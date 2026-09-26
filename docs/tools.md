@@ -21,8 +21,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Optionally: guideline lines for the system prompt, for guidance that spans
   calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
   "Tool guidelines").
-- Optionally: which end of long output to keep (`head` by default; a shell-like
-  tool declares `tail`), and its own size cap.
+- Optionally: how a long result is cut, and its own size cap. By default a
+  cut keeps the start; a tool may instead declare how many bytes of the
+  start and of the end to keep, as the shell does.
 - There is no read-only flag and no parallel-safety flag. Calls in a step run
   concurrently; file safety comes from the per-path lock in
   `docs/architecture.md` ("Tool calls in a step").
@@ -89,9 +90,10 @@ by content.
   smaller cap: web fetch sets its own in
   [Web fetch and web search](https://github.com/aakshintala/fiber/issues/57).
   `read` keeps the 16 KiB default ("File tools").
-- A cut result keeps the declared end (head or tail), a notice saying it was
-  cut, and the artifact path. Nothing is lost, only moved out of the model's
-  view. The full output is in the session's `artifacts/`. `read` is the
+- A cut result keeps what its tool declares (the start by default, or both
+  ends), a notice saying how many bytes were cut, and the artifact path. When
+  both ends are kept, the notice sits between them. Nothing is lost, only
+  moved out of the model's view. The full output is in the session's `artifacts/`. `read` is the
   exception: the file is the full output, so a cut read writes no artifact
   and its notice gives the offset to continue from.
 - The model reads the rest with the ordinary `read` tool on that path. There is
@@ -104,8 +106,9 @@ by content.
   `research/tool-result-sizes/sizes.py`; sizes, so they do not depend on the
   platform), 16 KiB cuts 1.2% of 26,829 shell results and almost no result of
   any other tool except file reads (16.8% of 5,070), search (about 9%) and web
-  fetch (24% of 21). Those are the tools where the model asked for exactly the
-  content, which is why they declare their own cap.
+  fetch (24% of 21). Web fetch declares its own cap for that reason. A cut
+  read continues from an offset, and search runs through the shell
+  ("Search").
 
 ## Progress
 
@@ -368,9 +371,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `nonzero_exit` and `process.exit_code`. A command killed by a signal
   Fiber did not send is `failed` with code `signal` and `process.signal`.
   A timeout is as above; a cancellation is `cancelled`.
-- Output follows "Bounded results": the shell declares `tail`, the default
-  16 KiB cap applies, the full output is in the session's `artifacts/`,
-  and output streams as `tool_call_delta` while the call runs. After a
+- Output follows "Bounded results": the default 16 KiB cap applies, and the
+  shell keeps the first 8 KiB and the last 8 KiB. The start is where a
+  command reports its setup, its first error or its first matches; the end is
+  where it reports how it finished. codex also splits evenly; pi keeps only
+  the end and Claude Code only the start. The full output is in the
+  session's `artifacts/`, and output streams as `tool_call_delta` while the call runs. After a
   move to the background, output goes to the job's output file.
 
 ### Terminal (`tty`)
