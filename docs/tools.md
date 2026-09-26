@@ -21,8 +21,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 - Optionally: guideline lines for the system prompt, for guidance that spans
   calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
   "Tool guidelines").
-- Optionally: which end of long output to keep (`head` by default; a shell-like
-  tool declares `tail`), and its own size cap.
+- Optionally: how a long result is cut, and its own size cap. By default a
+  cut keeps the start; a tool may instead declare how many bytes of the
+  start and of the end to keep, as the shell does.
 - There is no read-only flag and no parallel-safety flag. Calls in a step run
   concurrently; file safety comes from the per-path lock in
   `docs/architecture.md` ("Tool calls in a step").
@@ -89,9 +90,10 @@ by content.
   smaller cap: web fetch sets its own in
   [Web fetch and web search](https://github.com/aakshintala/fiber/issues/57).
   `read` keeps the 16 KiB default ("File tools").
-- A cut result keeps the declared end (head or tail), a notice saying it was
-  cut, and the artifact path. Nothing is lost, only moved out of the model's
-  view. The full output is in the session's `artifacts/`. `read` is the
+- A cut result keeps what its tool declares (the start by default, or both
+  ends), a notice saying how many bytes were cut, and the artifact path. When
+  both ends are kept, the notice sits between them. Nothing is lost, only
+  moved out of the model's view. The full output is in the session's `artifacts/`. `read` is the
   exception: the file is the full output, so a cut read writes no artifact
   and its notice gives the offset to continue from.
 - The model reads the rest with the ordinary `read` tool on that path. There is
@@ -104,8 +106,9 @@ by content.
   `research/tool-result-sizes/sizes.py`; sizes, so they do not depend on the
   platform), 16 KiB cuts 1.2% of 26,829 shell results and almost no result of
   any other tool except file reads (16.8% of 5,070), search (about 9%) and web
-  fetch (24% of 21). Those are the tools where the model asked for exactly the
-  content, which is why they declare their own cap.
+  fetch (24% of 21). Web fetch declares its own cap for that reason. A cut
+  read continues from an offset, and search runs through the shell
+  ("Search").
 
 ## Progress
 
@@ -143,8 +146,7 @@ the owner's usage is
 
 There are three: `read`, `write` and `edit`. There is no listing tool, and
 `read` on a directory fails with `unsupported_file` and points to the shell.
-Search is
-[Search: built-in tools or the shell?](https://github.com/aakshintala/fiber/issues/54).
+Search runs through the shell ("Search").
 
 A relative path is resolved against the workspace. A symbolic link is resolved
 to its target, and the target is the path the call declares, so permission and
@@ -254,6 +256,101 @@ the credential deny (`docs/permissions.md`) judge where the bytes really go.
   just before writing, the path is resolved again. If a symbolic link now
   points somewhere other than the path permission judged, the call fails with
   `path_changed` and nothing is written.
+
+## Search
+
+Settled by
+[Search: built-in tools or the shell?](https://github.com/aakshintala/fiber/issues/54);
+that ticket's resolution holds the rationale and the rejected alternatives.
+How pi, codex, Claude Code and fiber-zig search is
+[research/search/reference-agents.md](../research/search/reference-agents.md);
+the owner's usage is [research/search/usage.md](../research/search/usage.md).
+
+There is no search tool. The model searches with `grep` and `find` in the
+shell, and inside the shell tool those two names run a search built into
+Fiber.
+
+- In the owner's pi sessions, 83% of searches went through the shell although
+  pi offered `grep` and `find` tools; in their Claude Code sessions, all of
+  them did. codex has no search tool and tells the model to use `rg`.
+- The shell classifier already treats `grep` and `find` as read-only
+  ("Shell", "Effects"), and the shell's cut bounds their output, so a tool
+  would add neither.
+- A plain `grep -r` walks into `.git` and build directories. In a large
+  monorepo that is minutes of reading. The built-in search skips them.
+
+### How it runs
+
+- Before each command, the shell tool defines two shell functions, `grep`
+  and `find`, that run the Fiber binary's hidden `grep` and `find`
+  subcommands. The functions exist only in the model's own command line. A
+  script or build the command starts gets the system tools, because shell
+  functions are not passed to child processes. Claude Code does the same with
+  an embedded ugrep and bfs.
+- The subcommands are hidden: undocumented for people and free to change.
+- `command grep`, or a full path such as `/usr/bin/grep`, runs the system
+  tool. `rg` is not replaced; it already skips ignored files.
+- The search is ripgrep's own crates: `ignore` walks the tree, and
+  `grep-searcher` with `grep-regex` searches each file
+  (`docs/dependencies.md`).
+
+### Behaving like grep and find
+
+- With no path and no `-r`, `grep` reads its standard input, so a pipe such
+  as `cargo test | grep FAILED` works as before. About a fifth of the owner's
+  shell `grep` calls are filters of this kind.
+- Output is GNU `grep`'s, byte for byte: `path:line:text`, `--` between
+  context groups, and the path shown only when more than one file is
+  searched. `find` prints one path per line.
+- Exit codes are GNU's: 0 when something matched, 1 when nothing did, 2 on
+  an error.
+- `xargs grep` and `find -exec grep` run the system `grep`, because shell
+  functions do not reach the programs they start.
+
+### Flags
+
+- The built-in handles the flags the owner's sessions use most: `-n`, `-r`,
+  `-i`, `-v`, `-E`, `-F`, `-l`, `-c`, `-w`, `-o`, `-A`, `-B`, `-C`,
+  `--include` and `--exclude` for `grep`; `-name`, `-iname`, `-path`,
+  `-type`, `-maxdepth`, `-mindepth` and `-newer` for `find`.
+- A call with any other flag runs the system `grep` or `find` unchanged, as
+  Claude Code's does. `find` with `-exec`, `-execdir`, `-ok` or `-delete`
+  always runs the system `find`, and the shell classifier already declares
+  those calls `executes`.
+- Without `-E` or `-F`, a pattern is a basic regular expression, as in GNU
+  `grep`, and is translated to ripgrep's syntax before the search. With `-E`
+  it is an extended regular expression; with `-F`, a fixed string.
+
+### What it skips
+
+- A directory walk skips what the workspace's ignore files exclude
+  (`.gitignore`, `.ignore`, and git's global and repository excludes), and
+  always skips `.git`, `.svn`, `.hg`, `.bzr`, `.jj` and `.sl`.
+- A path the model names is always searched, even if it is ignored, as
+  ripgrep does. Ignore rules apply only to what the walk finds.
+- Hidden files are searched. Binary files are skipped, as `grep -I` does.
+- When a search finds nothing and skipped ignored directories on the way, it
+  prints one line on standard error saying so and naming the directories
+  skipped at the top level, so the model can search them by name. A search
+  that finds matches prints nothing extra.
+
+### Other command-line tools
+
+- A tool that must stay warm between calls, such as an index kept current by
+  a file watcher or a language server, is an extension that registers a tool
+  (`docs/extensions.md`). A command-line tool starts cold on every call.
+- Any other search tool, such as `ast-grep` or a tree-sitter query command,
+  is a command-line program the person installs. It reaches the model
+  through the person's instruction files (`docs/system-prompt.md`,
+  "Instruction files"). Prose works best when it maps a habit the model
+  already has onto the new tool. In the owner's pi-rig, tools under new names
+  (`ffgrep`, `fffind`: 180 calls in 30 days) lost to the shell's `grep`,
+  `rg`, `find` and `fd` (757 or more).
+- The person's configuration can add a command to the shell classifier's
+  read-only list, with the flags it may take and stay read-only
+  (`shell.read_only` in `docs/configuration.md`). A call to that command with
+  only those flags declares `reads` and skips review; any other flag makes it
+  `executes`, as for the built-in list. A repository cannot add to the list.
 
 ## Shell
 
@@ -368,9 +465,12 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `nonzero_exit` and `process.exit_code`. A command killed by a signal
   Fiber did not send is `failed` with code `signal` and `process.signal`.
   A timeout is as above; a cancellation is `cancelled`.
-- Output follows "Bounded results": the shell declares `tail`, the default
-  16 KiB cap applies, the full output is in the session's `artifacts/`,
-  and output streams as `tool_call_delta` while the call runs. After a
+- Output follows "Bounded results": the default 16 KiB cap applies, and the
+  shell keeps the first 8 KiB and the last 8 KiB. The start is where a
+  command reports its setup, its first error or its first matches; the end is
+  where it reports how it finished. codex also splits evenly; pi keeps only
+  the end and Claude Code only the start. The full output is in the
+  session's `artifacts/`, and output streams as `tool_call_delta` while the call runs. After a
   move to the background, output goes to the job's output file.
 
 ### Terminal (`tty`)
@@ -391,10 +491,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
 - The shell tool classifies each call (`docs/permissions.md`, "Effects").
   It splits the command on `&&`, `||`, `;` and `|`, and checks each part
-  against a fixed list of read-only commands and the flags allowed for
-  each. If every part is on the list, the call declares `reads`,
-  reversible, with the paths the command names, resolved against
-  `workdir`. Otherwise it declares `executes`, with no paths.
+  against a list of read-only commands and the flags allowed for each:
+  Fiber's own list, plus any the person's configuration adds ("Search",
+  "Other command-line tools"). If every part is on the list, the call
+  declares `reads`, reversible, with the paths the command names, resolved
+  against `workdir`. Otherwise it declares `executes`, with no paths.
 - It declares `executes` whenever it finds something it cannot read
   plainly: command substitution (`$( )` or backticks), process
   substitution, a redirect, or anything else outside the list.
@@ -509,9 +610,8 @@ The kinds are `docs/events.md`.
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, the task list, asking the person, web fetch and
-`handoff` (`docs/handoff.md`) behave the same for everyone and are compiled in, as is search if
-[Search: built-in tools or the shell?](https://github.com/aakshintala/fiber/issues/54)
-keeps it as a tool.
+`handoff` (`docs/handoff.md`) behave the same for everyone and are compiled in, as is
+the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.
 Built-ins register through the tool seam exactly as an extension does and can be

@@ -161,6 +161,28 @@ fn main() {
         let n = ignore::WalkBuilder::new(env!("CARGO_MANIFEST_DIR")).build().filter_map(Result::ok).count();
         black_box(n);
     }
+    #[cfg(feature = "search")]
+    {
+        // Walk the probe's own directory, including target/, as `grep -rn`
+        // would, and search every file for a pattern with a literal part.
+        use grep_regex::RegexMatcher;
+        use grep_searcher::{BinaryDetection, SearcherBuilder, sinks::UTF8};
+        let matcher = RegexMatcher::new_line_matcher(r"fn\s+\w+_\d+|serde").unwrap();
+        let mut searcher = SearcherBuilder::new()
+            .binary_detection(BinaryDetection::quit(b'\x00'))
+            .line_number(true)
+            .build();
+        let mut hits = 0usize;
+        for entry in ignore::WalkBuilder::new(env!("CARGO_MANIFEST_DIR")).build().filter_map(Result::ok) {
+            if entry.file_type().is_some_and(|t| t.is_file()) {
+                let _ = searcher.search_path(&matcher, entry.path(), UTF8(|_, line| {
+                    hits += line.len();
+                    Ok(true)
+                }));
+            }
+        }
+        black_box(hits);
+    }
     #[cfg(feature = "similar")]
     {
         let a = text(200);

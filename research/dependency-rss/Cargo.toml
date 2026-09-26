@@ -26,6 +26,8 @@ ring = { version = "0.17", optional = true }
 rustix = { version = "1", features = ["pty", "fs", "process", "termios"], optional = true }
 regex = { version = "1", optional = true }
 ignore = { version = "0.4", optional = true }
+grep-searcher = { version = "0.1", optional = true }
+grep-regex = { version = "0.1", optional = true }
 similar = { version = "2", optional = true }
 pulldown-cmark = { version = "0.13", default-features = false, optional = true }
 jsonschema = { version = "0.33", default-features = false, optional = true }
@@ -34,6 +36,8 @@ syntect = { version = "5", default-features = false, features = ["default-fancy"
 [features]
 serde_json = ["dep:serde", "dep:serde_json"]
 jsonschema = ["dep:jsonschema", "dep:serde_json"]
+# Built-in shell search: ripgrep's walker, regex adapter and search loop.
+search = ["ignore", "dep:grep-searcher", "dep:grep-regex"]
 
 [profile.release]
 lto = "thin"
