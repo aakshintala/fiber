@@ -104,7 +104,9 @@ only that crate, in KiB; the empty program is 323 KiB.
 | ring | SHA-256, for PKCE and extension binary checksums | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group | ~0 | ~0 | ~0 | 4 | 330 |
-| all of the above together | | 5,104 | 4,536 | 3,232 | 117 | 3,819 |
+| ignore, grep-searcher, grep-regex | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
+| similar | an edit's diff in `details` (`docs/tools.md`, "edit") | ~0 | 380 | ~0 | 1 | 389 |
+| all of the above together | | 7,048 | 6,104 | 4,288 | 136 | 6,452 |
 
 Notes:
 
@@ -121,6 +123,12 @@ Notes:
   adds no crate.
 - serde_json's `preserve_order` feature is never enabled
   (`docs/prompt-cache.md`).
+- The search row is ripgrep's walker (`ignore`), its search loop
+  (`grep-searcher`) and its regex adapter (`grep-regex`, which brings
+  `regex`), measured together walking the probe's own tree and searching every
+  file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
+  x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search,
+  similar and together rows were measured on September 26, 2026.
 
 ### Root certificates
 
@@ -141,13 +149,9 @@ already.
 | Crate | Needed if | Linux x86_64 | Linux arm64 | macOS arm64 | Crates | Binary |
 |---|---|---:|---:|---:|---:|---:|
 | rusqlite, SQLite bundled | Fiber keeps a derived database, such as for cross-session search; today listing sessions reads the logs (`docs/state.md`) | 2,236 | 1,984 | ~0 | 14 | 2,268 |
-| regex, ignore | [Search: built-in tools or the shell?](https://github.com/aakshintala/fiber/issues/54) keeps search built in | 1,720 / 1,380 | 1,724 / 1,344 | 1,088 / 560 | 5 / 13 | 2,055 / 1,752 |
-| similar | [File tools: read, write and edit](https://github.com/aakshintala/fiber/issues/52) shows a diff | ~0 | 380 | ~0 | 1 | 389 |
 | pulldown-cmark | the terminal UI renders markdown ([Epic: TUI](https://github.com/aakshintala/fiber/issues/82)) | 428 | 384 | ~0 | 4 | 724 |
 
-rusqlite carries SQLite's C source. regex and ignore share one regex engine,
-so both together add less than the sum of their rows. About 440 KiB of
-regex's binary is Unicode tables.
+rusqlite carries SQLite's C source.
 
 Syntax highlighting is the terminal UI's decision. The obvious crate, syntect,
 costs 8,704 KiB on Linux x86_64 just to load its syntax definitions. It has 44
