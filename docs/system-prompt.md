@@ -69,8 +69,9 @@ cache miss that follows is one the person started, and the rebuild is logged
 
 Fiber's text says who the model is, how instruction files bind it, and how its
 context restarts at a handoff. The model is an expert software engineer working
-inside Fiber; it is not Fiber. The opening line is adapted from pi's (MIT
-license).
+inside Fiber; it is not Fiber. Its work includes discussing, brainstorming and
+planning with the person, not only changing files. The opening line is adapted
+from pi's (MIT license).
 
 Preferences about how to work, such as testing, commit habits and reply style,
 are left to instruction files. Fiber's text states only what holds in every
