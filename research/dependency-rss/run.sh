@@ -10,7 +10,7 @@ set -eu
 cd "$(dirname "$0")"
 FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect"
 # Every crate in the runtime table of docs/dependencies.md, built together.
-RUNTIME="serde_json ureq ratatui crossterm mlua clap thiserror signal-hook getrandom base64 ring rustix"
+RUNTIME="serde_json ureq ratatui crossterm mlua clap thiserror signal-hook getrandom base64 ring rustix search similar"
 
 # crossterm needs a terminal, so every binary runs under script(1), which
 # gives it a pseudo-terminal. time(1) runs inside it and measures only the
