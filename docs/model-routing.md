@@ -50,6 +50,8 @@ For each model:
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees")
 - extra request body fields
+- a prompt addendum, text appended to the system prompt for this model only
+  (`docs/system-prompt.md`, "The model's addendum")
 - context window, output token limit, input kinds and cost
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor

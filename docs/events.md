@@ -254,6 +254,23 @@ Behaviour is `docs/prompt-cache.md`.
 latest `preamble_built` before its point. `reason` is a closed set: adding a
 value is a breaking change.
 
+### Opening message
+
+Behaviour is `docs/system-prompt.md`.
+
+| Kind | Durable | Payload |
+|---|---|---|
+| `opening_message` | yes | the environment (date, platform, shell, workspace, git, session log path), each instruction file's path and content, and the skills listing |
+| `instruction_file` | yes | `path`, `reason` (`subdirectory`, `created`, `changed`, `deleted`, `own_edit`), the file's `content` now (absent when deleted), and `sent` (`full`, `diff`, `deleted`, `none`) |
+| `date_changed` | yes | `date` |
+
+`opening_message` is written at session start and after each completed
+handoff. `instruction_file` with `own_edit` records the content after the
+session's own call changed the file, and sends nothing. A diff is rendered from
+`content` and the content the model last had, both in the log. The texts are
+rendered from these payloads. `reason` and `sent` are closed sets: adding a
+value is a breaking change.
+
 ### Handoff
 
 Behaviour is `docs/handoff.md`.

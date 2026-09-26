@@ -105,10 +105,12 @@ restarts from the note.
 In order:
 
 1. The system prompt and tools.
-2. This turn's input from the person and any steering messages applied in this
+2. A new opening message, written from the current instruction files and date
+   (`docs/system-prompt.md`, "After a handoff").
+3. This turn's input from the person and any steering messages applied in this
    turn, verbatim. A handoff between turns has none.
-3. The handoff note.
-4. A line Fiber writes listing the jobs still running, with each job's id and
+4. The handoff note.
+5. A line Fiber writes listing the jobs still running, with each job's id and
    description, as the rewind note does (`docs/events.md`, "Rewind").
 
 When a tool set `control.handoff`, the other calls in that step and their
@@ -162,8 +164,10 @@ The note is written so a fresh agent can continue the work. It:
 - leaves out secrets
 
 Instructions given to `/handoff` or the `handoff` driver command say what the
-next stretch of work focuses on. The note has no fixed headings. The exact
-wording Fiber uses to ask for the note is written with the system prompt.
+next stretch of work focuses on. The note has no fixed headings. The request
+for the note is the `handoff-note` section of `crates/loop/prompt/messages.md`,
+followed by `handoff-focus` when there are instructions
+(`docs/system-prompt.md`, "The texts").
 
 ## Recording
 

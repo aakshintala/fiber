@@ -18,6 +18,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   reversible, and the paths it touches, in the vocabulary of
   `docs/permissions.md`. Classification is per call, not per tool
   (`docs/permissions.md`).
+- Optionally: guideline lines for the system prompt, for guidance that spans
+  calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
+  "Tool guidelines").
 - Optionally: which end of long output to keep (`head` by default; a shell-like
   tool declares `tail`), and its own size cap.
 - There is no read-only flag and no parallel-safety flag. Calls in a step run

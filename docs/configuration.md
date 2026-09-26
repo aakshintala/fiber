@@ -291,12 +291,15 @@ holds what `docs/extensions.md` ("What a package holds") lists:
     "exit_timeout_ms": 2000
   },
   "install": ["npm", "ci"],
-  "repo_settings": ["workspace_url"]
+  "repo_settings": ["workspace_url"],
+  "prompt": "prompt.md"
 }
 ```
 
 `fiber` is the lowest Fiber version it runs on. `process` is present only for
-a process extension, and `exit_timeout_ms` has no default.
+a process extension, and `exit_timeout_ms` has no default. `prompt` names a
+file in the package whose text goes in the system prompt
+(`docs/system-prompt.md`, "Extension texts").
 
 ## A provider's data
 

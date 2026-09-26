@@ -8,10 +8,14 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   config.json                     global configuration (docs/configuration.md)
   config/<extension>.json         an extension's global settings
   rules                           global standing rules
+  AGENTS.md                       global instruction file (docs/system-prompt.md)
+  SYSTEM.md                       replaces Fiber's system prompt text
+  APPEND_SYSTEM.md                appended to the system prompt
   projects/<key>/                 one per project
     sessions/<id>/                events.jsonl, session.lock, artifacts/
     history.jsonl                 prompt history, append-only
     rules                         this project's standing rules
+    SYSTEM.md, APPEND_SYSTEM.md   this project's system prompt files
     config.json                   this project's configuration
     config/<extension>.json       an extension's settings for this project
     worktrees/<id>/               one git worktree per delegate that asked for one

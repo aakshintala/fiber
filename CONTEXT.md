@@ -121,6 +121,18 @@ What every model request in a session starts with: the system prompt, the tool
 definitions and the request settings. It changes only when it is built again.
 _Avoid_: prefix, header
 
+**Opening message**:
+The first message of a session's conversation, written by Fiber: the
+environment, the project's instruction files and the skills listing. It is
+logged once and written again after each handoff. See `docs/system-prompt.md`.
+_Avoid_: environment context, session context
+
+**Instruction file**:
+An `AGENTS.md`, or a `CLAUDE.md` in a directory with no `AGENTS.md`, that a
+project or a person writes for the model. It applies to its directory and
+everything below it.
+_Avoid_: context file, project doc, memory file
+
 **Role**:
 A configured name for a delegate's model reference, so that written
 instructions survive a model being withdrawn.

@@ -59,6 +59,8 @@ Beside the manifest it may hold:
 - a process extension's program and its dependencies
 - a TUI extension's Lua scripts
 - skills, prompt templates and themes
+- a prompt file, whose text goes in the system prompt (`docs/system-prompt.md`,
+  "Extension texts")
 
 What a skill, a prompt template and a theme are to Fiber is not yet specified.
 This page covers only how they arrive.

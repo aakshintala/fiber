@@ -36,7 +36,7 @@ The preamble is built at four points, and only these:
 | Point | What happens |
 |---|---|
 | Session start | Built before the first request. |
-| Resume | Built again from current inputs: AGENTS.md, the skills listing, the date, the servers' tool lists. If nothing changed, the bytes match and the cache still hits. |
+| Resume | Built again from current inputs: the person's system prompt files, extension prompt texts, the model's addendum, the servers' tool lists. Instruction files and the date are not inputs: they live in the logged opening message (`docs/system-prompt.md`). If nothing changed, the bytes match and the cache still hits. |
 | `reload` | Built again with the new tool set (`docs/mcp.md`, "Reload"). |
 | Switch | Built again with the new model, effort or thinking ("Switching model"). |
 
@@ -45,10 +45,10 @@ reason, the request settings, the system prompt text and the full tool
 definitions as sent. A fork or a rewind sends the latest build before its
 point, so its first request matches its parent's byte for byte.
 
-Between builds the preamble does not change. A file the system prompt draws on
-that changes during a session reaches the model as a message appended at the
-end, never as an edit to the system prompt. How that message is worded belongs
-to system prompt design.
+Between builds the preamble does not change. What varies by project or by day,
+such as instruction files, the environment and the skills listing, is in the
+opening message, which is logged once. A change to any of it reaches the model
+as a message appended at the end, never as an edit (`docs/system-prompt.md`).
 
 ## Bytes
 
@@ -188,8 +188,8 @@ A cache entry also expires after its lifetime with no request.
   "Hooks").
 - The reviewer has its own cache. Its prompt is fixed instructions, then the
   person's messages and the tool calls in log order, then the call under review.
-- The system prompt puts what is fixed for the session first. System prompt
-  design is on the map as fog and follows this page.
+- The system prompt holds only what is fixed for the session. What it holds
+  and what feeds it is `docs/system-prompt.md`.
 
 ## Sources
 
