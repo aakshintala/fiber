@@ -104,6 +104,7 @@ set the key.
 | `retry.max_delay_ms` | 60000 | yes | The cap on one backoff, and on a wait a server asks for. |
 | `tools."<name>".max_result_bytes` | the tool's own, or 16384 | yes | The tool's result cap (`docs/tools.md`, "Bounded results"). |
 | `tools."<name>".deferred` | the tool's own | yes | Whether the tool is deferred (`docs/tools.md`, "What is deferred by default"). |
+| `shell.read_only."<command>".flags` | none | no | Adds a command to the shell classifier's read-only list, with the flags it may take and stay read-only, such as `["--json", "-p"]` (`docs/tools.md`, "Search", "Other command-line tools"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
 | `extensions."<name>".version` | none | yes, with approval | Declares an extension for the repository, to be fetched (`docs/extensions.md`, "Extensions a repository brings"). |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
