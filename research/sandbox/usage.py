@@ -12,7 +12,7 @@ import json, glob, os, re, collections, random
 
 SELF = "174d9475-ef5c-449f-9723-ad5906089d4d"  # this measurement's own session
 
-SEG_SPLIT_RE = re.compile(r'&&|\|\||;|\|')
+SEG_SPLIT_RE = re.compile(r'&&|\|\||;|\n|\|')
 ENV_ASSIGN_RE = re.compile(r'^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|\'[^\']*\'|\S*)\s+')
 TMP_RE = re.compile(r'^(\$TMPDIR|\$\{TMPDIR\}|/tmp/|/private/tmp/|/var/folders/[^/\s"\']+/[^/\s"\']+/T/)')
 # `>`/`>>` file redirect, excluding fd-dup forms like `2>&1` or `>&2` (no `&`
@@ -49,7 +49,7 @@ def resolve(tok, base):
 def write_targets(stripped, effective_dir):
     """Best-effort: resolved absolute paths this segment actually WRITES to
     (not merely reads/mentions). Triggers: file redirection (`>`, `>>`,
-    `&>`), a `-o`/`-O`/`--output(=)` flag, or a first word from a small
+    `&>`), a `--output(=)` flag (long form only, see below), or a first word from a small
     write-verb list (sed/perl only count with `-i`). Anything else --
     cd, ls, cat, grep, find, git log, a script run without an output flag --
     is treated as read-only, even though an inline python/node/bun script
@@ -64,8 +64,12 @@ def write_targets(stripped, effective_dir):
     for m in REDIR_RE.finditer(stripped):
         cands.append(m.group(1))
         triggered = True
+    # Long-form `--output` only -- short `-o`/`-O` is too overloaded across
+    # tools to trust as "output file" (spot-check caught `lldb -o run -o
+    # quit`, where `-o` means "execute this debugger command", flagging
+    # "run"/"quit" as bogus write targets resolved into a wrong directory).
     for i, t in enumerate(toks):
-        if t in ('-o', '-O', '--output') and i + 1 < len(toks):
+        if t == '--output' and i + 1 < len(toks):
             cands.append(toks[i + 1])
             triggered = True
         elif t.startswith('--output='):
@@ -88,6 +92,11 @@ def write_targets(stripped, effective_dir):
         for t in toks[1:]:
             if not t.startswith('-'):
                 cands.append(t)
+    # A candidate carrying a stray quote character is almost always a `>`
+    # matched INSIDE a quoted sed/awk/perl expression (e.g. the shell-safe
+    # `s/.*x > y//` substitution), not a real shell redirect -- drop it
+    # rather than resolve a bogus path.
+    cands = [c for c in cands if "'" not in c and '"' not in c]
     return [resolve(c, effective_dir) for c in cands]
 
 NETWORK_SUBCMD = {
@@ -421,11 +430,21 @@ HEURISTIC_NOTES = """
 
 - Classification runs on the RAW command STRING, not on what the process
   actually did. `git commit --dry-run` and `git commit` classify the same.
-- A pipeline/chain (`&&`, `||`, `;`, `|`) is classified as a whole: if ANY
-  segment trips a class, the whole command counts for that class, because a
-  `&&` chain stops at the first blocked segment. A segment's "first
-  tool+subcommand" is used for the top-15 label even when later segments
-  also tripped other classes.
+- A pipeline/chain (`&&`, `||`, `;`, `|`, and a bare newline -- most Bash
+  calls in these logs are multi-line scripts) is classified as a whole: if
+  ANY segment trips a class, the whole command counts for that class,
+  because a `&&` chain stops at the first blocked segment. A segment's
+  "first tool+subcommand" is used for the top-15 label even when later
+  segments also tripped other classes. Splitting on newline is required --
+  without it, a 3-statement script (`mkdir x`, newline, `strings ~/foo >
+  x/out`, newline, `wc -l x/out`) reads as ONE segment starting with
+  `mkdir`, and every later token -- including `~/foo`, which is only ever
+  READ by `strings` -- gets scanned as one of `mkdir`'s write targets
+  (caught in spot-check, fixed by adding `\n` as a split point). The same
+  splitting is applied inside heredoc bodies, since there is no heredoc-
+  aware parsing; a body line that happens to contain `&&`/`;`/`|`/a newline
+  is treated the same as real shell syntax (usually harmless: heredoc body
+  text rarely starts a line with a recognized tool name).
 - `WRITE_OUTSIDE_TOOL` is presence-based: any invocation of cargo, npm, pip,
   go, brew, gh, claude, codex, pi, or a listed editor is flagged, regardless
   of subcommand -- e.g. `npm --version` counts the same as `npm install`.
@@ -436,9 +455,17 @@ HEURISTIC_NOTES = """
   (a loop variable, a project called `code`); not filtered out.
 - `write_outside_explicit`/`write_tmp` require an actual write signal, not
   just a path mention: file redirection (`>`, `>>`, `&>`, excluding fd-dup
-  forms like `2>&1`), a `-o`/`-O`/`--output` flag, or a first word from a
-  small write-verb list (`cp mv rm mkdir touch ln chmod chown tee dd rsync
-  tar unzip zip patch`; `sed`/`perl` only count with `-i`). Everything else
+  forms like `2>&1`), a long-form `--output`/`--output=` flag, or a first
+  word from a small write-verb list (`cp mv rm mkdir touch ln chmod chown
+  tee dd rsync tar unzip zip patch`; `sed`/`perl` only count with `-i`).
+  Short `-o`/`-O` is deliberately NOT treated as "output file" -- spot-check
+  caught `lldb -b -o run -o "bt 30" -o quit` misread as writing to files
+  named `run` and `quit` (lldb's `-o` means "run this debugger command"),
+  resolved into the wrong directory and wrongly flagged outside workspace.
+  Short `-o` is too overloaded across tools (`grep -o`, `sort -o`, `ssh -o`,
+  `tar -o`, `ls -o`, ...) to trust; this drops a few genuine cases (e.g.
+  `curl -o file`) but curl/wget are already unconditionally in the network
+  class regardless. Everything else
   -- `cd`, `ls`, `cat`, `grep`, `find`, `git log`, a script run with no
   output flag -- is read-only under this heuristic, even though an inline
   python/node/bun/zig script *could* write anywhere; the log has no
@@ -467,6 +494,12 @@ HEURISTIC_NOTES = """
   number treats it as a break. A `--offline` flag (spot-checked: present on
   11/53 of the sampled network-maybe cargo commands) genuinely rules out
   network but is not detected, so "maybe" over-counts by that much.
+- File-redirect detection (`>`) has no real shell tokenizer, so a literal
+  `>` INSIDE a quoted sed/awk/perl expression (e.g. `sed 's/.*x > y//'`,
+  spotted during spot-check on `grep ... | sed 's/.*lifecycle > //'`) can
+  misread as a redirect. Mitigated by dropping any candidate target that
+  contains a stray quote character (the common shape of this false
+  positive), which is not a complete fix for every quoting shape.
 - `cp`/`mv`/`ln` treat only the LAST non-flag argument as the write target
   (the destination); earlier arguments are sources, which may legitimately
   sit outside cwd while the write itself stays inside (`cp ~/x ./y` only
