@@ -141,6 +141,20 @@ compiled in through ureq. Empty means the platform's certificate loader
 returned no certificates. A test runs Fiber against an empty store and checks
 it connects through the fallback.
 
+## Programs Fiber runs
+
+Fiber needs no program installed beyond the operating system's own, with two
+exceptions:
+
+- The shell tool runs `/bin/bash`, or `sh` where bash does not exist
+  (`docs/tools.md`, "Shell").
+- Reading a PDF for a provider that cannot take one natively renders its
+  pages with poppler's `pdftoppm`. It is optional: without it, that one call
+  fails and names the package (`docs/tools.md`, "read").
+
+`grep` and `find` in the shell tool run Fiber's own search, not a system
+program (`docs/tools.md`, "Search").
+
 ## Waiting on other decisions
 
 These crates are the choice if the named decision needs one. Each is measured
