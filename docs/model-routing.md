@@ -55,6 +55,8 @@ For each model:
   dialect it speaks
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees")
+- whether its provider hosts a web search for it, and which variant
+  (`docs/tools.md`, "Web fetch and web search")
 - extra request body fields
 - a prompt addendum, text appended to the system prompt for this model only
   (`docs/system-prompt.md`, "The model's addendum")

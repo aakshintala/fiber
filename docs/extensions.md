@@ -185,14 +185,15 @@ extension sends the same calls as messages.
 ```
 fiber.tool(name, { description, input_schema, effects, run })
 fiber.provider(name, { models })
+fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { on_failure, timeout, run })
 fiber.watch(kinds, { timeout, run })
 fiber.command(name, { description, timeout, run })
 ```
 
-A tool, provider or hook registers before the session's tool set is fixed
-(`docs/prompt-cache.md`, "Tools"), so an extension that registers one is first
-used at session start.
+A tool, provider, search backend or hook registers before the session's tool
+set is fixed (`docs/prompt-cache.md`, "Tools"), so an extension that registers
+one is first used at session start.
 
 ### Host calls
 
