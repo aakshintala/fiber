@@ -86,7 +86,7 @@ acknowledgements carry no `seq`, so they never reach the log.
 | `steer_amend` | Replaces a steering message's text while it is still queued. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. |
 | `cancel` | Ends the running turn. |
-| `reply` | Answers an interaction the loop raised: approval, confirm, select, text input or status. Takes an optional `session_id` naming a delegate. |
+| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input, form or status. Takes an optional `session_id` naming a delegate. |
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
@@ -100,11 +100,11 @@ acknowledgements carry no `seq`, so they never reach the log.
 Rejection codes: `malformed`, `unknown_command`, `busy`, `stale_request`,
 `not_step_boundary`, `session_held`, `delegate_session`.
 
-**`reply` answers all five interactions, not just approvals.**
-`docs/architecture.md` fixes the set: "v0.0.1 ships one closed, versioned set
-of interactions — approval, confirm, select, text input, status — carried on
-the same request events the loop uses to ask a human anything, and answerable
-by any connected client including a headless one." The interaction kinds are
+**`reply` answers all seven interactions, not just approvals.**
+`docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
+of interactions — approval, confirm, select, multi-select, text input, form
+and status — carried on the same request events the loop uses to ask a human
+anything, and answerable by any connected client including a headless one." The interaction kinds are
 versioned and may grow; one command that carries a `request_id` does not have
 to grow with them. What happens to a stale one is already `docs/events.md`'s:
 "a reply naming a request that is no longer pending is rejected and does
@@ -182,19 +182,22 @@ never holding the pipe.
 There is no detach command. A session that exits is resumed from its log, so
 reattaching to one needs nothing kept running.
 
-**A pending approval does not keep a session alive.** An approval is raised
-before its tool call runs, so nothing is in flight. When the last client
-leaves with an approval pending and nothing else running, the session exits,
+**A pending approval or question does not keep a session alive.** An
+approval is raised before its tool call runs, and an `ask_user` question runs
+nothing, so nothing is in flight. When the last client leaves with either
+pending and nothing else running, the session exits,
 and `fiber_exited` names the request it stopped on. Resuming the session
 raises the request again and the turn goes on from there. The terminal and
 `fiber remote` list sessions that are waiting on a person, from their logs.
 Two cases have no one to wait for, and there escalation is a block as
 `docs/permissions.md` ("Headless") describes: a session started by
-`fiber ask`, and a session that has been sent `close`.
+`fiber ask`, and a session that has been sent `close`. In both, and in every
+delegate, an `ask_user` question ends the turn instead, and the driver resumes
+the session with the answers (`docs/tools.md`, "Asking the person").
 
 **A pending elicitation waits within its call's timeout.** An MCP call is in
 flight, so the session stays alive for it, and no longer than the call's
-timeout (`docs/mcp.md`, "Calls"). No wait on a person is unbounded.
+timeout (`docs/mcp.md`, "Calls").
 
 **A prompt arriving mid-turn is rejected `busy` and starts nothing.** Steering
 is the mid-turn channel. Fiber holds no prompt queue that no durable event
@@ -217,6 +220,9 @@ you have `events.jsonl`, byte for byte."
 
 - **The verdict** is `fiber_exited`, the last line, which copies the final
   message's text so a one-shot caller reads one line and is done.
+- **Questions** are `fiber_exited.questions`, when the model asked with
+  `ask_user`. The run exits 0, and the caller resumes the session with the
+  answers as its prompt (`docs/tools.md`, "Asking the person").
 - **Finished or died** is whether `fiber_exited` is there at all. A
   `fiber_started` with no matching `fiber_exited` means the process died.
 - **A failure before any session exists**, such as invalid configuration or a
@@ -323,7 +329,7 @@ Nothing is written for a call before it has stopped. Then `fiber_exited`
 with the exit code and no final message, the socket is unlinked, the lock is
 released, and the process exits.
 
-A session waiting on an approval when the signal arrives has nothing running
+A session waiting on an approval or a question when the signal arrives has nothing running
 (`docs/architecture.md`: "Permission decisions are made in order, before any
 of them runs"). It stops its jobs and exits with `suspended_on` naming the
 request, as it does when the last client leaves ("Lifecycle"), and resuming

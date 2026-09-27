@@ -605,6 +605,87 @@ The kinds are `docs/events.md`.
   delegates at once (`docs/delegates.md`, "Limits"). Parked threads are
   measured in `docs/architecture.md` ("The threads").
 
+## Asking the person
+
+Settled by
+[Asking the person a question](https://github.com/aakshintala/fiber/issues/55);
+that ticket's resolution holds the rationale and the rejected alternatives.
+
+The model asks with `ask_user`. The question goes to whoever drives the
+session. A person answers it through a `form` interaction. A program answers
+by resuming the session.
+
+### The call
+
+| Argument | Rule |
+|---|---|
+| `questions` | 1 to 4 items |
+| `question` | the full question, with its context |
+| `header` | a short label, at most 12 characters |
+| `options` | none, for a free-text question, or 2 to 4, each a `label` and an optional `description` |
+| `multiSelect` | optional; the person may choose several options |
+
+- There is no preview, no `required` flag and no skip flag. Any question can
+  be skipped.
+- The person can always type an answer, alone or with chosen options.
+- The description tells the model to put a recommended option first, with
+  "(Recommended)" in its label, and to ask with this tool rather than list
+  choices in its reply.
+- The definition is at most 300 tokens and counts toward the built-in budget
+  ("Size budget in CI").
+- A call that breaks these rules fails with `invalid_arguments`, as any call
+  does ("Before a call runs").
+- The tool declares no effect. It never reaches a reviewer and runs in
+  `readonly` (`docs/permissions.md`, "Fast paths").
+- It is declared in every session, including `fiber ask` sessions, forks and
+  other delegates, so the tool set never differs between them.
+
+### When a person can answer
+
+This is a session driven by the terminal or a `fiber serve` client.
+
+- One call raises one `form` interaction, with one field per question: select,
+  multi-select or text input. One `reply` answers the whole form.
+- It has no timeout. It lives like a pending approval: when the last client
+  leaves, the session exits on it with `suspended_on`, and resuming raises it
+  again (`docs/invocation.md`, "Lifecycle").
+- The request and its answer are `interaction_requested` and
+  `interaction_resolved` (`docs/events.md`, "Interactions").
+
+### When a program drives the session
+
+This is a delegate, forks included, a `fiber ask` session, and a session that
+has been sent `close`.
+
+- The turn ends `completed`, with the questions on `turn_completed`. The
+  call's result is one line saying the questions went to the driver.
+- A `close` that arrives while a question is pending ends the turn the same
+  way.
+- The driver answers by resuming the session. The answers arrive as the next
+  prompt.
+- A delegate's parent reads the questions from `delegate_finished`, which puts
+  them in the wake. It answers with `delegate_message`, or asks the person
+  first with its own `ask_user` (`docs/delegates.md`, "Results").
+- `fiber ask` exits 0 with `questions` on `fiber_exited`, and the caller
+  resumes the session with the answers (`docs/invocation.md`, "What a caller
+  gets back").
+
+A child's question goes to its parent, never straight to the person. The
+parent wrote the child's brief and can usually answer, and the person is never
+interrupted by a session they did not start. An approval is different: no
+model may answer one, so it is relayed to the person (`docs/permissions.md`,
+"Delegates").
+
+### The result
+
+For each question, one line: `<header>: ` followed by the chosen labels, the
+typed text in quotes, or `skipped`. A `note:` line follows when the person
+added a note to the whole form. A cancelled form is the single line
+`declined`.
+
+A declined form is an answer, not a failure: the call completes with status
+`completed`. The structured answers are on `interaction_resolved`.
+
 ## Built in or extension
 
 A first-party tool is compiled in unless its behaviour depends on a vendor or

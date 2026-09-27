@@ -193,7 +193,9 @@ It costs one prompt-cache miss. The log records it as the durable event
 A server can ask the person a question in the middle of a call. This is MCP
 elicitation, and Fiber answers it. An elicitation is an interaction like any
 other: Fiber raises it on the event stream as one of the interactions
-`docs/architecture.md` already names, and any driver answers it with `reply`.
+`docs/architecture.md` already names, logged as `interaction_requested` and
+`interaction_resolved` (`docs/events.md`, "Interactions"), and any driver
+answers it with `reply`.
 
 Fiber advertises form elicitation. The server sends a form of typed fields.
 Fiber asks each field in turn:

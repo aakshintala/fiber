@@ -93,16 +93,16 @@ event where it is display-only.
 
 ## Kinds
 
-Fiber's loop emits the kinds below. MCP elicitation adds no kind of its own: it
-raises the confirm, select and text input interactions every driver already
-answers with `reply` (`docs/mcp.md`, "Elicitation, sampling and roots").
+Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
+of their own: both raise interactions ("Interactions") that every driver
+answers with `reply`.
 
 ### Process boundary
 
 | Kind | Durable | Payload |
 |---|---|---|
 | `fiber_started` | yes | Fiber version, `schema_version`, new session or resumed |
-| `fiber_exited` | yes | exit code, the final message's `action_id` and its text, `error` if it failed (`docs/errors.md`, "What a caller gets"), `suspended_on` naming the `request_id` when the process exited on a pending approval (`docs/invocation.md`, "Lifecycle") |
+| `fiber_exited` | yes | exit code, the final message's `action_id` and its text, `error` if it failed (`docs/errors.md`, "What a caller gets"), `suspended_on` naming the `request_id` when the process exited on a pending approval or question (`docs/invocation.md`, "Lifecycle"), `questions` copied from the last `turn_completed` when its turn ended on questions |
 
 A process is not a named unit in the glossary; these two lines record its
 boundary without inventing one. They are durable for one reason: a
@@ -136,7 +136,7 @@ as soon as a delegate relays its own messages onto the same stdout.
 | `session_started` | yes | creation time, workspace root; optional `parent { session_id, delegate_id }` for a delegate and `forked_from { session_id, seq }` for a fork or a rewind (`docs/delegates.md`, "Forks"; "Rewind" below); for a rewind, `rewind { summary?, note, jobs }` |
 | `rewound` | yes | the new session's `session_id`, the `seq` of the point, and the `job_id`s handed to the new session (`jobs`); the last line of a session that was rewound ("Rewind" below) |
 | `turn_started` | yes | the input that started it; for a turn started by jobs, a source naming those `job_id`s |
-| `turn_completed` | yes | `outcome` (`completed`, `interrupted`, `failed`), `error` on failure (`docs/errors.md`, "What ends a turn") |
+| `turn_completed` | yes | `outcome` (`completed`, `interrupted`, `failed`), `error` on failure (`docs/errors.md`, "What ends a turn"), `questions` when an `ask_user` call ended the turn for a driver that is a program (`docs/tools.md`, "Asking the person") |
 | `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
 | `context_added` | yes | the text a hook added to the conversation, the extension's name and the hook point (`docs/extensions.md`, "Hooks") |
 
@@ -228,6 +228,21 @@ carries the tool call's `action_id`, the call's declared effects and paths,
 and why it was raised; a resolution carries the decision, the reason, and what
 decided it — the credential deny, a human, a standing rule, a session grant,
 the reviewer, or the mode.
+
+### Interactions
+
+| Kind | Durable | Payload |
+|---|---|---|
+| `interaction_requested` | yes | `request_id`, the `action_id` of the tool call that raised it, the kind (`confirm`, `select`, `multi-select`, `text input` or `form`), and its prompt, options or fields |
+| `interaction_resolved` | yes | `request_id`, the answer, or `declined`, and who answered |
+
+These carry every interaction except approval, which keeps
+`permission_requested` and `permission_resolved` because `docs/permissions.md`
+fixes their payloads. `ask_user` raises one `form` per call
+(`docs/tools.md`, "Asking the person"). MCP elicitation raises one interaction
+per field (`docs/mcp.md`, "Elicitation, sampling and roots"). They are durable
+for the reasons approvals are, and a reply naming a request that is no longer
+pending is rejected in the same way.
 
 ### Usage and notices
 
