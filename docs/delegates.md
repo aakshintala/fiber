@@ -148,9 +148,10 @@ The `job_*` kinds are unchanged. A delegate adds two kinds keyed by `job_id`, as
 
 ## Permissions
 
-- A Fiber delegate starts in its parent's mode. `docs/permissions.md` settles
-  that only a person changes a mode, so a model can never start a delegate in
-  a more permissive mode than its own.
+- A Fiber delegate starts in its parent's mode, and a mode change on the
+  parent applies to it too. A delegate in `readonly` never asks to leave it
+  (`docs/permissions.md`, "Leaving readonly"), so a delegate is never in a
+  more permissive mode than its parent.
 - In `auto`, the delegate's own reviewer judges its calls.
 - An escalation from a delegate is relayed up the tree to whoever drives the
   root, and answered with `reply` naming the delegate's `session_id`. With
