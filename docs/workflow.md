@@ -23,6 +23,9 @@ No harness is assumed. Any agent harness can fill any role below.
 The owner reads no code. A pull request merges on a green `CI` check and a
 resolved review, and the orchestrator merges it without asking.
 
+The orchestrator judges an implementer's work from the diff and the gate's
+output, never from the implementer's account of it.
+
 ## Choosing models
 
 An implementer is chosen for the capability its ticket needs: a mechanical
@@ -57,9 +60,29 @@ drift.
 
 Mutation testing runs in CI only.
 
-No one drives the binary by hand to declare work done. A behaviour the tests
-do not reach gets a test: a binary-level test for the JSON lines, a screen
-test for what the terminal shows (`docs/testing.md`).
+Driving the binary is not part of the gate. A behaviour the tests do not
+reach gets a test: a binary-level test for the JSON lines, a screen test for
+what the terminal shows (`docs/testing.md`).
+
+## Tools, not handwork
+
+Work that is not trivial ships the tool that did it or proves it: a codemod
+for an edit repeated across files, a generator for repetitive files, a
+script for a check. Trivial means a few edits a reader takes in at a glance.
+The implementer makes the first change by hand, then shows the tool
+reproduces it.
+
+The tool is in the pull request, so the reviewer reruns it rather than
+trusting the result. A tool later work will use is committed under
+`scripts/`. A one-off tool goes in the pull request body.
+
+## When fixes keep failing
+
+When two fixes that rest on one assumption have failed the same check, the
+implementer does not write a third. It writes down, in one sentence, the
+assumption both fixes made, and tests that assumption directly. If it is
+false, the next fix starts from what the test showed. If it holds, the cause
+is elsewhere.
 
 ## Size
 
@@ -94,6 +117,11 @@ The review is posted on the pull request as a comment. Each finding is
 either fixed, and the fix's diff reviewed again, or answered in a reply that
 cites evidence: a test, a doc line, a command's output. The pull request
 merges when every finding has one or the other.
+
+A finding that a review has raised before becomes a type, a lint or a check
+in `scripts/check`, in its own pull request, when a tool can catch it
+(`docs/code-quality.md`, "Tools enforce the rules"). Otherwise it is added to
+`docs/code-quality.md`, "What a reviewer checks".
 
 ## When a doc is wrong
 
