@@ -13,8 +13,9 @@ matches the work before starting it.
   `docs/performance.md`.
 
 Docs state what is true now. When code and a doc disagree, the doc wins and
-the code changes. When a doc cannot be met as written, stop and follow
-`docs/workflow.md`, "When a doc is wrong".
+the code changes. When a doc cannot be met as written, or building it
+shows a problem or a simpler design, follow `docs/workflow.md`, "When a doc
+should change".
 
 Plans, specs and backlogs live on GitHub Issues, never in files in the
 repository.

@@ -95,7 +95,9 @@ last one.
 
 ## The pull request
 
-The body says `Resolves #<ticket>`.
+The body says `Resolves #<ticket>`, and either `Doc friction: none` or a
+link to each `needs-owner` issue the work raised ("When a doc should
+change").
 
 When the ticket carries the `bug` label, CI runs the pull request's new and
 changed tests against the base commit, and at least one must fail there
@@ -125,15 +127,45 @@ links both findings, when a tool can catch it
 (`docs/code-quality.md`, "Tools enforce the rules"). Otherwise it is added to
 `docs/code-quality.md`, "What a reviewer checks".
 
-## When a doc is wrong
+## When a doc should change
 
-The doc wins, and the code changes to match it. When implementing shows that
-a doc cannot be met as written, the implementer stops. The orchestrator
-files an issue labelled `needs-owner` that quotes the doc and gives the
-evidence, and the ticket waits for the owner's ruling.
+The doc wins, and the code changes to match it. A code pull request may
+correct a doc's wording, such as a misnamed type or a broken link. What a
+doc decides, the owner changes.
 
-A code pull request may correct a doc's wording, such as a misnamed type or a
-broken link, but never changes what the doc decides.
+Two findings send a doc to the owner:
+
+- It cannot be met as written.
+- It can be met, but building it shows a problem or a simpler design. The
+  signs are the same workaround in several places, special-case branches for
+  unrelated edge cases, a type that needs an escape hatch to compile, a lock
+  where the doc says nothing is shared, callers that must know a module's
+  internals, or a mechanism the doc requires that nothing uses.
+
+For the second, the implementer pauses and tells the orchestrator what it
+found. The orchestrator reads the ticket's resolution first. An alternative
+the resolution already rejected is answered with the resolution's reason,
+the implementer carries on, and nothing is filed.
+
+Every other finding becomes an issue labelled `needs-owner`, filed by the
+orchestrator. It quotes the doc rule, names the code it affects, and gives
+the evidence: what fails, for a doc that cannot be met, or a sketch or a
+measurement, not a rewrite, for a better design.
+
+While the owner decides:
+
+- A doc that cannot be met, or an alternative that would replace what the
+  ticket builds: the ticket is marked blocked by the issue, and the
+  orchestrator takes the next ticket whose blockers are closed.
+- Any other alternative: the implementer finishes as the doc says, and the
+  pull request merges.
+
+The owner's ruling closes the issue, which unblocks the ticket. Accepted,
+the doc changes, a blocked ticket's brief is rewritten against the new doc,
+and code already merged follows in a later pull request. Rejected, the
+ticket resumes as the doc says. A doc reported as unmeetable is ruled on
+differently: the ruling shows how it is met or changes the doc, and a ticket
+that no longer makes sense is closed and its work replanned.
 
 ## Merging
 
