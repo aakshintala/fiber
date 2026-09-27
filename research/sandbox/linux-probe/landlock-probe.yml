@@ -1,0 +1,63 @@
+name: Landlock probe
+
+# Throwaway probe for Fiber ticket #30: live facts about Linux confinement
+# on GitHub-hosted runners. Runs only on the probe branch.
+on:
+  push:
+    branches:
+      - probe/landlock
+
+jobs:
+  probe:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Kernel and LSM facts
+        run: |
+          echo "=== uname -r ==="
+          uname -r
+          echo "=== uname -m ==="
+          uname -m
+          echo "=== /sys/kernel/security/lsm ==="
+          cat /sys/kernel/security/lsm 2>&1 || true
+          echo "=== rustup / cargo (preinstalled) ==="
+          rustup show
+          cargo --version
+          rustc --version
+
+      - name: Build landlock probe
+        working-directory: probe/landlock
+        run: cargo build --release
+
+      - name: Run landlock probe
+        run: |
+          mkdir -p /tmp/landlock-allowed
+          chmod +x probe/landlock/tests.sh
+          ./probe/landlock/target/release/landlock-probe \
+            /tmp/landlock-allowed \
+            "bash $GITHUB_WORKSPACE/probe/landlock/tests.sh /tmp/landlock-allowed" 2>&1
+
+      - name: Unprivileged user namespaces
+        run: |
+          echo "=== unshare -Urn true ==="
+          if unshare -Urn true; then rc=0; else rc=$?; fi
+          echo "exit=$rc"
+          echo "=== bwrap --version ==="
+          if command -v bwrap >/dev/null 2>&1; then
+            bwrap --version
+          else
+            echo "bwrap not installed"
+          fi
+          echo "=== sysctl kernel.apparmor_restrict_unprivileged_userns ==="
+          sysctl kernel.apparmor_restrict_unprivileged_userns 2>&1 || echo "sysctl key not present"
+
+      - name: seccompiler note
+        run: |
+          echo "seccompiler crate not used: Landlock is an LSM enforced by the kernel" \
+               "via the landlock_* syscalls the 'landlock' crate wraps directly." \
+               "No seccomp-bpf filter is needed for fs/net confinement above."

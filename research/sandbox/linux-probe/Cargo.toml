@@ -1,0 +1,11 @@
+[package]
+name = "landlock-probe"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "landlock-probe"
+path = "src/main.rs"
+
+[dependencies]
+landlock = "0.4.7"
