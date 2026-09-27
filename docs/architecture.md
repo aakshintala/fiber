@@ -149,7 +149,9 @@ event stream and driver commands (`docs/extensions.md`, "Commands and
 screens"). What a TUI extension may draw is the TUI's to settle.
 
 What an approval actually asks about, and what answers it when nobody is at
-the keyboard, is `docs/permissions.md`.
+the keyboard, is `docs/permissions.md`. How the model asks the person a
+question, and what happens when a program drives the session, is
+`docs/tools.md`, "Asking the person".
 
 ## Concurrency
 

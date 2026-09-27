@@ -108,6 +108,10 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - When a delegate finishes, the parent is woken as for any job. The wake carries
   the delegate's final message, bounded as `docs/tools.md`, "Bounded results",
   says: the first 16 KiB in the notice, the full text in `artifacts/`.
+- A delegate that asks with `ask_user` ends its turn, and the wake carries its
+  questions from `delegate_finished`. The parent answers with
+  `delegate_message`, which resumes the delegate, or asks the person first
+  (`docs/tools.md`, "Asking the person").
 - There is no status field beyond `job_completed`'s `completed`, `failed` and
   `cancelled`. None of 529 results in the owner's pi sessions ended with a
   requested `STATUS:` line.
@@ -122,7 +126,7 @@ The `job_*` kinds are unchanged. A delegate adds two kinds keyed by `job_id`, as
 | Kind | Durable | Payload |
 |---|---|---|
 | `delegate_started` | yes | `job_id`, the delegate's `session_id`, harness, model reference (role resolved), workspace, worktree path and branch when isolated, `forked_from` for a fork |
-| `delegate_finished` | yes | `job_id`, the final message (bounded, with `artifact` when cut), usage totals, worktree state (path, branch, dirty) |
+| `delegate_finished` | yes | `job_id`, the final message (bounded, with `artifact` when cut), `questions` when the delegate's turn ended on `ask_user`, usage totals, worktree state (path, branch, dirty) |
 
 - `delegate_started` is written after `job_started`, for each run.
   `delegate_finished` is written just before `job_completed`.
