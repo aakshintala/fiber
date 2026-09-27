@@ -160,11 +160,12 @@ While the owner decides:
 - Any other alternative: the implementer finishes as the doc says, and the
   pull request merges.
 
-The owner's ruling closes the issue. Accepted, the doc changes; a blocked
-ticket's brief is rewritten against the new doc, and code already merged
-follows in a later pull request. Rejected, a blocked ticket resumes as the
-doc says, and for a doc that cannot be met the ruling says how the ticket
-proceeds.
+The owner's ruling closes the issue, which unblocks the ticket. Accepted,
+the doc changes, a blocked ticket's brief is rewritten against the new doc,
+and code already merged follows in a later pull request. Rejected, the
+ticket resumes as the doc says. A doc reported as unmeetable is ruled on
+differently: the ruling shows how it is met or changes the doc, and a ticket
+that no longer makes sense is closed and its work replanned.
 
 ## Merging
 
