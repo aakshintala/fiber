@@ -71,18 +71,19 @@ code, not by hand. A check that will run more than once is a script. Three
 is picked, not measured.
 
 The pull request body gives the command that ran the script and what it
-printed, so anyone can rerun it on the base commit in a scratch checkout and
-compare. A script later work will use is committed under `scripts/`. A
-one-off script goes in the pull request body.
+printed, so anyone can run the script from the pull request's head against a
+scratch checkout of the base commit and compare. A script later work will
+use is committed under `scripts/`. A one-off script goes in the pull request
+body.
 
 ## When fixes keep failing
 
 When two fixes that rest on one assumption have failed the same check, the
 implementer does not write a third. It writes down, in one sentence, the
 assumption both fixes made, and tests that assumption directly. The pull
-request body gives the assumption, the test's command and its result. If
-the assumption is false, the next fix starts from what the test showed. If
-it holds, the cause is elsewhere.
+request body names the two failed fixes and gives the assumption, the test's
+command and its result. If the assumption is false, the next fix starts from
+what the test showed. If it holds, the cause is elsewhere.
 
 ## Size
 
