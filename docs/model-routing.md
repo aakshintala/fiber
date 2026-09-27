@@ -15,15 +15,19 @@ A protocol is a wire format: how a request is shaped, and how a streamed reply
 is parsed into actions. A provider is an endpoint that speaks one or more
 protocols: a name, a credential, base URLs and a list of models.
 
-Protocols are native Rust in the `provider` module. There are five:
+Protocols are native Rust in the `provider` module. There are four:
 
 | Protocol | Used by |
 |---|---|
 | `anthropic-messages` | OpenCode, OpenRouter, Databricks, muse |
 | `openai-completions` | OpenCode, OpenRouter, Databricks, muse |
-| `openai-responses` | OpenCode, Databricks, muse |
-| `openai-codex-responses` | ChatGPT/codex |
+| `openai-responses` | OpenCode, Databricks, muse, ChatGPT/codex |
 | `google-generative-ai` | OpenCode Zen's Gemini models |
+
+ChatGPT/codex speaks `openai-responses` with compatibility flags its extension
+declares: the request fields it requires or rejects, such as `store: false`,
+the headers its login supplies, and its usage-limit error body. Its streamed
+events, tool calls and reasoning items are parsed as plain Responses.
 
 An extension cannot add a protocol. A vendor with a new wire format needs a
 Fiber release.
