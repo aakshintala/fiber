@@ -174,10 +174,13 @@ Fiber retries these failures:
 
 - rate limits (HTTP 429)
 - server errors (HTTP 5xx) and overload responses
-- a dropped connection
+- a request timeout (HTTP 408) and a conflict (HTTP 409)
+- a failure with no HTTP status, such as a dropped connection
 - a stream that ends before its protocol's terminal event
 
-It never retries quota or billing errors.
+A response header `x-should-retry` overrides the status: `true` retries the
+failure, `false` does not. Fiber never retries quota or billing errors, whatever
+the header says.
 
 The defaults are 3 retries with exponential backoff: 2 seconds, then 4, then
 8, with each delay capped at 60 seconds. If the server asks Fiber to wait longer
