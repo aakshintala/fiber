@@ -127,14 +127,14 @@ deny: it is not a standing rule, no person or extension can remove it, and
 it applies in every mode, `yolo` included. It covers every effect — a read, a
 write, anything — not only reads.
 
-Fiber has no OS sandbox, so without this deny an agent's file read or shell
-command could retrieve the stored tokens. The macOS Keychain is not an
+Fiber does not confine tools ([Confinement](#confinement)), so without this
+deny an agent's file read could retrieve the stored tokens. The macOS Keychain is not an
 alternative protection: any process running as the person can read a keychain
 item the same way Fiber would. Source: the archived tree's
 [Deny tool reads of the credential store](https://github.com/aakshintala/fiber-zig/issues/97).
 
 Paths are canonicalised before matching (symlinks resolved, `..` removed), so
-no spelling of the path escapes it. The deny follows the resolved Fiber home,
+no spelling of a declared path escapes it. The deny follows the resolved Fiber home,
 so it still protects the credentials when `FIBER_HOME` moves Fiber home. If
 Fiber home cannot be resolved, Fiber does not start ([Fiber home](state.md)
 already makes a bad `FIBER_HOME` a startup error), so the deny can never be
@@ -142,10 +142,40 @@ silently narrowed.
 
 Like every other decision on this page, it relies on declared paths. The
 shell tool declares paths only for commands it recognises as read-only
-(`docs/tools.md`, "Shell"). An extension tool that misdeclares its paths gets
-nothing it could not do directly, the same boundary the Effects section
-already states for extensions. [Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30)
-is where confinement beyond this is settled.
+(`docs/tools.md`, "Shell"). A command it does not recognise, such as
+`python -c` opening a token file, declares no paths and the deny does not see
+it: in `auto` and `ask` the call is reviewed, and in `yolo` nothing stops it.
+An extension tool that misdeclares its paths gets nothing it could not do
+directly, the same boundary the Effects section already states for
+extensions.
+
+## Confinement
+
+Settled by
+[Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30);
+that ticket's resolution holds the rationale and the rejected alternatives.
+
+Fiber does not confine what a tool call can reach at the operating-system
+level. A program a tool starts runs with the account's full rights, on every
+platform and in every mode. Everything on this page decides whether a call
+runs; nothing limits what it does once it runs.
+
+- Approving an `executes` call grants whatever the account can do. That
+  includes Fiber home: an approved command can read `credentials/`, edit
+  `rules`, or write an extension. Approving a call is trusting it, the same
+  boundary as installing an extension.
+- Isolation comes from outside Fiber: run it in a container or a virtual
+  machine. pi takes the same position in its security documentation: "Real
+  isolation needs to come from the operating system or a
+  virtualization/container boundary."
+- A container protects the host from Fiber, not Fiber home from the agent.
+  Fiber home inside the container is as reachable as it is outside one.
+
+codex confines every command by default and asks only to escape. Claude Code
+ships a sandbox that is off by default, and its path denies are enforced by
+the operating system only while that sandbox is on. How each works, and what
+a fence would have broken in the owner's sessions, is
+[research/sandbox/](../research/sandbox/).
 
 ## The reviewer
 
@@ -312,11 +342,6 @@ a more permissive mode than its parent.
 
 ## Not settled here
 
-- Whether Fiber confines what a tool can reach at the operating-system level:
-  [Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30).
-  Both references pair a sandbox with this policy and use approval only for
-  escaping it. Fiber's policy is designed to sit above such a layer; nothing on
-  this page assumes one exists.
 - Which tools exist is indexed in
   [Epic: tools](https://github.com/aakshintala/fiber/issues/59); how a tool
   declares effects is `docs/tools.md`.
