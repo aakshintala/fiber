@@ -60,7 +60,9 @@ rather than per call. How the hints map to effects is `docs/mcp.md`
 
 ## Modes
 
-A session starts in the mode in `permissions.mode` (`docs/configuration.md`).
+A session starts in the mode in `permissions.mode` (`docs/configuration.md`),
+which is `auto`, `ask` or `yolo`. `readonly` is never a default: a person
+chooses it for one session with the `mode` command.
 **Only a person changes the mode.** The model, a tool or an extension never
 does. A person changes it in two ways:
 
@@ -68,7 +70,10 @@ does. A person changes it in two ways:
 - by answering yes when a `readonly` session asks to leave `readonly`
   ([Leaving readonly](#leaving-readonly))
 
-Each change is a `mode_changed` event (`docs/events.md`). A mode change adds,
+A change applies to the session and to every delegate of it that is
+running, so a delegate is never in a more permissive mode than its parent.
+Each change is a `mode_changed` event (`docs/events.md`) in every session it
+applies to. A mode change adds,
 hides or rewrites no tool and changes nothing in the system prompt, so it
 keeps the prompt cache (`docs/prompt-cache.md`).
 
@@ -120,8 +125,8 @@ A call in `readonly` with any effect other than `reads` does not run. Fiber
 asks the person whether to leave `readonly`, showing the call that asked. It
 is a `permission_requested` raised by step 4.
 
-- **Yes** switches the session to `permissions.mode` if that is `auto` or
-  `ask`, and to `auto` otherwise, and writes `mode_changed`. The call then
+- **Yes** switches the session to `permissions.mode` and writes
+  `mode_changed`. The call then
   continues from step 5 in the new mode. Yes is not an approval of the call:
   in `auto` the reviewer may still block it, and in `ask` the person is asked
   about the call itself.
@@ -134,8 +139,9 @@ is a `permission_requested` raised by step 4.
 A refusal reaches the model as the call's result, with a reason saying the
 session is `readonly` and the person kept it so. The turn continues.
 
-The question goes to whoever drives the root session, as every escalation
-does. A delegate that asks changes only its own mode.
+Only a root session asks. A delegate in `readonly` is there because its
+parent is, so it never asks to leave: its calls with an effect other than
+`reads` are refused, with a reason saying its parent is `readonly`.
 
 ### Fast paths
 
@@ -357,9 +363,10 @@ pending escalation and raises it again when resumed (`docs/invocation.md`,
 
 ## Delegates
 
-A Fiber delegate (`docs/delegates.md`) starts in its parent's mode. Only a
-person changes a mode, so a model can never start a delegate in a more
-permissive mode than its own.
+A Fiber delegate (`docs/delegates.md`) starts in its parent's mode, and a
+mode change on the parent applies to it too. Only a person changes a mode, and
+a delegate in `readonly` never asks to leave it ([Leaving readonly](#leaving-readonly)),
+so a delegate is never in a more permissive mode than its parent.
 
 - In `auto`, each delegate has its own reviewer, which judges that delegate's
   calls.

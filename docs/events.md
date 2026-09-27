@@ -231,7 +231,7 @@ the reviewer, or the mode.
 
 | Kind | Durable | Payload |
 |---|---|---|
-| `mode_changed` | yes | the permission mode before and after, and what changed it: the `mode` command, or the `request_id` of the question to leave `readonly` |
+| `mode_changed` | yes | the permission mode before and after, and what changed it: the `mode` command, the `request_id` of the question to leave `readonly`, or the parent session's change |
 
 A mode change applies to the next tool call judged after it. It never reaches
 the model and never rebuilds the preamble.

@@ -90,7 +90,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
-| `permissions.mode` | `docs/permissions.md` | no | The mode a new session starts in (`docs/permissions.md`, "Modes"). |
+| `permissions.mode` | `docs/permissions.md` | no | The mode a new session starts in: `auto`, `ask` or `yolo` (`docs/permissions.md`, "Modes"). |
 | `reviewer.model` | a small, fast model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
