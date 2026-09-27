@@ -229,6 +229,13 @@ and why it was raised; a resolution carries the decision, the reason, and what
 decided it — the credential deny, a human, a standing rule, a session grant,
 the reviewer, or the mode.
 
+| Kind | Durable | Payload |
+|---|---|---|
+| `mode_changed` | yes | the permission mode before and after, and what changed it: the `mode` command, or the `request_id` of the question to leave `readonly` |
+
+A mode change applies to the next tool call judged after it. It never reaches
+the model and never rebuilds the preamble.
+
 ### Interactions
 
 | Kind | Durable | Payload |
