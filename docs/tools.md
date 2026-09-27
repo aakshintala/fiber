@@ -510,11 +510,11 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   only for commands the recogniser understands. A command it does not
   understand, such as `python -c` opening a file, declares no paths, so
   the deny cannot see it; in `auto` and `ask` it is still reviewed, and in
-  `yolo` nothing stops it. Closing that gap needs confinement:
-  [Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30).
-- If Fiber confines tools, a shell call declared `reads` runs confined to
-  read-only access, so a command wrongly on the list fails instead of
-  writing.
+  `yolo` nothing stops it. Fiber does not confine the shell
+  (`docs/permissions.md`, "Confinement").
+- The read-only list is trusted. A command on it that writes after all, or
+  an entry in `shell.read_only` that is wrong, writes without review. An
+  entry is the person's statement that the command only reads.
 - The built-in shell is trusted to classify because it is compiled in. An
   extension that replaces the shell classifies its own calls and is
   believed, as `docs/permissions.md` already states.
@@ -743,6 +743,4 @@ Claude Code's opt-in automatic mode starts deferring tools.
   [Revisit: may a tool that never finished be re-run after a crash?](https://github.com/aakshintala/fiber/issues/40)
 - Each tool's own design: the tickets indexed in
   [Epic: tools](https://github.com/aakshintala/fiber/issues/59).
-- Confinement:
-  [Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30)
 - Delegates are `docs/delegates.md`, which lists what it leaves open.

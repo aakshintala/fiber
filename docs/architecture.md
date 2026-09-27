@@ -297,7 +297,6 @@ that the other does not.
 
 
 - Extensions are `docs/extensions.md`
-- Confinement: [Does Fiber confine what tools can touch?](https://github.com/aakshintala/fiber/issues/30)
 - The tool contract is `docs/tools.md`; the tool set is indexed in
   [Epic: tools](https://github.com/aakshintala/fiber/issues/59)
 - Background jobs are `docs/tools.md` ("Background jobs")
