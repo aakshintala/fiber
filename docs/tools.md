@@ -504,7 +504,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `rg --pre <cmd>` and `find -exec` run programs, `find -delete` deletes,
   `sort -o` writes. The list and its flag rules are part of building the
   shell tool.
-- A call declared `reads` takes the permission fast path and is allowed in
+- A call declared `reads` takes the permission fast path and runs in
   `readonly` mode.
 - The credential deny (`docs/permissions.md`, "Credentials") sees paths
   only for commands the recogniser understands. A command it does not
@@ -690,7 +690,7 @@ A declined form is an answer, not a failure: the call completes with status
 
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
-Fiber delegate harness, the task list, asking the person, web fetch and
+Fiber delegate harness, asking the person, web fetch and
 `handoff` (`docs/handoff.md`) behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
