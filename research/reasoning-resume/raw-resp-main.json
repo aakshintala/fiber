@@ -1,0 +1,2396 @@
+[
+ {
+  "label": "t1",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489187-XczmWnjW2hCK0WoYyURE",
+   "object": "response",
+   "created_at": 1790489187,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489190,
+   "output": [
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4702,
+    "input_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 4699
+    },
+    "output_tokens": 130,
+    "output_tokens_details": {
+     "reasoning_tokens": 106
+    },
+    "total_tokens": 4832,
+    "cost": 0.000652675,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.000652675,
+     "upstream_inference_input_cost": 0.000587675,
+     "upstream_inference_output_cost": 6.5e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 unchanged (warm)",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489190-Wp3SgIluvwoncKJARIQ2",
+   "object": "response",
+   "created_at": 1790489190,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489193,
+   "output": [
+    {
+     "id": "rs_0f53672c6792d669016ab8b26854dc87d19486c121f9d04dce",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Counting words and explaining**\n\nI need to count the words in a file, and the user specifically asked me to do this without tools. So, I'll use read_file instead. I\u2019ve completed that. It\u2019s also important to note that no files have changed. The developer has this quirky rule about reporting each file change path and reason, but in this case, there were none. Just to clarify, the 401 prime file contains four words, and indeed, no files were changed."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJp7keUOgnDTzxpe86ZHmYZ3i4Ad7YtMI4_zBV_3KvOcY33OXY701TZe28a-SfTFhf9x99m5yooZQLiKvUIoqmRe4nq1mvqP0sf0ZPJ4D44Nxr-bqMFh_mMJF2Zw8U1BcD5_fVc8-3iy0A46bzr7f4AUL3Qr18uV8PQ94dTpwGc74cKScxHHVq49nX8NqA0Mm4nh3Vs4LY9STz3f3GbFl0rDSr2sVoJ6lrcbaNB6gEgs04wnwOA8X4cfwRf5kIjrEpuLetDmOvTlclzTrXdcbcmlI0K4XpjO6S_6E2eVA-ix_m9q82xHtgfomD0BR5MbHKYo-5o9Hj8UPvpOQv8nUZi-GGoXPLk6W6Jd5bPpR7aNvUkXuTiW1FujXkjICKY88De-af8lWY6hZg-92BaIlNqpAeiunEl5DplJTNG4DgctBMYheWDqBE9yEwCbOii7QRti6Tocf-YFSOp0jlsDGRFhuIUHvVIpKnP2mjQu-PMluqbJ_JKq3Q3-41kvI8iBzfOxVe7vcnWUrkk-dO2fGuZVlSQPdgnO77P02UVqn2N6MKRd8yG3I6I1m4Mtl52Zpm1LDavIspdIJCRxkJfG4IU8r8KVSheEU7Rfz9iqF-rvefpuaCJ0PkADFQECNFq8z_07vV7rPH9QtDte9yJ6qJJTdju2mAp6hhi0ODQftIPr0JO6GisqFuujVA5KDuu5_4m_g649bOeHi3YBUSQuBwTnlRQ9aA0y1GU98Nk8G_BOP0GgovWwhWtQAxg9cPoTvA7_-Ew77536BkBl-lyjoTLL0ImbDs1HuxbtD5Q5ERD_HvZj_dzgPmH4knJAW5fJmhnMNtLV4bOxVIQMvL3bVDKlh64YjmIUR0BCDdI8SAzQMbveO-iOH8PwDXmHIRMeo0T2qytfqVR8K8msCpMjN397YD_yT1V_97Mg-BUFYwaKIGtJ6g9sgcgYoM4O8O4HRLbC3yVhHUSrd6YUjk4gozBeppsHkCY90LwP-G7lPUDktJWhIG9UbFITojVsHc5l_4BfxCTNtHU04wkDsD6Efsto-k2PQm--cauQpjRob0F9hu5D_Pv0KZ2HsVNiielRtaw67ZESHWm5JKy3M7sY5QXdLCx_DKrtZ3gK7iwNeBCvFGGdKdYG79U_Dpn1ilmtUq1QjHc01N4umxR7vk7InHbk6DD0J5XwGmwk-yL2bHKw_iCMYRZ6luEuA5c7_YANNeFO65JtQeXbFHUqRrg4Lh8Uf4FkfSNz5niDPVfvkeEjCp__zVpJwymniwAlHtxxHTKXfirtQRT90Qqg5kRJN82DwdhsEWb6c2VGMTp1Z_pEe1hupiI6EGujsPjTqJKAH2E3-hzWn68OhgVomy0W1bTPYn6SPckMIzNTLbB1QWfSwF9eRL11jaBqFP4isV4eegLyCCloe6YazKWGooQdi27y-ApN6D768RZ-3vkoZXR9m4stUbz4yowwJD1cprAcTcc5p7mHD07j2a88E1fqqPLLsBL243QHr30VXTBmsSa7iubNk405pJsUPmFyDKJ2x4YDePZWir8RetZKXCidf9Ne40Iqy2BNcBtNkPa_9vUBDEe5b813IcDFVGC-QraUBVP3uFitNYY3udoVWLU2BzgMHrWK3FEfR8H2Q2rEDI58CrLoBpZlXVUO8Jqa8lriwVK43FLj1miJmNyFW8UlIpCWBAbv84Hll86zWPy0CNPAdAjHhsgOj_lUgFtO5c68HA4.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_nf02f6i5z1",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime; 391 = 17 \u00d7 23 and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**.\n\nNo files changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4847,
+    "input_tokens_details": {
+     "cached_tokens": 4699,
+     "cache_write_tokens": 145
+    },
+    "output_tokens": 107,
+    "output_tokens_details": {
+     "reasoning_tokens": 63
+    },
+    "total_tokens": 4954,
+    "cost": 0.000118915,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.000118915,
+     "upstream_inference_input_cost": 6.5415e-05,
+     "upstream_inference_output_cost": 5.35e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 unchanged (read)",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489195-crAT6nPYTOhZSEsiu84S",
+   "object": "response",
+   "created_at": 1790489195,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489198,
+   "output": [
+    {
+     "id": "rs_0f53672c6792d669016ab8b26cb38087d1abea1fe6ce29b1a4",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Counting words and tokens**\n\nI'm checking how to explain prime numbers and make sure to clarify which specific words I\u2019m referring to. It seems like no files have changed since they are read-only, so I\u2019ll confirm that no changes occurred. Next, I'll count the tokens or words in the given list: alpha, beta, gamma, delta\u2014so that totals up to four words. Keeping track of everything tidy and straightforward is important!"
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJtQe-R_vLbcuk93rem4jDonk_7Lp52hq6AGj3LtVWSAzbVPFwvEdT3-cbZt_soQYDPLoISoLLMoTs4BBJWQLFlM8AVungBD-4giValV_KaMt9m_Q6mVNXmpFyxMyjYBSgFUh7X_LvEfnf6fphme6QNfFADKQ5J5O21J-NCMa9AAHf8Z7JiTZzHLPlEMkqPHx6lH88JHs1Wj_huS4l_HlFGMrlj7HMjymWpC9Zaddrl7n0kdk_HVe0f-ePHVI30_vCHfOQ4cSgcC49KIFJLBmgf35LTiUVXWsgmMc-vTTNjueSAnC8IVoZDvEfpFREDeqQXJ0472aQHSoxvzwZ4Y_f9sNo10Wi1sQORcjRpkvy50N0tFgup3mgcK_tH1D6xIeSCl-nQ3YhPMGeFcLrsdpWFkD_qkMkteNQ6t-9ZuN-n1T9MQ3v-VT1gd3Hy2cdtCYKP4IiLygqO2x65kIhU000p9dQ6eRrZSMLaqsn9z5iVqzUnx7lQNor_-1Iw7N4rmSiuyfK5LgQ-iiT8BoCGXLUqNY0wKrvsZO2Ldg1Bw9Xwuo8NBcz4k5JXTTyIE8xMsSrf6OBYTn7zx4vbUUCP_pWhzyuaMmfEOulzjzZuLpYiH6NxarSfmwAgceIHf80pFvgeiri281-7Y3BeHJAge9BA2ppiFM1nTRK2QVaUdV3Pr0tbZImgpGqYUs7GUGZZRXuJE2bPvEwGvY10w84aK9AcGTXbS4pynMGG-j0fcbaeO5md-WUNtur60VJo7paS1Zmqul1hBn52mjdLZzVqoVimNS5-GLqwHIQPW3KrU3k9jFlUQbK0VU5IE_0i8dMoQlyoO7q15vQheJlO5gIW_hnJdr3Afo0NsNmDy-J4mrEf2fHoDiggOmGqAqRCkVky8mQekCfLqiVZ5WX9Cr8CBTqQoTvA4pI3y7d7WO7KCUOYAt8CHIAqoKIOrpMxZUnQGhmDPbqT6VqnANPtiy4I_Hg1RAFjMONerEdQCMFtZ6tflmWyzpbU3hievF7hoOCTBeCrOftvvOOZbXYR8JWLEIoN8WOEqxNb0lA_zotwSJqCx9Z6u6rqnCJhvwAjJwBxLcJsZNqFim24T83DZ6B_PGSWdRrqUR0vnzmpnXWGukzyMb_bm0Q4IylhLRk2TTEs5RiLe_AMgR4xdGV2a9Te2BY0LiJmx0IdlHS2jWFubk56ZJ0Aj2ugkORNX0gXUo3AXm6ZRHK5n1XPPONQaBSCejDG8rTRfbBVEF3tXHJwXlyUL9Ja3HPATNoYZpiqxDZezAp1nP06wSAMDoHfVNTAxCh6ILBcgJ77qPq3BJn1wD_aaeEdZJ1sA7csgAGTC2ZuBp9SbcDhnu6x1ldEYbaJouZRRpLbpAltlK-hyAk6qs8XmAWIWzsgtmhGpCuKIa4Xl_pEGNn8cElHg6SED9y4biJsQ98tRkAkhUPXuZhkh28pJIk2bBxhZc-wU-LhQu2n7RLPgGQ_bUMOk-ALu3g7paSCnrOrrXBq24AZEwXHdQSVIiR6YPbSlCdzmYlwjMi6EVaOb-g8iRTPM1DXMYDTujUKJW_q7pkp6jlrDItnBgKjqJgQZx4UQ_r9CXUHTGBlZ3JwAQBEPId9Z8V7gSg3TMqIoA==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_wdlcnd8zn6l",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime; 391 = 17 \u00d7 23 and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**. No files were changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4847,
+    "input_tokens_details": {
+     "cached_tokens": 4844
+    },
+    "output_tokens": 94,
+    "output_tokens_details": {
+     "reasoning_tokens": 49
+    },
+    "total_tokens": 4941,
+    "cost": 9.574e-05,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 9.574e-05,
+     "upstream_inference_input_cost": 4.874e-05,
+     "upstream_inference_output_cost": 4.7e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 reasoning dropped",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489200-ghk5gF5XWVjM4yICOHhj",
+   "object": "response",
+   "created_at": 1790489200,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489203,
+   "output": [
+    {
+     "id": "rs_07afaa57a8bed5b8016ab8b271092087d1bc14ebfb7c2a58a6",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Determining primes and file changes**\n\nI need to check if 401 is prime. First, I find it's not divisible by 2, 3, 5, 7, 11, 13, 17, and 19. That means it's prime! Then, I've read a file that mentions four words: alpha, beta, gamma, and delta. I think I need to report changes to files, but none have changed. I should also keep my instructions tidy and succinct. I'll include a simple explanation of the prime numbers in my report."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJy8LrGYOu-PnhWVQAuZlzJNO_zP9SfWGQmdWpCV7Ecw7zbVCDhfONAi1sDz6EhSZ_nNH_5c5tDTNziiKFTnlX4nHhw5ySEmZMb4fVHnYZ_ccJMW_UwAqyEwL3Vz9kSZOENrHGqdUvvf6o_fQaYGrC0i-SmpzW7QUALdhkMkkxAtr8Fv-atafzV48w6-8QtMDp7TjinjjDSBUfKCBbQDUb1bjT0mVyKiUsLJrgSrRp9dmUgXNo0HO5ng8pAPTqQInQGfWrlU52eS9I6EUK-swgkqr4hQnWU9e1hX6dCcFAHFhU8IB2iCRom1z5AUTeYQFvJ4aSMHwBdMUfuGGti0bkPLdAOcFE5KDP8q4LZOAxHlAaCZq0lbL-wvYcW9bVbUiV-9qD78bYP7ZEsB-IkzJzLlAQof1Of0ZH2PB7l0ApdXbNeot_3zC6xyVnbovkHJjp9WtdS07bkjCcYhrMC2d89sFgB5eNXxH7cFpQQ1d_vRm_Kaa24vdi-7Y4Q86P_BMCVINkAfdRbtOEjGIkX7B-xRdabEVoPJYOjD8KHCTWJmmuOYbI81dhLbwgNIerhem24JLPq7Zytu66HC15L79l_nRKw6splP192Ui6y9RmIS34_wQS73tJc2v8_Zxm6WALIHWomHJV1yfgAp8fhUovIHKyHKO3MrWkQmBmpDFktYab-T-YX0OWoZ-zJbDHucXxCKC6LN8apUpupf5xv68tuVhZtsMr_t9YQnJsvuC1SDsPrN83Kvjqt6OblktG5oCPw8HH67Tuq97La04SLru097kiIFq1oPbk2XFd-FK-3WuvCjdh3DDtRUJVNF6jcvmThMbuOg0ajL0tAZGGzhzxyIhZB-4VH60gpprLPlZER6zIC8tj4n3fkG6VH6FzJrXSrZrbjpw-ClQEj6fNMvOM9tTM1_GpZ7-S9QD8bG65uGVFtURaouRgwJvxRuoxuofPgci4TtcuU_FHsMUEtZI4TJyMlvTnwI8UOWXQZY9YVN8KUPuy9ZU7tXwxKUcj96mhin0Y6p7cveIE6mV2apiCUHSp_vhrHKePATe9mo7B1K3mdmjl_NlfGYfTEWpvrJ3r5oQfVuk-pd_Btg2laH30STpTB5REG4-dADJdH2Lfko6qB67fRGNTERVIfIpAbuwSu91IbGkIrhW_Yd3QCfw1hIYZFLCUFHJnowhqs5r8Q1UWGTH1X_6_kOtyc1lN3d6zhcdQADsU-Cf_GmcIpWQdo5KKPJCz0qjg0Is5oodbLrhOxewxRV5I3Jso5A2XYZ3DWFc78fUAvP89WqPUf3JvPJk9eGcSl-mAEAgj0i8FTW5GmGKWHV36gGQhWddCKfPifhqftRMZViP3vqGIXXfG88UYLJkap8hf3NIjeF8VDE0d0SJZVZFjBQ2W0EvzxcLeL1XMvnBKBbWRsDjchxqxcOyS8tcob07O_dStBD3ETArDgFd5EH4hWaTP829vy_5TWKdwg5J7mkAeYMGJZ-haG5V5ftSykpTO9QYaEQrga64i7syGKQKFXHa0ORXtk62Ef5nayuRehzA6nsLTOfUwAJLgHZeu3PRBY0gqStnQbsRHogbGgXsqAXfQjbPYP1co0Etf0HKowLVNnc1VeYvh4MSRZxbKvZgaAJSAZK17KBlem0tCy11SaJwi5jU71hlOucf3KdaNXcC1C29US5HgYQFHrhMiIv6q_Rg95zKEifASUTk96z-MVl98Jo2Dw_AFepeqPj3vSdvXZoHEl5QwbsRfWAWchqax5ndj4HaoSwNNmrwlzwVss7G1Ghwb4s-nORH4cpMZPddWA5FKtUSl1Nu7wghBVnC4VA0W1VygbSBGQvMdzF9o6kB0HqNL1nDg35uq47LPIXZsmz_GmGYoqyg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_6avy9j2k2ln",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime: 391 = 17 \u00d7 23, and 437 = 19 \u00d7 23. `/tmp/401.txt` has **4 words**.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4739,
+    "input_tokens_details": {
+     "cached_tokens": 4699,
+     "cache_write_tokens": 37
+    },
+    "output_tokens": 176,
+    "output_tokens_details": {
+     "reasoning_tokens": 135
+    },
+    "total_tokens": 4915,
+    "cost": 0.000139915,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.000139915,
+     "upstream_inference_input_cost": 5.1915e-05,
+     "upstream_inference_output_cost": 8.8e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 encrypted_content altered",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZAHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "error": 400,
+   "body": "{\"error\":{\"message\":\"Provider returned error\",\"code\":400,\"metadata\":{\"raw\":\"{\\n  \\\"error\\\": {\\n    \\\"message\\\": \\\"The encrypted content for item rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb could not be verified. Reason: Encrypted content could not be decrypted or parsed.\\\",\\n    \\\"type\\\": \\\"invalid_request_error\\\",\\n    \\\"param\\\": null,\\n    \\\"code\\\": \\\"invalid_encrypted_content\\\"\\n  }\\n}\",\"provider_name\":\"OpenAI\",\"is_byok\":false,\"provider_error_code\":\"invalid_encrypted_content\"}},\"user_id\":\"user_3GBtuqxSlvQQUT9VadWOHxC71nK\"}"
+  }
+ },
+ {
+  "label": "t2 rig rebuild (no format)",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489207-QdXBOrVvEo1UO1QEawdf",
+   "object": "response",
+   "created_at": 1790489207,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489209,
+   "output": [
+    {
+     "id": "rs_0f53672c6792d669016ab8b278908087d18e456502e3853f2e",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Explaining prime determination**\n\nI'm counting four words here. I need to explain how to determine if a number is prime without using any tools. The developer has repeated the rule that a report must be made for each changed file, but since there are no changed files, I could simply say there are no files changed. If the user asks how many words there are, I should be concise and mention that 401 is prime and consists of four words."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJ5JyTj34b9AcAHjiDYVrr1hZn7f9eqZ4wQrgcOq6UlPaxkQytbBf7JdyzLKx3MpgqbEaKinwZsdwuD94zpEsuClUVc0fTGZPOPpwzq08wl1UPeYvHCwfESmIJhfulYRMm2AQnmMxTFGtesM6xynZZiHqgeQ1NtX83Ak_ONEDIYMQ3_BePw0z29kM9iKNQqSL6KTKyLHi2jISqBZArpcO-irsApTvNvykdMVGdkPqyP_IZb9wZ8UQ8fGNKz0Bt5DmT8Z2fo2FzKoWGsV9bTKQUis89LpczhstjixjbTH-pYhfCHeWINKu223abxtoQKBbQcqeg6INFn4j80Z9OO2S4ZK6joXHJpH8uwKoGiy0K6JyLQeQaf4rtnBl-bwmoNo1wglVoBY9TcIqnzrztVD78PR8sjBIiMtnusKLtzr0sBBnP7OrVhk-T5Au9iUWBUAIBdN9QKqpoVQgtLjtkQ0QPVlKUuoJ4xKBIz2o5oyu-SoaGPLSYiJbaZwQf0zOjtK8xIHn4gEbAkxDIpj79WndISh8en2W9_d5NDBElAWi775KmSeYdmgqtaYSYdcb3yg5Tk_tsXfFo9OZvgw-wJ5a9AAbwglTrbGqM-as4QLqHL7Drp55p0-uG6YWoy2RXIsmgpswQs4TCKItgGTBrhi_Eyz6zEMKvogcQAp3GHSANYO9vzN9jYUtlYDlTOp-gpRshg3VqpqTLzc3sivqwX2GequLr0gPQiHmSS1IMgZVGgS2LnlJQa5paRTFRwzrfzt8RF8yyo5lsnm5C1zE65gGRLckKhSTwTSe0iLbmVtG0tu1s5iJVSsGnto_g652PjPSIStGbBNbA4jMJlaa4CWu084bY-TLhFPtl_fObR0yBAt0J4QfzF0HxBtRLyOQu5yNcI641vmPfX7mYc0uAD-jbCRU51URq7-fnE7a1ghr83mWLbX4r5-BHUkCttTAaknTOnOHR6ip1RC-wymfrK8sKD0OZJFBRdrPoLRCvqM6R_ZXph53vV2H3NqwA6U9sAynf0zdKnjmTcgYsyAYYpHlHOBpMQZoH2QERPARny67YPRnaJS50lxbGOnYPCDwzQ3PEo1Q0btKUpxngp7fk9VGEj7AxmBijDa313PTbv0geRjkQhsfAml2QtU3tACY1uVuMKrZ-ziF-9W-JacLhQpXhqlxij7hiWZaOVrJWbTAh1Qiu12qYIJ_c3wNXEeoLT06I7hqtR0bn8nNI0UdN7fuJ9V-1pD293ApRulCmCXXOxZHs5jRjRnAJJLUVo9bDClGK3r0Ii5bx2cmzp_aNCyI8GHC_evYBnM0aUbyL6QYkaRStjAaAZpNCVQHDOJP2T4ECnrzFFt-PNLynf2hld7qLbywtBHEDM3MvUuvC8in2ifdVvxK5RHD1ob0SCQdGyijB9CK74-XP0hwalcD0H0Tx_Xo9eC7zQguCzPEGqNfEQThMzwB-Pxk_siF5J26bliQ4kbRUF3WeLAw10BpP0u6TMF8NdtJaqDKUjak-lC1XbQ-LG6Re0o_wrJZWy5suVL3PvIfYpF7fnnnogRls24fVDfDpfjxLg1iaPMJfTakwooi6BCipDL2dZMl_jrN2q0xv9s_V8liql-jmR2ubH7J12SqDgvTg_UvJodF4NvHzQlsuYck_xxRgYgYdhFlU5l9dY0zmyOyN8WJjrZs_eb2-Lk2hHZ8FIH4kjL-oStyhRtFo=.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_sz4qmbfffz",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime: 391 = 17 \u00d7 23, and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**. No files were changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4847,
+    "input_tokens_details": {
+     "cached_tokens": 4844
+    },
+    "output_tokens": 105,
+    "output_tokens_details": {
+     "reasoning_tokens": 59
+    },
+    "total_tokens": 4952,
+    "cost": 0.00010124,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00010124,
+     "upstream_inference_input_cost": 4.874e-05,
+     "upstream_inference_output_cost": 5.25e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 id + encrypted_content only",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "type": "reasoning",
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "summary": [],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489212-fL6ebnxW41IdWXQ0K2Kn",
+   "object": "response",
+   "created_at": 1790489212,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489214,
+   "output": [
+    {
+     "id": "rs_0f53672c6792d669016ab8b27ce9c887d1be1f36754509058f",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Keeping track of changes**\n\nI need to count the words and confirm if any calculations or files have changed. The developer indicated that I should report each file that has been changed, but it seems there are none. It's important for me to stay organized and concise in my reporting, so I should ensure everything is tidy and clear. I\u2019ll stick to the guidelines and focus on brevity, since that helps in communication!"
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJ9JmzZYbOnU88Rg3xRp07wcQvX2YffYde1rSkSW3C034Uclx9bnNhgSbV6Zl2ZMOBBxjB9qTv5OjPZd6GUjKrXRlqKN3VdbdmziyL23b187iTD2V--lmR_ni7kiYwAxOAreNef__ZS6kICiBsoIBi0KsY8-bdDnAIxfBb-3t4h22zQSS25nggHqt40sXeol1M7GhV9kR9xlSnUJi8GWkA9sA3RYfHT536_ZXvcEzDVcrOzhuyW28eIW7jYz6SUvMbskq_u393KKZWWcSOgzrCaLuTllPCPWa6HFtpfr_b_Exno28W5J1NTEM7i-dqt0ZFMqoqqb5sMm7kC7CDuPJy6kENqbxEliUtBbUuVmNkFXaKtmte5NtGLC0EXFmfJiHAWbEkiogo_dMN8y4IXNFmojMWPcw0Xm8i1Pys95vYK_EHAD-u3edmaRDtcFw7E2vSw4K8muIqiTHat1WnJSmIlTQ5cRpJBYp1A1U2vzD0beC34ZoFRA_O4p_h2_lnPeeqYoxgFGfiFOmcTwB4wZxheqLv-q5l6Nbx75-oR3ZgXsLZuT23K8rt4GZLJtV1Ohjh59l9yJ7muIVCiwSZ-SEQlDDiUlHiokuDmoXpuNEGmvD6c7WC2Md8a03tvsWqD_edgF73SUBEinw1KcD2iZF7wLYVINyeJ_hr6ngEUvqeQe1Uh8YfGqq7yRjrP8JKIf98uupTDDEIkpVu4pUJh8WzobPKgUwWzSRvBVZe80-5HEIXFeyzFtXSyhIHLg5ZCO_MV1K8PQK37nmE9-z171TagY0ztr2Cjkud908e3kWcLzqwKPaDFY7DwYqeCi_CjLxK7AkFkxqIIepXTp5hC1hZ3GKMnu5sbJn9rnW7LCk_1LWUPjjtejZEywoz_occxfVFWBo49g3XtDkcga23BDKfO39UZa0322cLyZCcK6TpKH4njVV-kTulfKnXn7OC8K0G3JO__YeeKjHx_rrc6BXGkAWLIdDJod5AKc0g8fffOgox_A_wYTfv1dCgpBXoylpuhV1WsUlavMkxaADtaD-sMEEsKekDcHbjituwBl1w9KnFcH1MC4hsfoe7cAw6jGEjkgZe2FvKDM25gcRPtvbgViIAf33I4v6phs8Uv9LT9ds71Jvy9EFuozrtpjpWuHetEHspm_wg5Ch_k-BB6i6mQH8FVXNWPBekUZdqtqkbQYTCFboOR0JiMt-laqAlgE4SjXoHda21yTpLmmgNUfa_TgFu9eX0rPckIDi3pNEFp_W-G5JJLbCM_W8p0LjCK7gjeNpb-XDHv3-ar8Blu1cRWWJ9AGJ_P-XxuZXrRmfnj_dR2uslH_h2b1h49djNMQMCZtEaa60f53ZWBmv_rU_8egXg83jEW54lL2xlZlZCgoA4SJYOT9iBP8GOKEk33ywmH3_LKSbFAEbKRupw8Z3sI6KHyalTuAm_5fC_gZQbKcy81Unf7vWUptTTD-MbCAXNTiCWBzZrJo09zmZgtVfdWULlptRv4HcYKpT0ENduAk9RJpB0lVtuhVHCJADBhx-y8AP0anrOpduDjKhVVEVBUXA==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_85sq6iyjygb",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime; 391 = 17 \u00d7 23 and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**. No files were changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4847,
+    "input_tokens_details": {
+     "cached_tokens": 4844
+    },
+    "output_tokens": 80,
+    "output_tokens_details": {
+     "reasoning_tokens": 35
+    },
+    "total_tokens": 4927,
+    "cost": 8.874e-05,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 8.874e-05,
+     "upstream_inference_input_cost": 4.874e-05,
+     "upstream_inference_output_cost": 4e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 no id",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489216-fk0mhIzAc13SiaWNfMjY",
+   "object": "response",
+   "created_at": 1790489216,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489217,
+   "output": [
+    {
+     "id": "rs_0b0af412af38d14e016ab8b280fc6c87d19387510d783817e1",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [],
+     "encrypted_content": "gAAAAABquLKBoupFucSu2DtiVRR62GR0PM4yHc5oTrixmwIHw4C9vtX6qyY8WWJGqJt3_BGgQ_t3lwEoQxaZjvd7fgKk3oJQrfZJIctJH-xGEeCRvxO78lIncKBvx9JoZkbwfG_ETP3UbqROsvA3JJFDLHiZI98zy-dqXfqrGFpS2Z5iaYFFwRZj32PhMCRpu8HupnX505ExccpzH8vet8rb4h4-QM1pqzxsJdxNOoa-bHm-Av-Ns3JS3pyUix7hmqsc20O016HhIb9-UzXvgpo5I0TaGlBg2PpWlQZTL545yHVUPKKEKI2mh27uZGz0RP3YwNZ044cfRUTNfME05xxlay8FuwRbFsc0LrSLH6XoDgbhe2o6yEDbUADqWwaqfISepiSzijDX2gO3urR1wqJVZuCPolJpRKe2Fb7TWXWbmDeR-XWHU_AS9AaGHoQ_555KUFgyna7lt3BEkyY9RC5IrPr5N2p3Upb6QGkukdMMK6zzNjgL56zIm03z6Sg3uB8qRZ3vCKdD4FxwxI-0euBI0aV9ZKeW9NADLtnXMmMUeRzedTZ0iKFC8Y9Mz1eJq-Udh0E2Kt0gBYIzykFHnGk2Fk0LXaWQ5XQ4k4jqD_2R-GAk8CeJQGgTcsrevigNiTjnZ0CSHDwb0QBlEb2jlnTkQJO8cbTh6d5Z3eLdfYydYoJ952Nf_RR4pOmp7WsfGn99JOYH60LFwF6n6fYK_Rv1UDxytkpympSh1y4T-8Ks8hqZeC5C2YtBjZYimolUWDrQUYDdv5JCFP4DFaVnZNlDV4_vTxQ43dxA33fw24FVebxmcDC-H8Wau13zw8Au85qTmTD6tZxwxblVps7NmeZBRERGwSz1qeCKbbLAqstsMNhug8-lVSbA7FjhiQEd50XWR2qcVSSPn3vPWKizv1OA8Mz0m9jWhnbp542RZYwwgBSkAFmmrOyB46UpcwHd8OmwSrQzh-_DSdvXcY-dafTamM-vDxDywCgbqpyYCK-piHJXESrMe5VGFmx1B0m4l-pf0bWujLdbS-3esfyKnkgzTk7wrzQWkcvGDazqJRDBU9UFDCrmlz0YlgZdSFzwIeYiaYBylU1rhJw_35bOfBBraX6ht7AU5WDDfHNiZ_dKvyhB1E9iVwahZ6Tch39SyjB0F7mu1aZKetuDxA4qHCpIwT1xlrcuLiRZNrmRGXnsKQTOvC-1DXQbf2IRf70J4rdN5dism5Zo4827BDM0_7VhqGbTB72SCIT3qJkcj6bwFIzNSPMpf2RIfVeML8G_BYTkgOG9ScOjMNx2bAxuyQI0rUfHQoOIQo9I2eOzAsDr4U8S-6EJhYD3TCxlNTANLYBgQx3WZ1q9A6FK5JnOpHOz0HIkHkUV_kSqNpsXoKb5UVQbCb5iYpYynBpv6OsDEuQdQVPfceyGyvGFFoZQ1bRSm_Ak3Rmzx4OGa61S9L55Oy5bAcU3-AmE5yRJe6n2IwOaQsr_fGvlWY8LYPGnhu_WNtJJRa6UmfF4TvJXlA9aLHFZlzh0BQIC5o1lFu-BykGWoFUj2w_v.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_6rqg0wtkkfx",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime. `/tmp/401.txt` contains **4 words**.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4847,
+    "input_tokens_details": {
+     "cached_tokens": 4844
+    },
+    "output_tokens": 63,
+    "output_tokens_details": {
+     "reasoning_tokens": 41
+    },
+    "total_tokens": 4910,
+    "cost": 8.024e-05,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 8.024e-05,
+     "upstream_inference_input_cost": 4.874e-05,
+     "upstream_inference_output_cost": 3.15e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 no encrypted_content",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489219-vEzoqmU88KD6bgC2hvfk",
+   "object": "response",
+   "created_at": 1790489219,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489222,
+   "output": [
+    {
+     "id": "rs_0c53b755caa44a8f016ab8b2848bf087d193c0a0bb66dd9960",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Calculating prime choice**\n\nI need to determine if 401 is a prime number. I checked for divisibility by primes up to its square root, which is around 20.02, testing against 2, 3, 5, 7, 11, 13, 17, and 19. None of them divides 401 evenly, confirming it as a prime. Also, the user indicated no tools should be used for solving, but I did verify the calculations. Finally, I can report that no files were changed."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLKGCxmsi5RXLN-VygwtEM9cOLSaB_Efkcwo4cs1ODSSXm9m4HF5kp6pYDTgFodnBwS7sa94whVaiNaRQQRr1RaCYRCiS2uyXIsxidaz4KUnnABeMldvhHqmA46YRvFi8JnyvQRJjsunr4BkMVV89pO2eUp4sWPI24dYbu7LeqJ6-e-dtssjgsURaaxPJwTBF9of16buHGTA5MMQpzJ9l5I8PRMEZm8bPNYRj7g0vMw7tQvsbrCqFhfz-0MfM90to0m3c59H5MM_-mLPEe8yrR-5BhmCYQlRDIiofpqfGaji1v7h8lTfJpKm82YAQ-iCg8e4lK7IU4qaWiC6PwFA6uBrI4BUaIjWhFEjjW-13UG79a57ctEd1tbyhJ6wGZ1Um0gROB8aBhKdBORRPxpAGtz--SgxIzCZOu6RBaRUduEsx2EgdzvMxKk1HJe-aa3kx-XUF9SaAZQLwUTKzpafX_53g_mFjwgqXpjoWRaObFyv-PM0JXnilnRdMcDZLlh5xiFjzWkq5DoyeGU1DJ6w-CdHI-x77wqwtn6d1yqJkarwg3JQCJPFDYT5TFVlFYgkk1rWWlH_irJkUi337kkqPUeAQX9EhwydN-eLXzPcmlJEEhyfuJoSBQLoDCxA3a1j1e5lpHRmI6lA_iKLWjkxdg-qtyEKDi3PfJIl31QnsHU9DYgCiYGSGQYy-qmV0Jd83Ahv78QeCOtLlPctHiqm95oltQwrSJYLgSGuojAdKemRfd1qHv1Ly8wlacyHLrqhhgxDgqKt_LrZz5t--gLvj8UkDsQfzD7lH56OatMvCk07Rm-WQTNuA7u-3vCcJH6sR-FA4T6lKvVVkQXlqvsH_lP_YEOGaLTxmMsYciiOKWVED2iMCiEgMMQ0eh1XeuiNUSsyINpSL95hj2PdcR6JtAtG13Oaoga67juPJnaDtOFYTqW37-_Cnk3v6EhiNIjOCcFHmADZ84S3BeSOG_yEtzHOWSs62zTmSczwf4jUNM4WAxYZbzcjcQY0vvIiRCIOUVo0RYc-Y9Ixmj-JJGCKlgxcmVfzhWY5xua0O4SOe8K7fGqvAX3d0CEs1iDtVfCTFDFtzg--5HdYsL0Xjxx7i3G1nct4SBphRx3yx4PVDFdf_rersViL-FdfRG0rEo5VgaEPvarEwxOL3nxRtoiWn0eipoSgijrxVti78hFDlZoz0eWdvOLg4O9ZGTSdUwsrtZ2jweJNdWs5GEwqwIMLZCoAbO5DH4fK76n5HreT6wTLH0Lh2yXqDfXTo5eXPDCV8UC0TisCY7sfG_l3ea3Iqet6ns4NcqNofuwTMzZRxV3NKS5nLS5mcgZ82xOBgiIX_rLGVJkoLypjf4qV00fvQYk2_uqhkGZx3x_eyVBsv4rER36NIuvJOW7VK3wMb78BVaHuUo_sVZjZSIGBN3CrQmXrYC2wnUnChh8NQkSw70M2lNL6fQtglDPVr1jRFs9jURtTHUNYZFYwweMEzU1CRa96rYLEl9Kfz8loGduo1qrpFTl7GQIatXFOVEPenCWRAK9DPz0QoPlJI6fdw706LGLhMhBBGETJzWaP0MmZA22i1X8Z-gQC667puYiAfaPsByCu8Z4xbnIgX8xuHk_8uvYK79MABv5d4H-FUv3Iiy2ELMTT5I4bT7uNs3-M1YXfLtWvxI8Iiw4jlsXlStrfLvMB-YV6s6uUbFAooVbcr9XuLQ0H7fXmK_Wo8oTUy4AGRSEO9-1FkjZA2gvpi_oC3-67WNu_lvSx-riX8AVqTbC-PjXuOTUDzub3gRmX0Ioq252aTfxyKIr59CLae6k0EJNcAY_cT25hrOP90uWpF0e1eZS8ndoWuVXnvl2RnnTD8XINWrfBXOqXNcGF3Q8U3Yf_fb779mDCbUaHwd74R_GF2SUBgireMgRMFAkdIUoSLurvMSoHxojP0m0rBLAjX9Uki76aH8GdqInZix2FI1mzdu8zzJGLWsnah5sCGO7tvAKY.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_mwqgg3f35l",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime, and `/tmp/401.txt` contains **4 words**.\n\nFiles changed: none.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4739,
+    "input_tokens_details": {
+     "cached_tokens": 4736
+    },
+    "output_tokens": 201,
+    "output_tokens_details": {
+     "reasoning_tokens": 173
+    },
+    "total_tokens": 4940,
+    "cost": 0.00014816,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00014816,
+     "upstream_inference_input_cost": 4.766e-05,
+     "upstream_inference_output_cost": 0.0001005
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 Sonnet 5, unchanged",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ],
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   }
+  },
+  "response": {
+   "id": "gen-1790489224-H3TjAvIEp5KASxUkQD8Y",
+   "object": "response",
+   "created_at": 1790489224,
+   "model": "anthropic/claude-sonnet-5",
+   "status": "completed",
+   "completed_at": 1790489228,
+   "output": [
+    {
+     "id": "rs_tmp_jgzm692cct",
+     "type": "reasoning",
+     "status": "completed",
+     "content": [
+      {
+       "type": "reasoning_text",
+       "text": "Confirming 401 is prime, and counting the word list gives four words. Since I only read the file without modifying it, there's nothing to report as changed.\n\n"
+      }
+     ],
+     "summary": [],
+     "signature": "ErcECrABCBIYAipAZ85zlC/1rq48ApEVMfEhbY5jnvYJhm4C3Fc+ekM64U/1oepVDXLFcVk4paT+mXy+nNNJdPHTBsacqXthvu01TTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBjOXi1QYSDD82AZlr3b0e4CTlmhoM5CyS3F6jHG6pL6V9IjBtAFAZ6FHIRG9L9yrK3DgSdjGjx39o7LNbq2DmYOs7qiULEuo9ZdNtluuyeb9Jax0qswKEKfzcmoSV4HcXpaCoofTI8TAxAhn6/vFNdNeyDgdc3GVcyhf6iZ2wNB4kKiaTVKNqwgNSle5BRdciZQhnJMqY0dFbSMpDYEYjcJjzuqj3QrtbLrLKq+OwlQcHxxqGVQByiHjP8UdZ7ETao5kgSfovmk/tdJUlrvq9JlCkKgnfNIyPaXorlyYQK6U8qfq0VayRvXdLeCZu/+MFUM9ry74n5+JvQRCOTOqfA4wHQ6rnq09xehJvpfzg1kkAxSXaAOaV7vE/tDe89yMaVXGAnPp2VBwjljTfEVGvc6DujVIN/A9qDRmGjd81afPoR/LCuvDw0WQXXSqeRA0QVXFsA+5YiyqdE+q0/057sTlRmh6b1qhdI095s2NoPKS8ZGtQry9Qcoq2gxF+95SUQ2j2SFZGOB9fGAE=",
+     "format": "anthropic-claude-v1"
+    },
+    {
+     "id": "msg_tmp_wlsy1jxaju",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "**Primality check:**\n- 391 = 17 \u00d7 23 \u2192 not prime\n- 437 = 19 \u00d7 23 \u2192 not prime\n- 401 \u2192 not divisible by 2, 3, 5, 7, 11, 13, 17, or 19 (\u221a401 \u2248 20.02), so **401 is prime**\n\n**File read:** `/tmp/401.txt` \u2014 contents: \"alpha beta gamma delta\"\n\n**Word count: 4**\n\nNo files were modified during this task \u2014 only a read-only lookup was performed on `/tmp/401.txt`, so there is nothing to report under the workspace-tidiness rule.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 7023,
+    "input_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 0
+    },
+    "output_tokens": 319,
+    "output_tokens_details": {
+     "reasoning_tokens": 121
+    },
+    "total_tokens": 7342,
+    "cost": 0.017236,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.017236,
+     "upstream_inference_input_cost": 0.014046,
+     "upstream_inference_output_cost": 0.00319
+    }
+   }
+  }
+ },
+ {
+  "label": "t2 Sonnet 5, reasoning dropped",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    }
+   ],
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   }
+  },
+  "response": {
+   "id": "gen-1790489230-p2Dk3YIPikiXuQ0VzeTy",
+   "object": "response",
+   "created_at": 1790489230,
+   "model": "anthropic/claude-sonnet-5",
+   "status": "completed",
+   "completed_at": 1790489233,
+   "output": [
+    {
+     "id": "rs_tmp_2sie5z5imsx",
+     "type": "reasoning",
+     "status": "completed",
+     "content": [
+      {
+       "type": "reasoning_text",
+       "text": "I'm factoring these numbers: 391 splits into 17 and 23, 437 splits into 19 and 23, while 401 checks out as prime after testing divisibility up to its square root. I also note the file contains four words.\n\n"
+      }
+     ],
+     "summary": [],
+     "signature": "EoQDCrABCBIYAipAraNOdREf+Zw8cYMJcocu2a/z0Bor5amoBrMMW77EHtgHRu8dbdhbxNeZL8R4EoWEYtKfCXNtH3dJ90b+Ulu+6zIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBkeXi1QYSDMZcinVy4CTB0OVmrxoMYw/47dT+k77aKEq9IjAY/Pd6XgTvwG9suqtfw4/BpM6JJNtbF6UNgPzsgVjqpbB0N7go1cCMtuzduLB/x70qgAE5bfopSpoY6cGTmCPqPxoMgbnS+cX4rdbb0ysHDcrJb7hZyu7mfZNCyv+JSqy2oIf0p6GoFa9bX40ZaRNrh8BkUo4SSzMt4StjaE/lW7H/dn1HE+60FMC/bVVAOyT/Q12+gUdwFYeafg84s8hR6TQLId2Uruw5NKnR0h3urF+H4hgB",
+     "format": "anthropic-claude-v1"
+    },
+    {
+     "id": "msg_tmp_7qvelokfm6j",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "**Working out the prime:**\n- 391 = 17 \u00d7 23 (not prime)\n- 437 = 19 \u00d7 23 (not prime)\n- 401: not divisible by 2, 3, 5, 7, 11, 13, 17, or 19 (\u221a401 \u2248 20), so **401 is prime**\n\n**File check:** I read `/tmp/401.txt`, which contains:\n`alpha beta gamma delta`\n\nThat's **4 words**.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ]
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 7023,
+    "input_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 0
+    },
+    "output_tokens": 215,
+    "output_tokens_details": {
+     "reasoning_tokens": 67
+    },
+    "total_tokens": 7238,
+    "cost": 0.016196,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.016196,
+     "upstream_inference_input_cost": 0.014046,
+     "upstream_inference_output_cost": 0.00215
+    }
+   }
+  }
+ },
+ {
+  "label": "t3 unchanged (warm)",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b26854dc87d19486c121f9d04dce",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Counting words and explaining**\n\nI need to count the words in a file, and the user specifically asked me to do this without tools. So, I'll use read_file instead. I\u2019ve completed that. It\u2019s also important to note that no files have changed. The developer has this quirky rule about reporting each file change path and reason, but in this case, there were none. Just to clarify, the 401 prime file contains four words, and indeed, no files were changed."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJp7keUOgnDTzxpe86ZHmYZ3i4Ad7YtMI4_zBV_3KvOcY33OXY701TZe28a-SfTFhf9x99m5yooZQLiKvUIoqmRe4nq1mvqP0sf0ZPJ4D44Nxr-bqMFh_mMJF2Zw8U1BcD5_fVc8-3iy0A46bzr7f4AUL3Qr18uV8PQ94dTpwGc74cKScxHHVq49nX8NqA0Mm4nh3Vs4LY9STz3f3GbFl0rDSr2sVoJ6lrcbaNB6gEgs04wnwOA8X4cfwRf5kIjrEpuLetDmOvTlclzTrXdcbcmlI0K4XpjO6S_6E2eVA-ix_m9q82xHtgfomD0BR5MbHKYo-5o9Hj8UPvpOQv8nUZi-GGoXPLk6W6Jd5bPpR7aNvUkXuTiW1FujXkjICKY88De-af8lWY6hZg-92BaIlNqpAeiunEl5DplJTNG4DgctBMYheWDqBE9yEwCbOii7QRti6Tocf-YFSOp0jlsDGRFhuIUHvVIpKnP2mjQu-PMluqbJ_JKq3Q3-41kvI8iBzfOxVe7vcnWUrkk-dO2fGuZVlSQPdgnO77P02UVqn2N6MKRd8yG3I6I1m4Mtl52Zpm1LDavIspdIJCRxkJfG4IU8r8KVSheEU7Rfz9iqF-rvefpuaCJ0PkADFQECNFq8z_07vV7rPH9QtDte9yJ6qJJTdju2mAp6hhi0ODQftIPr0JO6GisqFuujVA5KDuu5_4m_g649bOeHi3YBUSQuBwTnlRQ9aA0y1GU98Nk8G_BOP0GgovWwhWtQAxg9cPoTvA7_-Ew77536BkBl-lyjoTLL0ImbDs1HuxbtD5Q5ERD_HvZj_dzgPmH4knJAW5fJmhnMNtLV4bOxVIQMvL3bVDKlh64YjmIUR0BCDdI8SAzQMbveO-iOH8PwDXmHIRMeo0T2qytfqVR8K8msCpMjN397YD_yT1V_97Mg-BUFYwaKIGtJ6g9sgcgYoM4O8O4HRLbC3yVhHUSrd6YUjk4gozBeppsHkCY90LwP-G7lPUDktJWhIG9UbFITojVsHc5l_4BfxCTNtHU04wkDsD6Efsto-k2PQm--cauQpjRob0F9hu5D_Pv0KZ2HsVNiielRtaw67ZESHWm5JKy3M7sY5QXdLCx_DKrtZ3gK7iwNeBCvFGGdKdYG79U_Dpn1ilmtUq1QjHc01N4umxR7vk7InHbk6DD0J5XwGmwk-yL2bHKw_iCMYRZ6luEuA5c7_YANNeFO65JtQeXbFHUqRrg4Lh8Uf4FkfSNz5niDPVfvkeEjCp__zVpJwymniwAlHtxxHTKXfirtQRT90Qqg5kRJN82DwdhsEWb6c2VGMTp1Z_pEe1hupiI6EGujsPjTqJKAH2E3-hzWn68OhgVomy0W1bTPYn6SPckMIzNTLbB1QWfSwF9eRL11jaBqFP4isV4eegLyCCloe6YazKWGooQdi27y-ApN6D768RZ-3vkoZXR9m4stUbz4yowwJD1cprAcTcc5p7mHD07j2a88E1fqqPLLsBL243QHr30VXTBmsSa7iubNk405pJsUPmFyDKJ2x4YDePZWir8RetZKXCidf9Ne40Iqy2BNcBtNkPa_9vUBDEe5b813IcDFVGC-QraUBVP3uFitNYY3udoVWLU2BzgMHrWK3FEfR8H2Q2rEDI58CrLoBpZlXVUO8Jqa8lriwVK43FLj1miJmNyFW8UlIpCWBAbv84Hll86zWPy0CNPAdAjHhsgOj_lUgFtO5c68HA4.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_nf02f6i5z1",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime; 391 = 17 \u00d7 23 and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**.\n\nNo files changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    },
+    {
+     "role": "user",
+     "content": "Now say done."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489236-IBpB6Gbg9NNbMAZhTA42",
+   "object": "response",
+   "created_at": 1790489236,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489237,
+   "output": [
+    {
+     "id": "rs_0f53672c6792d669016ab8b294b26087d18767cb30b71382d7",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [],
+     "encrypted_content": "gAAAAABquLKUnBhLkWHHFxIW-oz4RtEWi4AzHfFrQo7zBTnhQxQvEXcdq1Wxu_Qr0qI7E2YAuqmLSrf9iDC0Demu-xoVtDOG1zeLQTnYzsn7aV-6zMvc-2rtdMwr74g3BUp10ufp8HafgwHVwU50khmXw-KXVlgNPO51ur24hSVjdQK0CDQdhrSRshfn6HdGGVkMpJJWBvMRVugCmu1xnQ5Z4iYM3E1pC7FtnGeYHnRzpPgpIAgtpXAhYQYVeNKm69dglm3pIj-09ln8v3lXL7pw4vnc67C1k7c6mJPxxMlEgZk4eXL9lL416mSkbyXBvpuc92USnMTk9HJIWccZtRey5IQQzz5NkmzLr1FC2b2DtVfy8DU8gZxUllMIQ4LLRiIDb81da8mCWvThveEtPu5yIxZKr6t99HIHEJNCwPplT0jbcoFFwxtfQv5K2ukgw_bSYgMidgQlKlQLoJ-dXJ7hX_1EOtbEVJ3kYUmDVuDSFvrSAfG3sUGu0eZg4KAzhg6Wt9LpPAAkorWhZtMRh123xbE_SeU04rbhroHxMtaajEJEuRtuRc2fdN1sGD6QtZjftvLmF3QdkjjmZpj9YSKGu8KwMOzMQ2-wXYOACHMRdiCDdGPSNhR_ngi2sIkhgEsnaFOQ1w0GO1J4C3IVr8bBayPFr5FMl9zgc_bTzEoltkgfIC_Qtb71OJzpyEkPRW3ScUoCVsTeZeii8ZzzdTJv2e8jPNg4Nf2v5zOJITdqDR2wjo0IeQtTyWM86NOwPKbEL08HT8JCDeSoYQ8LhpIODK6nWU4QG3oiXYVVa0WucuWidI2kXLriRKH-WKdv5mMNqbxBp-R-12QLhzv0Y7V7dnF3kmGThb-SXuL-ig2cGyC-doD27Vitbk0j_CbrvKIosaqo8S7vn8SByA46nMY95cn1apxYb9HnVnTpUdcAAcL0hHVnoxGqNuGZSlnfklK0jWkwBI4gwJ_2XRctEqaIK2O6WP0OAgNdA5bh0ICKT2qadwXlQcjMbph7iT0iZL9e_FwaZLmSPoNfxAgoP8Frdve9Q4k9vwbL-Rj-fI8VzeQ1dWLb7Rn5nAs_i15zcISw0rwlf0jBu7dKzMD2ErwERPO9epJIltby8H5Et1KtuBNJFSQFc5D9CWIiDZYHF1d5RRSGMD6GBvJxacHUpzoBBJEoDGrXuSaM_EKyjLgrR_tX9r9kLbXqOB11cXtsMMhLpRLXzjbm7yse7u_f9ib_oSQ97-OGFLoy1xFrD6FmZaX2k4XlAdd78V9b5AkQVVp8QTGOw4Yteq0wdyD-LnKii8f5C-8DKdeU0lTRz63bKWZ74u95ETThrHQMih6ovO8YJ4gM1y_y9_Eiq-_NNADt2D9hJzJyE62WtkumMDj3EQ9K4Q6JWklYeULIV6_cTRp5T_ibNRf4.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_q7t63ulzpva",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "Done.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4964,
+    "input_tokens_details": {
+     "cached_tokens": 4844,
+     "cache_write_tokens": 117
+    },
+    "output_tokens": 22,
+    "output_tokens_details": {
+     "reasoning_tokens": 14
+    },
+    "total_tokens": 4986,
+    "cost": 7.4365e-05,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 7.4365e-05,
+     "upstream_inference_input_cost": 6.3365e-05,
+     "upstream_inference_output_cost": 1.1e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "t3 unchanged (read)",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b263f5b487d1813a0953cc692afb",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Checking prime status**\n\nI need to identify if a number is prime. I\u2019ve confirmed that 391 equals 17 times 23, making it composite. For 401, I should check divisors up to 20: testing 2, 3, 5, and 7 showed they don\u2019t divide evenly, and the same goes for 11, 13, 17, and 19. Since none of these factors worked, 401 seems to be prime! Next, I\u2019ll take a look at the file in /tmp/401.txt."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJmR4u5PGquYoWxqFuGns2jwEskE0NZCHq2Chaod6CObc_eLgToA5BUNRtoABogc02IdZqby5c7eB0hRJl7nMpfz4zy4drA--UqiSd9NBPGYFMzKR2dKcMNO1A6ytt-PmCf2T8pe4En7PKDbcfy3PU2rcTPTepvngRXEBtJpmVn0dEoha9nr-17ep3q-WvAw6H7joOkv2VlcEyJOZfPilt3EcOno9mGHblN5sGsozmiEIuZL-jPwQg75aJpg2hT9QCGEiRM_uIu7NHTx4qy1SREEJ8rO_gk9RO_IXpBO6qRI6_JL0E3BMY5Zzmil3BvTAw5tQRdyaNVVirJP97W74Aj-I9_yXXYY_x7BUufVXvMsgCRrtoSd8Ea3Pzy0sC6BQlAfT8dJ5JUnpDUjekaRCMHxIbtTt2P7oV_7wjq9dgUfSQ0cpNHzvvEwZP0mSn8idXvb1XX9nti33pOsSFwGbQWjz203wt4Zn89svj6xwHQ1nPAXdxoQo1ltmCF95yNKuoz8HeBEew8-o2bFRf1Qn6M2gpkgm6A4hVkweaTcmjy9OgLE_9osx_bAUEcMq-722RrJXVQKrvUAijMMJDiRaNJVNhCcw0L3FA7_fWzUEAjGteVB70zV0T-SgetleOfIPzNuL9Jqfv3aSLM4fJ8ycb5oRw2e7ssDMcHroKDZEIOGE2LHgVymB0wO-YvbEPdTsgfwIVBIUN3PL7qdZtai4ETn6HA9c4jGmFitqF87EXnORWBscsMW_mxEFYbFVSqvBMHXnmcto8nzzOB3w2PfSl0gJuyWNUGxAU4gQYS5CRq0qLrhepprRKNMTPiHzyJvjpazj5Ywz1slsgTZYhHwj_IuzjNNV-54TN_GRF-kmStmmCBHma73uGyGRSaevTqEvE1wQmVPZg5spCuChKd3F1fia8R2-D4AuA3HO4B4JA9ySigITvpId5mpqhmUy5xZzCVlEyYNgvA5J_kz1WDRx9H-jbCWLHfbBAEW3Ud5lp7hO_sbmWpYJFGxd3bZkOQ-gPJgHPQ6ZQU224CJe_DtKHL4pqfsGwJ56PBuxx221hBPWP4wKKDoPsPzdNVCpOolYOaxfe5TrV4433A2ov8jTZ5d6P5se4VJqJ13TmW9LA3JtuODVZGH-H2XLLbNRfVspaDk1PlsyqoT3jamVuwEmB61NN-ghv8jfFLANhWzVm5FPIk5oZSBdtI5qir_l5MGP2zTSUnXlmcgbMiIFAwHLLgqpgVk2O-MwZOnUNBKpaOR6uzy9rBjiCFGd88spIlAw0rC94bpysrwCxzytalrIs-H6kk66GUTflb3lJ9QkVcsliNmsCMrvPmBKiHbtbrmjzuovUCXzTzczb-KAj7nun4d5Qyy0btf9u7yBvuG6BGZgnV0P9gy8X8SJIymIBRBj1qMxx1l8_c1HRLxdd6aJCelRxTr6HdlLcfqpOuimbm1M81rIh_tA7h7MNjS20w0pSoQQse_X3XCrU-my1l4R-pGtyDha-xD2YpM2l6Y6Ug3JKrBlcQtxADbXYfzL8JoPNNYEaazWIEphLVTpyOltr7wNhNgp1cdUI72vM0XPja6ap1Ia5IsQV6-ijxcg-tEpUshs-rXOZuW33fR4bxOBpOzH13jut9CSuIh5eoTGxZdO1ox7Te3vZM85JbBUWA7mnZp2TQR_YAO6eXObTPVHOdNg==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    },
+    {
+     "id": "rs_0f53672c6792d669016ab8b26854dc87d19486c121f9d04dce",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [
+      {
+       "type": "summary_text",
+       "text": "**Counting words and explaining**\n\nI need to count the words in a file, and the user specifically asked me to do this without tools. So, I'll use read_file instead. I\u2019ve completed that. It\u2019s also important to note that no files have changed. The developer has this quirky rule about reporting each file change path and reason, but in this case, there were none. Just to clarify, the 401 prime file contains four words, and indeed, no files were changed."
+      }
+     ],
+     "encrypted_content": "gAAAAABquLJp7keUOgnDTzxpe86ZHmYZ3i4Ad7YtMI4_zBV_3KvOcY33OXY701TZe28a-SfTFhf9x99m5yooZQLiKvUIoqmRe4nq1mvqP0sf0ZPJ4D44Nxr-bqMFh_mMJF2Zw8U1BcD5_fVc8-3iy0A46bzr7f4AUL3Qr18uV8PQ94dTpwGc74cKScxHHVq49nX8NqA0Mm4nh3Vs4LY9STz3f3GbFl0rDSr2sVoJ6lrcbaNB6gEgs04wnwOA8X4cfwRf5kIjrEpuLetDmOvTlclzTrXdcbcmlI0K4XpjO6S_6E2eVA-ix_m9q82xHtgfomD0BR5MbHKYo-5o9Hj8UPvpOQv8nUZi-GGoXPLk6W6Jd5bPpR7aNvUkXuTiW1FujXkjICKY88De-af8lWY6hZg-92BaIlNqpAeiunEl5DplJTNG4DgctBMYheWDqBE9yEwCbOii7QRti6Tocf-YFSOp0jlsDGRFhuIUHvVIpKnP2mjQu-PMluqbJ_JKq3Q3-41kvI8iBzfOxVe7vcnWUrkk-dO2fGuZVlSQPdgnO77P02UVqn2N6MKRd8yG3I6I1m4Mtl52Zpm1LDavIspdIJCRxkJfG4IU8r8KVSheEU7Rfz9iqF-rvefpuaCJ0PkADFQECNFq8z_07vV7rPH9QtDte9yJ6qJJTdju2mAp6hhi0ODQftIPr0JO6GisqFuujVA5KDuu5_4m_g649bOeHi3YBUSQuBwTnlRQ9aA0y1GU98Nk8G_BOP0GgovWwhWtQAxg9cPoTvA7_-Ew77536BkBl-lyjoTLL0ImbDs1HuxbtD5Q5ERD_HvZj_dzgPmH4knJAW5fJmhnMNtLV4bOxVIQMvL3bVDKlh64YjmIUR0BCDdI8SAzQMbveO-iOH8PwDXmHIRMeo0T2qytfqVR8K8msCpMjN397YD_yT1V_97Mg-BUFYwaKIGtJ6g9sgcgYoM4O8O4HRLbC3yVhHUSrd6YUjk4gozBeppsHkCY90LwP-G7lPUDktJWhIG9UbFITojVsHc5l_4BfxCTNtHU04wkDsD6Efsto-k2PQm--cauQpjRob0F9hu5D_Pv0KZ2HsVNiielRtaw67ZESHWm5JKy3M7sY5QXdLCx_DKrtZ3gK7iwNeBCvFGGdKdYG79U_Dpn1ilmtUq1QjHc01N4umxR7vk7InHbk6DD0J5XwGmwk-yL2bHKw_iCMYRZ6luEuA5c7_YANNeFO65JtQeXbFHUqRrg4Lh8Uf4FkfSNz5niDPVfvkeEjCp__zVpJwymniwAlHtxxHTKXfirtQRT90Qqg5kRJN82DwdhsEWb6c2VGMTp1Z_pEe1hupiI6EGujsPjTqJKAH2E3-hzWn68OhgVomy0W1bTPYn6SPckMIzNTLbB1QWfSwF9eRL11jaBqFP4isV4eegLyCCloe6YazKWGooQdi27y-ApN6D768RZ-3vkoZXR9m4stUbz4yowwJD1cprAcTcc5p7mHD07j2a88E1fqqPLLsBL243QHr30VXTBmsSa7iubNk405pJsUPmFyDKJ2x4YDePZWir8RetZKXCidf9Ne40Iqy2BNcBtNkPa_9vUBDEe5b813IcDFVGC-QraUBVP3uFitNYY3udoVWLU2BzgMHrWK3FEfR8H2Q2rEDI58CrLoBpZlXVUO8Jqa8lriwVK43FLj1miJmNyFW8UlIpCWBAbv84Hll86zWPy0CNPAdAjHhsgOj_lUgFtO5c68HA4.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "msg_tmp_nf02f6i5z1",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime; 391 = 17 \u00d7 23 and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**.\n\nNo files changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    },
+    {
+     "role": "user",
+     "content": "Now say done."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489239-DrfETYjubh8aBspdnR2L",
+   "object": "response",
+   "created_at": 1790489239,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489240,
+   "output": [
+    {
+     "id": "msg_tmp_fxzqx98lfs",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "Done.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4964,
+    "input_tokens_details": {
+     "cached_tokens": 4961
+    },
+    "output_tokens": 6,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 4970,
+    "cost": 5.291e-05,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 5.291e-05,
+     "upstream_inference_input_cost": 4.991e-05,
+     "upstream_inference_output_cost": 3e-06
+    }
+   }
+  }
+ },
+ {
+  "label": "t3 all reasoning dropped",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "high",
+    "summary": "auto"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "8f2cd0b4",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[8f2cd0b4] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    },
+    {
+     "id": "fc_tmp_chosxs23dzk",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    },
+    {
+     "type": "function_call_output",
+     "call_id": "call_M7Qeu7K3Z8411is9PT7xBFoz",
+     "output": "alpha beta gamma delta"
+    },
+    {
+     "id": "msg_tmp_nf02f6i5z1",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "401 is prime; 391 = 17 \u00d7 23 and 437 = 19 \u00d7 23. `/tmp/401.txt` contains **4 words**.\n\nNo files changed.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    },
+    {
+     "role": "user",
+     "content": "Now say done."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489242-OkN9ZeeVMIKfEFLfynij",
+   "object": "response",
+   "created_at": 1790489242,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489243,
+   "output": [
+    {
+     "id": "msg_tmp_6o822qrb2pu",
+     "type": "message",
+     "role": "assistant",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "text": "Done.",
+       "annotations": [],
+       "logprobs": []
+      }
+     ],
+     "phase": "final_answer"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "high",
+    "summary": "detailed",
+    "context": "all_turns",
+    "mode": "standard"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "8f2cd0b4",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4791,
+    "input_tokens_details": {
+     "cached_tokens": 4736,
+     "cache_write_tokens": 52
+    },
+    "output_tokens": 6,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 4797,
+    "cost": 5.716e-05,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 5.716e-05,
+     "upstream_inference_input_cost": 5.416e-05,
+     "upstream_inference_output_cost": 3e-06
+    }
+   }
+  }
+ }
+]

@@ -1,0 +1,5 @@
+effort none + include            in=4700 cached=0 reasoning=0 status=completed items=['function_call']
+no reasoning key + include       in=4699 cached=0 reasoning=110 status=completed items=['reasoning', 'function_call']
+   reasoning keys ['encrypted_content', 'format', 'id', 'status', 'summary', 'type'] enc
+effort minimal + include         in=4701 cached=0 reasoning=89 status=completed items=['reasoning', 'function_call']
+   reasoning keys ['encrypted_content', 'format', 'id', 'status', 'summary', 'type'] enc

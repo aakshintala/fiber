@@ -158,7 +158,9 @@ rebuilds the cache, with its size from the last `usage_recorded`, for example
 "switching rebuilds the cache: about 180,000 tokens". No confirmation is asked.
 
 The log records `model_changed`, with the settings before and after, then
-`preamble_built`. Probed: a model switch missed the whole cache on Anthropic and
+`preamble_built`. The new model is sent no reasoning state another model
+produced (`docs/loop.md`, "What the model is sent"). Probed: a model switch
+missed the whole cache on Anthropic and
 on Muse Spark, and a change of reasoning effort missed it on Anthropic and
 GPT-6 Luna.
 

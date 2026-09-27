@@ -163,7 +163,9 @@ Every line carries `action_id`. Deltas are ephemeral; everything else is
 durable.
 
 - `assistant_message_started` / `_delta` / `_completed`
-- `reasoning_started` / `_delta` / `_completed`
+- `reasoning_started` / `_delta` / `_completed` — `_completed` carries the
+  readable text and the provider's reasoning item exactly as it arrived
+  (`docs/loop.md`, "What the model is sent").
 - `tool_call_requested` — the model finished emitting the call: name, full
   arguments, provider id.
 - `tool_call_started` — execution began, wherever it runs, including a
