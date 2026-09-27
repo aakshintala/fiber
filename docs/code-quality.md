@@ -21,6 +21,11 @@ are longer. A check is named for what it checks: the archived tree's
 "public-surface audit" checked for leaked paths, not public items
 ([fiber-zig#446](https://github.com/aakshintala/fiber-zig/issues/446)).
 
+When more than one mechanism can enforce a rule, the strongest wins: a type
+that cannot hold the bad value, then a lint or check that fails CI, then one
+shared function every caller goes through, then a check at run time. Agents
+copy the guard the surrounding code already uses, so a weak one spreads.
+
 What no tool can check is in "What a reviewer checks", and nowhere else.
 
 ## Formatting
@@ -50,6 +55,15 @@ Denied everywhere:
 - hash-map order: `iter_over_hash_type`. A `HashMap` iterates in a different
   order every run, and no hash-map order may reach a request
   (`docs/prompt-cache.md`). Use a `BTreeMap`, or sort first
+- a `_` arm in a `match` on an enum, so a new variant fails to compile until
+  every `match` handles it. Three lints cover it: `wildcard_enum_match_arm`
+  when the `_` stands for several variants, `match_wildcard_for_single_variants`
+  when it stands for one, and rustc's `unreachable_patterns` when it stands
+  for none. `Option` and `Result` are exempt; they never grow. The lints
+  also fire on another crate's `#[non_exhaustive]` enum, such as
+  `std::io::ErrorKind`, where a `match` must keep its `_` and takes an allow
+  with a reason. `==`, `matches!` and `if let` trip none of them, so a test
+  for one variant needs no allow
 - visibility and documentation: rustc's `unreachable_pub` and `missing_docs`
   (see "Visibility" and "Comments")
 - `unsafe_code` and `undocumented_unsafe_blocks` (see "`unsafe`")
@@ -139,6 +153,18 @@ the code and the list disagree.
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 
+## Types
+
+Each kind of identifier is its own newtype, even when two share a
+representation. A session id, a `seq` and a tool call id are distinct types,
+so passing one where another belongs does not compile.
+
+Fields that describe mutually exclusive states are an enum, not a struct
+whose fields can contradict each other: `done: bool` beside
+`done_at: Option<Timestamp>` admits "done, at no time", where
+`enum Status { Open, Done { at: Timestamp } }` cannot. A runtime check for a
+combination "that cannot happen" marks a type that is too loose.
+
 ## Visibility
 
 An item is private, or `pub(crate)`, unless another crate uses it. rustc's
@@ -189,3 +215,13 @@ Only what no tool can:
 - every lint allow, `unsafe` block and mutation-test exemption gives a reason
   that holds
 - comments say why, not what happened
+- a fix sits where the wrong value is made, not where it is noticed, and the
+  same mistake elsewhere is fixed in the same pull request
+- no struct whose fields can contradict each other (see "Types")
+- a new member of a closed set of named cases, such as an event kind, a
+  mode or a state, is a variant or a table entry, not one more branch on an
+  existing `if`/`else` chain or a second flag that must stay in step with a
+  first
+- no function with one caller whose body only passes its arguments on to
+  another function, and no Fiber-defined trait with one implementation
+  other than the three seams (`docs/architecture.md`)
