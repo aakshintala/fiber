@@ -1,0 +1,2558 @@
+[
+ {
+  "label": "t1",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488964-4doOJrXUm0NdOOwt7HvD",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+     "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+     "caller": {
+      "type": "direct"
+     },
+     "name": "read_file",
+     "input": {
+      "path": "/tmp/a.txt"
+     }
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "tool_use",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 81,
+    "output_tokens_details": {
+     "thinking_tokens": 25
+    },
+    "cache_creation_input_tokens": 6917,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 6917,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0181065,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0181065,
+     "upstream_inference_prompt_cost": 0.0172965,
+     "upstream_inference_completions_cost": 0.00081
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 unchanged (write)",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488968-ItmrfEGaJX02A6eMkTUs",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since I only read and didn't modify anything, there's no need to report any changed files.\n\n",
+     "signature": "Er4DCrABCBIYAipA4RV/y3CLWEZYMKNeupGDum4ri6A7RmqZ8EB+IJaDui5F8lAkzo70cTUnbFAkX8oy/vR0z3QO+dsEtgx4X3gv2TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBiuPi1QYSDACqJVNRVnO0qGZP/xoMkdHXLjvmkekglY1hIjDaDoDKrbgJclK18Hxxg38M+CU0QyLOQa5COAbvnCjDxftR/LVjWscMCokl3yKbW1AqugFlPPkAR0M3lUD62xB2q60aQZ///xQNObPI03+0/YWRZO5ZhtcVGNJWPHe1nEL7Pc/lc9o0EFpfmUk9TIdIo/Nle/JBF45SkB6P9WRyHUCQo62tj10ulXxJnJc/sT5Q8Ub856JH8QPeAL1g9y5Kn1blcccFpGvNUTRxgE1AQE7VR6KHoII84cawEWV7I0l7IjiKKpJzbKmaeCpYjX3DcU8POukH8UCJvQmEuVwwBfXPaEXVBbywngPW8rAYAQ=="
+    },
+    {
+     "type": "text",
+     "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 147,
+    "output_tokens_details": {
+     "thinking_tokens": 58
+    },
+    "cache_creation_input_tokens": 96,
+    "cache_read_input_tokens": 6917,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 96,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0030974,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0030974,
+     "upstream_inference_prompt_cost": 0.0016274,
+     "upstream_inference_completions_cost": 0.00147
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 unchanged (read)",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488972-uwbK5ac7vIubTeukLaCO",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "I count four words: alpha, beta, gamma, delta. Since no files were changed, I'll note that in my report.\n\n",
+     "signature": "ErsDCrABCBIYAipA5FcG/PQt2Ey/G0/36SBPqMbk8R1vjFEAqst0xIOvnGE6igeqLZvtBMiazZJiNLRTG3IB7HfHhucUJrncJcQT0TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBj+Pi1QYSDGuKEnMI0pViOXLqyRoMjs8HDEUarlvEmfnOIjDBdId58un+Wqp0nhJP1kLh2XbU1+0qLsFup3XHfaEgw+vN5jpTG4IlCoMXlguey58qtwGIEyWv06vFHDr/dfw5CTNXAVs9M8G8xDoUvQF7IbKOgbsxxooQHvRKGTsY9+wRsGoZnCvONVxRjC6dIpso4GXGl8RV2hrDBD1GkE3PWYhvhPfMxMHJW90giRiT6jX/fdcsgPnV0nZllHqtn7dHF3Sa8r1CbmtYlVpiaDQqzMvhYAQT+HcMtDfXA11bhmv2Z7SMRHUftw7SGuw2MDvDraVaqFSqIRCNSanjBGQIFw2eCNEZrnJbjxoYAQ=="
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains the text: \"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nRegarding the workspace-tidiness rule: I did not modify, create, or delete any files during this task \u2014 I only performed a read operation on /tmp/a.txt. So there are no changed files to report.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 161,
+    "output_tokens_details": {
+     "thinking_tokens": 59
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7013,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0030166,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0030166,
+     "upstream_inference_prompt_cost": 0.0014066,
+     "upstream_inference_completions_cost": 0.00161
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 thinking dropped",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488977-uRJ60tB1m1Mat5TJVhY3",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting the words: alpha, beta, gamma, delta \u2014 that's four. Since I haven't modified any files, there's nothing to report under the tidy workspace rule.\n\n",
+     "signature": "EsYDCrABCBIYAipAr5t///lP8BmWVWD1RqGICPnuYThowrm/+Fft1a+a33KEt6jFczCH3DYPrME+ejAT3si6f7GkcA4xY8/vkAjSrTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBlOPi1QYSDI6P6n5cKJ/bjruhWRoMbDMHWTl91CSS5HXlIjClHZ+yJdGrdn3Zjfm8lsVFS17X/ktGTgrNiBNPeWWFBuzN94Yx60RLAuLOk3AqXxwqwgFSn6SBc79y6sTWMlUmZW2HuC9uasRqOdno/pxbubZppr7VN28rOdnYouwwktZk89eZp3VOA6r9VcJDa6EE8bngiiplvUcUNJzZ9d7HpNXbvgE0ay2dAbHS9SgDpvxx3AjGXZvmLmijj2gRYhz1PlJ7ocBJJ6SN+s9QoPUeZRsAQYYVEhuLJGheyv4LLauV8lRjzN6SYAirgo0PEUsUn0qtAwEzHcYQ8lxVTNmzblaveVq4iwUhGcBjNPkA3vYf71dtUxgB"
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains: \"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task (only a read operation was performed), so there is nothing to report regarding file modifications.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 133,
+    "output_tokens_details": {
+     "thinking_tokens": 61
+    },
+    "cache_creation_input_tokens": 70,
+    "cache_read_input_tokens": 6917,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 70,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0028924,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0028924,
+     "upstream_inference_prompt_cost": 0.0015624,
+     "upstream_inference_completions_cost": 0.00133
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 signature altered",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kA+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "error": 400,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.1.content.0: Invalid `signature` in `thinking` block\",\"error_type\":\"invalid_request\"},\"request_id\":\"gen-1790488982-S01ugqgLc9OBHHPTWnAv\",\"metadata\":{\"raw\":\"{\\\"type\\\":\\\"error\\\",\\\"error\\\":{\\\"type\\\":\\\"invalid_request_error\\\",\\\"message\\\":\\\"messages.1.content.0: Invalid `signature` in `thinking` block\\\"},\\\"request_id\\\":\\\"req_011CfTSL9TQMnbbuKAcqiEMW\\\"}\",\"provider_name\":\"Anthropic\",\"is_byok\":false}}"
+  }
+ },
+ {
+  "label": "t2 thinking text altered",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n extra",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488984-ytGqRAuj6v8w3ruTQ5X4",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting the words: alpha, beta, gamma, delta - that's 4. Since nothing was actually modified, I'll note that no files were changed.\n\n",
+     "signature": "EpYDCrABCBIYAipAxK/68WdwEQsfnrjTWf77on7t8jHHPSHYjFPKeqbhbeIJBJITH2Nj80McffPcVmKNBtcuCFDhwsB48xmqluNBOTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBm+Pi1QYSDNmwS2Ke9+gAk7GMCBoMRwF0wD+HGvYhZog1IjDaTqmRpK+/9IQ/GErXLKdaOlpN/aS11dNouiFk2DfHaCo/roy2vyrsgO6CEKlk8lkqkgHIFWaa23Rk9R7ktoL5BREpCtiLQ6AbsTcU5YrJjKKICuFGaKaj104nQx+ImC3CabL1O3PcZIkUYStU/rGClJZNYl8FYX9TdSYMyfFpzS/HCnYWTZDvlPEqF62Tt57elaxCzb2z+EEGw6uTDmGp0WodG8PlbGySR41XqCmc2txNXMO4rASU+qhlpDjhfV3fUyK4oBgB"
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains: \"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this operation \u2014 I only read the file, so there is nothing to report in terms of modifications.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 118,
+    "output_tokens_details": {
+     "thinking_tokens": 48
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7013,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0025866,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0025866,
+     "upstream_inference_prompt_cost": 0.0014066,
+     "upstream_inference_completions_cost": 0.00118
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 thinking text emptied",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488989-BPRYMPSRGUcVwemPQjna",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since no files were changed, I don't need to report any modifications.\n\n",
+     "signature": "EqMDCrABCBIYAipAqfmIg9X98uwg14nvnviAP1JvBzNYpo5uJk4NWlz2w/AGTVD70vqaQdkNWorCMhYwLCz825p62xcnT9HoIBAyxjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBoOPi1QYSDNFod9uY1Ba4RqC4ZhoMxsiW2Oi/aVJeU3tlIjCwaTE5bK9U1bp90EyAnmsQ3cmJlCL7YS+Qj6gi39TMO6STH3flbMwi5l6ad7IELvMqnwEqEk0FkKk8mouHLKYn9MgiYwu99htKfFHzS1RC14inn+06wL9T8NmoPCvCMX+TdVCikVfyqSE1nA1vRWjxhw2WyKPjnEflcXl/iOMClNLgp/smrKyKR7nSveZHXrPDA24z5NrH6Y1+XJhdsxh6W3/WfDxypztcM3ve3UdRt7n321lpB4AWpiSga2FVMQVxWSMtW+sW8JovqAkuZGvjTS0YAQ=="
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains the text: \"alpha beta gamma delta\"\n\n**Word count: 4**\n\n**Files changed:** None \u2014 I only read the file and performed no modifications, so the workspace remains tidy with no changes to report.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 133,
+    "output_tokens_details": {
+     "thinking_tokens": 54
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7013,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0027366,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0027366,
+     "upstream_inference_prompt_cost": 0.0014066,
+     "upstream_inference_completions_cost": 0.00133
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 thinking as text block",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "I should read /tmp/a.txt first, then count the words in it.\n\n"
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488994-yogVgHFGjQpBQlmosesc",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting the words: alpha, beta, gamma, delta \u2014 that's 4.\n\n",
+     "signature": "EsQCCrABCBIYAipAvazqJfqmDpt6uMQI+CYiu/k5TVDc1RpatVyMor+HkI1U2fFaqeClQgAaiu1LxWMqS74Xw/5TYLxusyOoLV8WPjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBpOPi1QYSDJ609LrGL7VjFEypvxoMlDNYMMwr9EYDLRnXIjDHX7xdBD3SR44nGWPBfzBUJSCiMazLqDETkwMnmdF4FxNBfNYEPP4IGXexTXVp/HQqQXviIiILVmmBhy634nP2a+M0Fzd88L3tsG2UdpGNQ96xEZ8ovKT6L7c92Awz+dJwoFnWsnX2v3uZ1kZr2ovT66WyGAE="
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains the text: \"alpha beta gamma delta\"\n\nThat is **4 words**.\n\nNo files were changed during this task, so there is nothing to report per the workspace-tidiness rules.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 95,
+    "output_tokens_details": {
+     "thinking_tokens": 25
+    },
+    "cache_creation_input_tokens": 92,
+    "cache_read_input_tokens": 6917,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 92,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0025674,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0025674,
+     "upstream_inference_prompt_cost": 0.0016174,
+     "upstream_inference_completions_cost": 0.00095
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 thinking off, block kept",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790488998-VAWKbkgJutwKGHPjMTzM",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since no files were actually changed, I should just note that clearly rather than fabricate a file change report.\n\n",
+     "signature": "EooECrABCBIYAipAerVbBVWIoEzXYTGITGGkyawbVFYxpYWo7FMEhF+G0nXQgpMZaTayZ4XJMDODA9in9e5/aERXASc6IqIt1obtyjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBqePi1QYSDAbnQCbR7/K9/X2KphoMr080iH3D2zRSOu0AIjA6eRU6AxeFCApdpOYsiYr8hEZ5DFkIPFHwLlOuz3GqMPCKFAWciWsY2q1SLEU/J7kqhgISYyXn1kq5FPhY3O5tKqJ3HCCRZQqHP+qLbB27ldtrDpcWs89e9Uz9IPLSLoi/AEq5Y/lTp5h3iQZd3WA/MYKlF1VYCMhD92Kd31bHorEHJF0rY+d0IwMrDka4NrcBI9uYtxbKmBZy/Jr3hHDQE5UvRFAYTz76aT47mm244p1TM1AQY4ghJywuggxnmkK5H3/nWPiBIiHzy2IIM9clQGUziCCpEbvc1+mhZ44oh75yzfuWWSOLlh2biN3JU/XXh10BGWSzYiT2V6vxNvn54UCWXwh1QgT3sroPKg5SF6HEh3WEJB91cOv67MBJXGoa9jrZ78rAQE53LWsW8Hf7Q9MFNhhFevMbGAE="
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains the text: \"alpha beta gamma delta\"\n\n**Word count: 4**\n\n**Files changed:** None \u2014 this task only required reading the file, so no files in the workspace were modified.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 147,
+    "output_tokens_details": {
+     "thinking_tokens": 77
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7013,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0028766,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0028766,
+     "upstream_inference_prompt_cost": 0.0014066,
+     "upstream_inference_completions_cost": 0.00147
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 thinking off, block dropped",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489003-zSbQ52TvQKgafFO74lVq",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "Counting: alpha, beta, gamma, delta \u2014 that's 4 words. Since no files were changed, there's nothing further to report.\n\n",
+     "signature": "EpQDCrABCBIYAipAgwghuflK4rpaEhtMtdYN98ubnPHXP5RvTFado3BwQya0A0vVXNujFI7LipRigi2oyi7plwD2GuU6QadxMn5q5DIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBruPi1QYSDCD9px5wcpWqsafDGxoMlia2KarxD77MUmc9IjCSvHO4sEgh0GN3f9PNpewrZ/SmefP/CQpbF7danIP5c2ZbmJbPX8r/wijX7mWhmwIqkAENI4J/UmlCeLPkoTJ7ZEhvcapISEg9yzHWQMbbPfPDI9i5inFVJgVqs/JbGoHEMEDwhCVQX4781YH7FAvrHzjuLAIWkAAqHHIIM72OKm9UWIyyVbMn1Xb6kiMfL1CW9jhJG/rO3QJX0ZnjE+j61Qb06n4NCQFSOrN1y+xoRt8zkdjFlFZmlNcXNoHpAOP4jvkYAQ=="
+    },
+    {
+     "type": "text",
+     "text": "I read /tmp/a.txt. Its contents: \"alpha beta gamma delta\"\n\nWord count: **4 words**.\n\nNo files were changed during this task (read-only operation), so there is nothing to report per the workspace-tidiness rule.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 130,
+    "output_tokens_details": {
+     "thinking_tokens": 51
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 6987,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0027014,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0027014,
+     "upstream_inference_prompt_cost": 0.0014014,
+     "upstream_inference_completions_cost": 0.0013
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 Haiku 4.5, unchanged",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489008-9hGIUaXDurDVD6i3mWsU",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains: \"alpha beta gamma delta\"\n\nThis text has **4 words**.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 29,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 5553,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 5553,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.00709225,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00709225,
+     "upstream_inference_prompt_cost": 0.00694725,
+     "upstream_inference_completions_cost": 0.000145
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 Haiku 4.5, thinking dropped",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489012-qY1Bde4YthBSBCA3dMZo",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains: \"alpha beta gamma delta\"\n\nThis has **4 words**.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 28,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 417,
+    "cache_read_input_tokens": 5079,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 417,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.00117515,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00117515,
+     "upstream_inference_prompt_cost": 0.00103515,
+     "upstream_inference_completions_cost": 0.00014
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 Haiku 4.5, thinking as text",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "I should read /tmp/a.txt first, then count the words in it.\n\n"
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489015-L5qVbRXuHe1jIzfnYVNT",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file contains: \"alpha beta gamma delta\"\n\nThis has **4 words**.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 21,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 435,
+    "cache_read_input_tokens": 5079,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 435,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.00116265,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00116265,
+     "upstream_inference_prompt_cost": 0.00105765,
+     "upstream_inference_completions_cost": 0.000105
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t3 unchanged (write)",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since I only read and didn't modify anything, there's no need to report any changed files.\n\n",
+       "signature": "Er4DCrABCBIYAipA4RV/y3CLWEZYMKNeupGDum4ri6A7RmqZ8EB+IJaDui5F8lAkzo70cTUnbFAkX8oy/vR0z3QO+dsEtgx4X3gv2TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBiuPi1QYSDACqJVNRVnO0qGZP/xoMkdHXLjvmkekglY1hIjDaDoDKrbgJclK18Hxxg38M+CU0QyLOQa5COAbvnCjDxftR/LVjWscMCokl3yKbW1AqugFlPPkAR0M3lUD62xB2q60aQZ///xQNObPI03+0/YWRZO5ZhtcVGNJWPHe1nEL7Pc/lc9o0EFpfmUk9TIdIo/Nle/JBF45SkB6P9WRyHUCQo62tj10ulXxJnJc/sT5Q8Ub856JH8QPeAL1g9y5Kn1blcccFpGvNUTRxgE1AQE7VR6KHoII84cawEWV7I0l7IjiKKpJzbKmaeCpYjX3DcU8POukH8UCJvQmEuVwwBfXPaEXVBbywngPW8rAYAQ=="
+      },
+      {
+       "type": "text",
+       "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+       "citations": []
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Now say done.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489018-DJJgzeWSjQp9PxPVqUPc",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "Done.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 154,
+    "cache_read_input_tokens": 7013,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 154,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0018416,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0018416,
+     "upstream_inference_prompt_cost": 0.0017916,
+     "upstream_inference_completions_cost": 5e-05
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t3 unchanged (read)",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since I only read and didn't modify anything, there's no need to report any changed files.\n\n",
+       "signature": "Er4DCrABCBIYAipA4RV/y3CLWEZYMKNeupGDum4ri6A7RmqZ8EB+IJaDui5F8lAkzo70cTUnbFAkX8oy/vR0z3QO+dsEtgx4X3gv2TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBiuPi1QYSDACqJVNRVnO0qGZP/xoMkdHXLjvmkekglY1hIjDaDoDKrbgJclK18Hxxg38M+CU0QyLOQa5COAbvnCjDxftR/LVjWscMCokl3yKbW1AqugFlPPkAR0M3lUD62xB2q60aQZ///xQNObPI03+0/YWRZO5ZhtcVGNJWPHe1nEL7Pc/lc9o0EFpfmUk9TIdIo/Nle/JBF45SkB6P9WRyHUCQo62tj10ulXxJnJc/sT5Q8Ub856JH8QPeAL1g9y5Kn1blcccFpGvNUTRxgE1AQE7VR6KHoII84cawEWV7I0l7IjiKKpJzbKmaeCpYjX3DcU8POukH8UCJvQmEuVwwBfXPaEXVBbywngPW8rAYAQ=="
+      },
+      {
+       "type": "text",
+       "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+       "citations": []
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Now say done.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489021-8UmKQFHsjUkyIbZoXy3q",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "Done.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7167,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0014874,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0014874,
+     "upstream_inference_prompt_cost": 0.0014374,
+     "upstream_inference_completions_cost": 5e-05
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t3 turn-1 thinking dropped",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since I only read and didn't modify anything, there's no need to report any changed files.\n\n",
+       "signature": "Er4DCrABCBIYAipA4RV/y3CLWEZYMKNeupGDum4ri6A7RmqZ8EB+IJaDui5F8lAkzo70cTUnbFAkX8oy/vR0z3QO+dsEtgx4X3gv2TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBiuPi1QYSDACqJVNRVnO0qGZP/xoMkdHXLjvmkekglY1hIjDaDoDKrbgJclK18Hxxg38M+CU0QyLOQa5COAbvnCjDxftR/LVjWscMCokl3yKbW1AqugFlPPkAR0M3lUD62xB2q60aQZ///xQNObPI03+0/YWRZO5ZhtcVGNJWPHe1nEL7Pc/lc9o0EFpfmUk9TIdIo/Nle/JBF45SkB6P9WRyHUCQo62tj10ulXxJnJc/sT5Q8Ub856JH8QPeAL1g9y5Kn1blcccFpGvNUTRxgE1AQE7VR6KHoII84cawEWV7I0l7IjiKKpJzbKmaeCpYjX3DcU8POukH8UCJvQmEuVwwBfXPaEXVBbywngPW8rAYAQ=="
+      },
+      {
+       "type": "text",
+       "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+       "citations": []
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Now say done.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489025-TU0UeA5WJbAGVGqRSVGY",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "Done.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 154,
+    "cache_read_input_tokens": 6987,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 154,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0018364,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0018364,
+     "upstream_inference_prompt_cost": 0.0017864,
+     "upstream_inference_completions_cost": 5e-05
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t3 all thinking dropped",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "text",
+       "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+       "citations": []
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Now say done.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489028-0RaCOWoapdMVadxopLjH",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "Done.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 96,
+    "cache_read_input_tokens": 6987,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 96,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0016914,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0016914,
+     "upstream_inference_prompt_cost": 0.0016414,
+     "upstream_inference_completions_cost": 5e-05
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t3 thinking off, blocks kept",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since I only read and didn't modify anything, there's no need to report any changed files.\n\n",
+       "signature": "Er4DCrABCBIYAipA4RV/y3CLWEZYMKNeupGDum4ri6A7RmqZ8EB+IJaDui5F8lAkzo70cTUnbFAkX8oy/vR0z3QO+dsEtgx4X3gv2TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBiuPi1QYSDACqJVNRVnO0qGZP/xoMkdHXLjvmkekglY1hIjDaDoDKrbgJclK18Hxxg38M+CU0QyLOQa5COAbvnCjDxftR/LVjWscMCokl3yKbW1AqugFlPPkAR0M3lUD62xB2q60aQZ///xQNObPI03+0/YWRZO5ZhtcVGNJWPHe1nEL7Pc/lc9o0EFpfmUk9TIdIo/Nle/JBF45SkB6P9WRyHUCQo62tj10ulXxJnJc/sT5Q8Ub856JH8QPeAL1g9y5Kn1blcccFpGvNUTRxgE1AQE7VR6KHoII84cawEWV7I0l7IjiKKpJzbKmaeCpYjX3DcU8POukH8UCJvQmEuVwwBfXPaEXVBbywngPW8rAYAQ=="
+      },
+      {
+       "type": "text",
+       "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+       "citations": []
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Now say done.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489032-s4qs17zBAWxfKMA5Drzp",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "Done.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7167,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0014874,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0014874,
+     "upstream_inference_prompt_cost": 0.0014374,
+     "upstream_inference_completions_cost": 5e-05
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t3 Haiku 4.5, unchanged",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[26757604] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Use read_file on /tmp/a.txt, then tell me how many words it has. Think briefly first."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "I should read /tmp/a.txt first, then count the words in it.\n\n",
+       "signature": "EtICCrABCBIYAipAZFsCvrlQ227EB0TquV/28K7kX+LJJWsZFz/TkIy6dnR9ecGDYZxZsB9I4Rih8wwPrs/KWtXBjB1hxVCF//0d6TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBh+Pi1QYSDAmDIoB2PgJIKuayMhoM1hHwETMJMZHGYqEzIjBMA6QxqYpMesZu7LybnV0p7njnVuLJwBoynxeBL+QWJ8tF1uO2b3DgtNBjWJ2enogqT7WhwLkDtf5Ao8zMjAeJDeohb5mNwgu2YLZ0NMR3WwpiWCmgCj1McvxmmGSkiylw6GhMMql31mT+AZxmczw8TC4WSjMUsXo0fs0UWJjH9wgYAQ=="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01D3H51NtbvjaFTiNuhxAWYg",
+       "content": "alpha beta gamma delta"
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "Counting the words gives four: alpha, beta, gamma, delta. Since I only read and didn't modify anything, there's no need to report any changed files.\n\n",
+       "signature": "Er4DCrABCBIYAipA4RV/y3CLWEZYMKNeupGDum4ri6A7RmqZ8EB+IJaDui5F8lAkzo70cTUnbFAkX8oy/vR0z3QO+dsEtgx4X3gv2TIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgBiuPi1QYSDACqJVNRVnO0qGZP/xoMkdHXLjvmkekglY1hIjDaDoDKrbgJclK18Hxxg38M+CU0QyLOQa5COAbvnCjDxftR/LVjWscMCokl3yKbW1AqugFlPPkAR0M3lUD62xB2q60aQZ///xQNObPI03+0/YWRZO5ZhtcVGNJWPHe1nEL7Pc/lc9o0EFpfmUk9TIdIo/Nle/JBF45SkB6P9WRyHUCQo62tj10ulXxJnJc/sT5Q8Ub856JH8QPeAL1g9y5Kn1blcccFpGvNUTRxgE1AQE7VR6KHoII84cawEWV7I0l7IjiKKpJzbKmaeCpYjX3DcU8POukH8UCJvQmEuVwwBfXPaEXVBbywngPW8rAYAQ=="
+      },
+      {
+       "type": "text",
+       "text": "I read /tmp/a.txt using the read_file tool. Its contents are:\n\n\"alpha beta gamma delta\"\n\nThat's **4 words**.\n\nNo files were changed during this task \u2014 I only performed a read operation, so there is nothing to report per the workspace-tidiness rule.",
+       "citations": []
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "Now say done.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489035-lZR08NlChpScbGJolkpL",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "The user is asking me to say \"done\". This is a simple request - no file operations needed. I should just respond with \"done\".",
+     "signature": "EpsDCroBCBIYAipAiBSlnnc2Lwz0l9zTLPxcINC5ALSHQw1QtOwfFBpuPfE6WQ1dqQKj1ciB8kxAGuVERfGhk0c953RHyjo12OgLHjIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okMGQ5ODNmM2YtNDlmYS00YTQ2LTgyNTQtYjFiYjI0OTFhMmE5eh51cHJvZl8wMTFDZlBGWVpxdTNraHVQRG9mdTZBTFaoAczj4tUGEgyq64N0pYp2CJNDQQkaDIiSUq6/bUSpoU22GSIwtNspGvIcJTEi+SPtrYwX07LbfKmQNqHnxJiNYfKhjF3Dl42bEYR6QND2xMbCk963Ko0B4Gc3tutv2uadL3IXUqXTimJr6ddHbT9RC/97ksBKLYQbygm4F1PpSV9f3U6w7ru0hLbvcxwNsH9iv33lMpHvrkjdr67uQolQGyn3g6Wst+C1NrLZLqYvFQfdL+MJPCfSByxCSrtumAPY2ezgh6094UBLz+i1aCzq4rbAnd+LuMndZiuk4B4vPE3nAOgzGAE="
+    },
+    {
+     "type": "text",
+     "text": "Done.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 10,
+    "output_tokens": 42,
+    "output_tokens_details": {
+     "thinking_tokens": 35
+    },
+    "cache_creation_input_tokens": 517,
+    "cache_read_input_tokens": 5079,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 517,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.00137415,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00137415,
+     "upstream_inference_prompt_cost": 0.00116415,
+     "upstream_inference_completions_cost": 0.00021
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ }
+]

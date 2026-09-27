@@ -1,0 +1,5 @@
+t1 anthropic in=2 read=0 write=6919 stop=tool_use blocks=['thinking', 'tool_use']
+amazon-bedrock   unchanged          in=2 read=0 write=7010 stop=end_turn blocks=['text'] Amazon Bedrock
+amazon-bedrock   thinking dropped   in=2 read=6814 write=175 stop=end_turn blocks=['text'] Amazon Bedrock
+google-vertex    unchanged          in=2 read=0 write=7010 stop=end_turn blocks=['thinking', 'text'] Google
+google-vertex    thinking dropped   in=2 read=6814 write=175 stop=end_turn blocks=['thinking', 'text'] Google

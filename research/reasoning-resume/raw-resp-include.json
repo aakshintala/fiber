@@ -1,0 +1,417 @@
+[
+ {
+  "label": "effort none + include",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "none"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "69309b8e",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[69309b8e] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489245-BA2sozyq6d7u3WAwBD3s",
+   "object": "response",
+   "created_at": 1790489245,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489246,
+   "output": [
+    {
+     "id": "fc_tmp_ss5e92x4ber",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_MfLjKOwxkBFyn0rF857Ic1Ig",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "none",
+    "context": "all_turns",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "69309b8e",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4700,
+    "input_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 4697
+    },
+    "output_tokens": 22,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 4722,
+    "cost": 0.000598425,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.000598425,
+     "upstream_inference_input_cost": 0.000587425,
+     "upstream_inference_output_cost": 1.1e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "no reasoning key + include",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "d8ca6caf",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[d8ca6caf] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489246-rTjOI5aKtXbiGgjM1Xvq",
+   "object": "response",
+   "created_at": 1790489246,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489248,
+   "output": [
+    {
+     "id": "rs_04a35446e9e38de8016ab8b29ecb9c87d1a478de371c485a58",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [],
+     "encrypted_content": "gAAAAABquLKfwNeYNT3WPw9a1QROtcYu9Lb-JjJofcYy5n3tLFS98cLJodhZ5euMDoy1CkLzcQugR-Cj9sRZGZBKoW1Xqeh-GFv2nA3S5OMVoJ4haDI7J0vOVE-Efa52a0ZTyWbYS7r7THwcDMYTQRz_-ocfDZjh7xOz70CCACGkhx2y21wPc06WjQvy58vUepi17QNeykZ1pLpL8V38AQLAlOHJ-OjT_wrZq0MN77DmFiIi-r7ROGSPEbso9ni60uc0UA8UseN1sEcHGQnkjol-V2eDvgCmteKTL2W_DBrJURkCJv9UuPpEXukVm2dASadAzs5tk67XjWcRSRvbWJmvnK2TgJ_rSfrtD8Q8_4sF11a9lhrZWN9lY0tBE5I1brg3fbTX6Z_6Efug0AEhsG3_O0iPZxWFiQaPU71JQbkCvTpDjiEUYMDYxAeRgXMjXRLMPbLM7ib6GE3v06pmuYLs1MW6awaRO44XVBcFJXC22w1ZjoyATyns01arIdIqKkQ_rufV28AQHYWZpd84yh23ImtjCCFBLoUID-wkzKB9xJeEuay0MzW0966DncaONaQUZqKRNizuM9KEUCLCyD4lIGNajsKDyBehO2Kzd50PUCiy8Lqgrhd8BRfMq4hjSomW_rGsu4LGZSAbNUYvdbaxp08rUWLevfHn9HWjCh5N_ShWb9kvaoke0l196LJw_LpcjgASy6RKSgL6jiXr61dqfBqDv5dJXYQMPKvw_T2DZ2HRv3IF5b7lNf1PX0JnPBSwkgG78kS7QGj9oJFziT0_Wa_GD7hhSqIYbJNeBhelTHj62WGiNUElKpC5GYmGdHYjOMoS1E4jyMj4l40iz9uB0FoUOtkXp6MuMGPtmqPZ5F_cTn8t2xEOrVBAjp2mVMhJjo9UPQUGn1qctSHKp9K752yCaTpIZCoo2kX_2LJVmqOtdosl1dPQYCKLAPPn2hRET1aJ4ICjjr3hHDy0oqAhYABwtqCecWiKeXx0_mj52zKABhi32iyX9BnW5Xh2avHSi4Fg4uQvkh8Sk_W-EurrK0N2RVCAcfpAsccedZ9hT6Rz0hmX1z8zv4WP2HPzki08Sz9y1-FEjull2f9bC63fW-9o1bhVIyqXEpJ_EWhUlGMGL0WoUhHQP3wFdDrOIlUYQzY8-0CX6qWu3M_RT2BTDqod6_wURVzDh9sOXWSzTRZSCLaiwPfOsap6ieooL6gg1coQ1TKhvB_crxH34iVM0O683jOZ5j_7bsjAjlNl71flIYdmMeYO-jAmfwzfZUTWYPTkrRR5YlwUVy97CgyWgouid9ZCfPTGHjudEUlknp6b3YVrmVUkckIvUtZE9N2ZgEQ8SqC2eyS8YdQUkYxtKkcxJ0l4hWZtyEuuC6YnfGuYzNJa2An3FO7KQkPH4VKYfn787PC6Ga63FeKS9F8wJteuq_NZzFa3ADw6CaIq1D5Gw-xSiAhtW2D6EC04hufvdinbjgL5BgnDsKKFLW_z8BhHE3037Xm3TrjY5acASWYoQk3gKg8iSfXvcmZZ6_sGXA24i4_IvxrVyhY3F8YRHCXGx9j55pE2OzBeLsuWMr5Go-x-sTc0WnRN74hWKoFWZXDGSMQhzPwvSrVZIb41IYWvtzXJVZDTHLs9yXoyJXh-SfWO9RmlaY-51aJbRvIq8OJmTauTfkBAAAWSRS5ULPZ2mmwwaA==.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_jyyzae65yn8",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_frFGMznGq68XPDyI2XyA44gv",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "medium",
+    "mode": "standard",
+    "summary": "detailed"
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "d8ca6caf",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4699,
+    "input_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 4696
+    },
+    "output_tokens": 134,
+    "output_tokens_details": {
+     "reasoning_tokens": 110
+    },
+    "total_tokens": 4833,
+    "cost": 0.0006543,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0006543,
+     "upstream_inference_input_cost": 0.0005873,
+     "upstream_inference_output_cost": 6.7e-05
+    }
+   }
+  }
+ },
+ {
+  "label": "effort minimal + include",
+  "request": {
+   "model": "openai/gpt-6-luna",
+   "store": false,
+   "include": [
+    "reasoning.encrypted_content"
+   ],
+   "reasoning": {
+    "effort": "minimal"
+   },
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "prompt_cache_key": "ec4a9ba0",
+   "max_output_tokens": 4096,
+   "input": [
+    {
+     "role": "developer",
+     "content": "[ec4a9ba0] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>"
+    },
+    {
+     "role": "user",
+     "content": "Work out which of 391, 401 and 437 is prime, without tools. Then use read_file on /tmp/<that number>.txt and tell me how many words it has."
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489248-1ZspzJj1NisvkT3nTjqC",
+   "object": "response",
+   "created_at": 1790489248,
+   "model": "openai/gpt-6-luna",
+   "status": "completed",
+   "completed_at": 1790489249,
+   "output": [
+    {
+     "id": "rs_08bee35d12c43cac016ab8b2a0de1887d1a5ed8ebf5243966f",
+     "type": "reasoning",
+     "status": "completed",
+     "summary": [],
+     "encrypted_content": "gAAAAABquLKhmyePvi-iazLyhnz7lTRo5tFdp99m7l8DXv5vjF2czoztXZmAlk8WpkTlDBUbnm9mlgJw0t1vo9HXDamOn1jB0-AaXGwlJ9nt1pK-NcaHyC39A12F7lPyySgKFlkExBgnta9ItVfjxqncpSVr7xZQlZiyPfcCvovgTnK0sEA-Cx4bSzTS7sRIJeKWaHTbeINjevT5OwE187qIjn9EvaE3Ufxr7AsQ3DhS3UtYVuGQDcUFlZOkpArGVhFBN9T2Gd1eDNm5YZEHtgDn6sHP9hR9b7FCKltsnsdig_aLdQNtBxpgHa1WbnZDRlVu8vgVVKSOZwaTQS3N0dupYJmE8OAdNoDDMnE6_B2HdJR5vcqFWKN5aly98dlsGp2TLQp-G97zsvXlLmly0ipduegcNzUFaX2giaVJCK7N2C3-L7zzt61TJ139-0olDkC22XfxokidcxLULWDoGJmi7xZIDbKrub5twU1D4bkvLm4SjC2EXlgnwZoCDexocmGFJqr_pIE5ozFliL8hI2egQXQdFGsoanqeBqvHfyd65giaDQF3urWOtSIGNk8Em6K6JDc5giZnVRBcoVDH79Yo9HGA1muBQGUBy_fAtOHXB6XeQCSdYu4QdPJp7un_DWa_pUnfT8Ox3vKPxBdk6We1a-SRg49LZWWEQFg3RC1mG4R3-1JzZX1tM8Q2Cn4yGTJqBd4T_vHsm-wmYOrtz2j4kNdikq1odOpcroogX3Qd6QuKE3cemCfhB_kj7CEKRCy8pjcudrB00zohELekaRmHkqEiSQr--P6uWmQbvVE1AM42kGNWaNAkfE-lCkLWewBWXY52B2Bg7QtJnyySherxu08VbNuX00PF6UusIBqkINkF74wISJZvxtpKR8hGQDoL2ZYpXMh3B64OvntnVErpOzYMrBsRT0ZW_fCqTOsaZPjrLgpsQzmnA7Ev3j7HKtyTZb3gFTyugmUMvTJ7IXPEb_TSoP67NrUwAwyqeHQj3cYRpSWHw4AtupSxGC8TiSa683bPpOHpDA8DT5hfc3qYs5LzPCIRk2tjyBCi_53K2AWbnuC8h_MjC0GqDtpqLGqRznAUBF_NiqQDYr8r3JrcZD88zYG6sie8KEREek2qrNONM3kzJgpjmwZPLjUE4t6kQSLQ--4knNzqNAwI4WsXS020_lpw94QvKyWJVOBSieYzH5Uyw2grpO_AgT6zF9ZmBRFcRip2uJNQSxv5C-jz3nLz8xLD4V-wtAo4SUafq7D2f8_vJhZ9tGMTPtB_LYDyAJmkSlOmzIMGOUpwspUtJkHL5QpyfAayqvMio6LwAcJ-8zhjsLysj_UMYWYXnPkpkEW1tZhl8OQDEv5J9u_EhEdEqcZJcWG3738TXkmqHiuFaj47gRAPzu9YBUB3Ety1JvKXGajbbNl_8z0MQ9BUe8-GNiARn7M1FjBMuuPxHusuUEvD0BlNrZz4uW0AdI_IWc5au4TfP6i6GpklvHwpx2q7n1UVzTh8VElwgTNeQqwAHcvVWpvgoo8uN177NIVvJaWGCTOvYYYRk_1hFbKlF2gcm6dJJ06CpeHT5jUHU4BmePRp-L83YcC98mQpdIoOfN737p4a.eyJlbmRwb2ludF9zbHVnIjoib3BlbmFpL2dwdC02LWx1bmEtMjAyNjA5MjJ8b3BlbmFpIn0",
+     "format": "openai-responses-v1"
+    },
+    {
+     "id": "fc_tmp_9ilantt8yvl",
+     "type": "function_call",
+     "status": "completed",
+     "call_id": "call_REyQnCTT2hRMhO4TqVHFpZLU",
+     "name": "read_file",
+     "arguments": "{\"path\":\"/tmp/401.txt\"}"
+    }
+   ],
+   "error": null,
+   "incomplete_details": null,
+   "tools": [
+    {
+     "type": "function",
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "strict": false,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ],
+      "additionalProperties": false
+     }
+    }
+   ],
+   "tool_choice": "auto",
+   "parallel_tool_calls": true,
+   "max_output_tokens": 4096,
+   "temperature": 1,
+   "top_p": 1,
+   "presence_penalty": 0,
+   "frequency_penalty": 0,
+   "top_logprobs": 0,
+   "max_tool_calls": null,
+   "metadata": {},
+   "background": false,
+   "previous_response_id": null,
+   "service_tier": "default",
+   "truncation": "disabled",
+   "store": false,
+   "instructions": null,
+   "text": {
+    "format": {
+     "type": "text"
+    }
+   },
+   "reasoning": {
+    "effort": "low",
+    "context": "all_turns",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "prompt_cache_key": "ec4a9ba0",
+   "prompt_cache_options": null,
+   "usage": {
+    "input_tokens": 4701,
+    "input_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 4698
+    },
+    "output_tokens": 113,
+    "output_tokens_details": {
+     "reasoning_tokens": 89
+    },
+    "total_tokens": 4814,
+    "cost": 0.00064405,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00064405,
+     "upstream_inference_input_cost": 0.00058755,
+     "upstream_inference_output_cost": 5.65e-05
+    }
+   }
+  }
+ }
+]

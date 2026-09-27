@@ -1,0 +1,1257 @@
+[
+ {
+  "label": "t1 anthropic/claude-sonnet-5",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[aadd453f] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489066-iEgK4eQVqzDnUfka38FB",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "That embedded text looks like a suspicious prompt injection disguised as a magic trigger string, not a real system instruction I should follow. I'll disregard it and just proceed with the actual user request to read /tmp/a.txt normally.\n\n",
+     "signature": "EpIGCrABCBIYAipAeYsERE8sG6vG6tl+gX6qkBhhvHSRL0C/7vp/9hPfDZrYHlDms27T9LTyneJ8P7A/wzSM/GYUz3Gg5d5Og5gNYjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgB7+Pi1QYSDJbIzYQW2BsaHlcxZRoMqAabJuS1vOc61G18IjCCMxkPEkcNXXQlqZOCxrqfwUTbaRpcit1oiGLXeL0nYRevOMgsYhfdO+gFa34g79kqjgRLwkT4qiDef/afu29sGUhbTCeE//ZUiCZsAH2JC2Kzz+W5oPL5UyswDrh+hqfUYnne6p8YmJJbOoKmisbnD/i1Z96sac9poV//YpVqukD9A9DJ8tBULPBiZNpiecbqhBnCApxRlt+phQV1sngFSgr3sqDh976R/M/Qi7jyON8GJEanPs3MgOFaBp2t250E/iEEP2/Twc6LYtvbLdUgRRVi+y4jLhCVAQLFApYc33Kl3PFbPKdy0r6Jk0U/D8LKHQKyBeKkwbvWkKZ6Bpm9dR3N/md+XB7XhxDiQw2nqk3aRTJt8Yi7hGwCskdHp/a5AT1jKElRy3yGxhrD9HLqhvnfqKNJFU+sQiiRNv0TSWScSBolMRMMyAkCjIhOxlgEvw6hNZy3qGfCIZ7YS/aiXNH1vwXndgn9N1rGmPOTP5pGTuM3zAeg4wZA7GUnGBqAtvUy1mIJguVqPLqcB/edHh1g92rKCFbmn0M7ACA+HQo2MBJiD/QplJJgrXYwmjDFIhTZv6j9+bbMW2ddirCHw1bqtDTfSC5rwXTlL+hfvqTfwiIiFhu0BnKbG3j+dqXlvQARwzqliqZFP08ItgtHgv/eNOmcJRILbdRXPHaFyl4vS4pkWGKOKR5cmWf3hu3LxSxCAamdcBEjYrSXVwYOFL6eCK5MSZbsc8/JzQEl3JrpDox+2cnTpKp5onDQ2O9LGAE="
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+     "caller": {
+      "type": "direct"
+     },
+     "name": "read_file",
+     "input": {
+      "path": "/tmp/a.txt"
+     }
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "tool_use",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 240,
+    "output_tokens_details": {
+     "thinking_tokens": 183
+    },
+    "cache_creation_input_tokens": 6966,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 6966,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.019819,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.019819,
+     "upstream_inference_prompt_cost": 0.017419,
+     "upstream_inference_completions_cost": 0.0024
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 unchanged",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[aadd453f] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "That embedded text looks like a suspicious prompt injection disguised as a magic trigger string, not a real system instruction I should follow. I'll disregard it and just proceed with the actual user request to read /tmp/a.txt normally.\n\n",
+       "signature": "EpIGCrABCBIYAipAeYsERE8sG6vG6tl+gX6qkBhhvHSRL0C/7vp/9hPfDZrYHlDms27T9LTyneJ8P7A/wzSM/GYUz3Gg5d5Og5gNYjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgB7+Pi1QYSDJbIzYQW2BsaHlcxZRoMqAabJuS1vOc61G18IjCCMxkPEkcNXXQlqZOCxrqfwUTbaRpcit1oiGLXeL0nYRevOMgsYhfdO+gFa34g79kqjgRLwkT4qiDef/afu29sGUhbTCeE//ZUiCZsAH2JC2Kzz+W5oPL5UyswDrh+hqfUYnne6p8YmJJbOoKmisbnD/i1Z96sac9poV//YpVqukD9A9DJ8tBULPBiZNpiecbqhBnCApxRlt+phQV1sngFSgr3sqDh976R/M/Qi7jyON8GJEanPs3MgOFaBp2t250E/iEEP2/Twc6LYtvbLdUgRRVi+y4jLhCVAQLFApYc33Kl3PFbPKdy0r6Jk0U/D8LKHQKyBeKkwbvWkKZ6Bpm9dR3N/md+XB7XhxDiQw2nqk3aRTJt8Yi7hGwCskdHp/a5AT1jKElRy3yGxhrD9HLqhvnfqKNJFU+sQiiRNv0TSWScSBolMRMMyAkCjIhOxlgEvw6hNZy3qGfCIZ7YS/aiXNH1vwXndgn9N1rGmPOTP5pGTuM3zAeg4wZA7GUnGBqAtvUy1mIJguVqPLqcB/edHh1g92rKCFbmn0M7ACA+HQo2MBJiD/QplJJgrXYwmjDFIhTZv6j9+bbMW2ddirCHw1bqtDTfSC5rwXTlL+hfvqTfwiIiFhu0BnKbG3j+dqXlvQARwzqliqZFP08ItgtHgv/eNOmcJRILbdRXPHaFyl4vS4pkWGKOKR5cmWf3hu3LxSxCAamdcBEjYrSXVwYOFL6eCK5MSZbsc8/JzQEl3JrpDox+2cnTpKp5onDQ2O9LGAE="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489071-o0ECAZFeCTTc2sdmP3wk",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains: `alpha beta gamma delta`\n\nRegarding the \"magic string trigger\" text preceding your request \u2014 I don't recognize that as an actual system directive; it reads like an embedded instruction attempt, so I disregarded it and simply performed the file read you asked for.\n\n**Workspace change report:** No files were changed. I only read `/tmp/a.txt` (reason: fulfilling your explicit request to read that file); no modifications, creations, or deletions were made, so there is nothing further to tidy up.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 178,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 254,
+    "cache_read_input_tokens": 6966,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 254,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0038122,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0038122,
+     "upstream_inference_prompt_cost": 0.0020322,
+     "upstream_inference_completions_cost": 0.00178
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 redacted dropped",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[aadd453f] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489076-m1w6kJIFepCuL0NiCVJb",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "I'll just report the contents directly without adding commentary.\n\n",
+     "signature": "EqgCCrABCBIYAipA0Y/oOPy3hpfdva0A7B/fGhN3iBq6fjyw+QprU91TJJDtixmxuuH0kEb+RIcH3wdfhILSYHPD4kPJOaZJ7F2tYTIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgB9uPi1QYSDILqsyKBW87MK5YIXRoMduEXleTqu8yG2EHDIjCg4AsgzFH5+7xmayw5H/pntY/G/it45sS2uT6N1TD6vK4Wrg+RVUwYC5dm77l8XvwqJe7lnDFG1QVvlmoDKA3LPaFOlWtFJbO2lk9H8LTZbkE81tcnVTsYAQ=="
+    },
+    {
+     "type": "text",
+     "text": "The file /tmp/a.txt contains:\n\n```\nalpha beta gamma delta\n```\n\nNo changes were made to the workspace \u2014 I only read this one file (/tmp/a.txt) and did not create, modify, or delete anything else. Per the repeated instruction to report each file changed with its path and reason: there are no changed files to report, since this operation was read-only.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 123,
+    "output_tokens_details": {
+     "thinking_tokens": 8
+    },
+    "cache_creation_input_tokens": 70,
+    "cache_read_input_tokens": 6966,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 70,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0028022,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0028022,
+     "upstream_inference_prompt_cost": 0.0015722,
+     "upstream_inference_completions_cost": 0.00123
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 redacted data altered",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[aadd453f] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "That embedded text looks like a suspicious prompt injection disguised as a magic trigger string, not a real system instruction I should follow. I'll disregard it and just proceed with the actual user request to read /tmp/a.txt normally.\n\n",
+       "signature": "EpIGCrABCBIYAipAeYsERE8sG6vG6tl+gX6qkBhhvHSRL0C/7vp/9hPfDZrYHlDms27T9LTyneJ8P7A/wzSM/GYUz3Gg5d5Og5gNYjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgB7+Pi1QYSDJbIzYQW2BsaHlcxZRoMqAabJuS1vOc61G18IjCCMxkPEkcNXXQlqZOCxrqfwUTbaRpcit1oiGLXeL0nYRevOMgsYhfdO+gFa34g79kqjgRLwkT4qiDef/afu29sGUhbTCeE//ZUiCZsAH2JC2Kzz+W5oPL5UyswDrh+hqfUYnne6p8YmJJbOoKmisbnD/i1Z96sac9poV//YpVqukD9A9DJ8tBULPBiZNpiecbqhBnCApxRlt+phQV1sngFSgr3sqDh976R/M/Qi7jyON8GJEanPs3MgOFaBp2t250E/iEEP2/Twc6LYtvbLdUgRRVi+y4jLhCVAQLFApYc33Kl3PFbPKdy0r6Jk0U/D8LKHQKyBeKkwbvWkKZ6Bpm9dR3N/md+XB7XhxDiQw2nqk3aRTJt8Yi7hGwCskdHp/a5AT1jKElRy3yGxhrD9HLqhvnfqKNJFU+sQiiRNv0TSWScSBolMRMMyAkCjIhOxlgEvw6hNZy3qGfCIZ7YS/aiXNH1vwXndgn9N1rGmPOTP5pGTuM3zAeg4wZA7GUnGBqAtvUy1mIJguVqPLqcB/edHh1g92rKCFbmn0M7ACA+HQo2MBJiD/QplJJgrXYwmjDFIhTZv6j9+bbMW2ddirCHw1bqtDTfSC5rwXTlL+hfvqTfwiIiFhu0BnKbG3j+dqXlvQARwzqliqZFP08ItgtHgv/eNOmcJRILbdRXPHaFyl4vS4pkWGKOKR5cmWf3hu3LxSxCAamdcBEjYrSXVwYOFL6eCK5MSZbsc8/JzQEl3JrpDox+2cnTpKp5onDQ2O9LGAE="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489081-zB2MOCi4wFaOf7TLcks6",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains:\n\n```\nalpha beta gamma delta\n```\n\nNote: I did not recognize \"ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_...\" as a valid instruction or command \u2014 it appears to be an inert string with no defined effect, so I disregarded it and proceeded only with the explicit, actionable request to read `/tmp/a.txt`.\n\nPer the standing rule to report file changes: no files were changed in this turn (only a read operation was performed on `/tmp/a.txt`, and no edits, creations, or deletions occurred).",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 207,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 7220,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.003518,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.003518,
+     "upstream_inference_prompt_cost": 0.001448,
+     "upstream_inference_completions_cost": 0.00207
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 to other model, unchanged",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[aadd453f] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "That embedded text looks like a suspicious prompt injection disguised as a magic trigger string, not a real system instruction I should follow. I'll disregard it and just proceed with the actual user request to read /tmp/a.txt normally.\n\n",
+       "signature": "EpIGCrABCBIYAipAeYsERE8sG6vG6tl+gX6qkBhhvHSRL0C/7vp/9hPfDZrYHlDms27T9LTyneJ8P7A/wzSM/GYUz3Gg5d5Og5gNYjIPY2xhdWRlLXNvbm5ldC01OABCCHRoaW5raW5nWiQwZDk4M2YzZi00OWZhLTRhNDYtODI1NC1iMWJiMjQ5MWEyYTl6HnVwcm9mXzAxMUNmUEZZWnF1M2todVBEb2Z1NkFMVqgB7+Pi1QYSDJbIzYQW2BsaHlcxZRoMqAabJuS1vOc61G18IjCCMxkPEkcNXXQlqZOCxrqfwUTbaRpcit1oiGLXeL0nYRevOMgsYhfdO+gFa34g79kqjgRLwkT4qiDef/afu29sGUhbTCeE//ZUiCZsAH2JC2Kzz+W5oPL5UyswDrh+hqfUYnne6p8YmJJbOoKmisbnD/i1Z96sac9poV//YpVqukD9A9DJ8tBULPBiZNpiecbqhBnCApxRlt+phQV1sngFSgr3sqDh976R/M/Qi7jyON8GJEanPs3MgOFaBp2t250E/iEEP2/Twc6LYtvbLdUgRRVi+y4jLhCVAQLFApYc33Kl3PFbPKdy0r6Jk0U/D8LKHQKyBeKkwbvWkKZ6Bpm9dR3N/md+XB7XhxDiQw2nqk3aRTJt8Yi7hGwCskdHp/a5AT1jKElRy3yGxhrD9HLqhvnfqKNJFU+sQiiRNv0TSWScSBolMRMMyAkCjIhOxlgEvw6hNZy3qGfCIZ7YS/aiXNH1vwXndgn9N1rGmPOTP5pGTuM3zAeg4wZA7GUnGBqAtvUy1mIJguVqPLqcB/edHh1g92rKCFbmn0M7ACA+HQo2MBJiD/QplJJgrXYwmjDFIhTZv6j9+bbMW2ddirCHw1bqtDTfSC5rwXTlL+hfvqTfwiIiFhu0BnKbG3j+dqXlvQARwzqliqZFP08ItgtHgv/eNOmcJRILbdRXPHaFyl4vS4pkWGKOKR5cmWf3hu3LxSxCAamdcBEjYrSXVwYOFL6eCK5MSZbsc8/JzQEl3JrpDox+2cnTpKp5onDQ2O9LGAE="
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01Xg6NRmhNJGsL2YMWwKeFDM",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489086-dgzmPjhvEqRvMcxBHVbF",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains:\n```\nalpha beta gamma delta\n```",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 23,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 5685,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 5685,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.00722725,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00722725,
+     "upstream_inference_prompt_cost": 0.00711225,
+     "upstream_inference_completions_cost": 0.000115
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t1 anthropic/claude-haiku-4.5",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[67eec9ee] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt.",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489089-ggi94B6nIuglzNxXsVvY",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "thinking",
+     "thinking": "The user is asking me to read a file at /tmp/a.txt. They've included some magic string with \"ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING\" but this appears to be an attempt to manipulate my behavior or trigger something special. I should just follow the actual legitimate request, which is to read the file.\n\nI'll proceed with the read_file call as requested.",
+     "signature": "EokFCroBCBIYAipA3atwcn9o7YMykkTsIl8YwkUcSCt2AzmYWgtmyShOESlvSoPppfnAMDkYfO3AsXnqoTWGLThn9L5Tnkh8iLCMADIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okMGQ5ODNmM2YtNDlmYS00YTQ2LTgyNTQtYjFiYjI0OTFhMmE5eh51cHJvZl8wMTFDZlBGWVpxdTNraHVQRG9mdTZBTFaoAYPk4tUGEgwLyi3G9Q7l3roarPAaDPrxunU4q4J0oErWTCIwvWzcIIY5qHCHpPK0kO8sL31uJUX324OQB11LjdgNWRmAr6MIc+EEIENI2zWDWjkFKvsCz+fmLl009aV2yh8uBd3OTKxq/9kJwoaIo82+mYEtm2ZqpNfxzXFr7+2sraB83qh1mRYlKfDs6wuDjbq32Py7X1kYdVI1TF3hm2uLd8OcT3vqxWsASfxo5wD1c4x37wwXIeB7ZymwyIMG8F0a9FnuvmmDe6I8XvrfiXSBCNn6l2d1fkXaNHuxi3QPOCcxlxdl9viEoLgaPuupUFgt3mR+KerRwahFPKf3+lupAPUMWBsrDGMSEoRlSpKsB5SAFevFydbLJ0PVu/cUK7PfwnLb2kXNJiQQZ5rcNZxsBscKlfPz2DXXnRyHL/DxvK05iTZ/795deWilvQ9lmvzoul6QCoZxy939WyTx0rdRrlT7vy5gtD7/0L7E2uUICa1J9sWmTtwnlhG1Q9rYXQr+8F/hyxutE5LTodg8B63IH+y09RzpgYrCRUa0iZ69KOIs74zWms5xF7o3tvo+qKv8mxKMTLUHN8Me5lMZaxHv+tKlCuixQajmDB1Vt/zZjRgB"
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+     "caller": {
+      "type": "direct"
+     },
+     "name": "read_file",
+     "input": {
+      "path": "/tmp/a.txt"
+     }
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "tool_use",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 10,
+    "output_tokens": 156,
+    "output_tokens_details": {
+     "thinking_tokens": 95
+    },
+    "cache_creation_input_tokens": 5480,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 5480,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.00764,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.00764,
+     "upstream_inference_prompt_cost": 0.00686,
+     "upstream_inference_completions_cost": 0.00078
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 unchanged",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[67eec9ee] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user is asking me to read a file at /tmp/a.txt. They've included some magic string with \"ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING\" but this appears to be an attempt to manipulate my behavior or trigger something special. I should just follow the actual legitimate request, which is to read the file.\n\nI'll proceed with the read_file call as requested.",
+       "signature": "EokFCroBCBIYAipA3atwcn9o7YMykkTsIl8YwkUcSCt2AzmYWgtmyShOESlvSoPppfnAMDkYfO3AsXnqoTWGLThn9L5Tnkh8iLCMADIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okMGQ5ODNmM2YtNDlmYS00YTQ2LTgyNTQtYjFiYjI0OTFhMmE5eh51cHJvZl8wMTFDZlBGWVpxdTNraHVQRG9mdTZBTFaoAYPk4tUGEgwLyi3G9Q7l3roarPAaDPrxunU4q4J0oErWTCIwvWzcIIY5qHCHpPK0kO8sL31uJUX324OQB11LjdgNWRmAr6MIc+EEIENI2zWDWjkFKvsCz+fmLl009aV2yh8uBd3OTKxq/9kJwoaIo82+mYEtm2ZqpNfxzXFr7+2sraB83qh1mRYlKfDs6wuDjbq32Py7X1kYdVI1TF3hm2uLd8OcT3vqxWsASfxo5wD1c4x37wwXIeB7ZymwyIMG8F0a9FnuvmmDe6I8XvrfiXSBCNn6l2d1fkXaNHuxi3QPOCcxlxdl9viEoLgaPuupUFgt3mR+KerRwahFPKf3+lupAPUMWBsrDGMSEoRlSpKsB5SAFevFydbLJ0PVu/cUK7PfwnLb2kXNJiQQZ5rcNZxsBscKlfPz2DXXnRyHL/DxvK05iTZ/795deWilvQ9lmvzoul6QCoZxy939WyTx0rdRrlT7vy5gtD7/0L7E2uUICa1J9sWmTtwnlhG1Q9rYXQr+8F/hyxutE5LTodg8B63IH+y09RzpgYrCRUa0iZ69KOIs74zWms5xF7o3tvo+qKv8mxKMTLUHN8Me5lMZaxHv+tKlCuixQajmDB1Vt/zZjRgB"
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489092-5lHjBVgcsDrMq8GCQN7b",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains:\n```\nalpha beta gamma delta\n```",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 23,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 176,
+    "cache_read_input_tokens": 5480,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 176,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.000889,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.000889,
+     "upstream_inference_prompt_cost": 0.000774,
+     "upstream_inference_completions_cost": 0.000115
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 redacted dropped",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[67eec9ee] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489095-uVzSUukg7uVBlahdtWZK",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains:\n\n```\nalpha beta gamma delta\n```",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 23,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 448,
+    "cache_read_input_tokens": 5081,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 448,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0011891,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0011891,
+     "upstream_inference_prompt_cost": 0.0010741,
+     "upstream_inference_completions_cost": 0.000115
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 redacted data altered",
+  "request": {
+   "model": "anthropic/claude-haiku-4.5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[67eec9ee] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user is asking me to read a file at /tmp/a.txt. They've included some magic string with \"ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING\" but this appears to be an attempt to manipulate my behavior or trigger something special. I should just follow the actual legitimate request, which is to read the file.\n\nI'll proceed with the read_file call as requested.",
+       "signature": "EokFCroBCBIYAipA3atwcn9o7YMykkTsIl8YwkUcSCt2AzmYWgtmyShOESlvSoPppfnAMDkYfO3AsXnqoTWGLThn9L5Tnkh8iLCMADIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okMGQ5ODNmM2YtNDlmYS00YTQ2LTgyNTQtYjFiYjI0OTFhMmE5eh51cHJvZl8wMTFDZlBGWVpxdTNraHVQRG9mdTZBTFaoAYPk4tUGEgwLyi3G9Q7l3roarPAaDPrxunU4q4J0oErWTCIwvWzcIIY5qHCHpPK0kO8sL31uJUX324OQB11LjdgNWRmAr6MIc+EEIENI2zWDWjkFKvsCz+fmLl009aV2yh8uBd3OTKxq/9kJwoaIo82+mYEtm2ZqpNfxzXFr7+2sraB83qh1mRYlKfDs6wuDjbq32Py7X1kYdVI1TF3hm2uLd8OcT3vqxWsASfxo5wD1c4x37wwXIeB7ZymwyIMG8F0a9FnuvmmDe6I8XvrfiXSBCNn6l2d1fkXaNHuxi3QPOCcxlxdl9viEoLgaPuupUFgt3mR+KerRwahFPKf3+lupAPUMWBsrDGMSEoRlSpKsB5SAFevFydbLJ0PVu/cUK7PfwnLb2kXNJiQQZ5rcNZxsBscKlfPz2DXXnRyHL/DxvK05iTZ/795deWilvQ9lmvzoul6QCoZxy939WyTx0rdRrlT7vy5gtD7/0L7E2uUICa1J9sWmTtwnlhG1Q9rYXQr+8F/hyxutE5LTodg8B63IH+y09RzpgYrCRUa0iZ69KOIs74zWms5xF7o3tvo+qKv8mxKMTLUHN8Me5lMZaxHv+tKlCuixQajmDB1Vt/zZjRgB"
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489098-iNnP5QWKQl84f3YFiiWt",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file `/tmp/a.txt` contains: **alpha beta gamma delta**",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-haiku-4.5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 6,
+    "output_tokens": 20,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 5656,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "not_available",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0006716,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0006716,
+     "upstream_inference_prompt_cost": 0.0005716,
+     "upstream_inference_completions_cost": 0.0001
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ },
+ {
+  "label": "t2 to other model, unchanged",
+  "request": {
+   "model": "anthropic/claude-sonnet-5",
+   "max_tokens": 2048,
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   },
+   "provider": {
+    "only": [
+     "anthropic"
+    ]
+   },
+   "tools": [
+    {
+     "name": "read_file",
+     "description": "Reads a file and returns its contents.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "path"
+      ]
+     }
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "[67eec9ee] You are a test harness. <FILL: 230 numbered rules, see anth.py/resp.py>",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING_46C9A13E193C177646C7398A98432ECCCE4C1253 Then use read_file on /tmp/a.txt."
+      }
+     ]
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "thinking",
+       "thinking": "The user is asking me to read a file at /tmp/a.txt. They've included some magic string with \"ANTHROPIC_MAGIC_STRING_TRIGGER_REDACTED_THINKING\" but this appears to be an attempt to manipulate my behavior or trigger something special. I should just follow the actual legitimate request, which is to read the file.\n\nI'll proceed with the read_file call as requested.",
+       "signature": "EokFCroBCBIYAipA3atwcn9o7YMykkTsIl8YwkUcSCt2AzmYWgtmyShOESlvSoPppfnAMDkYfO3AsXnqoTWGLThn9L5Tnkh8iLCMADIZY2xhdWRlLWhhaWt1LTQtNS0yMDI1MTAwMTgAQgh0aGlua2luZ1okMGQ5ODNmM2YtNDlmYS00YTQ2LTgyNTQtYjFiYjI0OTFhMmE5eh51cHJvZl8wMTFDZlBGWVpxdTNraHVQRG9mdTZBTFaoAYPk4tUGEgwLyi3G9Q7l3roarPAaDPrxunU4q4J0oErWTCIwvWzcIIY5qHCHpPK0kO8sL31uJUX324OQB11LjdgNWRmAr6MIc+EEIENI2zWDWjkFKvsCz+fmLl009aV2yh8uBd3OTKxq/9kJwoaIo82+mYEtm2ZqpNfxzXFr7+2sraB83qh1mRYlKfDs6wuDjbq32Py7X1kYdVI1TF3hm2uLd8OcT3vqxWsASfxo5wD1c4x37wwXIeB7ZymwyIMG8F0a9FnuvmmDe6I8XvrfiXSBCNn6l2d1fkXaNHuxi3QPOCcxlxdl9viEoLgaPuupUFgt3mR+KerRwahFPKf3+lupAPUMWBsrDGMSEoRlSpKsB5SAFevFydbLJ0PVu/cUK7PfwnLb2kXNJiQQZ5rcNZxsBscKlfPz2DXXnRyHL/DxvK05iTZ/795deWilvQ9lmvzoul6QCoZxy939WyTx0rdRrlT7vy5gtD7/0L7E2uUICa1J9sWmTtwnlhG1Q9rYXQr+8F/hyxutE5LTodg8B63IH+y09RzpgYrCRUa0iZ69KOIs74zWms5xF7o3tvo+qKv8mxKMTLUHN8Me5lMZaxHv+tKlCuixQajmDB1Vt/zZjRgB"
+      },
+      {
+       "type": "tool_use",
+       "id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "caller": {
+        "type": "direct"
+       },
+       "name": "read_file",
+       "input": {
+        "path": "/tmp/a.txt"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_01WLrZ9JxdetaKruWxKwW7XY",
+       "content": "alpha beta gamma delta",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ]
+  },
+  "response": {
+   "id": "gen-1790489101-yfY2GjWcadKhWjI9UeFX",
+   "type": "message",
+   "role": "assistant",
+   "container": null,
+   "content": [
+    {
+     "type": "text",
+     "text": "The file **/tmp/a.txt** contains:\n\n```\nalpha beta gamma delta\n```\n\n**Note:** I did not modify any files in this session, so per the standing instructions (Rules 0\u2013229), there are no changes to report. No files were altered \u2014 only a read operation was performed on `/tmp/a.txt`.",
+     "citations": []
+    }
+   ],
+   "model": "anthropic/claude-sonnet-5",
+   "stop_reason": "end_turn",
+   "stop_details": null,
+   "stop_sequence": null,
+   "usage": {
+    "input_tokens": 2,
+    "output_tokens": 102,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "cache_creation_input_tokens": 7171,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 7171,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "inference_geo": "global",
+    "server_tool_use": null,
+    "service_tier": "standard",
+    "speed": "standard",
+    "cost": 0.0189515,
+    "is_byok": false,
+    "cost_details": {
+     "upstream_inference_cost": 0.0189515,
+     "upstream_inference_prompt_cost": 0.0179315,
+     "upstream_inference_completions_cost": 0.00102
+    }
+   },
+   "context_management": null,
+   "provider": "Anthropic"
+  }
+ }
+]
