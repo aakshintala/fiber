@@ -94,7 +94,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | Code | What it covers | Retried |
 |---|---|---|
 | `rate_limited` | HTTP 429 | yes |
-| `provider_unavailable` | HTTP 5xx, including 503 and 529 overload | yes |
+| `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409 | yes |
 | `connection_failed` | DNS, TLS, a refused or dropped connection | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit | never |
@@ -107,6 +107,10 @@ policy is `docs/model-routing.md`, "When a model call fails".
 The status alone cannot classify: OpenRouter sends an upstream's context
 overflow as HTTP 200 with the error in the body or the last stream chunk. The
 provider crate reads the body, per protocol and per upstream.
+
+The Retried column is the default. A response header `x-should-retry: true`
+or `false` overrides it for that response (`docs/model-routing.md`, "When a
+model call fails").
 
 A wait longer than 60 seconds fails at once as `rate_limited` with
 `retry_after` set, so a person or a caller can decide.
