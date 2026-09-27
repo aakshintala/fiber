@@ -1,7 +1,8 @@
 # Provider protocol harvest
 
-One fact table for each of Fiber's five protocols (`docs/model-routing.md`,
-"Protocols and providers"). Each file compares pi (`@earendil-works/pi-ai`
+One fact table for each of five wire formats: Fiber's four protocols
+(`docs/model-routing.md`, "Protocols and providers") and the ChatGPT/codex
+variant of Responses. Each file compares pi (`@earendil-works/pi-ai`
 0.87.1, compiled JavaScript, plus the vendor SDKs it pins) with rig
 (`~/work/rig`, commit 42f4e06, September 26, 2026).
 
@@ -17,8 +18,8 @@ Every fact has a file and line in pi and in rig, and one mark: `agree`,
 | `google-generative-ai` | [google-generative-ai.md](google-generative-ai.md) | 21 | 23 | 14 | 14 |
 
 The codex file covers only what differs from plain Responses. It also breaks
-down pi's 1,302-line codex module, to inform whether codex is a fifth protocol
-or a variant of Responses (ADR 0007).
+down pi's 1,302-line codex module; that breakdown is why codex is a variant of
+Responses rather than a protocol of its own (ADR 0007).
 
 ## Reading the marks
 

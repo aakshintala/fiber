@@ -14,9 +14,12 @@ Fiber has to reach five providers in v0.0.1, and a person must be able to add
 or fix a provider without rebuilding Fiber. Providers differ in two ways that
 change at different rates.
 
-Wire formats are few and stable. The five providers need five between them:
-Anthropic Messages, OpenAI Chat Completions, OpenAI Responses, the ChatGPT/codex
-variant of Responses, and Google's Generative AI API. Parsing a streamed reply
+Wire formats are few and stable. The five providers need four between them:
+Anthropic Messages, OpenAI Chat Completions, OpenAI Responses and Google's
+Generative AI API. ChatGPT/codex speaks Responses. Its differences are request
+fields, headers from its login and one error body, not how a stream is parsed
+(`research/provider-harvest/openai-codex-responses.md`), so they are declared
+flags on the Responses protocol. Parsing a streamed reply
 correctly is the hardest code in the provider layer. pi lists 43 vendor quirks
 it absorbs there.
 
@@ -58,5 +61,5 @@ quirk would need a release. It would also leave two ways to define a provider.
 Lua protocols as an escape hatch. It covers a new vendor format without a
 release, and models write working Lua providers reliably
 (`research/extension-runtime/pass3`: 14 of 15 ran first try). It was rejected
-because nearly every vendor speaks one of the five formats, and the escape hatch
+because nearly every vendor speaks one of the four formats, and the escape hatch
 would be the least-tested path through the most fragile code.
