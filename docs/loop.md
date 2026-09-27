@@ -133,7 +133,8 @@ again is
 [Revisit: may a tool that never finished be re-run after a crash?](https://github.com/aakshintala/fiber/issues/40).
 
 The reasoning state a provider returns with a reply, such as Anthropic's
-signed thinking blocks and OpenAI's encrypted reasoning, is sent back in the
+signed thinking blocks, OpenAI's encrypted reasoning and Gemini's thought
+signatures, is sent back in the
 next request as the provider requires. Anthropic requires it, unchanged,
 whenever tool results are returned. It comes from the log like the rest of
 the conversation. Which bytes are logged, and what a resume, a fork or a

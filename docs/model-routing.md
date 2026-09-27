@@ -6,6 +6,8 @@ The provider seam is `docs/architecture.md`, and the extension runtime is
 [ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md). pi is the
 reference for wire and auth behavior. What it does is in
 [How pi does providers, auth and routing](https://github.com/aakshintala/fiber/issues/4).
+Each protocol's wire facts, read from pi and rig side by side, are in
+[research/provider-harvest](../research/provider-harvest/README.md).
 
 ## Protocols and providers
 
