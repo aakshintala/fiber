@@ -128,3 +128,12 @@ OpenAI's client keeps:
   logging, which is pi's approach, covers fields no one has modelled yet.
 - #134, `include` with reasoning off: accepted, through OpenRouter.
 - #135: no codex request made; nothing to tick.
+
+## Owner rulings, 2026-09-27
+
+- A reasoning item is sent only to the model reference that produced it, as pi does. This is
+  stricter than the probes require, since every Anthropic model and host tried accepted a genuine
+  signature.
+- A left-out item is left out whole. Its readable text is not sent as ordinary assistant text.
+- No live Gemini probe. pi and rig agree on `thoughtSignature`, and logging items verbatim covers
+  it.

@@ -134,12 +134,19 @@ again is
 
 The reasoning state a provider returns with a reply, such as Anthropic's
 signed thinking blocks, OpenAI's encrypted reasoning and Gemini's thought
-signatures, is sent back in the
-next request as the provider requires. Anthropic requires it, unchanged,
-whenever tool results are returned. It comes from the log like the rest of
-the conversation. Which bytes are logged, and what a resume, a fork or a
-switch to another model sends, is
-[Probe: what reasoning state a resume must send back](https://github.com/aakshintala/fiber/issues/95).
+signatures, is logged exactly as the provider returned it, and sent back
+unchanged to the model that produced it. The provider checks only the opaque
+part, the signature or encrypted content, and refuses a request in which it
+was changed. Leaving it out is accepted but loses the prompt cache from that
+point on.
+
+Each item goes only to the model that produced it, by its whole model
+reference, `provider/model` (`docs/model-routing.md`). After `/model` or the
+`model` command switches to another model reference, a request leaves out
+every item another one produced: both the opaque part and its readable text.
+A change of effort or thinking alone keeps the model, so its items are still
+sent. A fork keeps its parent's model and sends them unchanged. Probed on
+Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.
 
 ## What the loop does not do
 
