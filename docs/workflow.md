@@ -95,7 +95,9 @@ last one.
 
 ## The pull request
 
-The body says `Resolves #<ticket>`.
+The body says `Resolves #<ticket>`, and either `Doc friction: none` or a
+link to each `needs-owner` issue the work raised ("When a doc should
+change").
 
 When the ticket carries the `bug` label, CI runs the pull request's new and
 changed tests against the base commit, and at least one must fail there
@@ -125,15 +127,37 @@ links both findings, when a tool can catch it
 (`docs/code-quality.md`, "Tools enforce the rules"). Otherwise it is added to
 `docs/code-quality.md`, "What a reviewer checks".
 
-## When a doc is wrong
+## When a doc should change
 
-The doc wins, and the code changes to match it. When implementing shows that
-a doc cannot be met as written, the implementer stops. The orchestrator
-files an issue labelled `needs-owner` that quotes the doc and gives the
-evidence, and the ticket waits for the owner's ruling.
+The doc wins, and the code changes to match it. A code pull request may
+correct a doc's wording, such as a misnamed type or a broken link. What a
+doc decides, the owner changes.
 
-A code pull request may correct a doc's wording, such as a misnamed type or a
-broken link, but never changes what the doc decides.
+Two findings send a doc to the owner:
+
+- It cannot be met as written. The implementer stops, and the ticket waits
+  for the owner's ruling.
+- It can be met, but building it shows a problem or a simpler design. The
+  signs are the same workaround in several places, special-case branches for
+  unrelated edge cases, a type that needs an escape hatch to compile, a lock
+  where the doc says nothing is shared, callers that must know a module's
+  internals, or a mechanism the doc requires that nothing uses.
+
+For the second, the implementer pauses and tells the orchestrator what it
+found. The orchestrator reads the ticket's resolution first. An alternative
+the resolution already rejected is answered with the resolution's reason,
+and the implementer carries on. Anything else the implementer backs with a
+sketch or a measurement, not a rewrite.
+
+For either, the orchestrator files an issue labelled `needs-owner` that
+quotes the doc and gives the evidence. Then:
+
+- When the alternative would replace what the ticket builds, the ticket is
+  marked blocked by that issue, and the orchestrator takes the next ticket
+  whose blockers are closed.
+- Otherwise the implementer finishes as the doc says, and the pull request
+  merges. If the owner accepts the change, the doc changes and the code
+  follows in a later pull request.
 
 ## Merging
 
