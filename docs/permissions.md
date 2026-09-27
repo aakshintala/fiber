@@ -106,7 +106,8 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
 2. **A standing deny** matching this call: refused. No model call, no question.
 3. **A standing ask** matching this call: a human is asked, whatever the mode.
 4. **`readonly` mode**: a call with any effect other than `reads` asks a
-   person whether to leave `readonly` ([Leaving readonly](#leaving-readonly)).
+   person whether to leave `readonly` ([Leaving readonly](#leaving-readonly)),
+   except a web search or a fetch to a known host ([Fast paths](#fast-paths)).
 5. **`yolo` mode**: allowed.
 6. **A fast path** — see below: allowed, with no model call.
 7. **A session grant** matching this call: allowed.
@@ -121,7 +122,8 @@ else, because a rule that can be widened by a later layer is not a deny.
 Fiber has no plan mode. `readonly` is how a session works without changing
 anything, and this is how it stops.
 
-A call in `readonly` with any effect other than `reads` does not run. Fiber
+A call in `readonly` with any effect other than `reads` does not run, except
+the web calls in [Fast paths](#fast-paths). Fiber
 asks the person whether to leave `readonly`, showing the call that asked. It
 is a `permission_requested` raised by step 4.
 
@@ -141,16 +143,20 @@ session is `readonly` and the person kept it so. The turn continues.
 
 Only a root session asks. A delegate in `readonly` is there because its
 parent is, so it never asks to leave: its calls with an effect other than
-`reads` are refused, with a reason saying its parent is `readonly`.
+`reads`, the web calls in [Fast paths](#fast-paths) aside, are refused, with a reason saying its parent is `readonly`.
 
 ### Fast paths
 
-Two classes of call never reach a reviewer or a person:
+Three classes of call never reach a reviewer or a person:
 
-- every call whose only effect is `reads`, or that declares no effect, and
-- a `writes` call whose paths all sit inside the **workspace**.
+- every call whose only effect is `reads`, or that declares no effect,
+- a `writes` call whose paths all sit inside the **workspace**, and
+- a web search, and a web fetch to a host known in the session
+  (`docs/tools.md`, "Web fetch and web search"). Both run in `readonly`
+  too: they only retrieve. A fetch to any other host is reviewed, and in
+  `readonly` it asks the person to leave `readonly`.
 
-Everything else — shell execution, network, and any write outside the
+Everything else — shell execution, other network calls, and any write outside the
 workspace — is reviewed. This is where nearly all of the cost is saved, and it
 is the line Claude Code draws: a fixed allowlist of state-free tools, plus
 "file writes and edits inside the project directory are allowed without a

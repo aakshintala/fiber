@@ -87,9 +87,8 @@ by content.
 
 - A tool that declares no cap is cut at 16 KiB of model-facing content.
   Configuration can override any tool's cap (`docs/configuration.md`). A tool may declare a larger or
-  smaller cap: web fetch sets its own in
-  [Web fetch and web search](https://github.com/aakshintala/fiber/issues/57).
-  `read` keeps the 16 KiB default ("File tools").
+  smaller cap. `read` and `web_fetch` keep the 16 KiB default ("File tools",
+  "Web fetch and web search").
 - A cut result keeps what its tool declares (the start by default, or both
   ends), a notice saying how many bytes were cut, and the artifact path. When
   both ends are kept, the notice sits between them. Nothing is lost, only
@@ -106,8 +105,8 @@ by content.
   `research/tool-result-sizes/sizes.py`; sizes, so they do not depend on the
   platform), 16 KiB cuts 1.2% of 26,829 shell results and almost no result of
   any other tool except file reads (16.8% of 5,070), search (about 9%) and web
-  fetch (24% of 21). Web fetch declares its own cap for that reason. A cut
-  read continues from an offset, and search runs through the shell
+  fetch (24% of 21). A cut read continues from an offset, a cut fetch leaves
+  the whole page in the artifact, and search runs through the shell
   ("Search").
 
 ## Progress
@@ -686,12 +685,136 @@ added a note to the whole form. A cancelled form is the single line
 A declined form is an answer, not a failure: the call completes with status
 `completed`. The structured answers are on `interaction_resolved`.
 
+## Web fetch and web search
+
+Settled by
+[Web fetch and web search](https://github.com/aakshintala/fiber/issues/57);
+that ticket's resolution holds the rationale and the rejected alternatives.
+How Claude Code, codex, pi and fiber-zig do it is
+[research/web-tools/reference-agents.md](../research/web-tools/reference-agents.md);
+which providers host a search, and the search services a backend can call, is
+[research/web-tools/providers.md](../research/web-tools/providers.md).
+
+There are two tools. `web_fetch` is compiled in and runs on this machine for
+every provider. `web_search` is a provider's hosted search where the model's
+provider offers one, and otherwise Fiber's own tool over an installed search
+backend.
+
+### web_fetch
+
+- Arguments: `url` only. There is no prompt and no second model over the
+  page; the model reads the page itself.
+- The result begins with one line giving the final URL after redirects, the
+  HTTP status and the content type.
+- HTML is converted to markdown. Other text, JSON and XML come back as they
+  are.
+- A PDF, or a PNG, JPEG, GIF or WebP image, is saved to the session's
+  `artifacts/` and the result gives its path. The model reads it with `read`,
+  which already handles both ("File tools").
+- Any other content type fails with `unsupported_file`, giving its type and
+  size.
+- The cap is the 16 KiB default ("Bounded results"). A cut keeps the start of
+  the page, and the whole markdown is in the artifact.
+- A download larger than 10 MiB fails with `too_large`. Claude Code and
+  fiber-zig both use 10 MiB.
+- Each request times out after 60 seconds, and the whole fetch, redirects
+  included, after 5 minutes. Both fail with `timeout`. These are Claude
+  Code's values.
+- A status other than 2xx fails with `http_error`, giving the status and the
+  start of the body.
+- Redirects are followed, to any host, for at most 10 hops. Claude Code
+  returns a cross-host redirect to the model because it approves each host;
+  Fiber judges only the URL the model wrote, because the server chooses a
+  redirect ("Effects").
+- A URL is fetched as written: `http://` is not upgraded, so a server on
+  `localhost` or an intranet host works.
+- Fetch refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`) and
+  cloud metadata hosts such as `metadata.google.internal`, and fails with
+  `blocked_host`. The check runs on every hop after the name is resolved, so
+  a redirect or a DNS name cannot reach them. A metadata server hands out the
+  machine's cloud credentials; loopback and private addresses are allowed,
+  because reaching them is why fetch runs locally.
+- Writing to `artifacts/` is part of the call. It is not a `writes` effect.
+
+### web_search
+
+- The model sees one tool, `web_search`, whichever way it runs.
+- Arguments: `query` (required), and either `allowed_domains` or
+  `blocked_domains`, never both. These match Anthropic's hosted tool, so the
+  model sees the same arguments on every provider.
+- The description tells the model to end an answer that used search with a
+  list of the sources it used, as markdown links. Claude Code and fiber-zig
+  both ask for this.
+- There is no limit on searches per turn or per session.
+
+#### Hosted by the provider
+
+- When the model's provider hosts a search, that search is used, even when a
+  backend is also installed.
+- Which models host a search, and which variant each takes, is data in the
+  provider's extension (`docs/model-routing.md`). Reading and sending back the
+  hosted search's blocks is protocol code in `anthropic-messages`,
+  `openai-responses` and `google-generative-ai`.
+- Measured September 27, 2026: ChatGPT/codex, muse (only on its
+  `/v1/responses` endpoint), OpenRouter (its web plugin) and OpenCode (by
+  passing Anthropic's and OpenAI's hosted tools through) host a search.
+  Databricks does not: "Code interpreter and web search tools are not
+  supported by Databricks."
+- The provider runs the search before Fiber sees it, so a hosted search is
+  never reviewed and cannot be refused. It writes `tool_call_started` and
+  `tool_call_completed` like any call, with the query and the result URLs.
+- Its raw blocks are logged exactly as they arrived and sent back unchanged
+  only to the model that produced them, the rule for reasoning state
+  (`docs/loop.md`). Anthropic refuses a request whose encrypted search content
+  was changed. After a switch to another model reference, the request leaves
+  them out.
+- Whether a hosted search is declared is fixed when the preamble is built
+  ("Which tools the model sees"). On Anthropic, turning it on or off changes
+  the system prompt and so the cache.
+- `usage_recorded` carries the number of searches when the provider reports
+  it (`docs/events.md`), because hosted searches are billed per search.
+
+#### Fiber's own, over a backend
+
+- A search backend is an extension. Each search service has its own API, key
+  and response shape. Fiber ships none installed.
+- A backend registers with `fiber.search_backend` (`docs/extensions.md`). Its
+  function takes the query and the domain filter, and returns a list of
+  results, each a title, a URL and a snippet. Fiber writes the result.
+- A backend's key is stored at `credentials/<backend>`, as a provider's is,
+  and read with `host.secret`.
+- With more than one backend installed, `web_search.backend`
+  (`docs/configuration.md`) names the one used.
+- When the provider hosts no search and no backend is installed, `web_search`
+  is not declared.
+- The cap is the 16 KiB default.
+
+### Effects
+
+- Both tools declare `network`.
+- A search never reaches a reviewer or a person, in any mode, `readonly`
+  included. A query reaches only the search service.
+- A fetch to a known host takes the same fast path. Any other fetch is
+  reviewed, and in `readonly` it asks the person (`docs/permissions.md`,
+  "Fast paths").
+- A host is known in a session when it was named in one of the person's
+  messages or an instruction file, appeared in a search result in the
+  session, or was the host of a fetch a reviewer or a person allowed in the
+  session. A host named only inside a fetched page is not known: otherwise an
+  injected page could name its own host.
+- A query string does not make a fetch suspicious. A search on a known host,
+  such as a Jira query URL, needs no review.
+- What the reviewer is shown does not change: the person's messages and the
+  agent's tool calls, never a fetched page (`docs/permissions.md`, "What it is
+  shown").
+- A standing deny still applies first, so the person can deny a host.
+
 ## Built in or extension
 
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
-Fiber delegate harness, asking the person, web fetch and
-`handoff` (`docs/handoff.md`) behave the same for everyone and are compiled in, as is
+Fiber delegate harness, asking the person, web fetch, the `web_search` tool
+and `handoff` (`docs/handoff.md`) behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.
@@ -710,8 +833,8 @@ Four kinds ship as extensions:
   Detail belongs to
   [Provider quota the model can see](https://github.com/aakshintala/fiber/issues/58).
 - Web search backends: each search service has its own API, key and response
-  shape. How the web search tool splits from its backend is
-  [Web fetch and web search](https://github.com/aakshintala/fiber/issues/57)'s.
+  shape. The `web_search` tool itself is compiled in ("Web fetch and web
+  search").
 - Compact build and test output (the owner's `structured_return`): parsing
   depends on the person's toolchain, so it is an extension over an after-tool
   hook that replaces `content`, with the full log in the artifact.

@@ -255,7 +255,7 @@ pending is rejected in the same way.
 
 | Kind | Durable | Payload |
 |---|---|---|
-| `usage_recorded` | yes | generation id, model, tokens (uncached input, input read from the cache, input written to the cache by lifetime, output), cost or `null` when unknown, `action_id` where it belongs to one |
+| `usage_recorded` | yes | generation id, model, tokens (uncached input, input read from the cache, input written to the cache by lifetime, output), hosted web searches where the provider reports them, cost or `null` when unknown, `action_id` where it belongs to one |
 | `retry_scheduled` | no | cause, attempt, delay |
 | `notice` | no | open-set `code` and message, for a failure outside any action |
 
