@@ -222,8 +222,9 @@ Only what no tool can:
   mode or a state, is a variant or a table entry, not one more branch on an
   existing `if`/`else` chain or a second flag that must stay in step with a
   first
-- code that works around its doc is reported as a doc finding, for
-  `docs/workflow.md`, "When a doc should change", not as a code fix
+- code that works around its doc is reported as a doc finding that cites
+  the doc rule and the code, for `docs/workflow.md`, "When a doc should
+  change", not as a code fix
 - no function with one caller whose body only passes its arguments on to
   another function, and no Fiber-defined trait with one implementation
   other than the three seams (`docs/architecture.md`)

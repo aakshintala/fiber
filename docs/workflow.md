@@ -135,8 +135,7 @@ doc decides, the owner changes.
 
 Two findings send a doc to the owner:
 
-- It cannot be met as written. The implementer stops, and the ticket waits
-  for the owner's ruling.
+- It cannot be met as written.
 - It can be met, but building it shows a problem or a simpler design. The
   signs are the same workaround in several places, special-case branches for
   unrelated edge cases, a type that needs an escape hatch to compile, a lock
@@ -146,18 +145,26 @@ Two findings send a doc to the owner:
 For the second, the implementer pauses and tells the orchestrator what it
 found. The orchestrator reads the ticket's resolution first. An alternative
 the resolution already rejected is answered with the resolution's reason,
-and the implementer carries on. Anything else the implementer backs with a
-sketch or a measurement, not a rewrite.
+the implementer carries on, and nothing is filed.
 
-For either, the orchestrator files an issue labelled `needs-owner` that
-quotes the doc and gives the evidence. Then:
+Every other finding becomes an issue labelled `needs-owner`, filed by the
+orchestrator. It quotes the doc rule, names the code it affects, and gives
+the evidence: what fails, for a doc that cannot be met, or a sketch or a
+measurement, not a rewrite, for a better design.
 
-- When the alternative would replace what the ticket builds, the ticket is
-  marked blocked by that issue, and the orchestrator takes the next ticket
-  whose blockers are closed.
-- Otherwise the implementer finishes as the doc says, and the pull request
-  merges. If the owner accepts the change, the doc changes and the code
-  follows in a later pull request.
+While the owner decides:
+
+- A doc that cannot be met, or an alternative that would replace what the
+  ticket builds: the ticket is marked blocked by the issue, and the
+  orchestrator takes the next ticket whose blockers are closed.
+- Any other alternative: the implementer finishes as the doc says, and the
+  pull request merges.
+
+The owner's ruling closes the issue. Accepted, the doc changes; a blocked
+ticket's brief is rewritten against the new doc, and code already merged
+follows in a later pull request. Rejected, a blocked ticket resumes as the
+doc says, and for a doc that cannot be met the ruling says how the ticket
+proceeds.
 
 ## Merging
 
