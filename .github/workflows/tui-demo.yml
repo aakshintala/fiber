@@ -50,10 +50,7 @@ jobs:
             echo "::error::$bin is not statically linked"
             exit 1
           }
-          # A runner has no controlling terminal, so the pty `script` opens
-          # comes up 0x0. The prototype panics (capacity overflow) laying
-          # out a 0x0 screen, so give the pty an explicit size first.
-          script -qec "stty rows 48 cols 160; $bin research/tui-prototype/fixtures/session.jsonl --static --exit-after 2" /dev/null
+          script -qec "$bin research/tui-prototype/fixtures/session.jsonl --static --exit-after 2" /dev/null
 
       - name: Stage the binary for upload
         run: |

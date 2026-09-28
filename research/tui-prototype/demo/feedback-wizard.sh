@@ -356,7 +356,7 @@ rate NARROW_WINDOW "How it looks in a narrow window"
 stage "A heavy session"
 say "This is a much longer, busier recorded session — thousands of lines."
 step "Scroll around it, and search for a common word to see how it holds up."
-run_demo "$HEAVY_FIXTURE" --static
+run_demo "$HEAVY_FIXTURE" --static --paged
 rate HEAVY_SESSION "The heavy session: scrolling and searching a long one"
 
 stage "A few closing questions"

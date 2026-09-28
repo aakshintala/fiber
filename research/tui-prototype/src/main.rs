@@ -46,6 +46,8 @@ const SX_COM: Color = rgb(0x7a7a8a);
 
 const PANEL: u16 = 34;
 const CONV_MIN: u16 = 84;
+const FLOOR_COLS: u16 = 40;
+const FLOOR_ROWS: u16 = 10;
 const SPIN: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 const GLIMMER_MS: u64 = 120;
 
@@ -2433,7 +2435,26 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             dirty = true;
         }
 
-        if dirty && now_i >= last_frame + FRAME_GAP {
+        // below the floor: one centred line, nothing else laid out or drawn; the loop carries on
+        let size = term.size()?;
+        let small = size.width < FLOOR_COLS || size.height < FLOOR_ROWS;
+        if small && dirty && now_i >= last_frame + FRAME_GAP {
+            dirty = false;
+            last_frame = now_i;
+            frames += 1;
+            let (cols, rows) = (size.width, size.height);
+            term.backend_mut().write_all(b"\x1b[?2026h")?;
+            term.draw(|fr| {
+                if cols > 0 && rows > 0 {
+                    let msg: String = format!("Fiber needs {FLOOR_COLS}\u{d7}{FLOOR_ROWS} \u{b7} now {cols}\u{d7}{rows}").chars().take(cols as usize).collect();
+                    fr.buffer_mut().set_string((cols as usize).saturating_sub(msg.width()) as u16 / 2, rows / 2, &msg, Style::new());
+                }
+            })?;
+            let be = term.backend_mut();
+            be.write_all(b"\x1b[?2026l")?;
+            be.flush()?;
+        }
+        if !small && dirty && now_i >= last_frame + FRAME_GAP {
             dirty = false;
             last_frame = now_i;
             frames += 1;
