@@ -478,9 +478,14 @@ earlier point. A person starts one from the terminal, a driver with the
 - **Jobs.** A job started before the point and still running is adopted by the
   new session: its history shows the job starting, so it must own it. Each job
   started after the point and still running is listed, and the person chooses
-  to stop it or adopt it. Stop is the default. A driver answers with `reply`.
-  Stopping is the normal job stop. An adopted job's later `job_line` and
+  to stop it or adopt it. Stop is the default. The choice travels on the
+  `rewind` command, which names the jobs to adopt; every other such job stops
+  (`docs/invocation.md`). The client lists them from the log before it sends
+  the command, so no interaction is raised. Stopping is the normal job stop. An adopted job's later `job_line` and
   `job_completed` go to the new session's log.
+- **It never starts a turn.** The new session waits for a prompt, whichever
+  point it continues from, including one just after the person's input or
+  after a step.
 - **The old session is closed first.** While the process still holds the old
   session's lock, it writes a `job_completed` with `status: cancelled` for each
   job the person chose to stop. The summary's model call, when there is one,
