@@ -816,12 +816,31 @@ backend.
   shown").
 - A standing deny still applies first, so the person can deny a host.
 
+## Naming the session
+
+The model names the session with `name_session`, so the session list, the
+terminal's header and its title show what the work is about rather than the
+first prompt.
+
+- Argument: `name`, at most 60 characters.
+- The description tells the model to name the session after the first
+  prompt, and to rename it when the work's topic changes, a handoff included.
+- A name the person set with the `name` command pins it. While pinned, the
+  call fails with `name_pinned` and the message "the person named this
+  session". Clearing the person's name unpins it.
+- The tool declares no effect, never reaches a reviewer, and runs in
+  `readonly`.
+- It is declared in every session, so the tool set never differs between
+  sessions. Its definition counts toward the built-in budget ("Size budget in
+  CI").
+- Each name is written as `session_named` (`docs/events.md`).
+
 ## Built in or extension
 
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-and `handoff` (`docs/handoff.md`) behave the same for everyone and are compiled in, as is
+`handoff` (`docs/handoff.md`) and `name_session` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.
