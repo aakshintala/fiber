@@ -36,6 +36,13 @@ Fiber writes a thing itself when it is a small, fully specified format that
 Fiber owns end to end, such as server-sent events or JSON-RPC. It also writes
 one when the only crates for it fail the rules above.
 
+The `tui` crate prefers an existing crate to writing its own. Its crates meet
+every rule above, and their memory is measured and recorded, but memory is not
+a reason to refuse one: the terminal is its own process
+(`docs/architecture.md`), so nothing it admits reaches a session's memory. No
+other Fiber crate depends on a crate admitted only for `tui`, and CI checks
+each crate's dependency tree for it.
+
 Transitive crates are not listed. Each one's memory is counted in the direct
 crate that pulls it in, and cargo-deny checks its licence and advisories.
 
