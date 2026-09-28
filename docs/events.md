@@ -140,6 +140,7 @@ as soon as a delegate relays its own messages onto the same stdout.
 | `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
 | `steering_queue` | no | every steering message still queued, in order: the id of the `steer` command that sent it, its text, and where it came from; written whenever the queue changes |
 | `shell_command` | yes | a command the person ran with `send` true (`docs/invocation.md`, `shell`): the command, its output cut as a tool result is, `artifact` when cut, and `process` as on `tool_call_completed`; it joins the next turn's input |
+| `session_named` | yes | `name`, or `null` when the person clears theirs, and `by` (`person` or `model`); the latest is the session's name, and a `person` name pins it (`docs/tools.md`, "Naming the session") |
 | `clients` | no | `count`, the clients attached to the session, this one included; written whenever a client attaches or leaves |
 | `context_added` | yes | the text a hook added to the conversation, the extension's name and the hook point (`docs/extensions.md`, "Hooks") |
 

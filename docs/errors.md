@@ -218,6 +218,7 @@ Notices, for a failure outside any action:
 | Code | Meaning |
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
+| `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `config_key_ignored` | an unknown key, or a key a repository may not set |
 | `extension_failed` | an extension failed to start or missed its deadline |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
