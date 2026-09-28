@@ -481,6 +481,11 @@ struct Turn {
     blocks: Vec<Block>,
     /// tool calls of this turn folded elsewhere: a paged piece of a turn starts mid-turn
     calls_before: usize,
+    /// a paged piece that starts right after a handoff band another piece drew: its card opens anew
+    after_band: bool,
+    /// a paged piece of a turn whose earlier pieces drew no blocks: the card opens here, after
+    /// the gap under the bubble
+    fresh: bool,
 }
 struct Job {
     id: String,
@@ -1293,7 +1298,7 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
             let first = segs.len() == 1;
             let inner = &mut segs.last_mut().unwrap().1;
             // a piece that starts mid-turn follows blocks another piece drew
-            if !inner.is_empty() || (!head && first) {
+            if !inner.is_empty() || (!head && first && !t.after_band && !t.fresh) {
                 inner.push(Row::default());
             }
             inner.extend(r);
@@ -1301,7 +1306,7 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
         if segs.len() == 1 && segs[0].1.is_empty() {
             return out;
         }
-        if head {
+        if head || t.fresh {
             out.push(Row::default());
         }
         let n = segs.len();
@@ -1327,7 +1332,7 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
             if !tail && k + 1 == n {
                 card.pop();
             }
-            out.extend(if head || k > 0 { card } else { card.split_off(1) });
+            out.extend(if head || k > 0 || t.after_band || t.fresh { card } else { card.split_off(1) });
         }
     }
     out
