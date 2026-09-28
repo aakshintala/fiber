@@ -1,0 +1,8 @@
+[package]
+name = "session-listing"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+# Standalone: never part of Fiber's workspace. Evidence for #15.
+[workspace]
