@@ -74,6 +74,8 @@ fn width(spans: &[Span]) -> usize {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Act {
     Group(usize, usize),
+    /// a ledger row or a thought line: (turn, block, item), where paged the turn names a page
+    Item(usize, usize, usize),
     Notice(usize),
     End,
     Choice(usize),
@@ -923,6 +925,30 @@ struct View {
     force: Option<Act>,
     /// the Lua renderer for one tool's ledger rows
     lua: Option<std::rc::Rc<lua::Ext>>,
+    /// ledger rows and thought lines opened to their result or text, as `Act::Item` keys
+    exp: HashSet<(usize, usize, usize)>,
+}
+
+/// A thought's text, opened under its line, dim.
+fn thought_rows(text: &str, w: usize, ind: usize) -> Vec<Row> {
+    let pad = || vec![sp(" ".repeat(ind), Style::new())];
+    text.split('\n').flat_map(|p| wrap_rows(vec![sp(p, dim())], w, pad(), pad())).map(|r| Row { pre: ind as u16, ..r }).collect()
+}
+/// A call's result, opened under its ledger row: its error, or its output clipped to 20 lines.
+fn call_rows(c: &Call) -> Vec<Row> {
+    const MAX: usize = 20;
+    let text = match &c.err {
+        Some((code, msg)) => format!("{code}: {msg}"),
+        None if c.content.is_empty() => "no output".into(),
+        None => c.content.replace('\t', "    "),
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let r = |s: Span<'static>| Row { spans: vec![sp("        ", Style::new()), s], pre: 8, ..Default::default() };
+    let mut out: Vec<Row> = lines.iter().take(MAX).map(|l| r(sp(l.to_string(), Style::new()))).collect();
+    if lines.len() > MAX {
+        out.push(r(sp(format!("… {} more lines", lines.len() - MAX), dim())));
+    }
+    out
 }
 
 fn result_spans(c: &Call) -> Vec<Span<'static>> {
@@ -1019,19 +1045,25 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
 fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     let calls: Vec<&Call> = g.items.iter().filter_map(|i| if let Item::C(c) = i { Some(c) } else { None }).collect();
     let live_r = g.items.iter().find_map(|i| if let Item::R(r) = i { r.end.is_none().then_some(r) } else { None });
-    // thinking with no tool call before the next reply is one line
+    let Act::Group(ti, bi) = gid else { unreachable!() };
+    // thinking with no tool call before the next reply is one line; a click shows its text
     if calls.is_empty() {
         return g
             .items
             .iter()
-            .filter_map(|i| if let Item::R(r) = i { Some(r) } else { None })
-            .map(|r| {
+            .enumerate()
+            .filter_map(|(ii, i)| if let Item::R(r) = i { Some((ii, r)) } else { None })
+            .flat_map(|(ii, r)| {
                 let t = if r.end.is_none() {
                     format!("Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default())
                 } else {
                     format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
                 };
-                Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(gid), ..Default::default() }
+                let mut out = vec![Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(Act::Item(ti, bi, ii)), ..Default::default() }];
+                if v.exp.contains(&(ti, bi, ii)) {
+                    out.extend(thought_rows(&r.text, w, 2));
+                }
+                out
             })
             .collect();
     }
@@ -1052,7 +1084,8 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     // the ledger: one row per call, split by step, the step's thinking first
     let mut ledger: Vec<Row> = vec![];
     let mut last_step = 0;
-    for it in &g.items {
+    for (ii, it) in g.items.iter().enumerate() {
+        let (key, open) = (Act::Item(ti, bi, ii), v.exp.contains(&(ti, bi, ii)));
         let step = match it {
             Item::R(r) => r.step,
             Item::C(c) => c.step,
@@ -1066,7 +1099,10 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 } else {
                     format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
                 };
-                ledger.push(row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]));
+                ledger.push(Row { act: Some(key), ..row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]) });
+                if open {
+                    ledger.extend(thought_rows(&r.text, w, 8));
+                }
             }
             Item::C(c) if let Some(rows) = v.lua.as_ref().filter(|x| x.tool == c.name).and_then(|x| x.rows(c, &gutter, w)) => ledger.extend(rows),
             Item::C(c) => {
@@ -1084,7 +1120,10 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 }
                 let mut s = vec![sp(gutter, dim()), glyph, sp(" ", Style::new()), sp(format!("{:<9}", kind_of(c)), fg(CYAN)), sp(format!("{t:<tw$}"), Style::new()), sp("  ", Style::new())];
                 s.extend(res);
-                ledger.push(row(s));
+                ledger.push(Row { act: Some(key), ..row(s) });
+                if open {
+                    ledger.extend(call_rows(c));
+                }
             }
         }
     }
@@ -3152,6 +3191,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                     conv_cache = None;
                 }
+                Act::Item(p, bi, ii) => {
+                    if !v.exp.remove(&(p, bi, ii)) {
+                        v.exp.insert((p, bi, ii));
+                    }
+                    // paged: only a toggle renders a page again, so toggling its group twice
+                    // renders it with the row opened and the group as it was
+                    if let Some(pg) = pager.as_mut() {
+                        pg.toggle(p, bi, &v);
+                        pg.toggle(p, bi, &v);
+                    }
+                }
                 Act::Notice(i) => f.notices[i].2 = true,
                 Act::End => top = None,
                 Act::Context => {
@@ -3500,6 +3550,53 @@ mod tests {
         let rows: Vec<String> = conversation(&f, 100, &View::default()).iter().map(plain).collect();
         let (reply, done) = (rows.iter().position(|l| l.contains("Stopping here for the demo")).unwrap(), rows.iter().rposition(|l| l.contains("▣ completed")).unwrap());
         assert!(done > reply, "the card closes with its ▣ line after the reply");
+    }
+
+    #[test]
+    fn a_click_opens_a_ledger_row_or_a_thought() {
+        let out: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let call = Call { name: "shell".into(), args: json!({ "command": "cargo test" }), st: St::Completed, start: 0, end: Some(10), err: None, lines: 30, exit: Some(0), changes: vec![], content: out, step: 1, asked: None };
+        let thought = Reason { text: "**Plan**\nfirst this, then that".into(), start: 0, end: Some(5), step: 1 };
+        let g = Group { items: vec![Item::R(thought), Item::C(call)], steps: 1, step_closed: true, open: true, last_ts: 10 };
+        let mut v = View::default();
+        let text = |v: &View| group_lines(&g, Act::Group(0, 0), 80, v).iter().map(plain).collect::<Vec<_>>();
+        let rows = group_lines(&g, Act::Group(0, 0), 80, &v);
+        assert_eq!(rows[1].act, Some(Act::Item(0, 0, 0)));
+        assert_eq!(rows[2].act, Some(Act::Item(0, 0, 1)));
+        assert_eq!(rows.len(), 3);
+        v.exp.insert((0, 0, 1));
+        let t = text(&v);
+        assert!(t.iter().any(|l| l.trim() == "line 20") && !t.iter().any(|l| l.trim() == "line 21"));
+        assert!(t.last().unwrap().contains("… 10 more lines"));
+        v.exp.insert((0, 0, 0));
+        assert!(text(&v).iter().any(|l| l.contains("first this, then that")));
+        // a thought with no call is one line, and a click on it shows its text
+        let lone = Group { items: vec![Item::R(Reason { text: "why not".into(), start: 0, end: Some(1), step: 1 })], steps: 1, step_closed: true, open: false, last_ts: 1 };
+        let rows = group_lines(&lone, Act::Group(2, 3), 80, &View::default());
+        assert_eq!((rows.len(), rows[0].act), (1, Some(Act::Item(2, 3, 0))));
+        let v = View { exp: HashSet::from([(2, 3, 0)]), ..Default::default() };
+        assert!(plain(&group_lines(&lone, Act::Group(2, 3), 80, &v)[1]).contains("why not"));
+    }
+
+    #[test]
+    fn a_ledger_row_opens_in_the_paged_mode() {
+        let mut v = View { all_open: true, ..Default::default() };
+        let (mut pg, _) = paged::Pager::open("fixtures/session.jsonl", 8).unwrap();
+        pg.sync(124, &v, "");
+        pg.ensure(0, pg.total(), &v);
+        let (_, rows) = pg.rows(0, pg.total() - 1, &v);
+        let (r, key) = rows.iter().enumerate().find_map(|(r, x)| match x.act {
+            Some(Act::Item(p, bi, ii)) if plain(x).contains("read ") => Some((r, (p, bi, ii))),
+            _ => None,
+        }).unwrap();
+        let before = pg.total();
+        v.exp.insert(key);
+        pg.toggle(key.0, key.1, &v);
+        pg.toggle(key.0, key.1, &v);
+        assert!(pg.total() > before, "the page renders again, taller");
+        let (_, after) = pg.rows(0, pg.total() - 1, &v);
+        assert_eq!(after[r].act, Some(Act::Item(key.0, key.1, key.2)));
+        assert_eq!(after[r + 1].pre, 9, "the call's output sits under its row");
     }
 
     #[test]
