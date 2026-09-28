@@ -1416,6 +1416,8 @@ struct Ui {
     form: Form,
     flash: Vec<String>,
     flash_at: Option<Instant>,
+    /// the last copy's confirmation, floated in the conversation's top-right corner so nothing moves
+    copied: Option<(String, Instant)>,
     keys: String,
     cmd_n: u32,
     /// the context breakdown is swapped into the conversation area
@@ -2434,6 +2436,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             ui.flash_at = None;
             dirty = true;
         }
+        if ui.copied.as_ref().is_some_and(|c| now_i >= c.1 + FLASH) {
+            ui.copied = None;
+            dirty = true;
+        }
 
         // below the floor: one centred line, nothing else laid out or drawn; the loop carries on
         let size = term.size()?;
@@ -2544,7 +2550,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             geom = (conv_w, cols);
             let panel = panel_cache.as_ref();
             let uncached = v.lua.as_deref().filter(|x| !x.cached);
-            let (search, sel) = (ui.search.as_ref(), ui.sel);
+            let (search, sel, copied) = (ui.search.as_ref(), ui.sel, ui.copied.as_ref().map(|c| c.0.as_str()));
             // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
             // all written, however many writes and flushes it takes
             term.backend_mut().write_all(b"\x1b[?2026h")?;
@@ -2638,6 +2644,15 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         }
                     }
                     buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
+                }
+                // the copy's confirmation: the top-right corner, below the search box when it is open
+                if let Some(m) = copied.filter(|_| vrows.is_none()) {
+                    let y = if search.is_some() && view_h >= 3 { 3 } else { 0 };
+                    let s = vec![sp(format!(" {m} "), fg(CYAN))];
+                    let mw = width(&s).min(cw);
+                    if y < view_h && mw > 0 {
+                        buf.set_line(1 + (cw - mw) as u16, y as u16, &Line::from(tint(fit(&s, mw), BI)), mw as u16);
+                    }
                 }
                 for (k, r) in bot.iter().enumerate() {
                     let y = (view_h + k) as u16;
@@ -2741,6 +2756,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         add(window.is_none().then(|| v0 + Duration::from_secs_f64(a.warmup)));
         add(rd.deadline());
         add(ui.flash_at.map(|t| t + FLASH));
+        add(ui.copied.as_ref().map(|c| c.1 + FLASH));
         add((ui.drag_edge != 0).then_some(next_auto));
         add(exit_at);
         if dirty {
@@ -3051,7 +3067,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     }
                                     if !text.is_empty() {
                                         let how = copy(term.backend_mut(), &text);
-                                        say(&mut ui, format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()));
+                                        ui.copied = Some((format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()), Instant::now()));
                                     }
                                 }
                             }
