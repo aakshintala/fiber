@@ -37,6 +37,8 @@ The key map is under "Stage 2".
 
 `cargo run --bin gen` rewrites the fixtures from `src/bin/gen.rs`. `fixtures/session.jsonl` ends with a turn still running, waiting on an approval from the reviewer delegate and on a question form from the main session. `fixtures/idle.jsonl` is the same session cut after its last finished turn.
 
+`cargo run --release --bin from_claude -- <session.jsonl> <out.jsonl> [--max-bytes N]` converts a Claude Code session (main thread only) into the same kind of durable-only fixture, stopping after the turn where the output passes N bytes (default 12 MB, so a normal session converts whole) and turning each Claude Code compaction into a handoff, and adding one wherever the context would pass 400k without one. `fixtures/real.jsonl` is that conversion of one of the owner's own sessions. It is kept out of git (`.gitignore`) because it is a private session, so regenerate it locally from a session under `~/.claude/projects/`; `demo/package.sh` adds it to the zip when the file exists.
+
 `./measure.sh [runs] [seconds]` runs the measurement below inside tmux at 160 by 48.
 
 ## What stage 1 covers
