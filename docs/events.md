@@ -135,9 +135,10 @@ as soon as a delegate relays its own messages onto the same stdout.
 |---|---|---|
 | `session_started` | yes | creation time, workspace root; optional `parent { session_id, delegate_id }` for a delegate and `forked_from { session_id, seq }` for a fork or a rewind (`docs/delegates.md`, "Forks"; "Rewind" below); for a rewind, `rewind { summary?, note, jobs }` |
 | `rewound` | yes | the new session's `session_id`, the `seq` of the point, and the `job_id`s handed to the new session (`jobs`); the last line of a session that was rewound ("Rewind" below) |
-| `turn_started` | yes | the input that started it; for a turn started by jobs, a source naming those `job_id`s |
+| `turn_started` | yes | the input that started it, including each `shell_command` since the last turn; for a turn started by jobs, a source naming those `job_id`s |
 | `turn_completed` | yes | `outcome` (`completed`, `interrupted`, `failed`), `error` on failure (`docs/errors.md`, "What ends a turn"), `questions` when an `ask_user` call ended the turn for a driver that is a program (`docs/tools.md`, "Asking the person") |
 | `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
+| `shell_command` | yes | a command the person ran with `send` true (`docs/invocation.md`, `shell`): the command, its output cut as a tool result is, `artifact` when cut, and `process` as on `tool_call_completed`; it joins the next turn's input |
 | `context_added` | yes | the text a hook added to the conversation, the extension's name and the hook point (`docs/extensions.md`, "Hooks") |
 
 A **steering message** — input sent while a turn is running — joins that turn
