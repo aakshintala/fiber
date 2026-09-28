@@ -2498,6 +2498,9 @@ fn main() -> io::Result<()> {
     b.write_all(MOUSE_OFF.as_bytes())?;
     execute!(b, terminal::LeaveAlternateScreen, crossterm::cursor::Show)?;
     terminal::disable_raw_mode()?;
+    if a.no_pending {
+        let _ = std::fs::remove_file(&a.path);
+    }
     let report = res?;
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
