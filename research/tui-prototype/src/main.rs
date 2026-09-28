@@ -83,6 +83,8 @@ enum Act {
     Opt(usize),
     Submit,
     Decline,
+    /// a multi-choice question's Next row: on to the next question, or the review
+    Next,
     QRow(usize),
     QDrop(usize),
     /// opens the context breakdown
@@ -1698,6 +1700,12 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
             (body, Some(Act::Opt(j))),
             (sp(if cur { "█" } else { "" }, dim()), None),
         ]));
+        if multi {
+            // space toggles, so moving on is a row of its own
+            let on = fm.cur == j + 1;
+            let lab = if fm.tab + 1 == n { "Review →" } else { "Next →" };
+            rows.push(hot_row(vec![(sp(if on { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Next)), (sp(lab, if on { fg(PURPLE).add_modifier(Modifier::BOLD) } else { fg(PURPLE) }), Some(Act::Next))]));
+        }
         rows.push(Row::default());
         rows.push(row(vec![sp("←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words", dim())]));
     } else {
@@ -2938,9 +2946,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     ui.form.cur = 0;
                                 }
                                 Key::Up => ui.form.cur = ui.form.cur.saturating_sub(1),
-                                Key::Down => ui.form.cur = (ui.form.cur + 1).min(nopt),
+                                Key::Down => ui.form.cur = (ui.form.cur + 1).min(nopt + multi as usize),
                                 Key::Char(' ') if ui.form.tab < n && !on_text => form_choose(&mut ui, &fields),
                                 Key::Enter if ui.form.tab == n => submit_form(f, &mut ui, &mut cmds, ts),
+                                Key::Enter if multi && ui.form.cur == nopt + 1 => {
+                                    ui.form.tab += 1;
+                                    ui.form.cur = 0;
+                                }
                                 Key::Enter => {
                                     if !on_text {
                                         form_choose(&mut ui, &fields);
@@ -3119,6 +3131,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             form_choose(&mut ui, &fields);
                         }
                     }
+                }
+                Act::Next => {
+                    ui.form.tab += 1;
+                    ui.form.cur = 0;
                 }
                 Act::Submit => submit_form(f, &mut ui, &mut cmds, ts),
                 Act::Decline => decline_form(f, &mut ui, &mut cmds, ts),
@@ -3361,6 +3377,29 @@ mod tests {
         conversation(&shell_fold(0), 90, &v);
         conversation(&shell_fold(2), 90, &v);
         assert_eq!(v.lua.as_ref().unwrap().calls.get(), 3);
+    }
+
+    #[test]
+    fn a_multi_choice_question_ends_with_a_next_row() {
+        let fields = vec![
+            json!({ "header": "One", "question": "q1", "multiSelect": true, "options": [{ "label": "a" }, { "label": "b" }] }),
+            json!({ "header": "Two", "question": "q2", "options": [{ "label": "c" }] }),
+            json!({ "header": "Three", "question": "q3", "multiSelect": true, "options": [{ "label": "d" }] }),
+        ];
+        let f = Fold::default();
+        let p = Pending { rid: "r".into(), sid: String::new(), aid: "a".into(), what: Asking::Form(fields.clone()) };
+        let mut ui = Ui::default();
+        ui.form = Form { rid: "r".into(), sel: vec![vec![]; 3], text: vec![String::new(); 3], ..Default::default() };
+        let texts = |ui: &Ui| form_panel(&f, ui, 0, &p, &fields, 100).iter().map(plain).collect::<Vec<_>>();
+        let t = texts(&ui);
+        let (words, next) = (t.iter().position(|l| l.contains("Type an answer")).unwrap(), t.iter().position(|l| l.contains("Next →")).unwrap());
+        assert_eq!(next, words + 1, "Next follows the answer-in-words row");
+        let rows = form_panel(&f, &ui, 0, &p, &fields, 100);
+        assert!(rows[next].hot.iter().any(|h| h.2 == Act::Next));
+        ui.form.tab = 1;
+        assert!(!texts(&ui).iter().any(|l| l.contains("Next →") || l.contains("Review →")), "single choice has no Next row");
+        ui.form.tab = 2;
+        assert!(texts(&ui).iter().any(|l| l.contains("Review →")), "the last question reads Review");
     }
 
     #[test]
