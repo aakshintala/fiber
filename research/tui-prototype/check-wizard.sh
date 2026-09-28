@@ -188,7 +188,7 @@ finish() {
 TOTAL_STAGES=12
 
 cd "$(dirname "$0")"
-ENV_FILE="${ENV_FILE:-/tmp/fiber-tui-check-results.env}"
+ENV_FILE=/tmp/fiber-tui-check-results.env
 BIN="$PWD/target/release/tui-prototype"
 FIXTURE="$PWD/fixtures/session.jsonl"
 CMDS=/tmp/fiber-cmds.jsonl
