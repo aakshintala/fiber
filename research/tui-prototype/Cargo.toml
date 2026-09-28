@@ -1,0 +1,19 @@
+[package]
+name = "tui-prototype"
+version = "0.0.0"
+edition = "2024"
+publish = false
+default-run = "tui-prototype"
+
+# Not a workspace member: a throwaway research program.
+[workspace]
+
+[dependencies]
+ratatui = "0.30"
+crossterm = "0.29"
+serde_json = { version = "1", features = ["preserve_order"] }
+unicode-width = "0.2"
+libc = "0.2"
+
+[profile.release]
+lto = true
