@@ -47,7 +47,10 @@ Basis says where a number came from:
 - **From components** is the sum of measured parts, times two. Idle session:
   every runtime crate linked together costs 5.1 MiB over an empty program
   (`docs/dependencies.md`). Idle terminal: ratatui's two screen buffers and
-  crossterm, with room for the visible part of the transcript. Busy session: a
+  crossterm, with room for the visible part of the transcript. Admitting a
+  crate for the terminal raises its ceiling by twice the crate's measured cost
+  in the same pull request (`docs/dependencies.md`); its idle CPU and first
+  frame budgets do not move. Busy session: a
   300,000-token context is about 1.2 MB of text, and a 2 MiB conversation
   added about 3 MiB in `research/delegate-memory/`.
 - **Exact** follows from a rule, so the gate checks an equality, not a
