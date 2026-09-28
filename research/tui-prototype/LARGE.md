@@ -87,9 +87,9 @@ macOS timings only; they do not generalise to Linux (`docs/performance.md`,
 
 | Session | Time to first frame, cold start | Time to load the whole file, `--static` |
 |---|---:|---:|
-| Median | 1.77 ms | 3.45 ms |
-| p90 | 5.03 ms | 10.36 ms |
-| Heavy | 14.04 ms | 25.13 ms |
+| Median | 1.74 ms | 3.46 ms |
+| p90 | 4.99 ms | 10.42 ms |
+| Heavy | 14.32 ms | 25.62 ms |
 
 A cold start applies no event before drawing the first frame, so that column
 is near-constant across sessions; it is the terminal's own setup cost. The
@@ -106,9 +106,9 @@ is gated on. `--static`, idle for 10 seconds at the end.
 
 | Session | Peak memory footprint | Max RSS |
 |---|---:|---:|
-| Median | 4.89 MiB | 5.92 MiB |
-| p90 | 12.33 MiB | 13.36 MiB |
-| Heavy | 36.39 MiB | 37.39 MiB |
+| Median | 5.02 MiB | 6.09 MiB |
+| p90 | 12.44 MiB | 13.52 MiB |
+| Heavy | 36.03 MiB | 37.08 MiB |
 
 ### CPU
 
@@ -122,37 +122,28 @@ window onto steady-state replay, not the whole thing).
 
 | Session | Idle | Scrolling | Searching | Live replay |
 |---|---:|---:|---:|---:|
-| Median | 0.001% | 1.18% | 0.83% | 3.85% |
-| p90 | 0.001% | 4.70% | 3.32% | 3.92% |
-| Heavy | 0.001% | 9.16% | 6.31% | 6.76% |
+| Median | 0.001% | 0.60% | 0.46% | 3.59% |
+| p90 | 0.001% | 0.67% | 1.15% | 3.80% |
+| Heavy | 0.001% | 0.79% | 2.21% | 8.18% |
 
 Idle CPU on a fully loaded, `--static` session is the same as stage 1 found
 on the small idle fixture: no timer, no wakeup, nothing to redraw, whatever
 the session's size.
 
-Scrolling and searching both cost more CPU as the session grows, at a
-similar rate: heavy costs about 8 times median's scrolling CPU and about 8
-times its searching CPU, for 22 times the tool calls. Each redraw re-fits
-and re-diffs every visible row from the whole in-memory conversation, so a
-bigger conversation costs more per frame even though the frame rate itself
-(about 7.5 fps scrolling, about 4.3 fps searching) barely moves. Live replay
-scales more gently between median and p90 because both play back at the
-same 12x speed and this is a fixed 10-second window onto that replay, not
-the whole file; heavy's replay window catches more, and denser, events in
-the same 10 seconds, so it costs more and draws more frames.
+Scrolling now costs almost the same at every size: 0.6% of a core for the median session and 0.8% for the heavy one. Stage 3 caches the conversation's rendered rows and rebuilds them only when content changes, so a scroll frame only re-diffs the visible rows. Searching still grows with the session, to 2.2% for the heavy one, because each jump matches against every rendered row. Before stage 3, heavy scrolling cost 9.2% and heavy searching 6.3%, because every input event threw the cache away.
 
 ## Where the memory goes
 
 Peak memory footprint scales with the log, not with a fixed cost. Median,
-p90 and heavy hold 316, 1,741 and 6,135 durable lines and cost 4.89, 12.33
-and 36.39 MiB of footprint: the heavy session holds 19 times the median
+p90 and heavy hold 316, 1,741 and 6,135 durable lines and cost 5.02, 12.44
+and 36.03 MiB of footprint: the heavy session holds 19 times the median
 session's lines and costs 7.4 times its memory.
 
 Fitting a line through the median and heavy points gives the marginal cost:
 each extra 1,000 durable events costs about 5.4 MiB of resident memory, and
 each extra mebibyte of the log on disk costs about 7.6 MiB of memory once
 loaded. Projecting that line to p90's line count predicts 12.6 MiB against
-the 12.33 MiB measured, within 2%, so a straight line is a fair model of
+the 12.44 MiB measured, within 2%, so a straight line is a fair model of
 this design's memory cost across the range measured. The fixed part of that
 line — the cost of an almost-empty session, terminal setup included — is
 about 3.2 MiB.
@@ -183,9 +174,9 @@ comparable to the 8 MiB budget, and this page does not claim to pass or fail
 it.
 
 What can be said, numbers set side by side rather than compared as like for
-like: the median session's macOS footprint (4.89 MiB) sits under the 8 MiB
-figure, at 61% of it. The p90 session's footprint (12.33 MiB) is already
-1.5 times that figure, and the heavy session's (36.39 MiB) is 4.5 times it.
+like: the median session's macOS footprint (5.02 MiB) sits under the 8 MiB
+figure, at 61% of it. The p90 session's footprint (12.44 MiB) is already
+1.5 times that figure, and the heavy session's (36.03 MiB) is 4.5 times it.
 A typical session (median tool-call count) leaves headroom against this
 number; a session with as many prompts as the owner's p90 Claude Code
 session does not, and the heaviest real session found is well past it. None
@@ -198,21 +189,17 @@ Linux, which this page has not done.
 Folding the whole session log into memory does not scale. Memory grows with
 the log, at about 7.6 MiB resident per MiB of log, because every event's
 JSON is parsed and every rendered row is kept. The heavy session, sized to
-the longest real session found, costs 36.39 MiB of macOS footprint; the
-median session, at 4.89 MiB, is the only one of the three that would fit
+the longest real session found, costs 36.03 MiB of macOS footprint; the
+median session, at 5.02 MiB, is the only one of the three that would fit
 under the 8 MiB Linux idle-terminal budget if that macOS figure were the
 same measure, which it is not.
 
 CPU stays cheap while idle — 0.001% of a core regardless of session
-size, matching stage 1's idle finding — and load itself is fast: 25.13 ms
-to fold and draw the heavy session's 6,135 lines. Scrolling and searching
-do cost more as the session grows (up to 9.16% and 6.31% of a core on the
-heavy session), because every redraw re-fits and re-diffs the whole
-in-memory conversation, not just the visible rows. The problem #15's ruled
-design addresses is memory, not CPU: paging history from the log bounds
-memory to a window of rows instead of the whole session, and would likely
-cut the scrolling and searching cost too, since a paged client would have
-far fewer rows to re-fit per frame.
+size, matching stage 1's idle finding — and load itself is fast: 25.62 ms
+to fold and draw the heavy session's 6,135 lines. Scrolling costs under 1% of a core at every size, because the rendered
+rows are cached. Searching grows with the session, to 2.2% on the heavy one.
+The problem #15's ruled design addresses is memory, not CPU: paging history
+from the log bounds memory to a window of rows instead of the whole session.
 
 ## Numbers chosen without evidence
 
