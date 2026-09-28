@@ -95,6 +95,7 @@ acknowledgements carry no `seq`, so they never reach the log.
 | `mode` | Switches the permission mode at the next turn boundary (`docs/permissions.md`, "Modes"). Takes a mode. Rejected `invalid_arguments` for an unknown mode. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `session_id`, default this session; an optional `seq`, default the start of the latest turn; and whether to summarise. Rejected `busy` if a turn is running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |
+| `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. |
 
@@ -133,6 +134,22 @@ there. The list is a fold of the log, so there is no driver list command.
 message does to running shell calls, with nothing sent to the model. The
 terminal binds it to Ctrl+B. It never kills a command: the command becomes a
 job and keeps its timeout.
+
+**`shell` runs the person's own command, and the model sees it only if asked.**
+It runs in the session's workspace with the shell and output cap of the shell
+tool (`docs/tools.md`, "Shell"), and `cancel` stops it. It needs no approval:
+the person typed it, and a client that can attach already controls the session
+([#30](https://github.com/aakshintala/fiber/issues/30)).
+
+- With `send` false, the output goes back in the command's
+  `command_accepted` to the client that sent it and is never logged. The
+  terminal's side panel reads git state this way.
+- With `send` true, the output is logged as `shell_command`
+  (`docs/events.md`) and joins the next turn's input, never the running turn.
+  The terminal sends it for `!command`.
+
+pi does the same with `!` and `!!` (`excludeFromContext`). Settled by
+[#148](https://github.com/aakshintala/fiber/issues/148).
 
 **`rewind` moves the process to the new session.** From then on `fiber serve`
 drives the new session. It closes the old session with `rewound` while it
