@@ -73,8 +73,12 @@ sessions in the archived Zig tree. That tree's session peaked at 2.1 GiB on
 this turn.
 
 1,000 sessions is twice the largest project in the owner's pi sessions (489).
-Listing reads each log's first line; `docs/state.md` rules out a derived
-database, and the ruling stands while this budget holds.
+Listing reads each log line by line through its first `turn_started`, for the
+first prompt and branch, and the last 4 KiB, for the session's state. On macOS
+arm64 that costs 51 ms for 2,000 sessions, warm
+([research/session-listing](../research/session-listing/README.md)).
+`docs/state.md` rules out a derived database, and the ruling stands while this
+budget holds.
 
 ## Measuring
 
