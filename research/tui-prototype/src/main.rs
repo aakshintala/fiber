@@ -1104,9 +1104,9 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
     let tl = (maxw - 4).min(text.width());
     let body = wrap(inline(text, Style::new()), tl + 1, vec![sp(" ", Style::new())], vec![sp(" ", Style::new())]);
     let bw = body.iter().map(|l| width(l)).max().unwrap_or(0) + 3;
-    let pad = w - bw;
+    let pad = w.saturating_sub(bw);
     let mut out = vec![];
-    let e = |ch: &str| {
+    let e =|ch: &str| {
         let mut r = edge(ch, BU, None, bw);
         r.spans.insert(0, sp(" ".repeat(pad), Style::new()));
         r

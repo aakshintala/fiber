@@ -7,13 +7,14 @@
 //! assistant message id is one model call. Context is input + cache_read +
 //! cache_creation; past `HANDOFF_AT` the converter writes a handoff and shifts
 //! the reported context to restart near `RESTART`. Output stops after the turn
-//! in which it passes `--max-bytes` (default 5 MB).
+//! in which it passes `--max-bytes` (default 12 MB).
 
 use serde_json::{Value, json};
 use std::collections::HashMap;
 
 const HANDOFF_AT: u64 = 400_000;
 const RESTART: u64 = 30_000;
+const DEFAULT_MAX: usize = 12_000_000;
 const CLIP_LINES: usize = 200;
 const SID: &str = "s_real01";
 const MODEL: &str = "anthropic/claude-opus-5-5";
@@ -27,6 +28,7 @@ struct Out {
     turn: Option<String>,
     offset: u64,
     handoffs: u32,
+    last_ctx: u64,
 }
 
 /// One assistant message (a model call), assembled from its per-block lines.
@@ -63,6 +65,11 @@ impl Out {
         let s = Value::Object(e).to_string();
         self.bytes += s.len() + 1;
         self.lines.push(s);
+    }
+    fn handoff(&mut self, ts: i64, tokens_before: u64) {
+        self.ev("handoff_started", ts, None, json!({ "trigger": "auto" }));
+        self.ev("handoff_completed", ts, None, json!({ "outcome": "completed", "tokens_before": tokens_before, "note": [] }));
+        self.handoffs += 1;
     }
     fn id(&mut self, p: &str) -> String {
         self.n += 1;
@@ -142,12 +149,11 @@ fn flush(o: &mut Out, m: &mut Option<Msg>, calls: &mut Calls) {
     let (input, cr, cc, out) = (g("input_tokens"), g("cache_read_input_tokens"), g("cache_creation_input_tokens"), g("output_tokens"));
     let ctx = input + cr + cc - o.offset.min(cr);
     if ctx > HANDOFF_AT {
-        o.ev("handoff_started", m.ts, None, json!({ "trigger": "auto" }));
-        o.ev("handoff_completed", m.ts, None, json!({ "outcome": "completed", "tokens_before": ctx, "note": [] }));
-        o.handoffs += 1;
+        o.handoff(m.ts, ctx);
         o.offset = (input + cr + cc).saturating_sub(RESTART);
     }
     let cr = cr - o.offset.min(cr);
+    o.last_ctx = input + cr + cc;
     let msg = o.id("a");
     o.ev("assistant_message_started", m.ts, Some(&msg), json!({}));
     if m.reasoning {
@@ -191,17 +197,32 @@ fn main() {
         eprintln!("usage: from_claude <session.jsonl> <out.jsonl> [--max-bytes N]");
         std::process::exit(2);
     }
-    let max: usize = a.iter().position(|x| x == "--max-bytes").and_then(|i| a.get(i + 1)).and_then(|x| x.parse().ok()).unwrap_or(5_000_000);
-    let src = std::fs::read_to_string(&a[1]).expect("read session");
-    let mut o = Out { lines: vec![], bytes: 0, ts: 0, seq: 0, n: 0, turn: None, offset: 0, handoffs: 0 };
+    let max: usize = a.iter().position(|x| x == "--max-bytes").and_then(|i| a.get(i + 1)).and_then(|x| x.parse().ok()).unwrap_or(DEFAULT_MAX);
+    let o = convert(&std::fs::read_to_string(&a[1]).expect("read session"), max);
+    std::fs::write(&a[2], o.lines.join("\n") + "\n").expect("write out");
+    eprintln!("{}: {} lines, {} bytes, {} handoffs", a[2], o.lines.len(), o.bytes, o.handoffs);
+}
+
+fn convert(src: &str, max: usize) -> Out {
+    let mut o = Out { lines: vec![], bytes: 0, ts: 0, seq: 0, n: 0, turn: None, offset: 0, handoffs: 0, last_ctx: 0 };
     let mut cur: Option<Msg> = None;
     let mut calls = Calls::new();
     let mut started = false;
-
     for l in src.lines() {
         let Ok(d) = serde_json::from_str::<Value>(l) else { continue };
         let ty = d["type"].as_str().unwrap_or("");
-        if (ty != "user" && ty != "assistant") || d["isSidechain"] == true || d["isMeta"] == true {
+        if d["isSidechain"] == true || d["isMeta"] == true || d["isCompactSummary"] == true {
+            continue;
+        }
+        // a Claude Code compaction is a Fiber handoff; the source context is small afterwards
+        if ty == "system" && d["subtype"] == "compact_boundary" && started {
+            flush(&mut o, &mut cur, &mut calls);
+            let before = o.last_ctx;
+            o.handoff(ms(&d["timestamp"]), before);
+            o.offset = 0;
+            continue;
+        }
+        if ty != "user" && ty != "assistant" {
             continue;
         }
         let ts = ms(&d["timestamp"]);
@@ -272,9 +293,9 @@ fn main() {
     flush(&mut o, &mut cur, &mut calls);
     let end = o.ts;
     o.end_turn(end);
-    std::fs::write(&a[2], o.lines.join("\n") + "\n").expect("write out");
-    eprintln!("{}: {} lines, {} bytes, {} handoffs", a[2], o.lines.len(), o.bytes, o.handoffs);
+    o
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -287,5 +308,55 @@ mod tests {
     #[test]
     fn clips() {
         assert_eq!(lines(&clip(&"x\n".repeat(300))), CLIP_LINES + 1);
+    }
+    fn asst(id: &str, ts: &str, cr: u64) -> String {
+        json!({"type":"assistant","timestamp":ts,"message":{"id":id,"content":[{"type":"text","text":"hi"}],
+            "usage":{"input_tokens":1,"cache_read_input_tokens":cr,"cache_creation_input_tokens":0,"output_tokens":5}}}).to_string()
+    }
+    fn prompt(ts: &str) -> String {
+        json!({"type":"user","timestamp":ts,"message":{"content":"go"}}).to_string()
+    }
+    fn ctxs(o: &Out) -> (Vec<u64>, Vec<u64>) {
+        let (mut c, mut h) = (vec![], vec![]);
+        for l in &o.lines {
+            let v: Value = serde_json::from_str(l).unwrap();
+            if v["kind"] == "usage_recorded" {
+                let t = &v["payload"]["tokens"];
+                c.push(t["input"].as_u64().unwrap() + t["cache_read"].as_u64().unwrap() + t["cache_write"]["1h"].as_u64().unwrap());
+            }
+            if v["kind"] == "handoff_completed" {
+                h.push(v["payload"]["tokens_before"].as_u64().unwrap());
+            }
+        }
+        (c, h)
+    }
+    #[test]
+    fn compaction_becomes_a_handoff() {
+        let src = [
+            prompt("2026-01-01T00:00:00.000Z"),
+            asst("m1", "2026-01-01T00:00:01.000Z", 300_000),
+            json!({"type":"system","subtype":"compact_boundary","timestamp":"2026-01-01T00:00:02.000Z"}).to_string(),
+            json!({"type":"user","isCompactSummary":true,"timestamp":"2026-01-01T00:00:01.900Z","message":{"content":"summary"}}).to_string(),
+            asst("m2", "2026-01-01T00:00:03.000Z", 20_000),
+        ]
+        .join("\n");
+        let o = convert(&src, usize::MAX);
+        let (c, h) = ctxs(&o);
+        assert_eq!((c, h), (vec![300_001, 20_001], vec![300_001]));
+        assert_eq!(o.lines.iter().filter(|l| l.contains("\"turn_started\"")).count(), 1);
+        assert!(!o.lines.iter().any(|l| l.contains("summary")));
+    }
+    #[test]
+    fn overflow_without_compaction_restarts_near_30k() {
+        let src = [
+            prompt("2026-01-01T00:00:00.000Z"),
+            asst("m1", "2026-01-01T00:00:01.000Z", 390_000),
+            asst("m2", "2026-01-01T00:00:02.000Z", 410_000),
+            asst("m3", "2026-01-01T00:00:03.000Z", 415_000),
+        ]
+        .join("\n");
+        let (c, h) = ctxs(&convert(&src, usize::MAX));
+        assert_eq!(h, vec![410_001]);
+        assert_eq!(c, vec![390_001, RESTART, RESTART + 5_000]);
     }
 }
