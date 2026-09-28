@@ -171,7 +171,11 @@ is a command every driver gets.
 
 **First line is `fiber_started`**, carrying the Fiber version, the
 `schema_version`, the `session_id`, and whether the session is new or resumed.
-Both subcommands take the same resume selector.
+Both subcommands take the same resume selector, and so does `fiber`:
+`--resume <id>` takes a full session id or any prefix of one that is unique
+among the project's sessions. In the terminal, `fiber --resume` with no id
+opens the session list. `fiber serve` and `fiber ask` have no list to show, so
+there it is a usage error.
 
 **A rewind changes the session, not the process.** The `session_id` on the
 first line is the session the process started with. After a `rewind` the
@@ -184,6 +188,12 @@ connection to the session's socket. A client leaves by stdin EOF, by closing
 its connection, or by losing it. Leaving never cancels. When the last client
 has left, Fiber finishes the turn in flight, gives the ending notice and waits
 for any running jobs (`docs/tools.md`, "Background jobs"), then exits.
+
+**A session that never got a prompt leaves nothing behind.** The terminal
+starts its session at launch, so MCP servers connect while the person types. A
+session that exits with no `turn_started` in its log deletes its own directory,
+so opening `fiber` and then resuming another session leaves no empty session in
+the list.
 
 **`close` ends the session whoever else is attached.** It accepts no more
 prompts, then follows the same path.
