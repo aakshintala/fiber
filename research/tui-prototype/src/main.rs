@@ -1,17 +1,19 @@
-//! Stage 1 of the #15 TUI prototype: replays a fixture session of
-//! `docs/events.md` lines in a real terminal. Throwaway code: one file, the
-//! fold and the drawing side by side, no tests.
+//! Stages 1 and 2 of the #15 TUI prototype: replays a fixture session of
+//! `docs/events.md` lines in a real terminal. Throwaway code: the fold and the
+//! drawing side by side, the input parser in `input.rs`, a few tests.
 
-use crossterm::event::{self, Event, KeyCode, KeyEventKind, KeyModifiers, MouseButton, MouseEventKind};
+mod input;
+
 use crossterm::{execute, terminal};
+use input::{Ev, Key, Mouse};
 use ratatui::backend::CrosstermBackend;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::Terminal;
-use serde_json::Value;
-use std::collections::{BTreeMap, HashMap};
+use serde_json::{Value, json};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{self, BufWriter, Write};
 use std::sync::atomic::{AtomicU64, Ordering::Relaxed};
 use std::time::{Duration, Instant};
@@ -70,6 +72,15 @@ enum Act {
     Group(usize, usize),
     Notice(usize),
     End,
+    Choice(usize),
+    NextPending,
+    Reopen,
+    Tab(usize),
+    Opt(usize),
+    Submit,
+    Decline,
+    QRow(usize),
+    QDrop(usize),
 }
 
 #[derive(Clone, Default)]
@@ -77,9 +88,39 @@ struct Row {
     spans: Vec<Span<'static>>,
     bg: Option<Color>,
     act: Option<Act>,
+    /// continues the line above, which wrapping broke: copied joined with a space
+    cont: bool,
+    /// leading cells that are layout, not text: never copied
+    pre: u16,
+    /// reply text: URLs and file paths in it get OSC 8 links
+    link: bool,
+    /// click targets within the row, as cell ranges
+    hot: Vec<(u16, u16, Act)>,
 }
 fn row(spans: Vec<Span<'static>>) -> Row {
     Row { spans, ..Default::default() }
+}
+/// A row whose spans carry their own click targets.
+fn hot_row(parts: Vec<(Span<'static>, Option<Act>)>) -> Row {
+    let (mut x, mut hot, mut spans) = (0u16, vec![], vec![]);
+    for (s, a) in parts {
+        let w = s.content.width() as u16;
+        if let Some(a) = a {
+            hot.push((x, x + w, a));
+        }
+        x += w;
+        spans.push(s);
+    }
+    Row { spans, hot, ..Default::default() }
+}
+/// Puts spans in front of a row, moving its click targets with it.
+fn prefixed(r: Row, pre: Vec<Span<'static>>) -> Row {
+    let dx = width(&pre) as u16;
+    let hot = r.hot.iter().map(|&(a, b, k)| (a + dx, b + dx, k)).collect();
+    Row { spans: [pre, r.spans].concat(), hot, ..r }
+}
+fn plain(r: &Row) -> String {
+    r.spans.iter().map(|s| s.content.as_ref()).collect()
 }
 
 /// Cuts or pads spans to exactly `w` cells; a lone "\t" span right-aligns what follows.
@@ -134,14 +175,14 @@ fn edge(ch: &str, inner: Color, outer: Option<Color>, w: usize) -> Row {
     if let Some(o) = outer {
         s = s.bg(o);
     }
-    Row { spans: vec![sp(ch.repeat(w), s)], bg: outer, act: None }
+    Row { spans: vec![sp(ch.repeat(w), s)], bg: outer, ..Default::default() }
 }
 /// A surface: a tinted block with half-block edges and no border.
 fn slab(rows: Vec<Row>, bg: Color, outer: Option<Color>, w: usize) -> Vec<Row> {
     let mut out = vec![edge("▄", bg, outer, w)];
     for r in rows {
         let inner_bg = r.bg.unwrap_or(bg);
-        out.push(Row { spans: tint(tint(fit(&r.spans, w), inner_bg), bg), bg: Some(bg), act: r.act });
+        out.push(Row { spans: tint(tint(fit(&r.spans, w), inner_bg), bg), bg: Some(bg), ..r });
     }
     out.push(edge("▀", bg, outer, w));
     out
@@ -186,6 +227,11 @@ fn wrap(spans: Vec<Span<'static>>, w: usize, first: Vec<Span<'static>>, rest: Ve
     out.push(line);
     out
 }
+/// `wrap`, keeping which rows continue a line, so a copy can unwrap them.
+fn wrap_rows(spans: Vec<Span<'static>>, w: usize, first: Vec<Span<'static>>, rest: Vec<Span<'static>>) -> Vec<Row> {
+    let pre = width(&rest) as u16;
+    wrap(spans, w, first, rest).into_iter().enumerate().map(|(i, s)| Row { spans: s, cont: i > 0, pre: if i > 0 { pre } else { 0 }, ..Default::default() }).collect()
+}
 /// Inline markdown: `code` in cyan, **bold** bold.
 fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
     let mut out = vec![];
@@ -218,7 +264,7 @@ fn inline(text: &str, base: Style) -> Vec<Span<'static>> {
     out
 }
 fn para(text: &str, w: usize, base: Style) -> Vec<Row> {
-    text.split('\n').flat_map(|p| wrap(inline(p, base), w, vec![], vec![])).map(row).collect()
+    text.split('\n').flat_map(|p| wrap_rows(inline(p, base), w, vec![], vec![])).collect()
 }
 
 // ============================================================ markdown in replies
@@ -327,7 +373,7 @@ fn md(text: &str, w: usize) -> Vec<Row> {
         } else if l.starts_with('#') {
             out.push(row(vec![sp(l.trim_start_matches('#').trim(), fg(HD).add_modifier(Modifier::BOLD))]));
         } else if let Some(b) = l.strip_prefix("- ").or_else(|| l.strip_prefix("* ")) {
-            out.extend(wrap(inline(b, Style::new()), w, vec![sp("• ", fg(BLUE))], vec![sp("  ", Style::new())]).into_iter().map(row));
+            out.extend(wrap_rows(inline(b, Style::new()), w, vec![sp("• ", fg(BLUE))], vec![sp("  ", Style::new())]));
         } else if l.trim().is_empty() {
             out.push(Row::default());
         } else {
@@ -360,6 +406,8 @@ struct Call {
     changes: Vec<(String, i64, i64)>,
     content: String,
     step: usize,
+    /// `ask_user`: "answered" or "declined" once its form is resolved
+    asked: Option<&'static str>,
 }
 struct Reason {
     text: String,
@@ -384,6 +432,19 @@ enum Block {
     Steer(String, i64),
     Mcp(String),
     Done(String),
+    /// a resolved form: (header, answer, skipped) per question, the note, when, declined
+    Answer(Vec<(String, String, bool)>, Option<String>, i64, bool),
+}
+/// An approval or a question waiting on the person.
+struct Pending {
+    rid: String,
+    sid: String,
+    aid: String,
+    what: Asking,
+}
+enum Asking {
+    Approval { tool: String, args: Value, effects: Vec<String>, reversible: bool, paths: Vec<String>, step: String },
+    Form(Vec<Value>),
 }
 struct Turn {
     prompt: String,
@@ -426,7 +487,13 @@ struct Fold {
     text_dur: HashMap<String, i64>,
     files: BTreeMap<String, (i64, i64)>,
     jobs: Vec<Job>,
-    queue: Vec<String>,
+    /// the steering queue: (id of the `steer` command, text)
+    queue: Vec<(String, String)>,
+    pending: Vec<Pending>,
+    /// a delegate's calls, by action id, so its approvals can show the call
+    dcalls: HashMap<String, (String, Value)>,
+    /// each form's action id and fields, by request id
+    forms: HashMap<String, (String, Vec<Value>)>,
     notices: Vec<(String, String, bool)>,
     running: bool,
     turn_start: i64,
@@ -454,6 +521,9 @@ fn kind_of(c: &Call) -> &'static str {
     }
 }
 fn target(c: &Call) -> String {
+    if let Some(q) = c.args["questions"].as_array() {
+        return q.iter().filter_map(|q| q["header"].as_str()).collect::<Vec<_>>().join(", ");
+    }
     ["path", "command", "description"].iter().find_map(|k| c.args[k].as_str()).unwrap_or("").to_string()
 }
 fn dur(ms: i64) -> String {
@@ -474,6 +544,37 @@ fn clock(ts: i64) -> String {
 impl Fold {
     fn turn(&mut self) -> Option<&mut Turn> {
         self.turns.last_mut()
+    }
+    /// A call's tool and arguments, from this session's turns or a delegate's relayed lines.
+    fn call_of(&self, sid: &str, aid: &str) -> (String, Value) {
+        if sid == self.session_id {
+            if let Some(&(ti, bi, ii)) = self.at.get(aid) {
+                if let Block::Group(g) = &self.turns[ti].blocks[bi] {
+                    if let Item::C(c) = &g.items[ii] {
+                        return (c.name.clone(), c.args.clone());
+                    }
+                }
+            }
+        }
+        self.dcalls.get(aid).cloned().unwrap_or_default()
+    }
+    /// Action ids of this session's calls still running.
+    fn running_calls(&self) -> Vec<String> {
+        self.at
+            .iter()
+            .filter(|(_, t)| {
+                let (ti, bi, ii) = **t;
+                matches!(&self.turns[ti].blocks[bi], Block::Group(g) if matches!(&g.items[ii], Item::C(c) if matches!(c.st, St::Pending | St::Running)))
+            })
+            .map(|(a, _)| a.clone())
+            .collect()
+    }
+    /// Who is asking: "main", or the delegate's description.
+    fn asker(&self, sid: &str) -> String {
+        if sid == self.session_id {
+            return "main".into();
+        }
+        self.jobs.iter().find(|j| j.sid.as_deref() == Some(sid)).map_or(sid.to_string(), |j| format!("◆ {} ({sid})", j.desc))
     }
     /// The open tool group of the current turn, started if the last block is not one.
     fn group(&mut self, ts: i64) -> (usize, usize) {
@@ -503,8 +604,33 @@ impl Fold {
         if self.session_id.is_empty() {
             self.session_id = sid.to_string();
         }
+        // approvals and questions from any session in the tree share one queue
+        match kind {
+            "permission_requested" | "interaction_requested" => {
+                let rid = p["request_id"].as_str().unwrap_or("").to_string();
+                let caid = p["action_id"].as_str().unwrap_or(&aid).to_string();
+                let what = if kind == "permission_requested" {
+                    let (tool, args) = self.call_of(sid, &caid);
+                    let strs = |k: &str| p[k].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                    Asking::Approval { tool, args, effects: strs("effects"), reversible: p["reversible"].as_bool().unwrap_or(false), paths: strs("paths"), step: p["step"].as_str().unwrap_or("").into() }
+                } else {
+                    let fields = p["fields"].as_array().cloned().unwrap_or_default();
+                    self.forms.insert(rid.clone(), (caid.clone(), fields.clone()));
+                    Asking::Form(fields)
+                };
+                self.pending.push(Pending { rid, sid: sid.into(), aid: caid, what });
+            }
+            "permission_resolved" | "interaction_resolved" => {
+                let rid = p["request_id"].as_str().unwrap_or("");
+                self.pending.retain(|x| x.rid != rid);
+            }
+            _ => {}
+        }
         if sid != self.session_id {
             // a delegate's own lines, relayed: the Delegates card counts its calls
+            if kind == "tool_call_requested" {
+                self.dcalls.insert(aid.clone(), (p["name"].as_str().unwrap_or("").into(), p["arguments"].clone()));
+            }
             if let Some(j) = self.jobs.iter_mut().find(|j| j.sid.as_deref() == Some(sid)) {
                 if kind == "tool_call_completed" {
                     j.calls += 1;
@@ -547,6 +673,43 @@ impl Fold {
                 let s = format!("{outcome} · {} · {n} tool calls", dur(ts - t.ts));
                 t.blocks.push(Block::Done(s));
                 self.running = false;
+                // nothing of this session's can still wait on the person once its turn ends
+                let me = self.session_id.clone();
+                self.pending.retain(|x| x.sid != me);
+            }
+            "interaction_resolved" => {
+                let Some((caid, fields)) = self.forms.get(p["request_id"].as_str().unwrap_or("")).cloned() else { return };
+                let a = &p["answer"];
+                let declined = a == "declined" || a["declined"].as_bool() == Some(true) || p["declined"].as_bool() == Some(true);
+                let rows = if declined {
+                    vec![]
+                } else {
+                    fields
+                        .iter()
+                        .enumerate()
+                        .map(|(k, f)| {
+                            let h = f["header"].as_str().unwrap_or("").to_string();
+                            let x = &a["answers"][k];
+                            if x == "skipped" || x["skipped"].as_bool() == Some(true) || x.is_null() {
+                                return (h, "skipped".into(), true);
+                            }
+                            let mut v: Vec<String> = x["labels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
+                            if let Some(t) = x["text"].as_str() {
+                                v.push(format!("“{t}”"));
+                            }
+                            (h, v.join(", "), false)
+                        })
+                        .collect()
+                };
+                let note = a["note"].as_str().map(str::to_string);
+                if let Some(&(ti, bi, ii)) = self.at.get(&caid) {
+                    if let Item::C(c) = &mut Self::group_at(&mut self.turns, ti, bi).items[ii] {
+                        c.asked = Some(if declined { "declined" } else { "answered" });
+                    }
+                }
+                if let Some(t) = self.turn() {
+                    t.blocks.push(Block::Answer(rows, note, ts, declined));
+                }
             }
             "reasoning_started" => {
                 let (ti, bi) = self.group(ts);
@@ -627,6 +790,7 @@ impl Fold {
                     changes: vec![],
                     content: String::new(),
                     step,
+                    asked: None,
                 }));
                 g.last_ts = ts;
                 self.at.insert(aid, (ti, bi, g.items.len() - 1));
@@ -684,7 +848,7 @@ impl Fold {
                     t.blocks.push(Block::Steer(p["text"].as_str().unwrap_or("").into(), ts));
                 }
             }
-            "steering_queue" => self.queue = p["messages"].as_array().into_iter().flatten().map(|m| m["text"].as_str().unwrap_or("").to_string()).collect(),
+            "steering_queue" => self.queue = p["messages"].as_array().into_iter().flatten().map(|m| (m["id"].as_str().unwrap_or("").to_string(), m["text"].as_str().unwrap_or("").to_string())).collect(),
             "notice" => self.notices.push((p["code"].as_str().unwrap_or("").into(), p["message"].as_str().unwrap_or("").into(), false)),
             "mcp_server_failed" => {
                 self.mcp_down.push(p["server"].as_str().unwrap_or("").into());
@@ -720,12 +884,24 @@ impl Fold {
 }
 
 // ============================================================ conversation
+#[derive(Default)]
 struct View {
     all_open: bool,
     reduced: bool,
+    /// the search query, lower case, once it is long enough to open groups
+    q: String,
+    /// the group whose call is asking the person, opened so the call can be read
+    force: Option<Act>,
 }
 
 fn result_spans(c: &Call) -> Vec<Span<'static>> {
+    if kind_of(c) == "ask" {
+        return match (c.asked, c.st) {
+            (Some(a), _) => vec![sp(a, dim())],
+            (None, St::Pending | St::Running) => vec![sp("waiting on you", fg(ORANGE))],
+            _ => vec![sp("cancelled", dim())],
+        };
+    }
     match c.st {
         St::Pending | St::Running => return vec![sp("running", fg(ORANGE))],
         St::Cancelled => return vec![sp("cancelled", dim())],
@@ -748,7 +924,7 @@ fn result_spans(c: &Call) -> Vec<Span<'static>> {
 }
 
 fn summary(g: &Group) -> Vec<Span<'static>> {
-    const ORDER: [(&str, &str, &str, &str); 9] = [
+    const ORDER: [(&str, &str, &str, &str); 10] = [
         ("read", "read", "file", "files"),
         ("search", "searched", "pattern", "patterns"),
         ("list", "listed", "directory", "directories"),
@@ -757,6 +933,7 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
         ("shell", "ran", "command", "commands"),
         ("delegate", "started", "delegate", "delegates"),
         ("jobs", "checked", "job", "jobs"),
+        ("ask", "asked", "question", "questions"),
         ("other", "called", "tool", "tools"),
     ];
     let calls: Vec<&Call> = g.items.iter().filter_map(|i| if let Item::C(c) = i { Some(c) } else { None }).collect();
@@ -768,7 +945,9 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
         if cs.is_empty() {
             continue;
         }
-        let n = if matches!(k, "read" | "edit" | "write") {
+        let n = if k == "ask" {
+            cs.iter().map(|c| c.args["questions"].as_array().map_or(1, Vec::len)).sum()
+        } else if matches!(k, "read" | "edit" | "write") {
             let mut t: Vec<String> = cs.iter().map(|c| target(c)).collect();
             t.sort();
             t.dedup();
@@ -821,11 +1000,10 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 } else {
                     format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
                 };
-                Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], bg: None, act: Some(gid) }
+                Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(gid), ..Default::default() }
             })
             .collect();
     }
-    let open = v.all_open || g.open;
     let running: Vec<String> = calls.iter().filter(|c| matches!(c.st, St::Running | St::Pending)).map(|c| target(c)).collect();
     let start = g.items.iter().map(|i| match i {
         Item::R(r) => r.start,
@@ -841,12 +1019,8 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     if let Some(r) = live_r {
         head.push(sp(format!(" · Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default()), dim().add_modifier(Modifier::ITALIC)));
     }
-    head.push(sp(if open { "  ▾" } else { "  ▸" }, dim()));
-    let mut out: Vec<Row> = wrap(head, w, vec![], vec![sp("  ", Style::new())]).into_iter().map(|s| Row { spans: s, bg: None, act: Some(gid) }).collect();
-    if !open {
-        return out;
-    }
     // the ledger: one row per call, split by step, the step's thinking first
+    let mut ledger: Vec<Row> = vec![];
     let mut last_step = 0;
     for it in &g.items {
         let step = match it {
@@ -862,7 +1036,7 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 } else {
                     format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
                 };
-                out.push(row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]));
+                ledger.push(row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]));
             }
             Item::C(c) => {
                 let glyph = match c.st {
@@ -879,9 +1053,17 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 }
                 let mut s = vec![sp(gutter, dim()), glyph, sp(" ", Style::new()), sp(format!("{:<9}", kind_of(c)), fg(CYAN)), sp(format!("{t:<tw$}"), Style::new()), sp("  ", Style::new())];
                 s.extend(res);
-                out.push(row(s));
+                ledger.push(row(s));
             }
         }
+    }
+    // a search match inside the ledger opens it, as does a call waiting on the person
+    let hit = !v.q.is_empty() && ledger.iter().any(|r| plain(r).to_lowercase().contains(&v.q));
+    let open = v.all_open || g.open || hit || v.force == Some(gid);
+    head.push(sp(if open { "  ▾" } else { "  ▸" }, dim()));
+    let mut out: Vec<Row> = wrap_rows(head, w, vec![], vec![sp("  ", Style::new())]).into_iter().map(|r| Row { act: Some(gid), ..r }).collect();
+    if open {
+        out.extend(ledger);
     }
     out
 }
@@ -899,13 +1081,13 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
         r
     };
     out.push(e("▄"));
-    for l in body {
+    for (i, l) in body.into_iter().enumerate() {
         let mut s = vec![sp(" ".repeat(pad), Style::new())];
         let mut inner = fit(&l, bw - 2);
         inner.push(sp(" ", Style::new()));
         inner.push(sp("▐", fg(BLUE)));
         s.extend(tint(inner, BU));
-        out.push(row(s));
+        out.push(Row { spans: s, cont: i > 0, pre: pad as u16 + 1, ..Default::default() });
     }
     out.push(e("▀"));
     let who = format!("you {}", clock(ts));
@@ -922,7 +1104,7 @@ fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
         let mut inner: Vec<Row> = vec![];
         for (bi, b) in t.blocks.iter().enumerate() {
             let r: Vec<Row> = match b {
-                Block::Text(s) => md(s, iw),
+                Block::Text(s) => md(s, iw).into_iter().map(|r| Row { link: true, ..r }).collect(),
                 Block::Group(g) => group_lines(g, Act::Group(ti, bi), iw, v),
                 Block::Steer(s, ts) => {
                     let lab = format!(" · {} ", clock(*ts));
@@ -930,8 +1112,23 @@ fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
                     r.extend(para(s, iw, bold()));
                     r
                 }
-                Block::Mcp(m) => wrap(vec![sp(m.clone(), dim())], iw, vec![sp("⚠ ", fg(ORANGE))], vec![sp("  ", Style::new())]).into_iter().map(row).collect(),
+                Block::Mcp(m) => wrap_rows(vec![sp(m.clone(), dim())], iw, vec![sp("⚠ ", fg(ORANGE))], vec![sp("  ", Style::new())]),
                 Block::Done(s) => vec![row(vec![sp(format!("▣ {s}"), dim())])],
+                Block::Answer(rows, note, ts, declined) => {
+                    // the person's words, so a labelled rule like a steer, not a dim tool row
+                    let lab = format!(" · {} ", clock(*ts));
+                    let mut r = vec![row(vec![sp("you answered", fg(BLUE).add_modifier(Modifier::BOLD)), sp(lab.clone(), dim()), sp("─".repeat(iw.saturating_sub(12 + lab.width())), fg(SEL))])];
+                    if *declined {
+                        r.push(row(vec![sp("declined: the turn ended so you could answer in your own words", dim())]));
+                    }
+                    for (h, a, skipped) in rows {
+                        r.push(row(vec![sp(format!("{h:<13}"), fg(BLUE)), sp(a.clone(), if *skipped { dim() } else { bold() })]));
+                    }
+                    if let Some(n) = note {
+                        r.push(row(vec![sp(format!("{:<13}", "note"), fg(BLUE)), sp(format!("“{n}”"), bold())]));
+                    }
+                    r
+                }
             };
             if r.is_empty() {
                 continue;
@@ -952,7 +1149,7 @@ fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
                 let body = fit(&r.spans, iw);
                 s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
                 s.push(sp(" ", Style::new()));
-                Row { spans: s, bg: None, act: r.act }
+                Row { spans: s, bg: None, pre: r.pre + 1, ..r }
             })
             .collect();
         out.extend(slab(rows, BW, None, w));
@@ -979,7 +1176,18 @@ struct Card {
 fn t() -> Span<'static> {
     sp("\t", Style::new())
 }
-fn cards(f: &Fold, now: i64) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
+/// Cuts a path from the left, keeping the file name: "…/tests/serve_attach.rs".
+fn left_cut(p: &str, w: usize) -> String {
+    if p.width() <= w {
+        return p.into();
+    }
+    if let Some((i, _)) = p.match_indices('/').find(|(i, _)| p[*i..].width() < w) {
+        return format!("…{}", &p[i..]);
+    }
+    let cs: Vec<char> = p.chars().collect();
+    format!("…{}", cs[cs.len().saturating_sub(w.saturating_sub(1))..].iter().collect::<String>())
+}
+fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
     let mut c = vec![];
     let mut short = vec![];
     let hit = if f.input + f.cache_read + f.cache_write > 0 { 100 * f.cache_read / (f.input + f.cache_read + f.cache_write) } else { 0 };
@@ -996,6 +1204,7 @@ fn cards(f: &Fold, now: i64) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
             vec![sp("in ", dim()), sp(k(f.input), Style::new()), sp(" out ", dim()), sp(k(f.output), Style::new()), t(), sp("cache ", dim()), sp(format!("{hit}%"), Style::new())],
             vec![sp(format!("${:.2}", f.cost), Style::new()), sp(format!(" · {tps} tok/s · {} turns", f.turns.len()), dim())],
             vec![sp("tools ", dim()), sp(f.tools.to_string(), Style::new()), t(), sp(down.clone().unwrap_or_default(), fg(RED))],
+            vec![sp("keys ", dim()), t(), sp(keys.to_string(), Style::new())],
         ],
         cap: 0,
     });
@@ -1012,7 +1221,11 @@ fn cards(f: &Fold, now: i64) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
     let mut lines: Vec<Vec<Span<'static>>> = fl
         .iter()
         .take(5)
-        .map(|(p, (a, r))| vec![sp(p.trim_start_matches("crates/").to_string(), Style::new()), t(), sp(format!("+{a}"), fg(BLUE)), sp(format!(" {:>3}", format!("−{r}")), fg(RED))])
+        .map(|(p, (a, r))| {
+            let counts = vec![sp(format!("+{a}"), fg(BLUE)), sp(format!(" {:>3}", format!("−{r}")), fg(RED))];
+            let room = (PANEL as usize - 5).saturating_sub(width(&counts) + 1);
+            [vec![sp(left_cut(p, room), Style::new()), t()], counts].concat()
+        })
         .collect();
     let more = if fl.len() > 5 { format!("… {} more", fl.len() - 5) } else { String::new() };
     lines.push(vec![sp(more, dim()), t(), sp(format!("+{ta}"), fg(BLUE)), sp(format!(" −{tr}"), fg(RED))]);
@@ -1051,10 +1264,10 @@ fn cards(f: &Fold, now: i64) -> (Vec<Card>, Vec<Vec<Span<'static>>>) {
     short.push(vec![sp("Q ", dim()), sp("claude 65%", Style::new()), sp(" · ", dim()), sp("cursor 1%", fg(RED))]);
     (c, short)
 }
-fn panel_rows(f: &Fold, now: i64) -> Vec<Row> {
+fn panel_rows(f: &Fold, now: i64, keys: &str) -> Vec<Row> {
     let w = PANEL as usize - 2;
     let mut out = vec![];
-    for card in cards(f, now).0 {
+    for card in cards(f, now, keys).0 {
         let mut rows = vec![row([vec![sp("  ", Style::new())], fit(&card.title, w - 3), vec![sp(" ", Style::new())]].concat())];
         let body: Vec<_> = if card.cap > 0 { card.lines.into_iter().take(card.cap).collect() } else { card.lines };
         for l in body {
@@ -1065,9 +1278,9 @@ fn panel_rows(f: &Fold, now: i64) -> Vec<Row> {
     }
     out
 }
-fn status_rows(f: &Fold, now: i64, w: usize) -> Vec<Row> {
+fn status_rows(f: &Fold, now: i64, w: usize, keys: &str) -> Vec<Row> {
     let mut rows: Vec<Vec<Span<'static>>> = vec![vec![sp(" ", Style::new())]];
-    for it in cards(f, now).1 {
+    for it in cards(f, now, keys).1 {
         let cur = rows.last().unwrap();
         if cur.len() > 1 && width(cur) + 5 + width(&it) > w - 1 {
             if rows.len() == 2 {
@@ -1081,7 +1294,7 @@ fn status_rows(f: &Fold, now: i64, w: usize) -> Vec<Row> {
         }
         cur.extend(it);
     }
-    rows.into_iter().map(|s| Row { spans: s, bg: Some(BP), act: None }).collect()
+    rows.into_iter().map(|s| Row { spans: s, bg: Some(BP), ..Default::default() }).collect()
 }
 
 // ============================================================ bottom of the conversation column
@@ -1099,39 +1312,653 @@ fn glimmer(word: &str, tick: u64, reduced: bool) -> Vec<Span<'static>> {
         })
         .collect()
 }
-fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, below: usize, narrow: bool) -> Vec<Row> {
+// ============================================================ what the person has open
+#[derive(Default)]
+struct Search {
+    q: String,
+    i: usize,
+    /// (conversation row, first cell, width in cells)
+    hits: Vec<(usize, usize, usize)>,
+    jump: bool,
+}
+#[derive(Default)]
+struct Form {
+    rid: String,
+    tab: usize,
+    cur: usize,
+    sel: Vec<Vec<String>>,
+    text: Vec<String>,
+    note: String,
+}
+#[derive(Clone, Copy)]
+struct Sel {
+    a: (usize, usize),
+    b: (usize, usize),
+    moved: bool,
+    down: bool,
+}
+#[derive(Default)]
+struct Ui {
+    input: String,
+    /// the draft put away while a queued steering message is being edited
+    draft: String,
+    qsel: Option<usize>,
+    search: Option<Search>,
+    sel: Option<Sel>,
+    drag_edge: i8,
+    aside: HashSet<String>,
+    shown: usize,
+    choice: usize,
+    feedback: String,
+    form: Form,
+    flash: Vec<String>,
+    flash_at: Option<Instant>,
+    keys: String,
+    cmd_n: u32,
+}
+impl Ui {
+    /// The request on top: the first in arrival order not put aside, or the one clicked through to.
+    fn top<'a>(&self, f: &'a Fold) -> Option<(usize, &'a Pending)> {
+        let open: Vec<(usize, &Pending)> = f.pending.iter().enumerate().filter(|(_, p)| !self.aside.contains(&p.rid)).collect();
+        (!open.is_empty()).then(|| open[self.shown % open.len()])
+    }
+    fn nothing_open(&self, f: &Fold) -> bool {
+        self.search.is_none() && self.qsel.is_none() && self.top(f).is_none()
+    }
+    /// Starts a fresh form state when the form on top changes.
+    fn sync_form(&mut self, f: &Fold) {
+        if let Some((_, p)) = self.top(f) {
+            if let Asking::Form(fields) = &p.what {
+                if self.form.rid != p.rid {
+                    self.form = Form { rid: p.rid.clone(), sel: vec![vec![]; fields.len()], text: vec![String::new(); fields.len()], ..Default::default() };
+                }
+            }
+        }
+    }
+    fn answer_of(&self, k: usize) -> Option<String> {
+        let mut v = self.form.sel.get(k)?.clone();
+        let t = self.form.text.get(k)?;
+        if !t.is_empty() {
+            v.push(format!("“{t}”"));
+        }
+        (!v.is_empty()).then(|| v.join(", "))
+    }
+}
+
+fn primary(args: &Value) -> String {
+    ["command", "path", "url"].iter().find_map(|k| args[k].as_str()).map_or_else(|| args.to_string(), str::to_string)
+}
+/// The prefix a rule would remember. Not in the stream: see README, findings.
+fn rule_prefix(tool: &str, arg: &str) -> String {
+    if tool == "shell" { arg.split_whitespace().take(2).collect::<Vec<_>>().join(" ") } else { arg.to_string() }
+}
+
+fn input_box(ui: &Ui, below: usize, w: usize) -> Vec<Row> {
+    let editing = ui.qsel.is_some();
+    let room = w.saturating_sub(40);
+    let shown: String = if ui.input.width() > room {
+        let cs: Vec<char> = ui.input.chars().collect();
+        format!("…{}", cs[cs.len().saturating_sub(room)..].iter().collect::<String>())
+    } else {
+        ui.input.clone()
+    };
+    let mut line = vec![sp("▌", fg(if editing { ORANGE } else { BLUE })), sp(" ", Style::new()), sp("› ", fg(CYAN)), sp(shown, Style::new()), sp("█", dim())];
+    if editing {
+        line.extend([t(), sp("editing a queued message · enter amends · ⌥x drops · esc stops ", dim())]);
+    } else if below > 0 {
+        line.extend([t(), sp(format!("↓ {below} lines below · End"), fg(ORANGE)), sp(" ", Style::new())]);
+    }
+    slab(vec![Row { spans: line, act: (below > 0 && !editing).then_some(Act::End), ..Default::default() }], BI, None, w)
+}
+
+fn search_bar(s: &Search, w: usize) -> Vec<Row> {
+    let status = if s.q.is_empty() {
+        sp("type to search the whole session", dim())
+    } else if s.hits.is_empty() {
+        sp("no matches", dim())
+    } else {
+        sp(format!("{} of {}", s.i + 1, s.hits.len()), Style::new())
+    };
+    let line = vec![sp("▌", fg(ORANGE)), sp(" ", Style::new()), sp("⌕ ", fg(ORANGE)), sp(s.q.clone(), bold()), sp("█", dim()), t(), status, sp("  enter next · shift+enter or ↑ previous · esc closes ", dim())];
+    slab(vec![row(line)], BI, None, w)
+}
+
+fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row> {
+    let Asking::Approval { tool, args, effects, reversible, paths, step } = &p.what else { return vec![] };
+    let arg = primary(args);
+    let why = match step.as_str() {
+        "standing_ask" => "a standing ask rule matches it",
+        "readonly" => "it would leave readonly",
+        "reviewed" => "ask mode: every call is reviewed by you",
+        s => s,
+    };
+    let mut rows = vec![hot_row(vec![
+        (sp(format!("Approval {} of {}", k + 1, f.pending.len()), fg(ORANGE).add_modifier(Modifier::BOLD)), Some(Act::NextPending)),
+        (sp(format!(" · {}", f.asker(&p.sid)), fg(ORANGE)), None),
+        (t(), None),
+        (sp("esc puts it aside", dim()), None),
+    ])];
+    rows.extend(wrap_rows(vec![sp(format!("{tool} "), fg(CYAN).add_modifier(Modifier::BOLD)), sp(arg.clone(), bold())], w - 4, vec![], vec![]));
+    let mut facts = effects.join(", ");
+    if !reversible {
+        facts += " · not reversible";
+    }
+    if !paths.is_empty() {
+        facts += &format!(" · {}", paths.join(", "));
+    }
+    if !why.is_empty() {
+        facts += &format!(" · {why}");
+    }
+    rows.push(row(vec![sp(facts, dim())]));
+    rows.push(Row::default());
+    let choice = |i: usize, parts: Vec<Span<'static>>| {
+        let on = ui.choice == i;
+        let mut v = vec![(sp(if on { "▸ " } else { "  " }, fg(ORANGE)), Some(Act::Choice(i))), (sp(format!("{} ", i + 1), dim()), Some(Act::Choice(i)))];
+        v.extend(parts.into_iter().map(|s| (if on { Span::styled(s.content, s.style.add_modifier(Modifier::BOLD)) } else { s }, Some(Act::Choice(i)))));
+        hot_row(v)
+    };
+    rows.push(choice(0, vec![sp("Allow once", Style::new())]));
+    rows.push(choice(1, vec![sp("Allow and add rule ", Style::new()), sp(format!("{} *", rule_prefix(tool, &arg)), fg(CYAN))]));
+    let fb = if ui.feedback.is_empty() && ui.choice != 2 { sp("  type to add feedback", dim()) } else { sp(format!("  {}█", ui.feedback), Style::new()) };
+    rows.push(choice(2, vec![sp("Deny", Style::new()), fb]));
+    rows.push(Row::default());
+    rows.push(row(vec![sp("↑↓ choose · enter confirms · typing goes to the feedback · click a choice", dim())]));
+    let rows = rows.into_iter().map(|r| prefixed(r, vec![sp("▌", fg(ORANGE)), sp(" ", Style::new())])).collect();
+    slab(rows, BC, None, w)
+}
+
+fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usize) -> Vec<Row> {
+    let n = fields.len();
+    let fm = &ui.form;
+    let iw = w - 4;
+    let mut title = vec![
+        (sp("Question", fg(PURPLE).add_modifier(Modifier::BOLD)), None),
+        (sp(format!(" from {} · {n} question{}, any can be skipped", f.asker(&p.sid), if n == 1 { "" } else { "s" }), fg(PURPLE)), None),
+    ];
+    if f.pending.len() > 1 {
+        title.push((sp(format!(" · {} of {}", k + 1, f.pending.len()), fg(PURPLE).add_modifier(Modifier::BOLD)), Some(Act::NextPending)));
+    }
+    title.extend([(t(), None), (sp("esc: chat about this", dim()), None)]);
+    let mut rows = vec![hot_row(title), Row::default()];
+    let mut tabs = vec![(sp("← ", dim()), None)];
+    for (j, q) in fields.iter().enumerate() {
+        let done = ui.answer_of(j).is_some();
+        let st = if fm.tab == j { Style::new().add_modifier(Modifier::REVERSED) } else if done { fg(BLUE) } else { Style::new() };
+        tabs.push((sp(format!(" {}{} ", if done { "✔ " } else { "☐ " }, q["header"].as_str().unwrap_or("")), st), Some(Act::Tab(j))));
+        tabs.push((sp(" ", Style::new()), None));
+    }
+    tabs.push((sp(" ✔ Submit ", if fm.tab == n { Style::new().add_modifier(Modifier::REVERSED) } else { Style::new() }), Some(Act::Tab(n))));
+    tabs.push((sp(" →", dim()), None));
+    rows.extend([hot_row(tabs), Row::default()]);
+    if let Some(q) = fields.get(fm.tab) {
+        let multi = q["multiSelect"].as_bool().unwrap_or(false);
+        let opts = q["options"].as_array().cloned().unwrap_or_default();
+        rows.extend(wrap_rows(vec![sp(q["question"].as_str().unwrap_or("").to_string(), bold())], iw, vec![], vec![]));
+        if multi {
+            rows.push(row(vec![sp("choose any", dim())]));
+        }
+        rows.push(Row::default());
+        for (j, o) in opts.iter().enumerate() {
+            let label = o["label"].as_str().unwrap_or("").to_string();
+            let (cur, chosen) = (fm.cur == j, fm.sel[fm.tab].contains(&label));
+            let bx = match (multi, chosen) {
+                (true, true) => "[x] ",
+                (true, false) => "[ ] ",
+                (false, true) => "(•) ",
+                (false, false) => "( ) ",
+            };
+            let mut ls = Style::new();
+            if chosen {
+                ls = ls.add_modifier(Modifier::BOLD);
+            }
+            if cur {
+                ls = ls.add_modifier(Modifier::UNDERLINED);
+            }
+            let mut v = vec![
+                (sp(if cur { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Opt(j))),
+                (sp(format!("{} ", j + 1), dim()), Some(Act::Opt(j))),
+                (sp(bx, if chosen { fg(PURPLE) } else { dim() }), Some(Act::Opt(j))),
+                (sp(label, ls), Some(Act::Opt(j))),
+            ];
+            if let Some(d) = o["description"].as_str() {
+                v.push((sp(format!("  {d}"), dim()), Some(Act::Opt(j))));
+            }
+            rows.push(hot_row(v));
+        }
+        let j = opts.len();
+        let cur = fm.cur == j;
+        let txt = &fm.text[fm.tab];
+        let body = if !txt.is_empty() {
+            sp(txt.clone(), bold())
+        } else {
+            sp(if opts.is_empty() { "Type an answer" } else { "Type an answer, alone or with the options" }, dim())
+        };
+        rows.push(hot_row(vec![
+            (sp(if cur { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Opt(j))),
+            (sp(format!("{} ", j + 1), dim()), Some(Act::Opt(j))),
+            (sp("✎ ", dim()), Some(Act::Opt(j))),
+            (body, Some(Act::Opt(j))),
+            (sp(if cur { "█" } else { "" }, dim()), None),
+        ]));
+        rows.push(Row::default());
+        rows.push(row(vec![sp("←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words", dim())]));
+    } else {
+        rows.extend([row(vec![sp("Review", bold())]), Row::default()]);
+        for (j, q) in fields.iter().enumerate() {
+            let a = ui.answer_of(j);
+            rows.push(hot_row(vec![
+                (sp("  ", Style::new()), None),
+                (sp(format!("{:<13}", q["header"].as_str().unwrap_or("")), fg(BLUE)), Some(Act::Tab(j))),
+                (sp(a.clone().unwrap_or("skipped".into()), if a.is_some() { bold() } else { dim() }), Some(Act::Tab(j))),
+            ]));
+        }
+        let note = if fm.note.is_empty() { sp("Add a note on the whole form", dim()) } else { sp(fm.note.clone(), bold()) };
+        rows.push(row(vec![sp("▸ ", fg(PURPLE)), sp(format!("{:<13}", "note"), fg(BLUE)), note, sp("█", dim())]));
+        rows.push(Row::default());
+        rows.push(hot_row(vec![
+            (sp("  ", Style::new()), None),
+            (sp(" Submit ", Style::new().add_modifier(Modifier::REVERSED)), Some(Act::Submit)),
+            (sp("   ", Style::new()), None),
+            (sp(" Chat about this ", Style::new().bg(SEL)), Some(Act::Decline)),
+            (sp("  declines and ends the turn, so you can answer in your own words", dim()), None),
+        ]));
+        rows.push(Row::default());
+        rows.push(row(vec![sp("←→ question · enter submits · type to add the note · esc: chat about this", dim())]));
+    }
+    let rows = rows.into_iter().map(|r| prefixed(r, vec![sp("▌", fg(PURPLE)), sp(" ", Style::new())])).collect();
+    slab(rows, BC, None, w)
+}
+
+fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, below: usize, narrow: bool, ui: &Ui) -> Vec<Row> {
     let mut out = vec![];
+    let aside = f.pending.iter().filter(|p| ui.aside.contains(&p.rid)).count();
+    if aside > 0 {
+        let s = if aside == 1 { "" } else { "s" };
+        out.push(hot_row(vec![(sp("  ⚠ ", fg(ORANGE)), None), (sp(format!("{aside} approval{s} waiting · click to reopen"), fg(ORANGE).add_modifier(Modifier::BOLD)), Some(Act::Reopen))]));
+    }
     for (i, (code, msg, gone)) in f.notices.iter().enumerate() {
         if !gone {
-            out.push(Row { spans: vec![sp("  ⚠ ", fg(ORANGE)), sp(code.clone(), fg(ORANGE)), sp(format!(" · {msg}"), dim()), t(), sp("✕ ", dim())], bg: None, act: Some(Act::Notice(i)) });
+            out.push(Row { spans: vec![sp("  ⚠ ", fg(ORANGE)), sp(code.clone(), fg(ORANGE)), sp(format!(" · {msg}"), dim()), t(), sp("✕ ", dim())], act: Some(Act::Notice(i)), ..Default::default() });
         }
+    }
+    for m in &ui.flash {
+        out.push(row(vec![sp("  ", Style::new()), sp(m.clone(), fg(CYAN).add_modifier(Modifier::DIM))]));
     }
     if f.running {
         let spin = if v.reduced { "●" } else { SPIN[tick as usize % SPIN.len()] };
         let mut s = vec![sp("  ", Style::new()), sp(format!("{spin} "), fg(ORANGE))];
         s.extend(glimmer("Working", tick, v.reduced));
-        s.push(sp(format!(" {} · esc to interrupt", dur(now - f.turn_start)), dim()));
+        // Esc interrupts only when nothing is open, so the hint shows only then
+        let hint = if ui.nothing_open(f) { " · esc to interrupt" } else { "" };
+        s.push(sp(format!(" {}{hint}", dur(now - f.turn_start)), dim()));
         out.push(row(s));
     }
     if !f.queue.is_empty() {
         out.push(row(vec![sp("  • Steering, joins the turn at the next step", dim())]));
-        for q in &f.queue {
-            out.push(row(vec![sp("    ↳ ", dim()), sp(q.clone(), dim())]));
+        for (i, (_, q)) in f.queue.iter().enumerate() {
+            let on = ui.qsel == Some(i);
+            out.push(hot_row(vec![
+                (sp(if on { "    ▸ " } else { "    ↳ " }, if on { fg(ORANGE) } else { dim() }), Some(Act::QRow(i))),
+                (sp(q.clone(), if on { Style::new() } else { dim() }), Some(Act::QRow(i))),
+                (sp("  ✕", dim()), Some(Act::QDrop(i))),
+            ]));
         }
-        out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row", dim())]));
+        out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop", dim())]));
     }
-    let mut line = vec![sp("▌", fg(BLUE)), sp(" ", Style::new()), sp("› ", fg(CYAN)), sp("█", dim())];
-    if below > 0 {
-        line.push(t());
-        line.push(sp(format!("↓ {below} lines below · End"), fg(ORANGE)));
-        line.push(sp(" ", Style::new()));
-    }
-    let mut ib = slab(vec![Row { spans: line, bg: None, act: if below > 0 { Some(Act::End) } else { None } }], BI, None, w);
+    let mut ib = match (&ui.search, ui.top(f)) {
+        (Some(s), _) => search_bar(s, w),
+        (None, Some((k, p))) => match &p.what {
+            Asking::Approval { .. } => approval_panel(f, ui, k, p, w),
+            Asking::Form(fields) => form_panel(f, ui, k, p, fields, w),
+        },
+        (None, None) => input_box(ui, below, w),
+    };
     out.append(&mut ib);
     if narrow {
-        out.extend(status_rows(f, now, w));
+        out.extend(status_rows(f, now, w, &ui.keys));
     }
     out
+}
+
+// ============================================================ reading and copying
+/// The text of the chars that start in cells [from, to).
+fn cells(s: &str, from: usize, to: usize) -> String {
+    let mut x = 0;
+    let mut out = String::new();
+    for ch in s.chars() {
+        if x >= from && x < to {
+            out.push(ch);
+        }
+        x += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+    out
+}
+/// The text between two (row, cell) points, unwrapped: a row that continues a
+/// wrapped line joins it with a space, layout cells and surface edges are left out.
+fn selection_text(rows: &[Row], a: (usize, usize), b: (usize, usize)) -> String {
+    let (a, b) = if a <= b { (a, b) } else { (b, a) };
+    let mut out = String::new();
+    let mut first = true;
+    for r in a.0..=b.0.min(rows.len().saturating_sub(1)) {
+        let row = &rows[r];
+        let t = plain(row);
+        let tt = t.trim();
+        if !tt.is_empty() && tt.chars().all(|c| c == '▄' || c == '▀') {
+            continue;
+        }
+        let from = if r == a.0 { a.1 } else { 0 }.max(row.pre as usize);
+        let to = if r == b.0 { b.1 + 1 } else { usize::MAX };
+        let piece = cells(&t, from, to);
+        if !first {
+            out.push(if row.cont { ' ' } else { '\n' });
+        }
+        first = false;
+        out.push_str(piece.trim_end_matches([' ', '▐', '▌']));
+    }
+    out
+}
+fn b64(b: &[u8]) -> String {
+    const T: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    let mut s = String::new();
+    for c in b.chunks(3) {
+        let n = (c[0] as u32) << 16 | (*c.get(1).unwrap_or(&0) as u32) << 8 | *c.get(2).unwrap_or(&0) as u32;
+        for i in 0..4 {
+            s.push(if i <= c.len() { T[(n >> (18 - 6 * i)) as usize & 63] as char } else { '=' });
+        }
+    }
+    s
+}
+/// Copies through OSC 52, and also through the system clipboard command when
+/// not over SSH, since the terminal (or tmux) may ignore OSC 52.
+fn copy(out: &mut impl Write, text: &str) -> String {
+    let _ = write!(out, "\x1b]52;c;{}\x07", b64(text.as_bytes()));
+    let _ = out.flush();
+    if std::env::var_os("SSH_CONNECTION").is_some() {
+        return "OSC 52".into();
+    }
+    let cmd: Option<(&str, &[&str])> = if cfg!(target_os = "macos") {
+        Some(("pbcopy", &[]))
+    } else if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        Some(("wl-copy", &[]))
+    } else if std::env::var_os("DISPLAY").is_some() {
+        Some(("xclip", &["-selection", "clipboard"]))
+    } else {
+        None
+    };
+    let Some((c, args)) = cmd else { return "OSC 52".into() };
+    let ok = std::process::Command::new(c)
+        .args(args)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()
+        .and_then(|mut ch| {
+            ch.stdin.take().unwrap().write_all(text.as_bytes())?;
+            ch.wait()
+        })
+        .is_ok_and(|s| s.success());
+    if ok { format!("OSC 52 and {c}") } else { format!("OSC 52; {c} failed") }
+}
+
+/// Every match of `q` (lower case) in the rendered rows, as (row, first cell, width).
+fn find_all(rows: &[Row], q: &str) -> Vec<(usize, usize, usize)> {
+    let qc: Vec<char> = q.chars().collect();
+    let mut out = vec![];
+    if qc.is_empty() {
+        return out;
+    }
+    let low = |c: char| c.to_lowercase().next().unwrap_or(c);
+    for (ri, r) in rows.iter().enumerate() {
+        let t: Vec<char> = plain(r).chars().collect();
+        let wd: Vec<usize> = t.iter().map(|&c| unicode_width::UnicodeWidthChar::width(c).unwrap_or(0)).collect();
+        let mut i = 0;
+        while i + qc.len() <= t.len() {
+            if (0..qc.len()).all(|k| low(t[i + k]) == qc[k]) {
+                out.push((ri, wd[..i].iter().sum(), wd[i..i + qc.len()].iter().sum()));
+                i += qc.len();
+            } else {
+                i += 1;
+            }
+        }
+    }
+    out
+}
+
+/// URLs and file paths in a row of reply text, as (first cell, width, URL).
+fn links_in(t: &str, cwd: &str, host: &str) -> Vec<(usize, usize, String)> {
+    let mut out = vec![];
+    let mut x = 0;
+    let mut word: Vec<(usize, char)> = vec![];
+    let home = std::env::var("HOME").unwrap_or_default();
+    let mut flush = |word: &mut Vec<(usize, char)>| {
+        let lead = "([{\"'“`";
+        let trail = ".,;:)]}\"'”`";
+        let mut s = 0;
+        let mut e = word.len();
+        while s < e && lead.contains(word[s].1) {
+            s += 1;
+        }
+        while e > s && trail.contains(word[e - 1].1) {
+            e -= 1;
+        }
+        let w: String = word[s..e].iter().map(|c| c.1).collect();
+        let url = if w.starts_with("https://") || w.starts_with("http://") {
+            Some(w.clone())
+        } else if w.contains('/')
+            && w.chars().any(char::is_alphanumeric)
+            && w.chars().all(|c| c.is_alphanumeric() || "._-/~".contains(c))
+            && (w.rsplit('/').next().is_some_and(|l| l.contains('.') && !l.starts_with('.')) || w.starts_with("~/") || w.starts_with('/'))
+        {
+            let abs = if let Some(r) = w.strip_prefix("~/") {
+                format!("{home}/{r}")
+            } else if w.starts_with('/') {
+                w.clone()
+            } else {
+                format!("{}/{w}", cwd.replacen('~', &home, 1))
+            };
+            Some(format!("file://{host}{abs}"))
+        } else {
+            None
+        };
+        if let Some(u) = url {
+            let c0 = word[s].0;
+            let c1 = word[e - 1].0 + 1;
+            out.push((c0, c1 - c0, u));
+        }
+        word.clear();
+    };
+    for ch in t.chars() {
+        let cw = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if ch.is_whitespace() {
+            if !word.is_empty() {
+                flush(&mut word);
+            }
+        } else if cw == 1 {
+            word.push((x, ch));
+        }
+        x += cw;
+    }
+    if !word.is_empty() {
+        flush(&mut word);
+    }
+    out
+}
+fn hostname() -> String {
+    let mut b = [0u8; 256];
+    unsafe { libc::gethostname(b.as_mut_ptr().cast(), b.len()) };
+    String::from_utf8_lossy(&b[..b.iter().position(|&c| c == 0).unwrap_or(0)]).into_owned()
+}
+
+// ============================================================ what the TUI would send, and Fiber's side of it
+/// The prototype has no Fiber to talk to: it shows each command it would send,
+/// appends it to `--commands FILE`, and plays the lines Fiber would write back.
+fn send(ui: &mut Ui, cmds: &mut Option<std::fs::File>, mut c: Value) -> String {
+    ui.cmd_n += 1;
+    let id = format!("c_{:04x}", 0xc000 + ui.cmd_n);
+    c["id"] = json!(id);
+    let line = c.to_string();
+    if let Some(fh) = cmds {
+        let _ = writeln!(fh, "{line}");
+    }
+    if ui.flash_at.is_none_or(|t| t.elapsed() > Duration::from_millis(200)) {
+        ui.flash.clear();
+    }
+    ui.flash.push(format!("→ would send {line}"));
+    ui.flash_at = Some(Instant::now());
+    id
+}
+fn say(ui: &mut Ui, m: String) {
+    ui.flash = vec![m];
+    ui.flash_at = Some(Instant::now());
+}
+fn synth(f: &mut Fold, kind: &str, sid: &str, aid: Option<&str>, ts: i64, payload: Value) {
+    let mut e = json!({ "kind": kind, "session_id": sid, "ts": ts, "schema_version": 1, "payload": payload });
+    if let Some(a) = aid {
+        e["action_id"] = json!(a);
+    }
+    f.apply(&e);
+}
+fn interrupt(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
+    send(ui, cmds, json!({ "command": "cancel" }));
+    let me = f.session_id.clone();
+    for a in f.running_calls() {
+        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "cancelled" }));
+    }
+    synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "interrupted" }));
+}
+fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, choice: usize) {
+    let Some((_, p)) = ui.top(f) else { return };
+    let Asking::Approval { tool, args, .. } = &p.what else { return };
+    let (rid, sid, prefix) = (p.rid.clone(), p.sid.clone(), rule_prefix(tool, &primary(args)));
+    let mut c = json!({ "command": "reply", "request_id": rid, "decision": if choice == 2 { "deny" } else { "allow" } });
+    if sid != f.session_id {
+        c["session_id"] = json!(sid);
+    }
+    if choice == 1 {
+        c["rule"] = json!({ "tool": tool, "prefix": prefix });
+    }
+    if choice == 2 && !ui.feedback.is_empty() {
+        c["feedback"] = json!(ui.feedback);
+    }
+    let decision = c["decision"].clone();
+    send(ui, cmds, c);
+    synth(f, "permission_resolved", &sid, None, ts, json!({ "request_id": rid, "decision": decision, "by": "person" }));
+    ui.feedback.clear();
+    ui.choice = 0;
+    ui.shown = 0;
+}
+fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
+    let Some((_, p)) = ui.top(f) else { return };
+    let Asking::Form(fields) = &p.what else { return };
+    let (rid, aid, sid) = (p.rid.clone(), p.aid.clone(), p.sid.clone());
+    let mut lines = vec![];
+    let answers: Vec<Value> = fields
+        .iter()
+        .enumerate()
+        .map(|(k, q)| {
+            let (sel, txt) = (&ui.form.sel[k], &ui.form.text[k]);
+            let h = q["header"].as_str().unwrap_or("");
+            if sel.is_empty() && txt.is_empty() {
+                lines.push(format!("{h}: skipped"));
+                return json!("skipped");
+            }
+            let mut a = json!({ "labels": sel });
+            let mut l = format!("{h}: {}", sel.join(", "));
+            if !txt.is_empty() {
+                a["text"] = json!(txt);
+                l += &format!(" \"{txt}\"");
+            }
+            lines.push(l);
+            a
+        })
+        .collect();
+    let mut ans = json!({ "answers": answers });
+    if !ui.form.note.is_empty() {
+        ans["note"] = json!(ui.form.note);
+        lines.push(format!("note: {}", ui.form.note));
+    }
+    send(ui, cmds, json!({ "command": "reply", "request_id": rid, "answer": ans }));
+    synth(f, "interaction_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "answer": ans, "by": "person" }));
+    synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }));
+    ui.shown = 0;
+}
+/// "Chat about this", and Esc on a form: reply declined, then cancel.
+fn decline_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
+    let Some((_, p)) = ui.top(f) else { return };
+    let (rid, aid, sid) = (p.rid.clone(), p.aid.clone(), p.sid.clone());
+    send(ui, cmds, json!({ "command": "reply", "request_id": rid, "answer": { "declined": true } }));
+    synth(f, "interaction_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "answer": { "declined": true }, "by": "person" }));
+    synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": "declined" }] }));
+    interrupt(f, ui, cmds, ts);
+    ui.shown = 0;
+}
+/// Space, Enter or a click on an option: single choice replaces, multi-choice toggles.
+fn form_choose(ui: &mut Ui, fields: &[Value]) {
+    let Some(q) = fields.get(ui.form.tab) else { return };
+    let Some(o) = q["options"].get(ui.form.cur) else { return };
+    let label = o["label"].as_str().unwrap_or("").to_string();
+    let sel = &mut ui.form.sel[ui.form.tab];
+    if q["multiSelect"].as_bool().unwrap_or(false) {
+        if let Some(i) = sel.iter().position(|l| *l == label) {
+            sel.remove(i);
+        } else {
+            sel.push(label);
+        }
+    } else {
+        *sel = vec![label];
+    }
+}
+fn queue_msgs(q: &[(String, String)]) -> Value {
+    json!({ "messages": q.iter().map(|(id, t)| json!({ "id": id, "text": t, "source": "person" })).collect::<Vec<_>>() })
+}
+fn queue_pick(f: &Fold, ui: &mut Ui, i: usize) {
+    if i >= f.queue.len() {
+        return;
+    }
+    if ui.qsel.is_none() {
+        ui.draft = std::mem::take(&mut ui.input);
+    }
+    ui.qsel = Some(i);
+    ui.input = f.queue[i].1.clone();
+}
+fn queue_leave(ui: &mut Ui) {
+    ui.qsel = None;
+    ui.input = std::mem::take(&mut ui.draft);
+}
+fn queue_drop(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, i: usize) {
+    let Some((id, _)) = f.queue.get(i).cloned() else { return };
+    send(ui, cmds, json!({ "command": "steer_drop", "steer_id": id }));
+    let mut q = f.queue.clone();
+    q.remove(i);
+    let me = f.session_id.clone();
+    synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
+    if ui.qsel.is_some() {
+        queue_leave(ui);
+    }
+}
+/// Enter in the input box: amends the queued message being edited, steers during a turn, or prompts.
+fn enter(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
+    let me = f.session_id.clone();
+    if let Some(i) = ui.qsel {
+        let Some((id, _)) = f.queue.get(i).cloned() else { return queue_leave(ui) };
+        send(ui, cmds, json!({ "command": "steer_amend", "steer_id": id, "text": ui.input }));
+        let mut q = f.queue.clone();
+        q[i].1 = ui.input.clone();
+        synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
+        return queue_leave(ui);
+    }
+    if ui.input.trim().is_empty() {
+        return;
+    }
+    let text = std::mem::take(&mut ui.input);
+    if f.running {
+        let id = send(ui, cmds, json!({ "command": "steer", "text": text }));
+        let mut q = f.queue.clone();
+        q.push((id, text));
+        synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
+    } else {
+        send(ui, cmds, json!({ "command": "prompt", "input": [{ "type": "text", "text": text }] }));
+    }
 }
 
 // ============================================================ painting
@@ -1197,9 +2024,10 @@ struct Args {
     exit_after: Option<f64>,
     warmup: f64,
     audit: bool,
+    commands: Option<String>,
 }
 fn args() -> Args {
-    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false };
+    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false, commands: None };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -1210,8 +2038,9 @@ fn args() -> Args {
             "--exit-after" => a.exit_after = it.next().and_then(|v| v.parse().ok()),
             "--warmup" => a.warmup = it.next().and_then(|v| v.parse().ok()).expect("--warmup S"),
             "--diff-audit" => a.audit = true,
+            "--commands" => a.commands = it.next(),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -1223,7 +2052,12 @@ fn args() -> Args {
     a
 }
 
+// button presses, drags and releases, in SGR form; not 1003, which reports every motion
+const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
+const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+
 fn main() -> io::Result<()> {
+    let t0 = Instant::now();
     let a = args();
     let events: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
     let mut f = Fold::default();
@@ -1237,14 +2071,17 @@ fn main() -> io::Result<()> {
 
     terminal::enable_raw_mode()?;
     let mut out = Counting(BufWriter::with_capacity(1 << 16, io::stdout()));
-    execute!(out, terminal::EnterAlternateScreen, event::EnableMouseCapture)?;
+    execute!(out, terminal::EnterAlternateScreen)?;
+    out.write_all(MOUSE_ON.as_bytes())?;
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = run(&a, &events, &mut f, &mut next, &mut term);
-    execute!(term.backend_mut(), event::DisableMouseCapture, terminal::LeaveAlternateScreen, crossterm::cursor::Show)?;
+    let res = run(&a, &events, &mut f, &mut next, &mut term, t0);
+    let b = term.backend_mut();
+    b.write_all(MOUSE_OFF.as_bytes())?;
+    execute!(b, terminal::LeaveAlternateScreen, crossterm::cursor::Show)?;
     terminal::disable_raw_mode()?;
     let report = res?;
-    if let (Some(path), Some(r)) = (&a.stats, report) {
-        std::fs::write(path, r)?;
+    if let Some(path) = &a.stats {
+        std::fs::write(path, report)?;
     }
     println!("Session {0} · resume it with fiber --resume {0}", f.session_id);
     Ok(())
@@ -1252,9 +2089,9 @@ fn main() -> io::Result<()> {
 
 type Term = Terminal<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>;
 
-fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Term) -> io::Result<Option<String>> {
+fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Term, t0: Instant) -> io::Result<String> {
     let v0 = Instant::now();
-    let mut v = View { all_open: false, reduced: a.reduced };
+    let mut v = View { reduced: a.reduced, ..Default::default() };
     // replay clock: an event is due `gap / speed` after the one before it
     let ts_of = |i: usize| events[i]["ts"].as_i64().unwrap_or(0);
     let mut due = Instant::now();
@@ -1271,18 +2108,39 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut next_tick = Instant::now();
     let mut scroll: usize = 0; // lines above the bottom
     let mut pscroll: usize = 0;
-    let mut conv_cache: Option<(usize, Vec<Row>)> = None;
+    type Key3 = (bool, Option<Act>, String);
+    let mut conv_cache: Option<(usize, Key3, Vec<Row>)> = None;
+    let mut conv_gen: u64 = 0;
     let mut panel_cache: Option<Vec<Row>> = None;
     let mut hits: Vec<(u16, u16, u16, Act)> = vec![];
     let mut dirty = true;
-    let mut geom = (0u16, 0u16, 0u16, 0u16); // conv x-end, conv height, panel x, rows
+    let mut geom = (0u16, 0u16); // conversation column width, screen width
+    // where the conversation's rows sit: first row shown, blank rows above it, rows shown, height
+    let mut lay = (0usize, 0usize, 0usize, 0usize);
     let exit_at = a.exit_after.map(|s| v0 + Duration::from_secs_f64(s));
     let mut window: Option<(Instant, u64, u64, u64, (f64, i64, i64, u64, u64))> = None;
     let mut audit = Audit::default();
     let mut prev_buf: Option<Buffer> = None;
     let mut frames: u64 = 0;
 
-    loop {
+    let mut ui = Ui::default();
+    let mut rd = input::Reader::new()?;
+    let mut cmds = match &a.commands {
+        Some(p) => Some(std::fs::OpenOptions::new().create(true).append(true).open(p)?),
+        None => None,
+    };
+    let host = hostname();
+    // keyboard protocol detection: sent after the first frame, never waited on
+    let mut first_frame: Option<Duration> = None;
+    let mut det_sent: Option<Duration> = None;
+    let mut kitty_seen: Option<u32> = None;
+    let mut det: Option<(bool, Duration)> = None;
+    let mut pushed = false;
+    let mut links_at = (u64::MAX, usize::MAX);
+    let mut next_auto = Instant::now();
+    const FLASH: Duration = Duration::from_secs(6);
+
+    'main: loop {
         let now_i = Instant::now();
         // apply every event that is due
         while *next < events.len() && due <= now_i {
@@ -1313,40 +2171,86 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         if window.is_none() && now_i >= v0 + Duration::from_secs_f64(a.warmup) {
             window = Some((now_i, BYTES.load(Relaxed), frames, FLUSHES.load(Relaxed), rusage()));
         }
+        // dragging past the top or bottom edge keeps scrolling while the button is held
+        if ui.drag_edge != 0 && now_i >= next_auto {
+            next_auto = now_i + Duration::from_millis(40);
+            let (start, _, shown, _) = lay;
+            if let Some(s) = ui.sel.as_mut() {
+                if ui.drag_edge < 0 && start > 0 {
+                    scroll += 1;
+                    s.b.0 = start - 1;
+                } else if ui.drag_edge > 0 && scroll > 0 {
+                    scroll -= 1;
+                    s.b.0 = start + shown;
+                }
+                s.moved = true;
+            }
+            dirty = true;
+        }
+        if ui.flash_at.is_some_and(|t| now_i >= t + FLASH) {
+            ui.flash.clear();
+            ui.flash_at = None;
+            dirty = true;
+        }
 
         if dirty {
             dirty = false;
             frames += 1;
+            ui.sync_form(f);
+            ui.keys = match (det, det_sent) {
+                (Some((true, d)), _) => format!("kitty · {} ms", d.as_millis()),
+                (Some((false, d)), _) => format!("legacy · {} ms", d.as_millis()),
+                (None, Some(_)) => "detecting…".into(),
+                (None, None) => String::new(),
+            };
             let size = term.size()?;
             let (cols, rows) = (size.width, size.height);
             let narrow = cols < PANEL + CONV_MIN;
             let conv_w = if narrow { cols } else { cols - PANEL };
             let cw = conv_w as usize - 2;
-            if conv_cache.as_ref().is_none_or(|(w, _)| *w != cw) {
-                let old = conv_cache.as_ref().map_or(0, |(_, r)| r.len());
+            // the call asking the person has its group open
+            v.force = ui.top(f).filter(|(_, p)| p.sid == f.session_id).and_then(|(_, p)| f.at.get(&p.aid)).map(|&(ti, bi, _)| Act::Group(ti, bi));
+            v.q = ui.search.as_ref().map(|s| s.q.to_lowercase()).filter(|q| q.chars().count() >= 3).unwrap_or_default();
+            let key: Key3 = (v.all_open, v.force, v.q.clone());
+            if conv_cache.as_ref().is_none_or(|(w, k, _)| *w != cw || *k != key) {
+                let old = conv_cache.as_ref().map_or(0, |(_, _, r)| r.len());
                 let rows_new = conversation(f, cw, &v);
                 if scroll > 0 && old > 0 {
                     scroll += rows_new.len().saturating_sub(old); // paused: keep the view where it is
                 }
-                conv_cache = Some((cw, rows_new));
+                conv_cache = Some((cw, key, rows_new));
+                conv_gen += 1;
             }
             if panel_cache.is_none() && !narrow {
-                panel_cache = Some(panel_rows(f, vnow));
+                panel_cache = Some(panel_rows(f, vnow, &ui.keys));
             }
-            let conv = &conv_cache.as_ref().unwrap().1;
-            let mut bot = bottom(f, conv_w as usize, tick, vnow, &v, scroll, narrow);
+            let conv = &conv_cache.as_ref().unwrap().2;
+            if let Some(s) = ui.search.as_mut() {
+                s.hits = find_all(conv, &s.q.to_lowercase());
+                s.i = s.i.min(s.hits.len().saturating_sub(1));
+            }
+            let mut bot = bottom(f, conv_w as usize, tick, vnow, &v, scroll, narrow, &ui);
             let view_h = (rows as usize).saturating_sub(bot.len());
             let max_scroll = conv.len().saturating_sub(view_h);
+            if let Some(s) = ui.search.as_mut().filter(|s| s.jump) {
+                s.jump = false;
+                if let Some(&(r, _, _)) = s.hits.get(s.i) {
+                    // centre the current match
+                    scroll = max_scroll.saturating_sub(r.saturating_sub(view_h / 2));
+                }
+            }
             if scroll > max_scroll {
                 scroll = max_scroll;
-                bot = bottom(f, conv_w as usize, tick, vnow, &v, scroll, narrow);
             }
+            bot = bottom(f, conv_w as usize, tick, vnow, &v, scroll, narrow, &ui);
             let start = conv.len().saturating_sub(view_h + scroll);
             let vis = &conv[start..(start + view_h).min(conv.len())];
             let top_pad = view_h - vis.len();
+            lay = (start, top_pad, vis.len(), view_h);
             hits.clear();
-            geom = (conv_w, view_h as u16, conv_w, rows);
+            geom = (conv_w, cols);
             let panel = panel_cache.as_ref();
+            let (search, sel) = (ui.search.as_ref(), ui.sel);
             let completed = term.draw(|fr| {
                 let buf = fr.buffer_mut();
                 // conversation
@@ -1355,6 +2259,26 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     paint(buf, 1, y, cw as u16, r);
                     if let Some(act) = r.act {
                         hits.push((y, 1, 1 + cw as u16, act));
+                    }
+                }
+                let ys = |r: usize| (r >= start && r < start + vis.len()).then(|| (top_pad + r - start) as u16);
+                // every search match marked, the current one brighter
+                if let Some(s) = search {
+                    for (i, &(r, c, w)) in s.hits.iter().enumerate() {
+                        let Some(y) = ys(r) else { continue };
+                        let st = if i == s.i { Style::new().bg(ORANGE).fg(Color::Black) } else { Style::new().bg(rgb(0x5a4a1a)).fg(Color::White) };
+                        buf.set_style(Rect::new(1 + c as u16, y, (w as u16).min(cw as u16 - c as u16), 1), st);
+                    }
+                }
+                if let Some(s) = sel.filter(|s| s.moved) {
+                    let (a, b) = if s.a <= s.b { (s.a, s.b) } else { (s.b, s.a) };
+                    for r in a.0..=b.0 {
+                        let Some(y) = ys(r) else { continue };
+                        let x0 = if r == a.0 { a.1 } else { 0 }.min(cw);
+                        let x1 = if r == b.0 { b.1 + 1 } else { cw }.min(cw);
+                        if x1 > x0 {
+                            buf.set_style(Rect::new(1 + x0 as u16, y, (x1 - x0) as u16, 1), Style::new().bg(rgb(0x264f78)));
+                        }
                     }
                 }
                 // scroll thumb
@@ -1368,6 +2292,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 for (k, r) in bot.iter().enumerate() {
                     let y = (view_h + k) as u16;
                     paint(buf, 0, y, conv_w, r);
+                    for &(x0, x1, act) in &r.hot {
+                        hits.push((y, x0, x1, act));
+                    }
                     if let Some(act) = r.act {
                         hits.push((y, 0, conv_w, act));
                     }
@@ -1381,13 +2308,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
             })?;
+            let frame_buf = (links_at != (conv_gen, start) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
-                let cur = completed.buffer.clone();
+                let cur = frame_buf.clone().unwrap();
                 if let Some(prev) = &prev_buf {
                     if prev.area == cur.area {
                         let d = prev.diff(&cur);
                         let mut ys: Vec<u16> = d.iter().map(|(_, y, _)| *y).collect();
-                        ys.dedup();
                         ys.sort();
                         ys.dedup();
                         audit.frames += 1;
@@ -1399,86 +2326,373 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 prev_buf = Some(cur);
             }
+            // links: mouse capture turns off the terminal's own link detection, so replies
+            // mark URLs and paths with OSC 8, rewritten only when the conversation moves
+            if links_at != (conv_gen, start) {
+                links_at = (conv_gen, start);
+                let fb = frame_buf.unwrap();
+                let be = term.backend_mut();
+                for (k, r) in vis.iter().enumerate().filter(|(_, r)| r.link) {
+                    let y = (top_pad + k) as u16;
+                    for (c0, w, url) in links_in(&plain(r), &f.cwd, &host) {
+                        let x0 = 1 + c0 as u16;
+                        let cells: Vec<(u16, u16, &ratatui::buffer::Cell)> = (x0..x0 + w as u16).filter(|&x| x < conv_w).map(|x| (x, y, &fb[(x, y)])).collect();
+                        write!(be, "\x1b]8;;{url}\x1b\\")?;
+                        ratatui::backend::Backend::draw(be, cells.into_iter())?;
+                        write!(be, "\x1b]8;;\x1b\\")?;
+                    }
+                }
+                be.flush()?;
+            }
+            if first_frame.is_none() {
+                first_frame = Some(t0.elapsed());
+                // kitty's flags query, then primary device attributes: a terminal that
+                // answers the second but not the first does not speak the protocol
+                let be = term.backend_mut();
+                be.write_all(b"\x1b[?u\x1b[c")?;
+                be.flush()?;
+                det_sent = Some(t0.elapsed());
+                panel_cache = None;
+                dirty = true;
+            }
         }
 
         // sleep until the next event, the next tick, or input; with no turn running and no
         // replay left there is no deadline at all
         let mut deadline: Option<Instant> = replaying.then_some(due);
-        if f.running {
-            deadline = Some(deadline.map_or(next_tick, |d| d.min(next_tick)));
-        }
-        if window.is_none() {
-            let w = v0 + Duration::from_secs_f64(a.warmup);
-            deadline = Some(deadline.map_or(w, |d| d.min(w)));
-        }
-        if let Some(x) = exit_at {
-            deadline = Some(deadline.map_or(x, |d| d.min(x)));
-            if Instant::now() >= x {
-                break;
+        let mut add = |d: Option<Instant>| {
+            if let Some(d) = d {
+                deadline = Some(deadline.map_or(d, |x| x.min(d)));
             }
+        };
+        add(f.running.then_some(next_tick));
+        add(window.is_none().then(|| v0 + Duration::from_secs_f64(a.warmup)));
+        add(rd.deadline());
+        add(ui.flash_at.map(|t| t + FLASH));
+        add((ui.drag_edge != 0).then_some(next_auto));
+        add(exit_at);
+        if dirty {
+            add(Some(Instant::now()));
         }
-        let timeout = deadline.map_or(Duration::from_secs(86_400), |d| d.saturating_duration_since(Instant::now()));
-        if !event::poll(timeout)? {
-            continue;
+        if exit_at.is_some_and(|x| Instant::now() >= x) {
+            break;
         }
-        match event::read()? {
-            Event::Key(key) if key.kind != KeyEventKind::Release => {
-                let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
-                match key.code {
-                    KeyCode::Char('c') if ctrl => break,
-                    KeyCode::Char('q') => break,
-                    KeyCode::Char('o') if ctrl => {
-                        v.all_open = !v.all_open;
-                        conv_cache = None;
+        let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
+        let (evs, resized) = rd.wait(timeout)?;
+        if resized {
+            dirty = true;
+            conv_cache = None;
+        }
+        let (conv_w, cols) = geom;
+        let (start, top_pad, shown, view_h) = lay;
+        let conv_len = conv_cache.as_ref().map_or(0, |c| c.2.len());
+        // a screen point in the conversation, as (row, cell), clamped to what is shown
+        let at = |x: u16, y: u16| -> Option<(usize, usize)> {
+            if conv_len == 0 || shown == 0 {
+                return None;
+            }
+            let r = start + (y as usize).saturating_sub(top_pad).min(shown - 1);
+            Some((r, (x as usize).saturating_sub(1)))
+        };
+        let ts = vnow;
+        for ev in evs {
+            dirty = true;
+            let mut click: Option<Act> = None;
+            match ev {
+                Ev::KittyFlags(fl) => {
+                    if det.is_none() {
+                        kitty_seen = Some(fl);
                     }
-                    KeyCode::End => scroll = 0,
-                    KeyCode::PageUp => scroll += 20,
-                    KeyCode::PageDown => scroll = scroll.saturating_sub(20),
-                    KeyCode::Up => scroll += 1,
-                    KeyCode::Down => scroll = scroll.saturating_sub(1),
-                    _ => continue,
+                    continue;
                 }
-                dirty = true;
-            }
-            Event::Mouse(m) => {
-                let over_panel = m.column >= geom.2 && geom.2 < term.size()?.width && panel_cache.is_some();
-                match m.kind {
-                    MouseEventKind::ScrollUp if over_panel => pscroll = pscroll.saturating_sub(3),
-                    MouseEventKind::ScrollDown if over_panel => pscroll += 3,
-                    MouseEventKind::ScrollUp => scroll += 3,
-                    MouseEventKind::ScrollDown => scroll = scroll.saturating_sub(3),
-                    MouseEventKind::Down(MouseButton::Left) => {
-                        let Some(&(_, _, _, act)) = hits.iter().find(|(y, x0, x1, _)| *y == m.row && m.column >= *x0 && m.column < *x1) else { continue };
-                        match act {
-                            Act::Group(ti, bi) => {
-                                if let Block::Group(g) = &mut f.turns[ti].blocks[bi] {
-                                    g.open = !g.open;
-                                }
-                                conv_cache = None;
+                Ev::Da1 => {
+                    if det.is_none() {
+                        det = Some((kitty_seen.is_some(), t0.elapsed()));
+                        if kitty_seen.is_some() {
+                            // disambiguate escape codes: Shift+Enter, Cmd+F and Esc become unambiguous
+                            let be = term.backend_mut();
+                            be.write_all(b"\x1b[>1u")?;
+                            be.flush()?;
+                            pushed = true;
+                        }
+                        panel_cache = None;
+                    }
+                    continue;
+                }
+                Ev::Key(k, m) => {
+                    let plain_key = !m.ctrl && !m.alt && !m.sup;
+                    if k == Key::Char('c') && m.ctrl {
+                        break 'main;
+                    }
+                    // the selection's highlight goes with any key; Esc does nothing else then
+                    if ui.sel.take().is_some_and(|s| s.moved) && k == Key::Esc {
+                        continue;
+                    }
+                    if k == Key::Char('f') && (m.ctrl || m.sup) {
+                        let s = ui.search.get_or_insert_with(Search::default);
+                        if !s.hits.is_empty() {
+                            s.i = (s.i + 1) % s.hits.len();
+                            s.jump = true;
+                        }
+                        continue;
+                    }
+                    if let Some(s) = ui.search.as_mut() {
+                        let n = s.hits.len().max(1);
+                        match k {
+                            Key::Esc => ui.search = None,
+                            Key::Enter if m.shift => s.i = (s.i + n - 1) % n,
+                            Key::Up => s.i = (s.i + n - 1) % n,
+                            Key::Enter | Key::Down => s.i = (s.i + 1) % n,
+                            Key::Backspace => {
+                                s.q.pop();
+                                s.i = 0;
                             }
-                            Act::Notice(i) => f.notices[i].2 = true,
-                            Act::End => scroll = 0,
+                            Key::Char(c) if plain_key => {
+                                s.q.push(c);
+                                s.i = 0;
+                            }
+                            _ => {}
+                        }
+                        if let Some(s) = ui.search.as_mut() {
+                            s.jump = true;
+                        }
+                        continue;
+                    }
+                    match k {
+                        Key::Char('o') if m.ctrl => {
+                            v.all_open = !v.all_open;
+                            continue;
+                        }
+                        Key::PageUp => {
+                            scroll += 20;
+                            continue;
+                        }
+                        Key::PageDown => {
+                            scroll = scroll.saturating_sub(20);
+                            continue;
+                        }
+                        Key::End => {
+                            scroll = 0;
+                            continue;
+                        }
+                        _ => {}
+                    }
+                    match ui.top(f).map(|(_, p)| matches!(p.what, Asking::Form(_))) {
+                        // the approval panel: typing goes to the feedback
+                        Some(false) => match k {
+                            Key::Esc => {
+                                let rid = ui.top(f).unwrap().1.rid.clone();
+                                ui.aside.insert(rid);
+                                ui.shown = 0;
+                            }
+                            Key::Up => ui.choice = (ui.choice + 2) % 3,
+                            Key::Down | Key::Tab => ui.choice = (ui.choice + 1) % 3,
+                            Key::Enter => {
+                                let c = ui.choice;
+                                approve(f, &mut ui, &mut cmds, ts, c)
+                            }
+                            Key::Backspace => {
+                                ui.feedback.pop();
+                            }
+                            Key::Char(c) if plain_key => {
+                                ui.feedback.push(c);
+                                ui.choice = 2;
+                            }
+                            _ => {}
+                        },
+                        // the question form: Esc means "Chat about this"
+                        Some(true) => {
+                            let Some((_, p)) = ui.top(f) else { continue };
+                            let Asking::Form(fields) = &p.what else { continue };
+                            let fields = fields.clone();
+                            let n = fields.len();
+                            let nopt = fields.get(ui.form.tab).map_or(0, |q| q["options"].as_array().map_or(0, Vec::len));
+                            let multi = fields.get(ui.form.tab).is_some_and(|q| q["multiSelect"].as_bool() == Some(true));
+                            let on_text = ui.form.tab < n && ui.form.cur == nopt;
+                                                        match k {
+                                Key::Esc => decline_form(f, &mut ui, &mut cmds, ts),
+                                Key::Left | Key::BackTab => {
+                                    ui.form.tab = (ui.form.tab + n) % (n + 1);
+                                    ui.form.cur = 0;
+                                }
+                                Key::Right | Key::Tab => {
+                                    ui.form.tab = (ui.form.tab + 1) % (n + 1);
+                                    ui.form.cur = 0;
+                                }
+                                Key::Up => ui.form.cur = ui.form.cur.saturating_sub(1),
+                                Key::Down => ui.form.cur = (ui.form.cur + 1).min(nopt),
+                                Key::Char(' ') if ui.form.tab < n && !on_text => form_choose(&mut ui, &fields),
+                                Key::Enter if ui.form.tab == n => submit_form(f, &mut ui, &mut cmds, ts),
+                                Key::Enter => {
+                                    if !on_text {
+                                        form_choose(&mut ui, &fields);
+                                    }
+                                    if on_text || !multi {
+                                        ui.form.tab += 1;
+                                        ui.form.cur = 0;
+                                    }
+                                }
+                                Key::Backspace if ui.form.tab == n => {
+                                    ui.form.note.pop();
+                                }
+                                Key::Backspace if on_text => {
+                                    ui.form.text[ui.form.tab].pop();
+                                }
+                                Key::Char(c) if plain_key => {
+                                    let d = c.to_digit(10).unwrap_or(0) as usize;
+                                    if ui.form.tab == n {
+                                        ui.form.note.push(c);
+                                    } else if !on_text && d >= 1 && d <= nopt + 1 {
+                                        ui.form.cur = d - 1;
+                                        if d <= nopt {
+                                            form_choose(&mut ui, &fields);
+                                        }
+                                    } else {
+                                        ui.form.cur = nopt;
+                                        ui.form.text[ui.form.tab].push(c);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        // the input box, and the steering queue above it
+                        None => match k {
+                            Key::Esc if ui.qsel.is_some() => queue_leave(&mut ui),
+                            Key::Esc if f.running => interrupt(f, &mut ui, &mut cmds, ts),
+                            Key::Up if m.alt => {
+                                let i = ui.qsel.map_or(f.queue.len().saturating_sub(1), |i| i.saturating_sub(1));
+                                queue_pick(f, &mut ui, i);
+                            }
+                            Key::Down if m.alt => match ui.qsel {
+                                Some(i) if i + 1 < f.queue.len() => queue_pick(f, &mut ui, i + 1),
+                                Some(_) => queue_leave(&mut ui),
+                                None => {}
+                            },
+                            // ⌥x, or the "≈" macOS types for it where Option is not Alt
+                            Key::Char('x') | Key::Char('≈') if ui.qsel.is_some() && (m.alt || k == Key::Char('≈')) => {
+                                let i = ui.qsel.unwrap();
+                                queue_drop(f, &mut ui, &mut cmds, ts, i);
+                            }
+                            Key::Enter => enter(f, &mut ui, &mut cmds, ts),
+                            Key::Backspace => {
+                                ui.input.pop();
+                            }
+                            Key::Up => scroll += 1,
+                            Key::Down => scroll = scroll.saturating_sub(1),
+                            Key::Char(c) if plain_key => ui.input.push(c),
+                            _ => {}
+                        },
+                    }
+                }
+                Ev::Mouse(kind, x, y, _) => {
+                    let over_panel = x >= conv_w && conv_w < cols && panel_cache.is_some();
+                    let in_conv = !over_panel && (y as usize) < view_h;
+                    match kind {
+                        Mouse::WheelUp if over_panel => pscroll = pscroll.saturating_sub(3),
+                        Mouse::WheelDown if over_panel => pscroll += 3,
+                        Mouse::WheelUp => scroll += 3,
+                        Mouse::WheelDown => scroll = scroll.saturating_sub(3),
+                        Mouse::Down if in_conv => {
+                            ui.sel = at(x, y).map(|p| Sel { a: p, b: p, moved: false, down: true });
+                        }
+                        Mouse::Down => {
+                            ui.sel = None;
+                            click = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| h.3);
+                        }
+                        Mouse::Drag => {
+                            if let Some(s) = ui.sel.as_mut().filter(|s| s.down) {
+                                if let Some(p) = at(x.min(conv_w.saturating_sub(2)), y) {
+                                    s.b = p;
+                                    s.moved |= s.b != s.a;
+                                }
+                                ui.drag_edge = if y == 0 { -1 } else if y as usize >= view_h.saturating_sub(1) { 1 } else { 0 };
+                            }
+                        }
+                        Mouse::Up => {
+                            ui.drag_edge = 0;
+                            if let Some(s) = ui.sel.as_mut().filter(|s| s.down) {
+                                s.down = false;
+                                if !s.moved {
+                                    // a click, not a drag: the row's target, if it has one
+                                    ui.sel = None;
+                                    click = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| h.3);
+                                } else if let Some((_, _, conv)) = &conv_cache {
+                                    let text = selection_text(conv, s.a, s.b);
+                                    if !text.is_empty() {
+                                        let how = copy(term.backend_mut(), &text);
+                                        say(&mut ui, format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()));
+                                    }
+                                }
+                            }
+                        }
+                        Mouse::Other => {}
+                    }
+                }
+            }
+            let Some(act) = click else { continue };
+            match act {
+                Act::Group(ti, bi) => {
+                    if let Block::Group(g) = &mut f.turns[ti].blocks[bi] {
+                        g.open = !g.open;
+                    }
+                    conv_cache = None;
+                }
+                Act::Notice(i) => f.notices[i].2 = true,
+                Act::End => scroll = 0,
+                Act::Choice(i) => {
+                    ui.choice = i;
+                    approve(f, &mut ui, &mut cmds, ts, i);
+                }
+                Act::NextPending => ui.shown += 1,
+                Act::Reopen => {
+                    ui.aside.clear();
+                    ui.shown = 0;
+                }
+                Act::Tab(k) => {
+                    ui.form.tab = k;
+                    ui.form.cur = 0;
+                }
+                Act::Opt(j) => {
+                    ui.form.cur = j;
+                    if let Some((_, p)) = ui.top(f) {
+                        if let Asking::Form(fields) = &p.what {
+                            let fields = fields.clone();
+                            form_choose(&mut ui, &fields);
                         }
                     }
-                    _ => continue,
                 }
-                dirty = true;
+                Act::Submit => submit_form(f, &mut ui, &mut cmds, ts),
+                Act::Decline => decline_form(f, &mut ui, &mut cmds, ts),
+                Act::QRow(i) => queue_pick(f, &mut ui, i),
+                Act::QDrop(i) => queue_drop(f, &mut ui, &mut cmds, ts, i),
             }
-            Event::Resize(..) => {
-                dirty = true;
-                conv_cache = None;
-            }
-            _ => {}
+        }
+        // anything a key or click changed may change the conversation's rows
+        if dirty {
+            conv_cache = None;
+            panel_cache = None;
         }
     }
+    if pushed {
+        term.backend_mut().write_all(b"\x1b[<u")?;
+    }
 
-    let Some((t0, b0, f0, fl0, r0)) = window else { return Ok(None) };
-    let secs = t0.elapsed().as_secs_f64();
+    use std::fmt::Write as _;
+    let mut s = String::new();
+    let ms = |d: Option<Duration>| d.map_or("none".into(), |d| format!("{:.2}", d.as_secs_f64() * 1000.0));
+    let _ = writeln!(s, "first_frame_ms\t{}", ms(first_frame));
+    let _ = writeln!(s, "query_sent_ms\t{}", ms(det_sent));
+    let _ = writeln!(s, "detected_ms\t{}", ms(det.map(|d| d.1)));
+    let _ = writeln!(s, "keys\t{}", match det {
+        Some((true, _)) => format!("kitty (flags {})", kitty_seen.unwrap_or(0)),
+        Some((false, _)) => "legacy".into(),
+        None => "no reply".into(),
+    });
+    let Some((t0w, b0, f0, fl0, r0)) = window else { return Ok(s) };
+    let secs = t0w.elapsed().as_secs_f64();
     let r1 = rusage();
     let bytes = BYTES.load(Relaxed) - b0;
     let fr = frames - f0;
-    let mut s = String::new();
-    use std::fmt::Write as _;
     let _ = writeln!(s, "mode\t{}", if a.reduced { "reduced-motion" } else { "glimmer" });
     let _ = writeln!(s, "running\t{}", f.running);
     let _ = writeln!(s, "seconds\t{secs:.2}");
@@ -1491,5 +2705,71 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     if a.audit {
         let _ = writeln!(s, "audit_frames\t{}\ncells_per_frame\t{:.2}\ncells_max\t{}\nrows_max\t{}\nrows_hist\t{:?}", audit.frames, audit.cells as f64 / audit.frames.max(1) as f64, audit.cells_max, audit.rows_max, audit.rows_hist);
     }
-    Ok(Some(s))
+    Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn fold_with(prompt: &str, reply: &str) -> Fold {
+        let mut f = Fold::default();
+        f.turns.push(Turn { prompt: prompt.into(), ts: 0, blocks: vec![Block::Text(reply.into())] });
+        f
+    }
+    fn find(rows: &[Row], s: &str) -> usize {
+        rows.iter().position(|r| plain(r).contains(s)).unwrap()
+    }
+
+    #[test]
+    fn a_copy_unwraps_lines_and_leaves_out_layout() {
+        let f = fold_with("short", "alpha beta gamma delta epsilon zeta\n\n- one two three four five six seven");
+        let rows = conversation(&f, 24, &View::default());
+        let (r0, r1) = (find(&rows, "alpha"), find(&rows, "seven"));
+        assert!(r1 > r0 + 2, "the text wrapped");
+        let got = selection_text(&rows, (r0, 0), (r1, 99));
+        assert_eq!(got, "alpha beta gamma delta epsilon zeta\n\n• one two three four five six seven");
+        // backwards, and starting mid-line
+        let c = plain(&rows[r0]).find("beta").unwrap();
+        assert_eq!(selection_text(&rows, (r1, 99), (r0, c)), "beta gamma delta epsilon zeta\n\n• one two three four five six seven");
+    }
+
+    #[test]
+    fn a_copy_of_the_bubble_is_the_prompt() {
+        let prompt = "Fix it properly: wait on the lock file's creation instead of sleeping, then sweep every test";
+        let f = fold_with(prompt, "ok");
+        let rows = conversation(&f, 40, &View::default());
+        let (r0, r1) = (find(&rows, "Fix it"), find(&rows, "every test"));
+        assert!(r1 > r0);
+        assert_eq!(selection_text(&rows, (r0, 0), (r1, 99)), prompt);
+    }
+
+    #[test]
+    fn base64() {
+        assert_eq!(b64(b"hello"), "aGVsbG8=");
+        assert_eq!(b64(b"hi"), "aGk=");
+        assert_eq!(b64(b"abc"), "YWJj");
+    }
+
+    #[test]
+    fn links_and_paths() {
+        let l = links_in("see crates/log/tests/lock.rs; and https://x.y/z.", "/w", "h");
+        assert_eq!(l.len(), 2);
+        assert_eq!(l[0], (4, 24, "file://h/w/crates/log/tests/lock.rs".into()));
+        assert_eq!(l[1].2, "https://x.y/z");
+        assert!(links_in("fix/wait-for-path and/or third_party/ //", "/w", "h").is_empty());
+    }
+
+    #[test]
+    fn left_cut_keeps_the_file_name() {
+        assert_eq!(left_cut("crates/doors/tests/serve_attach.rs", 24), "…/tests/serve_attach.rs");
+        assert_eq!(left_cut("a/b.rs", 24), "a/b.rs");
+    }
+
+    #[test]
+    fn search_finds_every_match() {
+        let f = fold_with("find wait", "wait_for_path, and Wait again");
+        let rows = conversation(&f, 60, &View::default());
+        assert_eq!(find_all(&rows, "wait").len(), 3);
+    }
 }
