@@ -139,7 +139,9 @@ per server. A person can type while servers connect.
 
 A server that misses its deadline, or fails to start, leaves its tools out for
 the whole session. The session log records which server and why, as the durable
-event `mcp_server_failed` (`docs/events.md`). A server marked
+event `mcp_server_failed` (`docs/events.md`). Its `error.message` is Fiber's own
+sentence and says what to do, such as how to log in, so a person and a headless
+caller read the same advice. A server marked
 `required` makes that failure fatal instead: the session does not start, and a
 headless run exits with code 1 and error code `mcp_required_server_failed`.
 

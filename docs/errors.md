@@ -8,8 +8,8 @@ The provider evidence is
 ## The shape
 
 Every failure is `error { code, message }`: on `tool_call_completed`,
-`job_completed`, `handoff_completed`, a failed model call, `turn_completed` and
-`fiber_exited`. A `notice` carries the same `code` and message.
+`job_completed`, `handoff_completed`, `mcp_server_failed`, a failed model call,
+`turn_completed` and `fiber_exited`. A `notice` carries the same `code` and message.
 
 - `code` is a stable label. A consumer switches on it and never parses the
   message. A label means the same thing wherever it appears: `timeout` is a
@@ -186,7 +186,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
 | `mcp_server_unapproved` | exit | a repository's MCP server is not approved |
-| `mcp_server_unavailable` | tool call | the server failed to start or died |
+| `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `no_match` | tool call | an edit block's text was not found in the file |
