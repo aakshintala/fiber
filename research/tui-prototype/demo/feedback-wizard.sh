@@ -273,7 +273,8 @@ else
   ask TERMINAL "What terminal are you using (its name is usually in its app menu)?"
 fi
 write_env TERMINAL "$TERMINAL"
-cols=$(tput cols 2>/dev/null || echo 0)
+cols=$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || true)
+cols=${cols:-0}
 write_env WINDOW_COLS "$cols"
 if [[ "$cols" -lt 118 ]]; then
   warn "Your window is $cols columns wide. Widen it to at least 118 columns before going on — the layout needs the room."

@@ -253,7 +253,8 @@ say "Run this wizard in Ghostty itself, not inside tmux."
 say "Building the release binary…"
 cargo build --release -q
 printf '  %s✓ built%s %s\n' "$GREEN" "$RESET" "$BIN"
-cols=$(tput cols)
+cols=$(stty size </dev/tty 2>/dev/null | awk '{print $2}' || true)
+cols=${cols:-0}
 if (( cols < 118 )); then
   warn "The window is $cols columns wide. Widen it to at least 118 before going on."
 else
