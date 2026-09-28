@@ -143,8 +143,14 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
         }
         let (cb, x, y) = (v[0], v[1].saturating_sub(1) as u16, v[2].saturating_sub(1) as u16);
         let m = Mods { shift: cb & 4 != 0, alt: cb & 8 != 0, ctrl: cb & 16 != 0, sup: false };
+        // wheel buttons 4 to 7: up, down, left, right. A trackpad's sideways drift
+        // arrives as 6 and 7 (66, 67), which are not vertical scrolling
         let kind = if cb & 64 != 0 {
-            if cb & 1 == 0 { Mouse::WheelUp } else { Mouse::WheelDown }
+            match cb & 3 {
+                0 => Mouse::WheelUp,
+                1 => Mouse::WheelDown,
+                _ => Mouse::Other,
+            }
         } else if cb & 3 != 0 {
             Mouse::Other
         } else if fin == b'm' {
@@ -225,6 +231,8 @@ extern "C" fn on_winch(_: libc::c_int) {
 
 pub struct Reader {
     buf: Vec<u8>,
+    /// the bytes the last `wait` read, for `--log-input`
+    pub raw: Vec<u8>,
     winch: i32,
     /// when the buffer last stopped on an incomplete sequence
     stuck: Option<Instant>,
@@ -244,7 +252,7 @@ impl Reader {
         }
         WINCH_FD.store(fds[1], Relaxed);
         unsafe { libc::signal(libc::SIGWINCH, on_winch as *const () as libc::sighandler_t) };
-        Ok(Reader { buf: vec![], winch: fds[0], stuck: None })
+        Ok(Reader { buf: vec![], raw: vec![], winch: fds[0], stuck: None })
     }
     /// The deadline by which an incomplete Esc sequence is flushed as the Esc key.
     pub fn deadline(&self) -> Option<Instant> {
@@ -260,6 +268,7 @@ impl Reader {
             return if e.kind() == io::ErrorKind::Interrupted { Ok((vec![], false)) } else { Err(e) };
         }
         let mut resized = false;
+        self.raw.clear();
         if p[1].revents & libc::POLLIN != 0 {
             let mut d = [0u8; 64];
             while unsafe { libc::read(self.winch, d.as_mut_ptr().cast(), d.len()) } > 0 {}
@@ -270,6 +279,7 @@ impl Reader {
             let n = unsafe { libc::read(0, d.as_mut_ptr().cast(), d.len()) };
             if n > 0 {
                 self.buf.extend_from_slice(&d[..n as usize]);
+                self.raw.extend_from_slice(&d[..n as usize]);
                 self.stuck = None;
             }
         }
@@ -317,6 +327,11 @@ mod tests {
         assert_eq!(one(b"\x1b[<0;5;3M"), Some(Ev::Mouse(Mouse::Down, 4, 2, Mods::default())));
         assert_eq!(one(b"\x1b[<32;6;3M"), Some(Ev::Mouse(Mouse::Drag, 5, 2, Mods::default())));
         assert_eq!(one(b"\x1b[<0;6;3m"), Some(Ev::Mouse(Mouse::Up, 5, 2, Mods::default())));
+        assert_eq!(one(b"\x1b[<64;5;3M"), Some(Ev::Mouse(Mouse::WheelUp, 4, 2, Mods::default())));
+        assert_eq!(one(b"\x1b[<65;5;3M"), Some(Ev::Mouse(Mouse::WheelDown, 4, 2, Mods::default())));
+        // sideways wheel, as a trackpad's drift sends it: not up and down
+        assert_eq!(one(b"\x1b[<66;5;3M"), Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default())));
+        assert_eq!(one(b"\x1b[<67;5;3M"), Some(Ev::Mouse(Mouse::Other, 4, 2, Mods::default())));
         assert_eq!(parse(b"\x1b"), None);
         assert_eq!(parse(b"\x1b[1;"), None);
         assert_eq!(one("é".as_bytes()), Some(Ev::Key(Key::Char('é'), Mods::default())));

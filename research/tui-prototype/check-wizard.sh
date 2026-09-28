@@ -185,7 +185,10 @@ finish() {
 # Replace the example below. Set TOTAL_STAGES to match the stages you write.
 # ──────────────────────────────────────────────────────────────────────────
 
-TOTAL_STAGES=12
+# --stage3 runs only the stage 3 checks, after the build.
+ONLY3=false
+[[ "${1:-}" == "--stage3" ]] && ONLY3=true
+if $ONLY3; then TOTAL_STAGES=6; else TOTAL_STAGES=17; fi
 
 cd "$(dirname "$0")"
 ENV_FILE=/tmp/fiber-tui-check-results.env
@@ -257,7 +260,10 @@ else
   note "The window is $cols columns wide."
 fi
 say "Results go to $ENV_FILE. Running again keeps them, and Enter keeps a saved note."
+awk '/"kind":"permission_requested"/{exit} {print}' "$FIXTURE" > "$QUEUE_FIXTURE"
 pause
+
+if ! $ONLY3; then
 
 stage "Look: stripes, edges, faint text, glimmer"
 say "The prototype opens with the whole session loaded and the last turn still running."
@@ -332,7 +338,6 @@ stage "⌥ keys, macos-option-as-alt off"
 if grep -q '^macos-option-as-alt' "$GHOSTTY_CONFIG" 2>/dev/null; then
   warn "Your config sets macos-option-as-alt already: $(grep '^macos-option-as-alt' "$GHOSTTY_CONFIG")"
 fi
-awk '/"kind":"permission_requested"/{exit} {print}' "$FIXTURE" > "$QUEUE_FIXTURE"
 say "This run uses Ghostty's default, where Option types characters rather than acting as Alt."
 note "This session stops before the approval, so nothing covers the input box."
 step "With the queued steering message showing above the input box, press ⌥↑. It should load into the input box."
@@ -367,6 +372,53 @@ step "Drag the window narrower than 118 columns. The panel gives way to two stat
 step "Drag it wide again. The panel returns, with no garbage left on screen."
 run_proto --static
 verdict RESIZE "Panel gave way and returned cleanly?"
+fi
+
+INPUT_LOG=/tmp/fiber-tui-input.log
+
+stage "Trackpad input log"
+say "This run records every byte Ghostty sends, so the scrolling fix can be checked against what a trackpad really sends."
+step "Scroll up a little on the trackpad, a few short movements, then quit with Ctrl+C."
+rm -f "$INPUT_LOG"
+FX="$QUEUE_FIXTURE" run_proto --static --log-input "$INPUT_LOG"
+if [[ -f "$INPUT_LOG" ]]; then
+  counts=$(grep -o '\[<6[4-7];' "$INPUT_LOG" | sort | uniq -c | awk '{printf "%s×%s ", $1, substr($2, 3, 2)}' || true)
+  say "Wheel buttons received (64 up, 65 down, 66 left, 67 right): ${counts:-none}"
+  write_env TRACKPAD_BUTTONS "${counts:-none}"
+  write_env TRACKPAD_LOG "$INPUT_LOG"
+else
+  warn "No log was written."
+fi
+
+stage "Trackpad and wheel scrolling"
+step "Small movements: scroll up and down a little at a time, slowly, then quickly. The view moves one way only, with your finger, and never bounces back."
+step "Wide movements and a flick: the view moves smoothly, and no text flickers, scrolling up or down."
+step "Mouse wheel, if you have one: one notch moves about three rows."
+FX="$QUEUE_FIXTURE" run_proto --static
+verdict TRACKPAD_SMALL "Small movements, no bounce?"
+verdict TRACKPAD_WIDE "Wide movements smooth, no flicker?"
+verdict WHEEL "Wheel notch about three rows?"
+
+stage "Summary line"
+say "This run replays the session in real time, about 30 seconds."
+step "Watch the tool group line of the turn that is running while its calls start and finish. It stays one row, and nothing above it moves."
+run_proto
+verdict SUMMARY_LINE "Group line stayed one row, nothing moved?"
+
+stage "Search box and jump overlay"
+step "Type some text in the input box, then press Ctrl+F and type lock. The box floats over the conversation's top-right corner with even ▄ ▀ edges, shows \"⌕ lock\" and \"1 of N\", and the input box keeps your text."
+step "Press Esc, then scroll up. A pill, \" ↓ N lines below · End \", sits centred at the bottom of the conversation. Click it: the view jumps to the end and the pill goes. Nothing appears in the input box."
+FX="$QUEUE_FIXTURE" run_proto --static
+verdict SEARCH_BOX "Search box top-right, clean edges, draft kept?"
+verdict JUMP_OVERLAY "Pill centred at the bottom, click jumps?"
+
+stage "Context view"
+step "Scroll up a little and note the top line. Type /context and press Enter. The breakdown replaces the conversation; the panel and the input box stay."
+step "Press Esc. The conversation is back at exactly the same place."
+step "Click the Session card's context bar in the panel. The view opens again; click its header to go back."
+FX="$QUEUE_FIXTURE" run_proto --static
+verdict CONTEXT_VIEW "View swapped in, Esc returned to the same place?"
+verdict CONTEXT_CLICK "Clicking the context bar opened it?"
 
 restore_config
 finish

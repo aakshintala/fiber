@@ -81,6 +81,10 @@ enum Act {
     Decline,
     QRow(usize),
     QDrop(usize),
+    /// opens the context breakdown
+    Context,
+    /// leaves a swapped view
+    Back,
 }
 
 #[derive(Clone, Default)]
@@ -498,6 +502,11 @@ struct Fold {
     running: bool,
     turn_start: i64,
     last_ts: i64,
+    /// characters of what the preamble and opening message put in context, for the context view
+    sys_chars: usize,
+    tooldef_chars: usize,
+    instr_chars: usize,
+    skills_chars: usize,
 }
 
 fn heading(text: &str, last: bool) -> Option<String> {
@@ -649,6 +658,8 @@ impl Fold {
                 let g = &p["environment"]["git"];
                 self.branch = g["branch"].as_str().unwrap_or("").into();
                 self.dirty = g["dirty"].as_bool().unwrap_or(false);
+                self.instr_chars = p["instruction_files"].as_array().into_iter().flatten().map(|i| i["content"].as_str().map_or(0, str::len)).sum();
+                self.skills_chars = p["skills"].as_array().filter(|a| !a.is_empty()).map_or(0, |a| Value::from(a.clone()).to_string().len());
             }
             "preamble_built" | "model_changed" => {
                 let src = if kind == "model_changed" { &p["after"] } else { p };
@@ -657,6 +668,11 @@ impl Fold {
                 self.thinking = src["thinking"].as_str().unwrap_or("").into();
                 if let Some(t) = p["tools"].as_array() {
                     self.tools = t.len();
+                    // deferred tools are not in context until loaded
+                    self.tooldef_chars = t.iter().filter(|d| d["deferred"] != true).map(|d| d.to_string().len()).sum();
+                }
+                if let Some(sp) = p["system_prompt"].as_str() {
+                    self.sys_chars = sp.len();
                 }
             }
             "mode_changed" => self.mode = p["after"].as_str().unwrap_or("").into(),
@@ -1012,7 +1028,6 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     let first = start.min().unwrap_or(0);
     let mut head = vec![sp("● ", dim())];
     head.extend(summary(g));
-    head.push(sp(format!(" · {}", dur(g.last_ts - first)), dim()));
     if !running.is_empty() {
         head.push(sp(format!(" · {}", running.join(", ")), dim()));
     }
@@ -1060,8 +1075,10 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     // a search match inside the ledger opens it, as does a call waiting on the person
     let hit = !v.q.is_empty() && ledger.iter().any(|r| plain(r).to_lowercase().contains(&v.q));
     let open = v.all_open || g.open || hit || v.force == Some(gid);
-    head.push(sp(if open { "  ▾" } else { "  ▸" }, dim()));
-    let mut out: Vec<Row> = wrap_rows(head, w, vec![], vec![sp("  ", Style::new())]).into_iter().map(|r| Row { act: Some(gid), ..r }).collect();
+    // one row whatever runs: wrapping to two rows and back as calls start and finish
+    // moved everything around it, so what is in flight is cut to fit; the duration and toggle stay right
+    head.extend([t(), sp(format!("{} {}", dur(g.last_ts - first), if open { "▾" } else { "▸" }), dim())]);
+    let mut out = vec![Row { spans: fit(&head, w), act: Some(gid), ..Default::default() }];
     if open {
         out.extend(ledger);
     }
@@ -1267,11 +1284,16 @@ fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>)
 fn panel_rows(f: &Fold, now: i64, keys: &str) -> Vec<Row> {
     let w = PANEL as usize - 2;
     let mut out = vec![];
-    for card in cards(f, now, keys).0 {
+    for (ci, card) in cards(f, now, keys).0.into_iter().enumerate() {
         let mut rows = vec![row([vec![sp("  ", Style::new())], fit(&card.title, w - 3), vec![sp(" ", Style::new())]].concat())];
         let body: Vec<_> = if card.cap > 0 { card.lines.into_iter().take(card.cap).collect() } else { card.lines };
-        for l in body {
-            rows.push(row([vec![sp("  ", Style::new())], fit(&l, w - 3), vec![sp(" ", Style::new())]].concat()));
+        for (li, l) in body.into_iter().enumerate() {
+            let mut r = row([vec![sp("  ", Style::new())], fit(&l, w - 3), vec![sp(" ", Style::new())]].concat());
+            // the Session card's context bar and the line under it open the context breakdown
+            if ci == 0 && (li == 2 || li == 3) {
+                r.act = Some(Act::Context);
+            }
+            rows.push(r);
         }
         out.extend(slab(rows, BC, Some(BP), w));
         out.push(Row::default());
@@ -1280,7 +1302,8 @@ fn panel_rows(f: &Fold, now: i64, keys: &str) -> Vec<Row> {
 }
 fn status_rows(f: &Fold, now: i64, w: usize, keys: &str) -> Vec<Row> {
     let mut rows: Vec<Vec<Span<'static>>> = vec![vec![sp(" ", Style::new())]];
-    for it in cards(f, now, keys).1 {
+    let mut ctx_at: Option<(usize, u16, u16)> = None;
+    for (k, it) in cards(f, now, keys).1.into_iter().enumerate() {
         let cur = rows.last().unwrap();
         if cur.len() > 1 && width(cur) + 5 + width(&it) > w - 1 {
             if rows.len() == 2 {
@@ -1292,9 +1315,18 @@ fn status_rows(f: &Fold, now: i64, w: usize, keys: &str) -> Vec<Row> {
         if cur.len() > 1 {
             cur.push(sp("  │  ", dim()));
         }
+        if k == 3 {
+            // the context summary opens the context breakdown
+            let x0 = width(cur) as u16;
+            ctx_at = Some((rows.len() - 1, x0, x0 + width(&it) as u16));
+        }
+        let cur = rows.last_mut().unwrap();
         cur.extend(it);
     }
-    rows.into_iter().map(|s| Row { spans: s, bg: Some(BP), ..Default::default() }).collect()
+    rows.into_iter()
+        .enumerate()
+        .map(|(i, s)| Row { spans: s, bg: Some(BP), hot: ctx_at.filter(|c| c.0 == i).map(|c| (c.1, c.2, Act::Context)).into_iter().collect(), ..Default::default() })
+        .collect()
 }
 
 // ============================================================ bottom of the conversation column
@@ -1355,6 +1387,10 @@ struct Ui {
     flash_at: Option<Instant>,
     keys: String,
     cmd_n: u32,
+    /// the context breakdown is swapped into the conversation area
+    ctx_view: bool,
+    /// the view's own scroll, rows from its top
+    vscroll: usize,
 }
 impl Ui {
     /// The request on top: the first in arrival order not put aside, or the one clicked through to.
@@ -1363,7 +1399,7 @@ impl Ui {
         (!open.is_empty()).then(|| open[self.shown % open.len()])
     }
     fn nothing_open(&self, f: &Fold) -> bool {
-        self.search.is_none() && self.qsel.is_none() && self.top(f).is_none()
+        self.search.is_none() && self.qsel.is_none() && !self.ctx_view && self.top(f).is_none()
     }
     /// Starts a fresh form state when the form on top changes.
     fn sync_form(&mut self, f: &Fold) {
@@ -1393,7 +1429,7 @@ fn rule_prefix(tool: &str, arg: &str) -> String {
     if tool == "shell" { arg.split_whitespace().take(2).collect::<Vec<_>>().join(" ") } else { arg.to_string() }
 }
 
-fn input_box(ui: &Ui, below: usize, w: usize) -> Vec<Row> {
+fn input_box(ui: &Ui, w: usize) -> Vec<Row> {
     let editing = ui.qsel.is_some();
     let room = w.saturating_sub(40);
     let shown: String = if ui.input.width() > room {
@@ -1402,25 +1438,114 @@ fn input_box(ui: &Ui, below: usize, w: usize) -> Vec<Row> {
     } else {
         ui.input.clone()
     };
-    let mut line = vec![sp("▌", fg(if editing { ORANGE } else { BLUE })), sp(" ", Style::new()), sp("› ", fg(CYAN)), sp(shown, Style::new()), sp("█", dim())];
+    // while search is open typing goes to the search box, so the draft shows without a cursor
+    let cursor = if ui.search.is_none() { "█" } else { "" };
+    let mut line = vec![sp("▌", fg(if editing { ORANGE } else { BLUE })), sp(" ", Style::new()), sp("› ", fg(CYAN)), sp(shown, Style::new()), sp(cursor, dim())];
     if editing {
         line.extend([t(), sp("editing a queued message · enter amends · ⌥x drops · esc stops ", dim())]);
-    } else if below > 0 {
-        line.extend([t(), sp(format!("↓ {below} lines below · End"), fg(ORANGE)), sp(" ", Style::new())]);
     }
-    slab(vec![Row { spans: line, act: (below > 0 && !editing).then_some(Act::End), ..Default::default() }], BI, None, w)
+    slab(vec![row(line)], BI, None, w)
 }
 
-fn search_bar(s: &Search, w: usize) -> Vec<Row> {
+/// The search box's width, floating over the conversation's top-right corner.
+const SBOX_W: usize = 40;
+fn search_box(s: &Search) -> Vec<Span<'static>> {
     let status = if s.q.is_empty() {
-        sp("type to search the whole session", dim())
+        sp("type to search", dim())
     } else if s.hits.is_empty() {
         sp("no matches", dim())
     } else {
         sp(format!("{} of {}", s.i + 1, s.hits.len()), Style::new())
     };
-    let line = vec![sp("▌", fg(ORANGE)), sp(" ", Style::new()), sp("⌕ ", fg(ORANGE)), sp(s.q.clone(), bold()), sp("█", dim()), t(), status, sp("  enter next · shift+enter or ↑ previous · esc closes ", dim())];
-    slab(vec![row(line)], BI, None, w)
+    vec![sp(" ⌕ ", fg(ORANGE)), sp(s.q.clone(), bold()), sp("█", dim()), t(), status, sp(" ", Style::new())]
+}
+
+/// A swapped view's header row: its name, and Esc back to the conversation.
+fn view_header(name: &str, cmd: &str) -> Row {
+    Row { spans: vec![sp(" ", Style::new()), sp(name.to_string(), bold()), sp(format!("  {cmd}"), dim()), t(), sp("esc returns ", dim())], bg: Some(BI), act: Some(Act::Back), ..Default::default() }
+}
+
+/// The context breakdown: one bar of context by category against the handoff point, then
+/// the largest tool results. The stream has each part's text but no token count per part,
+/// so each part is estimated at 4 characters a token (see README, findings).
+fn context_view(f: &Fold, w: usize) -> Vec<Row> {
+    let tok = |chars: usize| chars as u64 / 4;
+    let (mut you, mut replies, mut reasoning, mut calls, mut results) = (0, 0, 0, 0, 0);
+    let mut largest: Vec<(String, u64)> = vec![];
+    for t in &f.turns {
+        you += t.prompt.len();
+        for b in &t.blocks {
+            match b {
+                Block::Text(x) => replies += x.len(),
+                Block::Steer(x, _) => you += x.len(),
+                Block::Group(g) => {
+                    for it in &g.items {
+                        match it {
+                            Item::R(r) => reasoning += r.text.len(),
+                            Item::C(c) => {
+                                calls += c.name.len() + c.args.to_string().len();
+                                results += c.content.len();
+                                largest.push((format!("{} {}", kind_of(c), target(c)), tok(c.content.len())));
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    let mut cats: Vec<(&str, u64, Color)> = vec![
+        ("system prompt", tok(f.sys_chars), BLUE),
+        ("tool definitions", tok(f.tooldef_chars), CYAN),
+        ("instruction files", tok(f.instr_chars), PURPLE),
+        ("skills listing", tok(f.skills_chars), rgb(0xc9a8ff)),
+        ("your messages", tok(you), rgb(0xd4d4d4)),
+        ("replies", tok(replies), rgb(0x4a7fd0)),
+        ("reasoning", tok(reasoning), rgb(0x808080)),
+        ("tool calls", tok(calls), ORANGE),
+        ("tool results", tok(results), RED),
+    ];
+    let known: u64 = cats.iter().map(|c| c.1).sum();
+    // usage reports the whole context; what the text above does not account for
+    cats.push(("not attributed", f.ctx.saturating_sub(known), rgb(0x5a5a6a)));
+    let total = f.ctx.max(known);
+    let bw = w.saturating_sub(6);
+    let mut bar = vec![sp("  ", Style::new())];
+    let mut used = 0;
+    for &(_, n, c) in &cats {
+        if n == 0 || used >= bw {
+            continue;
+        }
+        let cells = ((n as f64 / HANDOFF_AT as f64 * bw as f64).round() as usize).max(1).min(bw - used);
+        bar.push(sp("█".repeat(cells), fg(c)));
+        used += cells;
+    }
+    bar.push(sp("▁".repeat(bw - used), fg(SEL)));
+    bar.push(sp("│", fg(ORANGE)));
+    let hk = format!("handoff {}", k(HANDOFF_AT));
+    let mut out = vec![
+        Row::default(),
+        row(vec![sp("  ", Style::new()), sp(format!("{} tokens", k(total)), bold()), sp(format!(" · {}% of the {}M window · automatic handoff at {}", total * 100 / WINDOW, WINDOW / 1_000_000, k(HANDOFF_AT)), dim())]),
+        Row::default(),
+        row(bar),
+        row(vec![sp(" ".repeat((bw + 3).saturating_sub(hk.width())), Style::new()), sp(hk, fg(ORANGE))]),
+        Row::default(),
+    ];
+    for &(name, n, c) in &cats {
+        let est = if name == "not attributed" { " " } else { "~" };
+        out.push(row(vec![sp("  ■ ", fg(c)), sp(format!("{name:<20}"), Style::new()), sp(format!("{est}{:>7}", k(n)), Style::new()), sp(format!("{:>6}", format!("{}%", n * 100 / total.max(1))), dim())]));
+    }
+    out.extend([Row::default(), row(vec![sp("  Largest tool results", bold())])]);
+    largest.sort_by_key(|x| std::cmp::Reverse(x.1));
+    let tw = w.saturating_sub(14).min(60);
+    for (what, n) in largest.into_iter().take(5) {
+        out.push(row([vec![sp("  ", Style::new())], fit(&[sp(what, dim())], tw), vec![sp(format!("~{:>7}", k(n)), Style::new())]].concat()));
+    }
+    out.push(Row::default());
+    for l in ["~ is an estimate at 4 characters a token from the text in the event stream; usage reports only the total.", "Deferred tools are not counted until loaded."] {
+        out.extend(wrap_rows(vec![sp(l, dim())], w, vec![sp("  ", Style::new())], vec![sp("  ", Style::new())]));
+    }
+    out
 }
 
 fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row> {
@@ -1569,7 +1694,7 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
     slab(rows, BC, None, w)
 }
 
-fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, below: usize, narrow: bool, ui: &Ui) -> Vec<Row> {
+fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, narrow: bool, ui: &Ui) -> Vec<Row> {
     let mut out = vec![];
     let aside = f.pending.iter().filter(|p| ui.aside.contains(&p.rid)).count();
     if aside > 0 {
@@ -1605,13 +1730,13 @@ fn bottom(f: &Fold, w: usize, tick: u64, now: i64, v: &View, below: usize, narro
         }
         out.push(row(vec![sp("      ⌥↑ edit · ⌥↓ next · ⌥x drop · click a row to edit, ✕ to drop", dim())]));
     }
-    let mut ib = match (&ui.search, ui.top(f)) {
-        (Some(s), _) => search_bar(s, w),
-        (None, Some((k, p))) => match &p.what {
+    // search floats over the conversation, so the input box keeps its place and its draft
+    let mut ib = match ui.top(f) {
+        Some((k, p)) => match &p.what {
             Asking::Approval { .. } => approval_panel(f, ui, k, p, w),
             Asking::Form(fields) => form_panel(f, ui, k, p, fields, w),
         },
-        (None, None) => input_box(ui, below, w),
+        None => input_box(ui, w),
     };
     out.append(&mut ib);
     if narrow {
@@ -1961,6 +2086,16 @@ fn enter(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     }
 }
 
+// ============================================================ scrolling
+/// Moves the conversation `d` rows (negative is up). `top` is the first row shown while
+/// scrolled up, or `None` while following the output; reaching the end follows again.
+/// Anchoring the top row, not the distance from the end, keeps the view still while
+/// rows are added or removed below it.
+fn scroll_by(top: Option<usize>, max_top: usize, d: isize) -> Option<usize> {
+    let t = top.unwrap_or(max_top) as isize + d;
+    (t < max_top as isize).then(|| t.max(0) as usize)
+}
+
 // ============================================================ painting
 fn paint(buf: &mut Buffer, x: u16, y: u16, w: u16, r: &Row) {
     if let Some(bg) = r.bg {
@@ -2025,9 +2160,11 @@ struct Args {
     warmup: f64,
     audit: bool,
     commands: Option<String>,
+    log_input: Option<String>,
+    wheel: usize,
 }
 fn args() -> Args {
-    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false, commands: None };
+    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false, commands: None, log_input: None, wheel: 1 };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -2039,8 +2176,10 @@ fn args() -> Args {
             "--warmup" => a.warmup = it.next().and_then(|v| v.parse().ok()).expect("--warmup S"),
             "--diff-audit" => a.audit = true,
             "--commands" => a.commands = it.next(),
+            "--log-input" => a.log_input = it.next(),
+            "--wheel-lines" => a.wheel = it.next().and_then(|v| v.parse().ok()).expect("--wheel-lines N"),
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2106,7 +2245,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     }
     let mut tick: u64 = 0;
     let mut next_tick = Instant::now();
-    let mut scroll: usize = 0; // lines above the bottom
+    // the first conversation row shown while scrolled up; None follows the output
+    let mut top: Option<usize> = None;
     let mut pscroll: usize = 0;
     type Key3 = (bool, Option<Act>, String);
     let mut conv_cache: Option<(usize, Key3, Vec<Row>)> = None;
@@ -2115,8 +2255,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut hits: Vec<(u16, u16, u16, Act)> = vec![];
     let mut dirty = true;
     let mut geom = (0u16, 0u16); // conversation column width, screen width
-    // where the conversation's rows sit: first row shown, blank rows above it, rows shown, height
-    let mut lay = (0usize, 0usize, 0usize, 0usize);
+    // where the conversation's rows sit: first row shown, blank rows above it, rows shown,
+    // height, and the first row shown at the end
+    let mut lay = (0usize, 0usize, 0usize, 0usize, 0usize);
+    // frames are at most one per FRAME_GAP, so a burst of wheel events is one frame
+    const FRAME_GAP: Duration = Duration::from_millis(16);
+    let mut last_frame = Instant::now() - FRAME_GAP;
+    let mut log = match &a.log_input {
+        Some(p) => Some(std::fs::File::create(p)?),
+        None => None,
+    };
     let exit_at = a.exit_after.map(|s| v0 + Duration::from_secs_f64(s));
     let mut window: Option<(Instant, u64, u64, u64, (f64, i64, i64, u64, u64))> = None;
     let mut audit = Audit::default();
@@ -2136,7 +2284,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut kitty_seen: Option<u32> = None;
     let mut det: Option<(bool, Duration)> = None;
     let mut pushed = false;
-    let mut links_at = (u64::MAX, usize::MAX);
+    let mut links_at = (u64::MAX, usize::MAX, false, false);
     let mut next_auto = Instant::now();
     const FLASH: Duration = Duration::from_secs(6);
 
@@ -2174,13 +2322,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         // dragging past the top or bottom edge keeps scrolling while the button is held
         if ui.drag_edge != 0 && now_i >= next_auto {
             next_auto = now_i + Duration::from_millis(40);
-            let (start, _, shown, _) = lay;
+            let (start, _, shown, _, max_top) = lay;
             if let Some(s) = ui.sel.as_mut() {
                 if ui.drag_edge < 0 && start > 0 {
-                    scroll += 1;
+                    top = Some(start - 1);
                     s.b.0 = start - 1;
-                } else if ui.drag_edge > 0 && scroll > 0 {
-                    scroll -= 1;
+                } else if ui.drag_edge > 0 && start < max_top {
+                    top = scroll_by(Some(start), max_top, 1);
                     s.b.0 = start + shown;
                 }
                 s.moved = true;
@@ -2193,9 +2341,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             dirty = true;
         }
 
-        if dirty {
+        if dirty && now_i >= last_frame + FRAME_GAP {
             dirty = false;
+            last_frame = now_i;
             frames += 1;
+            let (b0, fl0) = (BYTES.load(Relaxed), FLUSHES.load(Relaxed));
             ui.sync_form(f);
             ui.keys = match (det, det_sent) {
                 (Some((true, d)), _) => format!("kitty · {} ms", d.as_millis()),
@@ -2213,12 +2363,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             v.q = ui.search.as_ref().map(|s| s.q.to_lowercase()).filter(|q| q.chars().count() >= 3).unwrap_or_default();
             let key: Key3 = (v.all_open, v.force, v.q.clone());
             if conv_cache.as_ref().is_none_or(|(w, k, _)| *w != cw || *k != key) {
-                let old = conv_cache.as_ref().map_or(0, |(_, _, r)| r.len());
-                let rows_new = conversation(f, cw, &v);
-                if scroll > 0 && old > 0 {
-                    scroll += rows_new.len().saturating_sub(old); // paused: keep the view where it is
-                }
-                conv_cache = Some((cw, key, rows_new));
+                conv_cache = Some((cw, key, conversation(f, cw, &v)));
                 conv_gen += 1;
             }
             if panel_cache.is_none() && !narrow {
@@ -2229,32 +2374,49 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 s.hits = find_all(conv, &s.q.to_lowercase());
                 s.i = s.i.min(s.hits.len().saturating_sub(1));
             }
-            let mut bot = bottom(f, conv_w as usize, tick, vnow, &v, scroll, narrow, &ui);
+            let bot = bottom(f, conv_w as usize, tick, vnow, &v, narrow, &ui);
             let view_h = (rows as usize).saturating_sub(bot.len());
-            let max_scroll = conv.len().saturating_sub(view_h);
+            let max_top = conv.len().saturating_sub(view_h);
             if let Some(s) = ui.search.as_mut().filter(|s| s.jump) {
                 s.jump = false;
                 if let Some(&(r, _, _)) = s.hits.get(s.i) {
                     // centre the current match
-                    scroll = max_scroll.saturating_sub(r.saturating_sub(view_h / 2));
+                    top = Some(r.saturating_sub(view_h / 2));
                 }
             }
-            if scroll > max_scroll {
-                scroll = max_scroll;
-            }
-            bot = bottom(f, conv_w as usize, tick, vnow, &v, scroll, narrow, &ui);
-            let start = conv.len().saturating_sub(view_h + scroll);
+            top = top.filter(|&t| t < max_top);
+            let start = top.unwrap_or(max_top);
             let vis = &conv[start..(start + view_h).min(conv.len())];
             let top_pad = view_h - vis.len();
-            lay = (start, top_pad, vis.len(), view_h);
+            // a swapped view: its header, then its rows from its own scroll
+            let vrows: Option<Vec<Row>> = ui.ctx_view.then(|| {
+                let body = context_view(f, cw);
+                ui.vscroll = ui.vscroll.min(body.len().saturating_sub(view_h.saturating_sub(1)));
+                let mut r = vec![view_header("Context", "/context")];
+                r.extend(body.into_iter().skip(ui.vscroll).take(view_h.saturating_sub(1)));
+                r
+            });
+            lay = (start, top_pad, if vrows.is_some() { 0 } else { vis.len() }, view_h, max_top);
             hits.clear();
             geom = (conv_w, cols);
             let panel = panel_cache.as_ref();
             let (search, sel) = (ui.search.as_ref(), ui.sel);
+            // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
+            // all written, however many writes and flushes it takes
+            term.backend_mut().write_all(b"\x1b[?2026h")?;
             let completed = term.draw(|fr| {
                 let buf = fr.buffer_mut();
+                if let Some(vr) = &vrows {
+                    for (k, r) in vr.iter().enumerate() {
+                        let (x, w) = if k == 0 { (0, conv_w) } else { (1, cw as u16) };
+                        paint(buf, x, k as u16, w, r);
+                        if let Some(act) = r.act {
+                            hits.push((k as u16, 0, conv_w, act));
+                        }
+                    }
+                }
                 // conversation
-                for (k, r) in vis.iter().enumerate() {
+                for (k, r) in vis.iter().enumerate().filter(|_| vrows.is_none()) {
                     let y = (top_pad + k) as u16;
                     paint(buf, 1, y, cw as u16, r);
                     if let Some(act) = r.act {
@@ -2263,7 +2425,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
                 let ys = |r: usize| (r >= start && r < start + vis.len()).then(|| (top_pad + r - start) as u16);
                 // every search match marked, the current one brighter
-                if let Some(s) = search {
+                if let Some(s) = search.filter(|_| vrows.is_none()) {
                     for (i, &(r, c, w)) in s.hits.iter().enumerate() {
                         let Some(y) = ys(r) else { continue };
                         let st = if i == s.i { Style::new().bg(ORANGE).fg(Color::Black) } else { Style::new().bg(rgb(0x5a4a1a)).fg(Color::White) };
@@ -2282,12 +2444,47 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
                 // scroll thumb
-                if conv.len() > view_h {
+                if conv.len() > view_h && vrows.is_none() {
                     let th = (view_h * view_h / conv.len()).max(1);
                     let tt = (view_h - th) * start / (conv.len() - view_h);
                     for y in tt..tt + th {
                         buf.set_string(conv_w - 1, y as u16, "┃", fg(rgb(0x808080)));
                     }
+                }
+                // scrolled up: a pill centred at the bottom of the conversation jumps to the end
+                if start < max_top && vrows.is_none() && view_h > 0 {
+                    let label = format!(" ↓ {} lines below · End ", max_top - start);
+                    let pw = label.width() as u16 + 2;
+                    let (x0, y) = (1 + (cw as u16).saturating_sub(pw) / 2, view_h as u16 - 1);
+                    for x in x0..x0 + pw {
+                        let under = buf[(x, y)].bg;
+                        buf[(x, y)].reset();
+                        buf[(x, y)].set_bg(under);
+                    }
+                    // half blocks in the pill's tint round its ends
+                    buf.set_string(x0, y, "▐", fg(SEL));
+                    buf.set_string(x0 + 1, y, &label, fg(ORANGE).bg(SEL));
+                    buf.set_string(x0 + pw - 1, y, "▌", fg(SEL));
+                    hits.insert(0, (y, x0, x0 + pw, Act::End));
+                }
+                // search floats over the conversation's top-right corner, as an editor's find box does
+                if let Some(s) = search.filter(|_| vrows.is_none() && view_h >= 3) {
+                    let bw = SBOX_W.min(cw.saturating_sub(2));
+                    let x0 = 1 + (cw - bw) as u16;
+                    for x in x0..x0 + bw as u16 {
+                        for (y, ch) in [(0, "▄"), (1, " "), (2, "▀")] {
+                            let under = buf[(x, y)].bg;
+                            let c = &mut buf[(x, y)];
+                            c.reset();
+                            c.set_symbol(ch);
+                            if y == 1 {
+                                c.set_bg(BI);
+                            } else {
+                                c.set_fg(BI).set_bg(under);
+                            }
+                        }
+                    }
+                    buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
                 }
                 for (k, r) in bot.iter().enumerate() {
                     let y = (view_h + k) as u16;
@@ -2305,10 +2502,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     let ps = pscroll.min(p.len().saturating_sub(rows as usize));
                     for (k, r) in p.iter().skip(ps).take(rows as usize).enumerate() {
                         paint(buf, conv_w + 1, k as u16, PANEL - 2, r);
+                        if let Some(act) = r.act {
+                            hits.push((k as u16, conv_w, cols, act));
+                        }
                     }
                 }
             })?;
-            let frame_buf = (links_at != (conv_gen, start) || a.audit).then(|| completed.buffer.clone());
+            let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
                 let cur = frame_buf.clone().unwrap();
                 if let Some(prev) = &prev_buf {
@@ -2328,11 +2528,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
             // links: mouse capture turns off the terminal's own link detection, so replies
             // mark URLs and paths with OSC 8, rewritten only when the conversation moves
-            if links_at != (conv_gen, start) {
-                links_at = (conv_gen, start);
+            if links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) {
+                links_at = (conv_gen, start, ui.ctx_view, ui.search.is_some());
                 let fb = frame_buf.unwrap();
                 let be = term.backend_mut();
-                for (k, r) in vis.iter().enumerate().filter(|(_, r)| r.link) {
+                for (k, r) in vis.iter().enumerate().filter(|(_, r)| r.link && vrows.is_none()) {
                     let y = (top_pad + k) as u16;
                     for (c0, w, url) in links_in(&plain(r), &f.cwd, &host) {
                         let x0 = 1 + c0 as u16;
@@ -2342,7 +2542,19 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         write!(be, "\x1b]8;;\x1b\\")?;
                     }
                 }
-                be.flush()?;
+            }
+            let be = term.backend_mut();
+            be.write_all(b"\x1b[?2026l")?;
+            be.flush()?;
+            if let Some(l) = log.as_mut() {
+                let _ = writeln!(
+                    l,
+                    "{:>9.1} frame  top {top:?} start {start} end {max_top} rows {} bytes {} flushes {}",
+                    v0.elapsed().as_secs_f64() * 1000.0,
+                    conv.len(),
+                    BYTES.load(Relaxed) - b0,
+                    FLUSHES.load(Relaxed) - fl0
+                );
             }
             if first_frame.is_none() {
                 first_frame = Some(t0.elapsed());
@@ -2372,7 +2584,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         add((ui.drag_edge != 0).then_some(next_auto));
         add(exit_at);
         if dirty {
-            add(Some(Instant::now()));
+            add(Some(last_frame + FRAME_GAP));
         }
         if exit_at.is_some_and(|x| Instant::now() >= x) {
             break;
@@ -2383,8 +2595,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             dirty = true;
             conv_cache = None;
         }
+        if let Some(l) = log.as_mut().filter(|_| !rd.raw.is_empty()) {
+            let _ = writeln!(l, "{:>9.1} read   {:?}", v0.elapsed().as_secs_f64() * 1000.0, String::from_utf8_lossy(&rd.raw));
+            for e in &evs {
+                let _ = writeln!(l, "{:>9} event  {e:?}", "");
+            }
+        }
         let (conv_w, cols) = geom;
-        let (start, top_pad, shown, view_h) = lay;
+        let (start, top_pad, shown, view_h, max_top) = lay;
+        // only what changes the fold or the rows throws the caches away; scrolling and selecting do not
+        let mut changed = false;
         let conv_len = conv_cache.as_ref().map_or(0, |c| c.2.len());
         // a screen point in the conversation, as (row, cell), clamped to what is shown
         let at = |x: u16, y: u16| -> Option<(usize, usize)> {
@@ -2396,6 +2616,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         };
         let ts = vnow;
         for ev in evs {
+            // sideways wheel and other buttons change nothing, so they draw no frame
+            if matches!(ev, Ev::Mouse(Mouse::Other, ..)) {
+                continue;
+            }
             dirty = true;
             let mut click: Option<Act> = None;
             match ev {
@@ -2429,6 +2653,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         continue;
                     }
                     if k == Key::Char('f') && (m.ctrl || m.sup) {
+                        ui.ctx_view = false;
                         let s = ui.search.get_or_insert_with(Search::default);
                         if !s.hits.is_empty() {
                             s.i = (s.i + 1) % s.hits.len();
@@ -2458,25 +2683,39 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         }
                         continue;
                     }
+                    // Esc leaves a swapped view, back to where the conversation was
+                    if k == Key::Esc && ui.ctx_view {
+                        ui.ctx_view = false;
+                        continue;
+                    }
+                    let page = view_h.saturating_sub(2).max(1) as isize;
+                    let d = match k {
+                        Key::PageUp => -page,
+                        Key::PageDown => page,
+                        Key::Up if !m.alt && ui.top(f).is_none() => -1,
+                        Key::Down if !m.alt && ui.top(f).is_none() => 1,
+                        _ => 0,
+                    };
+                    if d != 0 && ui.ctx_view {
+                        ui.vscroll = (ui.vscroll as isize + d).max(0) as usize;
+                        continue;
+                    }
+                    if d != 0 {
+                        top = scroll_by(top, max_top, d);
+                        continue;
+                    }
                     match k {
                         Key::Char('o') if m.ctrl => {
                             v.all_open = !v.all_open;
                             continue;
                         }
-                        Key::PageUp => {
-                            scroll += 20;
-                            continue;
-                        }
-                        Key::PageDown => {
-                            scroll = scroll.saturating_sub(20);
-                            continue;
-                        }
                         Key::End => {
-                            scroll = 0;
+                            top = None;
                             continue;
                         }
                         _ => {}
                     }
+                    changed = true;
                     match ui.top(f).map(|(_, p)| matches!(p.what, Asking::Form(_))) {
                         // the approval panel: typing goes to the feedback
                         Some(false) => match k {
@@ -2573,12 +2812,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 let i = ui.qsel.unwrap();
                                 queue_drop(f, &mut ui, &mut cmds, ts, i);
                             }
+                            // the one slash command the prototype has: there is no slash command panel yet
+                            Key::Enter if ui.qsel.is_none() && ui.input.trim() == "/context" => {
+                                ui.input.clear();
+                                ui.ctx_view = true;
+                                ui.vscroll = 0;
+                            }
                             Key::Enter => enter(f, &mut ui, &mut cmds, ts),
                             Key::Backspace => {
                                 ui.input.pop();
                             }
-                            Key::Up => scroll += 1,
-                            Key::Down => scroll = scroll.saturating_sub(1),
                             Key::Char(c) if plain_key => ui.input.push(c),
                             _ => {}
                         },
@@ -2587,12 +2830,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 Ev::Mouse(kind, x, y, _) => {
                     let over_panel = x >= conv_w && conv_w < cols && panel_cache.is_some();
                     let in_conv = !over_panel && (y as usize) < view_h;
+                    let in_sbox = ui.search.is_some() && y < 3 && (x as usize) + SBOX_W + 2 > conv_w as usize;
+                    let wl = a.wheel as isize;
                     match kind {
-                        Mouse::WheelUp if over_panel => pscroll = pscroll.saturating_sub(3),
-                        Mouse::WheelDown if over_panel => pscroll += 3,
-                        Mouse::WheelUp => scroll += 3,
-                        Mouse::WheelDown => scroll = scroll.saturating_sub(3),
-                        Mouse::Down if in_conv => {
+                        Mouse::WheelUp if over_panel => pscroll = pscroll.saturating_sub(a.wheel),
+                        Mouse::WheelDown if over_panel => pscroll += a.wheel,
+                        Mouse::WheelUp if ui.ctx_view => ui.vscroll = ui.vscroll.saturating_sub(a.wheel),
+                        Mouse::WheelDown if ui.ctx_view => ui.vscroll += a.wheel,
+                        Mouse::WheelUp => top = scroll_by(top, max_top, -wl),
+                        Mouse::WheelDown => top = scroll_by(top, max_top, wl),
+                        Mouse::Down if in_conv && !ui.ctx_view && !in_sbox => {
                             ui.sel = at(x, y).map(|p| Sel { a: p, b: p, moved: false, down: true });
                         }
                         Mouse::Down => {
@@ -2630,6 +2877,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 }
             }
             let Some(act) = click else { continue };
+            changed = true;
             match act {
                 Act::Group(ti, bi) => {
                     if let Block::Group(g) = &mut f.turns[ti].blocks[bi] {
@@ -2638,7 +2886,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     conv_cache = None;
                 }
                 Act::Notice(i) => f.notices[i].2 = true,
-                Act::End => scroll = 0,
+                Act::End => top = None,
+                Act::Context => {
+                    ui.search = None;
+                    ui.ctx_view = true;
+                    ui.vscroll = 0;
+                }
+                Act::Back => ui.ctx_view = false,
                 Act::Choice(i) => {
                     ui.choice = i;
                     approve(f, &mut ui, &mut cmds, ts, i);
@@ -2667,8 +2921,8 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 Act::QDrop(i) => queue_drop(f, &mut ui, &mut cmds, ts, i),
             }
         }
-        // anything a key or click changed may change the conversation's rows
-        if dirty {
+        // a key or click that reached the panels or the input box may change the fold
+        if changed {
             conv_cache = None;
             panel_cache = None;
         }
@@ -2764,6 +3018,57 @@ mod tests {
     fn left_cut_keeps_the_file_name() {
         assert_eq!(left_cut("crates/doors/tests/serve_attach.rs", 24), "…/tests/serve_attach.rs");
         assert_eq!(left_cut("a/b.rs", 24), "a/b.rs");
+    }
+
+    #[test]
+    fn scrolling_anchors_the_top_row_and_follows_again_at_the_end() {
+        assert_eq!(scroll_by(None, 100, -3), Some(97));
+        assert_eq!(scroll_by(Some(97), 100, 2), Some(99));
+        assert_eq!(scroll_by(Some(99), 100, 1), None, "the end follows the output again");
+        assert_eq!(scroll_by(Some(1), 100, -5), Some(0));
+        assert_eq!(scroll_by(None, 100, 3), None);
+    }
+
+    #[test]
+    fn a_running_group_line_is_one_row_whatever_is_in_flight() {
+        let call = |target: &str, st: St| {
+            Item::C(Call {
+                name: "shell".into(),
+                args: json!({ "command": target }),
+                st,
+                start: 0,
+                end: None,
+                err: None,
+                lines: 0,
+                exit: None,
+                changes: vec![],
+                content: String::new(),
+                step: 1,
+                asked: None,
+            })
+        };
+        let long = "cargo test -p doors --test serve_attach -- --nocapture wait_for_path_sweeps_every_waiting_test";
+        for n in 1..6 {
+            let items = (0..n).map(|i| call(if i % 2 == 0 { long } else { "grep -rn sleep crates" }, St::Running)).collect();
+            let g = Group { items, steps: 1, step_closed: false, open: false, last_ts: 1000 };
+            let rows = group_lines(&g, Act::Group(0, 0), 60, &View::default());
+            assert_eq!(rows.len(), 1, "{n} calls in flight");
+            assert_eq!(width(&rows[0].spans), 60);
+            assert!(plain(&rows[0]).ends_with('▸'));
+        }
+    }
+
+    #[test]
+    fn the_context_view_accounts_for_the_whole_context() {
+        let mut f = fold_with("a prompt", "a reply of some length");
+        f.ctx = 120_000;
+        f.sys_chars = 4_000;
+        let rows = context_view(&f, 90);
+        let text: Vec<String> = rows.iter().map(plain).collect();
+        assert!(text.iter().any(|l| l.contains("120k tokens")));
+        assert!(text.iter().any(|l| l.contains("system prompt") && l.contains("~") && l.contains("1.0k")));
+        assert!(text.iter().any(|l| l.contains("not attributed")));
+        assert!(rows.iter().all(|r| width(&r.spans) <= 90));
     }
 
     #[test]

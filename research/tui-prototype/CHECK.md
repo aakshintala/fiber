@@ -30,3 +30,14 @@ Each line is one check: what to do, then what to look for.
 - Esc on an approval: press Esc at start. The approval should step aside behind "1 approval waiting", and the form should come up; click the row to bring the approval back.
 - Esc in the form: press Esc on the form. It should send `reply` declined then `cancel` (shown above the input box and in `/tmp/fiber-cmds.jsonl`), end the turn "interrupted", and show "declined" under "you answered".
 - Resize: drag the window narrower than 118 columns and back. The panel should give way to two status rows and return, with no garbage left behind.
+
+Stage 3, again in Ghostty itself. `./check-wizard.sh --stage3` runs only these.
+
+- Trackpad log: run with `--log-input /tmp/fiber-tui-input.log`, scroll up a little on the trackpad, and quit. The log should show button 64 events mixed with 66 and 67 (sideways), which the prototype now ignores. Keep the file for Claude.
+- Trackpad, small movements: scroll up and down a little at a time, slowly and quickly. The view should move one way only, with the finger, and never bounce back.
+- Trackpad, wide movements and a flick: the view should move smoothly, and nothing on screen should flicker, scrolling up or down.
+- Mouse wheel, if you have one: one notch should move about three rows.
+- Summary line: run without `--static` and watch the running group's line while calls start and finish. It should stay one row, and nothing above it should move.
+- Search box: type some text in the input box, then press Ctrl+F and type `lock`. The box should float over the conversation's top-right corner with even ▄ ▀ edges and show "⌕ lock" and "1 of N". The input box should keep your text.
+- Jump overlay: scroll up. A pill, " ↓ N lines below · End ", should sit centred at the bottom of the conversation. Clicking it should jump to the end and the pill should go. Nothing should appear in the input box.
+- Context view: scroll up a little, then type `/context` and press Enter. The breakdown should replace the conversation, with the panel and the input box still there. Press Esc: the conversation should be back at exactly the same place. Then click the Session card's context bar: the view should open again.
