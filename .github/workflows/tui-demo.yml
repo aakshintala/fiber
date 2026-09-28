@@ -46,7 +46,7 @@ jobs:
           set -eu
           bin="research/tui-prototype/target/${{ matrix.target }}/release/tui-prototype"
           file "$bin"
-          file "$bin" | grep -qi "statically linked" || {
+          file "$bin" | grep -qiE "statically linked|static-pie linked" || {
             echo "::error::$bin is not statically linked"
             exit 1
           }
