@@ -331,7 +331,7 @@ Behaviour is `docs/mcp.md`.
 
 | Kind | Durable | Payload |
 |---|---|---|
-| `mcp_server_failed` | yes | the server's name, why it failed (did not start, missed its startup deadline, not logged in, died), and whether Fiber will restart it |
+| `mcp_server_failed` | yes | the server's name, why it failed (did not start, missed its startup deadline, not logged in, died), whether Fiber will restart it, and `error { code, message }` with code `mcp_server_unavailable` (`docs/errors.md`, "The shape") |
 | `reloaded` | yes | the servers kept, restarted, started and stopped, the extensions reloaded, and any server that failed, with why |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
