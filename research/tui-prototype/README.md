@@ -27,6 +27,11 @@ cargo run --release -- fixtures/session.jsonl
 | `--wheel-lines N` | rows scrolled per wheel event; the default is 1 |
 | `--lua-renderer FILE.lua` | draws one tool's ledger rows with a Lua renderer, such as `lua/shell_row.lua`; see `SEAMS.md` |
 | `--lua-uncached` | calls the Lua renderer for every visible row on every frame, instead of caching its rows |
+| `--paged` | pages history from the file instead of folding it all, for a finished session; see `PAGING.md` |
+| `--window S` | with `--paged`, screens of rows kept rendered above and below the viewport; default 1 |
+| `--page-lines N` | with `--paged`, the fewest log lines in a page before it may be cut; default 64 |
+| `--verify-copy` | with `--paged`, checks each copy against the whole file folded at once, and records the result in `--stats` |
+| `--paging-bench` | prints the paging measurements that need no terminal, and exits |
 
 The key map is under "Stage 2".
 
@@ -54,7 +59,7 @@ Stage 2 covers selection and copy, search, keyboard protocol detection, the appr
 - clicking a ledger row to open that call's diff, output or error, and every panel item's view but the context breakdown (model picker, usage, tools, a delegate's or job's transcript, a file's diff);
 - the Delegates card scrolling on its own, and the Jobs card's list;
 - the start page, the session list, handoff bands, the nudge, rewind, retries, a failed turn, crash recovery and interrupts, because the fixture has none of them;
-- paging history from the log: the prototype folds the whole file into memory;
+- paging history from the log: by default the prototype folds the whole file into memory; `--paged` is a probe of paging, in `PAGING.md`;
 - the 256-colour theme: colours are the mock's "atelier" truecolour values, written into the code.
 
 ## The glimmer's cost
