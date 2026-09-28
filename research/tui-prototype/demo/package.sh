@@ -62,6 +62,8 @@ chmod +x "$dist"/bin/*
 
 cp "$proto/fixtures/session.jsonl" "$dist/fixtures/"
 cp "$proto"/fixtures/large-*.jsonl "$dist/fixtures/"
+# a private session, present only on the owner's machine
+[[ -f "$proto/fixtures/real.jsonl" ]] && cp "$proto/fixtures/real.jsonl" "$dist/fixtures/"
 
 cp feedback-wizard.sh "$dist/"
 chmod +x "$dist/feedback-wizard.sh"
