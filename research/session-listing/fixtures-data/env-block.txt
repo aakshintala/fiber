@@ -1,0 +1,6 @@
+Date: 2026-09-28
+Operating system: macOS, arm64
+Shell: /bin/zsh
+Workspace: /Users/aakshintala/work/fiber
+Git repository: yes, branch research/session-listing-15
+Session log: /Users/aakshintala/.fiber/projects/-Users-aakshintala-work-fiber/sessions/7c1e9f2a-4b3d-4e8a-9c2f-1a2b3c4d5e6f/events.jsonl
