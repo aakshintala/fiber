@@ -21,6 +21,10 @@ pub struct Page {
     tail: bool,
     turn_ts: i64,
     calls_before: usize,
+    /// the page starts right after a handoff band
+    after_band: bool,
+    /// the turn's earlier pages drew no blocks
+    fresh: bool,
 }
 
 pub struct Pager {
@@ -40,6 +44,9 @@ pub struct Pager {
     /// search matches as (page, row in page, first cell, width)
     pub hits: Vec<(usize, usize, usize, usize)>,
     resident: HashMap<usize, (Fold, Vec<Row>)>,
+    /// each completed handoff's line, and the context size the first usage after it reports,
+    /// which may be pages later
+    afters: HashMap<usize, u64>,
     /// groups the person opened, by (page, block), so a page loads as it was left
     opened: HashSet<(usize, usize)>,
     sid: String,
@@ -61,6 +68,9 @@ impl Pager {
         let (mut offsets, mut turns, mut pages) = (vec![], vec![], vec![]);
         let mut cur: Option<Page> = None;
         let (mut open, mut in_group, mut calls) = (0i64, false, 0usize);
+        // a handoff writing its note, and the completed handoff still waiting on its size after
+        let (mut handing, mut waiting): (bool, Option<usize>) = (false, None);
+        let mut afters = HashMap::new();
         let mut buf = String::new();
         let mut off = 0u64;
         let mut i = 0usize;
@@ -89,13 +99,16 @@ impl Pager {
                     }
                     turns.push(i);
                     calls = 0;
-                    cur = Some(Page { first: i, end: i, head: true, tail: false, turn_ts: e["ts"].as_i64().unwrap_or(0), calls_before: 0 });
-                } else if kind == "assistant_message_started" && open == 0 && !in_group && cur.as_ref().is_some_and(|p| i - p.first >= page_lines) {
+                    cur = Some(Page { first: i, end: i, head: true, tail: false, turn_ts: e["ts"].as_i64().unwrap_or(0), calls_before: 0, after_band: false, fresh: false });
+                } else if kind == "assistant_message_started" && open == 0 && !in_group && !handing && cur.as_ref().is_some_and(|p| i - p.first >= page_lines) {
                     let mut p = cur.take().unwrap();
                     p.end = i;
                     let ts = p.turn_ts;
                     pages.push(p);
-                    cur = Some(Page { first: i, end: i, head: false, tail: false, turn_ts: ts, calls_before: calls });
+                    // the turn's blocks so far are still in the summary fold, which trims only their text
+                    let blocks = sum.turns.last().map_or(&[][..], |t| &t.blocks[..]);
+                    let (after_band, fresh) = (matches!(blocks.last(), Some(Block::Handoff(_))), blocks.is_empty());
+                    cur = Some(Page { first: i, end: i, head: false, tail: false, turn_ts: ts, calls_before: calls, after_band, fresh });
                 }
                 match kind {
                     "tool_call_requested" => {
@@ -116,10 +129,20 @@ impl Pager {
                         }
                     }
                     "steering_applied" | "interaction_resolved" | "turn_completed" => in_group = false,
+                    "handoff_started" => handing = true,
+                    "handoff_completed" => {
+                        handing = false;
+                        waiting = (e["payload"]["outcome"].as_str().unwrap_or("completed") == "completed").then_some(i);
+                    }
                     _ => {}
                 }
             }
             sum.apply(&e);
+            if kind == "usage_recorded" && sid == sum.session_id {
+                if let Some(l) = waiting.take() {
+                    afters.insert(l, sum.ctx);
+                }
+            }
             trim(&mut sum, kind, sid, e["action_id"].as_str().unwrap_or(""));
             i += 1;
         }
@@ -130,7 +153,7 @@ impl Pager {
             pages.push(p);
         }
         let sid = sum.session_id.clone();
-        let pager = Pager { file, offsets, turns, pages, counts: vec![], starts: vec![0], key: None, find: String::new(), hits: vec![], resident: HashMap::new(), opened: HashSet::new(), sid, resident_max: 0 };
+        let pager = Pager { file, offsets, turns, pages, counts: vec![], starts: vec![0], key: None, find: String::new(), hits: vec![], resident: HashMap::new(), afters, opened: HashSet::new(), sid, resident_max: 0 };
         Ok((pager, sum))
     }
 
@@ -140,13 +163,21 @@ impl Pager {
         let (a, b) = (self.offsets[pg.first], self.offsets[pg.end]);
         let mut f = Fold { session_id: self.sid.clone(), ..Default::default() };
         if !pg.head {
-            f.turns.push(Turn { ts: pg.turn_ts, calls_before: pg.calls_before, ..Default::default() });
+            f.turns.push(Turn { ts: pg.turn_ts, calls_before: pg.calls_before, after_band: pg.after_band, fresh: pg.fresh, ..Default::default() });
         }
         let mut bytes = vec![0u8; (b - a) as usize];
         self.file.seek(SeekFrom::Start(a)).and_then(|_| self.file.read_exact(&mut bytes)).expect("the log is readable");
-        for l in bytes.split(|&c| c == b'\n') {
+        let first = pg.first;
+        for (k, l) in bytes.split(|&c| c == b'\n').enumerate() {
             if let Ok(e) = serde_json::from_slice::<Value>(l) {
                 f.apply(&e);
+            }
+            // the size after a handoff comes from a usage line that may be on a later page
+            if let Some(&n) = self.afters.get(&(first + k)) {
+                if let Some(h) = f.band() {
+                    h.after = Some(n);
+                }
+                f.ho = None;
             }
         }
         if let Some(t) = f.turns.first_mut() {
@@ -540,6 +571,89 @@ mod tests {
         pg.ensure(top.0, top.0 + vh, &v);
         let (base, rows) = pg.rows(top.0, b.0, &v);
         assert_eq!(selection_text(&rows, (b.0 - base, b.1), (top.0 - base, top.1)), selection_text(&all, b, top));
+    }
+
+    /// A session with a handoff mid-turn, its note, and a person's handoff whose size after
+    /// arrives in the next turn: pages cut at every chance land on both sides of each band.
+    fn handoff_fixture() -> String {
+        let mut n = 0;
+        let mut e = |kind: &str, aid: &str, payload: serde_json::Value| {
+            n += 1;
+            serde_json::json!({ "kind": kind, "session_id": "s", "ts": 1000 * n, "action_id": aid, "payload": payload }).to_string() + "\n"
+        };
+        let usage = |n: u64| serde_json::json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } });
+        let text = |t: &str| serde_json::json!({ "text": t });
+        let mut out = String::new();
+        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "text", "text": "go" }] }));
+        for (i, t) in ["one", "two", "three"].iter().enumerate() {
+            out += &e("assistant_message_started", &format!("b{i}"), serde_json::json!({}));
+            out += &e("assistant_message_completed", &format!("b{i}"), text(&format!("before {t}")));
+        }
+        out += &e("usage_recorded", "", usage(402_000));
+        out += &e("handoff_started", "", serde_json::json!({ "trigger": "auto" }));
+        out += &e("assistant_message_started", "n1", serde_json::json!({}));
+        out += &e("assistant_message_completed", "n1", text("THE NOTE"));
+        out += &e("usage_recorded", "", usage(403_000));
+        out += &e("handoff_completed", "", serde_json::json!({ "outcome": "completed", "tokens_before": 402_000, "note": ["n1"] }));
+        for (i, t) in ["four", "five"].iter().enumerate() {
+            out += &e("assistant_message_started", &format!("c{i}"), serde_json::json!({}));
+            out += &e("assistant_message_completed", &format!("c{i}"), text(&format!("after {t}")));
+            if i == 0 {
+                out += &e("usage_recorded", "", usage(32_000));
+            }
+        }
+        out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
+        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "text", "text": "/handoff" }] }));
+        out += &e("handoff_started", "", serde_json::json!({ "trigger": "person" }));
+        out += &e("handoff_completed", "", serde_json::json!({ "outcome": "completed", "tokens_before": 40_000, "note": [] }));
+        out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
+        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "text", "text": "next" }] }));
+        out += &e("assistant_message_started", "d0", serde_json::json!({}));
+        out += &e("assistant_message_completed", "d0", text("fresh"));
+        out += &e("usage_recorded", "", usage(12_000));
+        out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
+        out
+    }
+
+    #[test]
+    fn handoff_bands_render_the_same_paged_as_whole() {
+        let path = std::env::temp_dir().join(format!("tui-prototype-handoff-{}.jsonl", std::process::id()));
+        std::fs::write(&path, handoff_fixture()).unwrap();
+        let path = path.to_str().unwrap().to_string();
+        let v = View::default();
+        let all = text(&whole(&path, 90, &v));
+        assert!(all.iter().any(|l| l.contains("402k → 32k")) && all.iter().any(|l| l.contains("40k → 12k")), "{all:#?}");
+        assert!(!all.iter().any(|l| l.contains("THE NOTE")));
+        for page_lines in [1, 2, 3, 64] {
+            let (mut pg, _) = Pager::open(&path, page_lines).unwrap();
+            if page_lines == 1 {
+                assert!(pg.pages.iter().any(|p| p.after_band), "a page starts right after a band");
+            }
+            pg.sync(90, &v, "");
+            let (_, rows) = pg.rows(0, pg.total() - 1, &v);
+            assert_eq!(text(&rows), all, "at {page_lines} lines a page");
+        }
+        let _ = std::fs::remove_file(&path);
+        // the converted real session, where it is present (it is private, so never committed)
+        let real = "fixtures/real.jsonl";
+        if std::path::Path::new(real).exists() {
+            let all = text(&whole(real, 124, &v));
+            assert_eq!(all.iter().filter(|l| l.contains("⇄ handoff")).count(), 3);
+            let bands: Vec<usize> = (0..all.len()).filter(|&i| all[i].contains("⇄ handoff")).collect();
+            assert!(bands.iter().all(|&i| !all[i].contains('…')), "every band has its size after");
+            for page_lines in [1, 8, 50, 64] {
+                let (mut pg, _) = Pager::open(real, page_lines).unwrap();
+                pg.sync(124, &v, "");
+                let (_, rows) = pg.rows(0, pg.total() - 1, &v);
+                let rows = text(&rows);
+                // the rows around each band first, so a failure points at the handoff
+                for &i in &bands {
+                    let (a, b) = (i.saturating_sub(8), (i + 8).min(all.len()));
+                    assert_eq!(rows.get(a..b), Some(&all[a..b]), "around the band at row {i}, {page_lines} lines a page");
+                }
+                assert_eq!(rows, all, "{real} at {page_lines} lines a page");
+            }
+        }
     }
 
     #[test]

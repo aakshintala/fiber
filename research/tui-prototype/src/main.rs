@@ -37,6 +37,7 @@ const BU: Color = rgb(0x343541); // the person's bubble
 const BI: Color = rgb(0x1a1a22); // input box
 const BW: Color = rgb(0x101017); // turn card
 const BK: Color = rgb(0x181821); // code block
+const BH: Color = rgb(0x1f1a2e); // handoff band
 const HD: Color = rgb(0xff9f43);
 const SX_KW: Color = rgb(0x6eaafe);
 const SX_FN: Color = rgb(0x7dd3fc);
@@ -74,6 +75,8 @@ fn width(spans: &[Span]) -> usize {
 #[derive(Clone, Copy, PartialEq, Debug)]
 enum Act {
     Group(usize, usize),
+    /// a ledger row or a thought line: (turn, block, item), where paged the turn names a page
+    Item(usize, usize, usize),
     Notice(usize),
     End,
     Choice(usize),
@@ -83,6 +86,8 @@ enum Act {
     Opt(usize),
     Submit,
     Decline,
+    /// a multi-choice question's Next row: on to the next question, or the review
+    Next,
     QRow(usize),
     QDrop(usize),
     /// opens the context breakdown
@@ -446,6 +451,17 @@ enum Block {
     Done(String),
     /// a resolved form: (header, answer, skipped) per question, the note, when, declined
     Answer(Vec<(String, String, bool)>, Option<String>, i64, bool),
+    /// breaks the turn's card with a band
+    Handoff(Handoff),
+}
+struct Handoff {
+    trigger: String,
+    before: u64,
+    /// the context size the first request after the handoff reports
+    after: Option<u64>,
+    ts: i64,
+    /// none while the note is being written
+    outcome: Option<String>,
 }
 /// An approval or a question waiting on the person.
 struct Pending {
@@ -465,6 +481,11 @@ struct Turn {
     blocks: Vec<Block>,
     /// tool calls of this turn folded elsewhere: a paged piece of a turn starts mid-turn
     calls_before: usize,
+    /// a paged piece that starts right after a handoff band another piece drew: its card opens anew
+    after_band: bool,
+    /// a paged piece of a turn whose earlier pieces drew no blocks: the card opens here, after
+    /// the gap under the bubble
+    fresh: bool,
 }
 struct Job {
     id: String,
@@ -518,6 +539,8 @@ struct Fold {
     tooldef_chars: usize,
     instr_chars: usize,
     skills_chars: usize,
+    /// the latest handoff's band, while it waits on its outcome or on the size after it
+    ho: Option<(usize, usize)>,
 }
 
 fn heading(text: &str, last: bool) -> Option<String> {
@@ -564,6 +587,13 @@ fn clock(ts: i64) -> String {
 impl Fold {
     fn turn(&mut self) -> Option<&mut Turn> {
         self.turns.last_mut()
+    }
+    fn band(&mut self) -> Option<&mut Handoff> {
+        let (ti, bi) = self.ho?;
+        match self.turns.get_mut(ti)?.blocks.get_mut(bi)? {
+            Block::Handoff(h) => Some(h),
+            _ => None,
+        }
     }
     /// A call's tool and arguments, from this session's turns or a delegate's relayed lines.
     fn call_of(&self, sid: &str, aid: &str) -> (String, Value) {
@@ -776,7 +806,9 @@ impl Fold {
             }
             "assistant_message_delta" | "assistant_message_completed" => {
                 let text = p["text"].as_str().unwrap_or("");
-                if !self.at.contains_key(&aid) && !text.is_empty() && !self.turns.is_empty() {
+                // the handoff note belongs to the band, not the card
+                let noting = self.band().is_some_and(|h| h.outcome.is_none());
+                if !self.at.contains_key(&aid) && !text.is_empty() && !self.turns.is_empty() && !noting {
                     let ti = self.turns.len() - 1;
                     let t = &mut self.turns[ti];
                     t.blocks.push(Block::Text(String::new()));
@@ -863,11 +895,41 @@ impl Fold {
                 self.output += o;
                 self.ctx = i + r + cw + o;
                 self.cost += p["cost"].as_f64().unwrap_or(0.0);
+                let ctx = self.ctx;
+                if let Some(h) = self.band().filter(|h| h.outcome.as_deref() == Some("completed")) {
+                    h.after = Some(ctx);
+                    self.ho = None;
+                }
                 if let Some(a) = p["action_id"].as_str() {
                     if let Some(d) = self.text_dur.get(a) {
                         self.text_ms += d;
                         self.text_out += o;
                     }
+                }
+            }
+            "handoff_started" => {
+                let Some(t) = self.turns.last_mut() else { return };
+                t.blocks.push(Block::Handoff(Handoff { trigger: p["trigger"].as_str().unwrap_or("").into(), before: 0, after: None, ts, outcome: None }));
+                let bi = t.blocks.len() - 1;
+                self.ho = Some((self.turns.len() - 1, bi));
+            }
+            "handoff_completed" => {
+                // a tool-started handoff writes no handoff_started
+                if !self.band().is_some_and(|h| h.outcome.is_none()) {
+                    let Some(t) = self.turns.last_mut() else { return };
+                    t.blocks.push(Block::Handoff(Handoff { trigger: "tool".into(), before: 0, after: None, ts, outcome: None }));
+                    let bi = t.blocks.len() - 1;
+                    self.ho = Some((self.turns.len() - 1, bi));
+                }
+                let outcome = p["outcome"].as_str().unwrap_or("completed").to_string();
+                let done = outcome == "completed";
+                if let Some(h) = self.band() {
+                    h.outcome = Some(outcome);
+                    h.before = p["tokens_before"].as_u64().unwrap_or(0);
+                    h.ts = ts;
+                }
+                if !done {
+                    self.ho = None;
                 }
             }
             "steering_applied" => {
@@ -921,6 +983,30 @@ struct View {
     force: Option<Act>,
     /// the Lua renderer for one tool's ledger rows
     lua: Option<std::rc::Rc<lua::Ext>>,
+    /// ledger rows and thought lines opened to their result or text, as `Act::Item` keys
+    exp: HashSet<(usize, usize, usize)>,
+}
+
+/// A thought's text, opened under its line, dim.
+fn thought_rows(text: &str, w: usize, ind: usize) -> Vec<Row> {
+    let pad = || vec![sp(" ".repeat(ind), Style::new())];
+    text.split('\n').flat_map(|p| wrap_rows(vec![sp(p, dim())], w, pad(), pad())).map(|r| Row { pre: ind as u16, ..r }).collect()
+}
+/// A call's result, opened under its ledger row: its error, or its output clipped to 20 lines.
+fn call_rows(c: &Call) -> Vec<Row> {
+    const MAX: usize = 20;
+    let text = match &c.err {
+        Some((code, msg)) => format!("{code}: {msg}"),
+        None if c.content.is_empty() => "no output".into(),
+        None => c.content.replace('\t', "    "),
+    };
+    let lines: Vec<&str> = text.lines().collect();
+    let r = |s: Span<'static>| Row { spans: vec![sp("        ", Style::new()), s], pre: 8, ..Default::default() };
+    let mut out: Vec<Row> = lines.iter().take(MAX).map(|l| r(sp(l.to_string(), Style::new()))).collect();
+    if lines.len() > MAX {
+        out.push(r(sp(format!("… {} more lines", lines.len() - MAX), dim())));
+    }
+    out
 }
 
 fn result_spans(c: &Call) -> Vec<Span<'static>> {
@@ -1017,19 +1103,25 @@ fn summary(g: &Group) -> Vec<Span<'static>> {
 fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     let calls: Vec<&Call> = g.items.iter().filter_map(|i| if let Item::C(c) = i { Some(c) } else { None }).collect();
     let live_r = g.items.iter().find_map(|i| if let Item::R(r) = i { r.end.is_none().then_some(r) } else { None });
-    // thinking with no tool call before the next reply is one line
+    let Act::Group(ti, bi) = gid else { unreachable!() };
+    // thinking with no tool call before the next reply is one line; a click shows its text
     if calls.is_empty() {
         return g
             .items
             .iter()
-            .filter_map(|i| if let Item::R(r) = i { Some(r) } else { None })
-            .map(|r| {
+            .enumerate()
+            .filter_map(|(ii, i)| if let Item::R(r) = i { Some((ii, r)) } else { None })
+            .flat_map(|(ii, r)| {
                 let t = if r.end.is_none() {
                     format!("Thinking{}", heading(&r.text, true).map(|h| format!(": {h}")).unwrap_or_default())
                 } else {
                     format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
                 };
-                Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(gid), ..Default::default() }
+                let mut out = vec![Row { spans: vec![sp(t, dim().add_modifier(Modifier::ITALIC))], act: Some(Act::Item(ti, bi, ii)), ..Default::default() }];
+                if v.exp.contains(&(ti, bi, ii)) {
+                    out.extend(thought_rows(&r.text, w, 2));
+                }
+                out
             })
             .collect();
     }
@@ -1050,7 +1142,8 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
     // the ledger: one row per call, split by step, the step's thinking first
     let mut ledger: Vec<Row> = vec![];
     let mut last_step = 0;
-    for it in &g.items {
+    for (ii, it) in g.items.iter().enumerate() {
+        let (key, open) = (Act::Item(ti, bi, ii), v.exp.contains(&(ti, bi, ii)));
         let step = match it {
             Item::R(r) => r.step,
             Item::C(c) => c.step,
@@ -1064,7 +1157,10 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 } else {
                     format!("+ Thought{} · {}", heading(&r.text, false).map(|h| format!(": {h}")).unwrap_or_default(), dur(r.end.unwrap() - r.start))
                 };
-                ledger.push(row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]));
+                ledger.push(Row { act: Some(key), ..row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]) });
+                if open {
+                    ledger.extend(thought_rows(&r.text, w, 8));
+                }
             }
             Item::C(c) if let Some(rows) = v.lua.as_ref().filter(|x| x.tool == c.name).and_then(|x| x.rows(c, &gutter, w)) => ledger.extend(rows),
             Item::C(c) => {
@@ -1082,7 +1178,10 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 }
                 let mut s = vec![sp(gutter, dim()), glyph, sp(" ", Style::new()), sp(format!("{:<9}", kind_of(c)), fg(CYAN)), sp(format!("{t:<tw$}"), Style::new()), sp("  ", Style::new())];
                 s.extend(res);
-                ledger.push(row(s));
+                ledger.push(Row { act: Some(key), ..row(s) });
+                if open {
+                    ledger.extend(call_rows(c));
+                }
             }
         }
     }
@@ -1126,6 +1225,24 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
     out
 }
 
+/// A handoff's band: the trigger, the context before and after, and the time.
+fn band_rows(h: &Handoff, w: usize) -> Vec<Row> {
+    let why = match h.trigger.as_str() {
+        "auto" => format!("automatic at {}", k(HANDOFF_AT)),
+        "person" => "you asked with /handoff".into(),
+        "overflow" => "the request did not fit".into(),
+        "tool" => "the model handed off".into(),
+        x => x.into(),
+    };
+    let size = match h.outcome.as_deref() {
+        None => sp("writing the note…", dim()),
+        Some("completed") => sp(format!("{} → {}", k(h.before), h.after.map_or("…".into(), k)), bold()),
+        Some(o) => sp(format!("{o} · the context is unchanged"), fg(ORANGE)),
+    };
+    let s = vec![sp(" ⇄ ", fg(PURPLE)), sp("handoff", fg(PURPLE).add_modifier(Modifier::BOLD)), sp(format!(" · {why}"), dim()), t(), size, sp(format!(" · {} ", clock(h.ts)), dim())];
+    slab(vec![row(s)], BH, None, w)
+}
+
 fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
     f.turns.iter().enumerate().flat_map(|(ti, t)| turn_rows(ti, t, w, v, true, true)).collect()
 }
@@ -1141,9 +1258,14 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
             out.push(Row::default());
             out.extend(bubble(&t.prompt, t.ts, w));
         }
-        let mut inner: Vec<Row> = vec![];
+        // a handoff breaks the card: each band starts a new piece of it
+        let mut segs: Vec<(Option<&Handoff>, Vec<Row>)> = vec![(None, vec![])];
         for (bi, b) in t.blocks.iter().enumerate() {
             let r: Vec<Row> = match b {
+                Block::Handoff(h) => {
+                    segs.push((Some(h), vec![]));
+                    continue;
+                }
                 Block::Text(s) => md(s, iw).into_iter().map(|r| Row { link: true, ..r }).collect(),
                 Block::Group(g) => group_lines(g, Act::Group(ti, bi), iw, v),
                 Block::Steer(s, ts) => {
@@ -1173,34 +1295,45 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
             if r.is_empty() {
                 continue;
             }
+            let first = segs.len() == 1;
+            let inner = &mut segs.last_mut().unwrap().1;
             // a piece that starts mid-turn follows blocks another piece drew
-            if !inner.is_empty() || !head {
+            if !inner.is_empty() || (!head && first && !t.after_band && !t.fresh) {
                 inner.push(Row::default());
             }
             inner.extend(r);
         }
-        if inner.is_empty() {
+        if segs.len() == 1 && segs[0].1.is_empty() {
             return out;
         }
-        if head {
+        if head || t.fresh {
             out.push(Row::default());
         }
-        let rows = inner
-            .into_iter()
-            .map(|r| {
-                let mut s = vec![sp(" ", Style::new())];
-                let body = fit(&r.spans, iw);
-                s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
-                s.push(sp(" ", Style::new()));
-                let hot = r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect();
-                Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
-            })
-            .collect();
-        let mut card = slab(rows, BW, None, w);
-        if !tail {
-            card.pop();
+        let n = segs.len();
+        for (k, (h, inner)) in segs.into_iter().enumerate() {
+            if let Some(h) = h {
+                out.extend(band_rows(h, w));
+            }
+            if inner.is_empty() {
+                continue;
+            }
+            let rows = inner
+                .into_iter()
+                .map(|r| {
+                    let mut s = vec![sp(" ", Style::new())];
+                    let body = fit(&r.spans, iw);
+                    s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
+                    s.push(sp(" ", Style::new()));
+                    let hot = r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect();
+                    Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
+                })
+                .collect();
+            let mut card = slab(rows, BW, None, w);
+            if !tail && k + 1 == n {
+                card.pop();
+            }
+            out.extend(if head || k > 0 || t.after_band || t.fresh { card } else { card.split_off(1) });
         }
-        out.extend(if head { card } else { card.split_off(1) });
     }
     out
 }
@@ -1416,12 +1549,16 @@ struct Ui {
     form: Form,
     flash: Vec<String>,
     flash_at: Option<Instant>,
+    /// the last copy's confirmation, floated in the conversation's top-right corner so nothing moves
+    copied: Option<(String, Instant)>,
     keys: String,
     cmd_n: u32,
     /// the context breakdown is swapped into the conversation area
     ctx_view: bool,
     /// the view's own scroll, rows from its top
     vscroll: usize,
+    /// the person answered an approval or a form since the last input was handled
+    answered: bool,
 }
 impl Ui {
     /// The request on top: the first in arrival order not put aside, or the one clicked through to.
@@ -1503,9 +1640,21 @@ fn context_view(f: &Fold, w: usize) -> Vec<Row> {
     let tok = |chars: usize| chars as u64 / 4;
     let (mut you, mut replies, mut reasoning, mut calls, mut results) = (0, 0, 0, 0, 0);
     let mut largest: Vec<(String, u64)> = vec![];
-    for t in &f.turns {
-        you += t.prompt.len();
-        for b in &t.blocks {
+    // only what follows the last completed handoff is in context
+    let cut = f
+        .turns
+        .iter()
+        .enumerate()
+        .flat_map(|(ti, t)| t.blocks.iter().enumerate().filter(|(_, b)| matches!(b, Block::Handoff(h) if h.outcome.as_deref() == Some("completed"))).map(move |(bi, _)| (ti, bi)))
+        .last();
+    for (ti, t) in f.turns.iter().enumerate() {
+        if cut.is_none_or(|c| ti > c.0) {
+            you += t.prompt.len();
+        }
+        for (bi, b) in t.blocks.iter().enumerate() {
+            if cut.is_some_and(|c| (ti, bi) <= c) {
+                continue;
+            }
             match b {
                 Block::Text(x) => replies += x.len(),
                 Block::Steer(x, _) => you += x.len(),
@@ -1696,6 +1845,12 @@ fn form_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, fields: &[Value], w: usi
             (body, Some(Act::Opt(j))),
             (sp(if cur { "█" } else { "" }, dim()), None),
         ]));
+        if multi {
+            // space toggles, so moving on is a row of its own
+            let on = fm.cur == j + 1;
+            let lab = if fm.tab + 1 == n { "Review →" } else { "Next →" };
+            rows.push(hot_row(vec![(sp(if on { "▸ " } else { "  " }, fg(PURPLE)), Some(Act::Next)), (sp(lab, if on { fg(PURPLE).add_modifier(Modifier::BOLD) } else { fg(PURPLE) }), Some(Act::Next))]));
+        }
         rows.push(Row::default());
         rows.push(row(vec![sp("←→ question · ↑↓ choose · enter chooses and moves on · space toggles · type to answer in words", dim())]));
     } else {
@@ -2002,6 +2157,7 @@ fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64,
     ui.feedback.clear();
     ui.choice = 0;
     ui.shown = 0;
+    ui.answered = true;
 }
 fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let Some((_, p)) = ui.top(f) else { return };
@@ -2037,6 +2193,20 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
     synth(f, "interaction_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "answer": ans, "by": "person" }));
     synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }));
     ui.shown = 0;
+    ui.answered = true;
+}
+/// The fixture ends waiting on the person, so once nothing waits the turn ends as Fiber
+/// would end it: the calls complete, a short reply, then `turn_completed`.
+fn finish_turn(f: &mut Fold, ts: i64) {
+    let me = f.session_id.clone();
+    for a in f.running_calls() {
+        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "completed" }));
+    }
+    let aid = format!("a_end_{}", f.turns.len());
+    synth(f, "assistant_message_started", &me, Some(&aid), ts, json!({}));
+    let text = "Thanks — that's everything I needed. Stopping here for the demo.";
+    synth(f, "assistant_message_completed", &me, Some(&aid), ts, json!({ "text": text, "outcome": "completed" }));
+    synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "completed" }));
 }
 /// "Chat about this", and Esc on a form: reply declined, then cancel.
 fn decline_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
@@ -2201,6 +2371,7 @@ struct Args {
     page_lines: usize,
     verify_copy: bool,
     bench: bool,
+    no_pending: bool,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -2222,6 +2393,7 @@ fn args() -> Args {
         page_lines: 64,
         verify_copy: false,
         bench: false,
+        no_pending: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -2243,8 +2415,9 @@ fn args() -> Args {
             "--page-lines" => a.page_lines = it.next().and_then(|v| v.parse().ok()).expect("--page-lines N"),
             "--verify-copy" => a.verify_copy = true,
             "--paging-bench" => a.bench = true,
+            "--no-pending" => a.no_pending = true,
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2260,9 +2433,43 @@ fn args() -> Args {
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
+/// `--no-pending`: drops the requests nobody answered and the calls that asked them, drops the
+/// open turn's calls that never finished, and ends that turn, so the screen opens settled.
+fn settle(mut ev: Vec<Value>) -> Vec<Value> {
+    let me = ev.first().and_then(|e| e["session_id"].as_str()).unwrap_or("").to_string();
+    let kind = |e: &Value| e["kind"].as_str().unwrap_or("").to_string();
+    let asks = |e: &Value| matches!(e["kind"].as_str(), Some("permission_requested" | "interaction_requested"));
+    let calls = |e: &Value| matches!(e["kind"].as_str(), Some("tool_call_requested" | "tool_call_started"));
+    let resolved: HashSet<String> = ev.iter().filter(|e| kind(e).ends_with("_resolved")).filter_map(|e| e["payload"]["request_id"].as_str().map(str::to_string)).collect();
+    let done: HashSet<String> = ev.iter().filter(|e| kind(e) == "tool_call_completed").filter_map(|e| e["action_id"].as_str().map(str::to_string)).collect();
+    let unasked = |e: &Value| asks(e) && !resolved.contains(e["payload"]["request_id"].as_str().unwrap_or(""));
+    let asked: HashSet<String> = ev.iter().filter(|e| unasked(e)).filter_map(|e| e["payload"]["action_id"].as_str().or(e["action_id"].as_str()).map(str::to_string)).collect();
+    let mine = |e: &Value, k: &str| kind(e) == k && e["session_id"] == me.as_str();
+    let open = ev.iter().rposition(|e| mine(e, "turn_started")).filter(|&s| !ev[s..].iter().any(|e| mine(e, "turn_completed")));
+    let ts = ev.last().map_or(0, |e| e["ts"].as_i64().unwrap_or(0));
+    let mut i = 0;
+    ev.retain(|e| {
+        i += 1;
+        let aid = e["action_id"].as_str().unwrap_or("");
+        let unfinished = open.is_some_and(|s| i > s) && e["session_id"] == me.as_str() && calls(e) && !done.contains(aid);
+        !(unasked(e) || (calls(e) && asked.contains(aid)) || unfinished)
+    });
+    if open.is_some() {
+        ev.push(json!({ "kind": "turn_completed", "session_id": me, "ts": ts, "schema_version": 1, "payload": { "outcome": "completed" } }));
+    }
+    ev
+}
+
 fn main() -> io::Result<()> {
     let t0 = Instant::now();
-    let a = args();
+    let mut a = args();
+    if a.no_pending {
+        // the settled lines go to a file of their own, so the paged mode reads them too
+        let ev: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        let p = std::env::temp_dir().join(format!("tui-prototype-settled-{}.jsonl", std::process::id()));
+        std::fs::write(&p, settle(ev).iter().map(|e| e.to_string() + "\n").collect::<String>())?;
+        a.path = p.to_string_lossy().into_owned();
+    }
     if a.bench {
         // the conversation's text width and height at 160 by 48: 160 less the panel less
         // two margins, 48 less the input box
@@ -2296,6 +2503,9 @@ fn main() -> io::Result<()> {
     b.write_all(MOUSE_OFF.as_bytes())?;
     execute!(b, terminal::LeaveAlternateScreen, crossterm::cursor::Show)?;
     terminal::disable_raw_mode()?;
+    if a.no_pending {
+        let _ = std::fs::remove_file(&a.path);
+    }
     let report = res?;
     if let Some(path) = &a.stats {
         std::fs::write(path, report)?;
@@ -2434,6 +2644,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             ui.flash_at = None;
             dirty = true;
         }
+        if ui.copied.as_ref().is_some_and(|c| now_i >= c.1 + FLASH) {
+            ui.copied = None;
+            dirty = true;
+        }
 
         // below the floor: one centred line, nothing else laid out or drawn; the loop carries on
         let size = term.size()?;
@@ -2544,7 +2758,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             geom = (conv_w, cols);
             let panel = panel_cache.as_ref();
             let uncached = v.lua.as_deref().filter(|x| !x.cached);
-            let (search, sel) = (ui.search.as_ref(), ui.sel);
+            let (search, sel, copied) = (ui.search.as_ref(), ui.sel, ui.copied.as_ref().map(|c| c.0.as_str()));
             // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
             // all written, however many writes and flushes it takes
             term.backend_mut().write_all(b"\x1b[?2026h")?;
@@ -2638,6 +2852,15 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         }
                     }
                     buf.set_line(x0, 1, &Line::from(tint(fit(&search_box(s), bw), BI)), bw as u16);
+                }
+                // the copy's confirmation: the top-right corner, below the search box when it is open
+                if let Some(m) = copied.filter(|_| vrows.is_none()) {
+                    let y = if search.is_some() && view_h >= 3 { 3 } else { 0 };
+                    let s = vec![sp(format!(" {m} "), fg(CYAN))];
+                    let mw = width(&s).min(cw);
+                    if y < view_h && mw > 0 {
+                        buf.set_line(1 + (cw - mw) as u16, y as u16, &Line::from(tint(fit(&s, mw), BI)), mw as u16);
+                    }
                 }
                 for (k, r) in bot.iter().enumerate() {
                     let y = (view_h + k) as u16;
@@ -2741,6 +2964,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         add(window.is_none().then(|| v0 + Duration::from_secs_f64(a.warmup)));
         add(rd.deadline());
         add(ui.flash_at.map(|t| t + FLASH));
+        add(ui.copied.as_ref().map(|c| c.1 + FLASH));
         add((ui.drag_edge != 0).then_some(next_auto));
         add(exit_at);
         if dirty {
@@ -2922,9 +3146,13 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     ui.form.cur = 0;
                                 }
                                 Key::Up => ui.form.cur = ui.form.cur.saturating_sub(1),
-                                Key::Down => ui.form.cur = (ui.form.cur + 1).min(nopt),
+                                Key::Down => ui.form.cur = (ui.form.cur + 1).min(nopt + multi as usize),
                                 Key::Char(' ') if ui.form.tab < n && !on_text => form_choose(&mut ui, &fields),
                                 Key::Enter if ui.form.tab == n => submit_form(f, &mut ui, &mut cmds, ts),
+                                Key::Enter if multi && ui.form.cur == nopt + 1 => {
+                                    ui.form.tab += 1;
+                                    ui.form.cur = 0;
+                                }
                                 Key::Enter => {
                                     if !on_text {
                                         form_choose(&mut ui, &fields);
@@ -3051,7 +3279,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     }
                                     if !text.is_empty() {
                                         let how = copy(term.backend_mut(), &text);
-                                        say(&mut ui, format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()));
+                                        ui.copied = Some((format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()), Instant::now()));
                                     }
                                 }
                             }
@@ -3069,6 +3297,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         g.open = !g.open;
                     }
                     conv_cache = None;
+                }
+                Act::Item(p, bi, ii) => {
+                    if !v.exp.remove(&(p, bi, ii)) {
+                        v.exp.insert((p, bi, ii));
+                    }
+                    // paged: only a toggle renders a page again, so toggling its group twice
+                    // renders it with the row opened and the group as it was
+                    if let Some(pg) = pager.as_mut() {
+                        pg.toggle(p, bi, &v);
+                        pg.toggle(p, bi, &v);
+                    }
                 }
                 Act::Notice(i) => f.notices[i].2 = true,
                 Act::End => top = None,
@@ -3104,11 +3343,20 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         }
                     }
                 }
+                Act::Next => {
+                    ui.form.tab += 1;
+                    ui.form.cur = 0;
+                }
                 Act::Submit => submit_form(f, &mut ui, &mut cmds, ts),
                 Act::Decline => decline_form(f, &mut ui, &mut cmds, ts),
                 Act::QRow(i) => queue_pick(f, &mut ui, i),
                 Act::QDrop(i) => queue_drop(f, &mut ui, &mut cmds, ts, i),
             }
+        }
+        // the last answer the turn waited on, once the replay has nothing more to play
+        if std::mem::take(&mut ui.answered) && f.running && f.pending.is_empty() && *next >= events.len() {
+            finish_turn(f, ts);
+            changed = true;
         }
         // a key or click that reached the panels or the input box may change the fold
         if changed {
@@ -3345,6 +3593,167 @@ mod tests {
         conversation(&shell_fold(0), 90, &v);
         conversation(&shell_fold(2), 90, &v);
         assert_eq!(v.lua.as_ref().unwrap().calls.get(), 3);
+    }
+
+    #[test]
+    fn a_multi_choice_question_ends_with_a_next_row() {
+        let fields = vec![
+            json!({ "header": "One", "question": "q1", "multiSelect": true, "options": [{ "label": "a" }, { "label": "b" }] }),
+            json!({ "header": "Two", "question": "q2", "options": [{ "label": "c" }] }),
+            json!({ "header": "Three", "question": "q3", "multiSelect": true, "options": [{ "label": "d" }] }),
+        ];
+        let f = Fold::default();
+        let p = Pending { rid: "r".into(), sid: String::new(), aid: "a".into(), what: Asking::Form(fields.clone()) };
+        let mut ui = Ui::default();
+        ui.form = Form { rid: "r".into(), sel: vec![vec![]; 3], text: vec![String::new(); 3], ..Default::default() };
+        let texts = |ui: &Ui| form_panel(&f, ui, 0, &p, &fields, 100).iter().map(plain).collect::<Vec<_>>();
+        let t = texts(&ui);
+        let (words, next) = (t.iter().position(|l| l.contains("Type an answer")).unwrap(), t.iter().position(|l| l.contains("Next →")).unwrap());
+        assert_eq!(next, words + 1, "Next follows the answer-in-words row");
+        let rows = form_panel(&f, &ui, 0, &p, &fields, 100);
+        assert!(rows[next].hot.iter().any(|h| h.2 == Act::Next));
+        ui.form.tab = 1;
+        assert!(!texts(&ui).iter().any(|l| l.contains("Next →") || l.contains("Review →")), "single choice has no Next row");
+        ui.form.tab = 2;
+        assert!(texts(&ui).iter().any(|l| l.contains("Review →")), "the last question reads Review");
+    }
+
+    fn fixture(path: &str) -> Vec<Value> {
+        std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+    fn fold_of(ev: &[Value]) -> Fold {
+        let mut f = Fold::default();
+        for e in ev {
+            f.apply(e);
+        }
+        f
+    }
+
+    #[test]
+    fn no_pending_opens_the_demo_settled() {
+        let whole = fold_of(&fixture("fixtures/session.jsonl"));
+        assert!(whole.running && !whole.pending.is_empty(), "the fixture ends waiting on the person");
+        let f = fold_of(&settle(fixture("fixtures/session.jsonl")));
+        assert!(!f.running && f.pending.is_empty());
+        let t = f.turns.last().unwrap();
+        assert!(matches!(t.blocks.last(), Some(Block::Done(s)) if s.starts_with("completed")));
+        assert!(f.running_calls().is_empty(), "no call of the settled turn still runs");
+        // a settled log is left as it is
+        let again = settle(fixture("fixtures/idle.jsonl"));
+        assert_eq!(again, fixture("fixtures/idle.jsonl"));
+    }
+
+    #[test]
+    fn answering_the_last_request_ends_the_turn() {
+        let mut f = fold_of(&fixture("fixtures/session.jsonl"));
+        let mut ui = Ui::default();
+        approve(&mut f, &mut ui, &mut None, 1, 0);
+        ui.sync_form(&f);
+        assert!(f.running && f.pending.len() == 1, "the form still waits");
+        submit_form(&mut f, &mut ui, &mut None, 2);
+        assert!(ui.answered && f.pending.is_empty());
+        finish_turn(&mut f, 3);
+        assert!(!f.running && f.running_calls().is_empty());
+        let rows: Vec<String> = conversation(&f, 100, &View::default()).iter().map(plain).collect();
+        let (reply, done) = (rows.iter().position(|l| l.contains("Stopping here for the demo")).unwrap(), rows.iter().rposition(|l| l.contains("▣ completed")).unwrap());
+        assert!(done > reply, "the card closes with its ▣ line after the reply");
+    }
+
+    #[test]
+    fn a_click_opens_a_ledger_row_or_a_thought() {
+        let out: String = (1..=30).map(|i| format!("line {i}\n")).collect();
+        let call = Call { name: "shell".into(), args: json!({ "command": "cargo test" }), st: St::Completed, start: 0, end: Some(10), err: None, lines: 30, exit: Some(0), changes: vec![], content: out, step: 1, asked: None };
+        let thought = Reason { text: "**Plan**\nfirst this, then that".into(), start: 0, end: Some(5), step: 1 };
+        let g = Group { items: vec![Item::R(thought), Item::C(call)], steps: 1, step_closed: true, open: true, last_ts: 10 };
+        let mut v = View::default();
+        let text = |v: &View| group_lines(&g, Act::Group(0, 0), 80, v).iter().map(plain).collect::<Vec<_>>();
+        let rows = group_lines(&g, Act::Group(0, 0), 80, &v);
+        assert_eq!(rows[1].act, Some(Act::Item(0, 0, 0)));
+        assert_eq!(rows[2].act, Some(Act::Item(0, 0, 1)));
+        assert_eq!(rows.len(), 3);
+        v.exp.insert((0, 0, 1));
+        let t = text(&v);
+        assert!(t.iter().any(|l| l.trim() == "line 20") && !t.iter().any(|l| l.trim() == "line 21"));
+        assert!(t.last().unwrap().contains("… 10 more lines"));
+        v.exp.insert((0, 0, 0));
+        assert!(text(&v).iter().any(|l| l.contains("first this, then that")));
+        // a thought with no call is one line, and a click on it shows its text
+        let lone = Group { items: vec![Item::R(Reason { text: "why not".into(), start: 0, end: Some(1), step: 1 })], steps: 1, step_closed: true, open: false, last_ts: 1 };
+        let rows = group_lines(&lone, Act::Group(2, 3), 80, &View::default());
+        assert_eq!((rows.len(), rows[0].act), (1, Some(Act::Item(2, 3, 0))));
+        let v = View { exp: HashSet::from([(2, 3, 0)]), ..Default::default() };
+        assert!(plain(&group_lines(&lone, Act::Group(2, 3), 80, &v)[1]).contains("why not"));
+    }
+
+    #[test]
+    fn a_ledger_row_opens_in_the_paged_mode() {
+        let mut v = View { all_open: true, ..Default::default() };
+        let (mut pg, _) = paged::Pager::open("fixtures/session.jsonl", 8).unwrap();
+        pg.sync(124, &v, "");
+        pg.ensure(0, pg.total(), &v);
+        let (_, rows) = pg.rows(0, pg.total() - 1, &v);
+        let (r, key) = rows.iter().enumerate().find_map(|(r, x)| match x.act {
+            Some(Act::Item(p, bi, ii)) if plain(x).contains("read ") => Some((r, (p, bi, ii))),
+            _ => None,
+        }).unwrap();
+        let before = pg.total();
+        v.exp.insert(key);
+        pg.toggle(key.0, key.1, &v);
+        pg.toggle(key.0, key.1, &v);
+        assert!(pg.total() > before, "the page renders again, taller");
+        let (_, after) = pg.rows(0, pg.total() - 1, &v);
+        assert_eq!(after[r].act, Some(Act::Item(key.0, key.1, key.2)));
+        assert_eq!(after[r + 1].pre, 9, "the call's output sits under its row");
+    }
+
+    fn handoff_fold(outcome: Option<&str>) -> Fold {
+        let e = |kind: &str, aid: &str, payload: Value| json!({ "kind": kind, "session_id": "s", "ts": 1000, "action_id": aid, "payload": payload });
+        let usage = |n: u64| e("usage_recorded", "", json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } }));
+        let mut ev = vec![
+            e("turn_started", "", json!({ "input": [{ "type": "text", "text": "go" }] })),
+            e("assistant_message_started", "a1", json!({})),
+            e("assistant_message_completed", "a1", json!({ "text": "before the handoff" })),
+            usage(402_000),
+        ];
+        match outcome {
+            // a tool-started handoff writes no handoff_started and makes no note request
+            None => ev.push(e("handoff_completed", "", json!({ "outcome": "completed", "tokens_before": 402_000 }))),
+            Some(o) => ev.extend([
+                e("handoff_started", "", json!({ "trigger": "auto" })),
+                e("assistant_message_started", "a2", json!({})),
+                e("assistant_message_completed", "a2", json!({ "text": "THE NOTE" })),
+                usage(403_000),
+                e("handoff_completed", "", json!({ "outcome": o, "tokens_before": 402_000, "note": ["a2"] })),
+            ]),
+        }
+        let after = if outcome == Some("failed") { 404_000 } else { 32_000 };
+        ev.extend([usage(after), e("assistant_message_started", "a3", json!({})), e("assistant_message_completed", "a3", json!({ "text": "after the handoff" })), e("turn_completed", "", json!({ "outcome": "completed" }))]);
+        fold_of(&ev)
+    }
+
+    #[test]
+    fn a_handoff_breaks_the_card_with_a_band() {
+        let f = handoff_fold(Some("completed"));
+        let rows: Vec<String> = conversation(&f, 90, &View::default()).iter().map(plain).collect();
+        let at = |s: &str| rows.iter().position(|l| l.contains(s));
+        let (b, band, a, done) = (at("before the handoff").unwrap(), at("automatic at 400k").unwrap(), at("after the handoff").unwrap(), at("▣ completed").unwrap());
+        assert!(b < band && band < a && a < done);
+        assert!(rows[band].contains("402k → 32k"), "{}", rows[band]);
+        assert!(at("THE NOTE").is_none(), "the note is not a reply");
+        assert_eq!(rows.iter().filter(|l| !l.is_empty() && l.chars().all(|c| c == '▄')).count(), 3, "two cards and the band");
+        // the context follows the size after the handoff, and counts nothing before it
+        assert_eq!(f.ctx, 32_000);
+        assert!(context_view(&f, 90).iter().any(|r| plain(r).contains("32k tokens")));
+        // before the first request after it, the size after is not known
+        let mut g = handoff_fold(Some("completed"));
+        if let Some(Block::Handoff(h)) = g.turns[0].blocks.iter_mut().find(|b| matches!(b, Block::Handoff(_))) {
+            h.after = None;
+        }
+        assert!(conversation(&g, 90, &View::default()).iter().any(|r| plain(r).contains("402k → …")));
+        let failed: Vec<String> = conversation(&handoff_fold(Some("failed")), 90, &View::default()).iter().map(plain).collect();
+        assert!(failed.iter().any(|l| l.contains("failed · the context is unchanged")));
+        let tool: Vec<String> = conversation(&handoff_fold(None), 90, &View::default()).iter().map(plain).collect();
+        assert!(tool.iter().any(|l| l.contains("the model handed off") && l.contains("402k → 32k")));
     }
 
     #[test]
