@@ -2502,7 +2502,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 s.hits = find_all(conv, &s.q.to_lowercase());
                 s.i = s.i.min(s.hits.len().saturating_sub(1));
             }
-            let bot = bottom(f, conv_w as usize, tick, vnow, &v, narrow, &ui);
+            let mut bot = bottom(f, conv_w as usize, tick, vnow, &v, narrow, &ui);
+            // a bottom area taller than the screen keeps its last rows, the input box
+            bot.drain(..bot.len().saturating_sub(rows as usize));
             let view_h = (rows as usize).saturating_sub(bot.len());
             let max_top = total.saturating_sub(view_h);
             if let Some(s) = ui.search.as_mut().filter(|s| s.jump) {
@@ -2594,7 +2596,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
                 // scroll thumb
-                if total > view_h && vrows.is_none() {
+                if total > view_h && view_h > 0 && vrows.is_none() {
                     let th = (view_h * view_h / total).max(1);
                     let tt = (view_h - th) * start / (total - view_h);
                     for y in tt..tt + th {
