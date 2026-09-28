@@ -66,8 +66,8 @@ impl Out {
         self.bytes += s.len() + 1;
         self.lines.push(s);
     }
-    fn handoff(&mut self, ts: i64, tokens_before: u64) {
-        self.ev("handoff_started", ts, None, json!({ "trigger": "auto" }));
+    fn handoff(&mut self, ts: i64, tokens_before: u64, trigger: &str) {
+        self.ev("handoff_started", ts, None, json!({ "trigger": trigger }));
         self.ev("handoff_completed", ts, None, json!({ "outcome": "completed", "tokens_before": tokens_before, "note": [] }));
         self.handoffs += 1;
     }
@@ -93,6 +93,20 @@ fn ms(v: &Value) -> i64 {
     let doy = (153 * ((m + 9) % 12) + 2) / 5 + d - 1;
     let days = era * 146_097 + yoe * 365 + yoe / 4 - yoe / 100 + doy - 719_468;
     ((days * 24 + n(11, 13)) * 60 + n(14, 16)) * 60_000 + n(17, 19) * 1000 + n(20, 23)
+}
+
+/// Drops every `<system-reminder>…</system-reminder>` span.
+fn strip_reminders(s: &str) -> String {
+    let mut out = String::new();
+    let mut rest = s;
+    while let Some(i) = rest.find("<system-reminder>") {
+        out.push_str(&rest[..i]);
+        rest = match rest[i..].find("</system-reminder>") {
+            Some(j) => &rest[i + j + "</system-reminder>".len()..],
+            None => "",
+        };
+    }
+    out + rest
 }
 
 fn lines(s: &str) -> usize {
@@ -149,7 +163,7 @@ fn flush(o: &mut Out, m: &mut Option<Msg>, calls: &mut Calls) {
     let (input, cr, cc, out) = (g("input_tokens"), g("cache_read_input_tokens"), g("cache_creation_input_tokens"), g("output_tokens"));
     let ctx = input + cr + cc - o.offset.min(cr);
     if ctx > HANDOFF_AT {
-        o.handoff(m.ts, ctx);
+        o.handoff(m.ts, ctx, "auto");
         o.offset = (input + cr + cc).saturating_sub(RESTART);
     }
     let cr = cr - o.offset.min(cr);
@@ -208,6 +222,7 @@ fn convert(src: &str, max: usize) -> Out {
     let mut cur: Option<Msg> = None;
     let mut calls = Calls::new();
     let mut started = false;
+    let mut asked = false; // a `/compact` prompt is waiting for its compaction
     for l in src.lines() {
         let Ok(d) = serde_json::from_str::<Value>(l) else { continue };
         let ty = d["type"].as_str().unwrap_or("");
@@ -218,7 +233,8 @@ fn convert(src: &str, max: usize) -> Out {
         if ty == "system" && d["subtype"] == "compact_boundary" && started {
             flush(&mut o, &mut cur, &mut calls);
             let before = o.last_ctx;
-            o.handoff(ms(&d["timestamp"]), before);
+            o.handoff(ms(&d["timestamp"]), before, if asked { "person" } else { "auto" });
+            asked = false;
             o.offset = 0;
             continue;
         }
@@ -278,8 +294,13 @@ fn convert(src: &str, max: usize) -> Out {
             }
             _ => {}
         }
-        let pt = prompt.trim();
-        if pt.is_empty() || pt.starts_with("<local-command") || pt.starts_with("<command-") || pt.starts_with("<system-reminder") {
+        let clean = strip_reminders(&prompt);
+        let pt = clean.trim();
+        if pt.is_empty() || ["<task-notification", "<local-command", "<command-", "<system-reminder"].iter().any(|p| pt.starts_with(p)) {
+            continue;
+        }
+        if pt == "/compact" || pt.starts_with("/compact ") {
+            asked = true;
             continue;
         }
         o.end_turn(ts);
@@ -358,5 +379,26 @@ mod tests {
         let (c, h) = ctxs(&convert(&src, usize::MAX));
         assert_eq!(h, vec![410_001]);
         assert_eq!(c, vec![390_001, RESTART, RESTART + 5_000]);
+    }
+    #[test]
+    fn harness_text_is_not_a_prompt_and_compact_is_the_persons_handoff() {
+        let u = |t: &str, ts: &str| json!({"type":"user","timestamp":ts,"message":{"content":t}}).to_string();
+        let src = [
+            u("real <system-reminder>secret</system-reminder>prompt", "2026-01-01T00:00:00.000Z"),
+            asst("m1", "2026-01-01T00:00:01.000Z", 1_000),
+            u("<task-notification>done</task-notification>", "2026-01-01T00:00:02.000Z"),
+            asst("m2", "2026-01-01T00:00:03.000Z", 1_000),
+            u("/compact keep going", "2026-01-01T00:00:04.000Z"),
+            json!({"type":"system","subtype":"compact_boundary","timestamp":"2026-01-01T00:00:05.000Z"}).to_string(),
+            asst("m3", "2026-01-01T00:00:06.000Z", 1_000),
+            json!({"type":"system","subtype":"compact_boundary","timestamp":"2026-01-01T00:00:07.000Z"}).to_string(),
+        ]
+        .join("\n");
+        let o = convert(&src, usize::MAX);
+        let all = o.lines.join("\n");
+        assert_eq!(all.matches("\"turn_started\"").count(), 1);
+        assert!(all.contains("real prompt") && !all.contains("secret") && !all.contains("keep going"));
+        let t: Vec<String> = o.lines.iter().filter_map(|l| serde_json::from_str::<Value>(l).ok()).filter(|v| v["kind"] == "handoff_started").map(|v| v["payload"]["trigger"].as_str().unwrap().to_string()).collect();
+        assert_eq!(t, ["person", "auto"]);
     }
 }
