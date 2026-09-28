@@ -3,6 +3,7 @@
 //! drawing side by side, the input parser in `input.rs`, a few tests.
 
 mod input;
+mod lua;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -85,6 +86,8 @@ enum Act {
     Context,
     /// leaves a swapped view
     Back,
+    /// a click region an extension drew, by its interned id
+    Ext(usize),
 }
 
 #[derive(Clone, Default)]
@@ -100,6 +103,8 @@ struct Row {
     link: bool,
     /// click targets within the row, as cell ranges
     hot: Vec<(u16, u16, Act)>,
+    /// drawn by a Lua renderer, from this
+    lua: Option<std::rc::Rc<lua::LuaSrc>>,
 }
 fn row(spans: Vec<Span<'static>>) -> Row {
     Row { spans, ..Default::default() }
@@ -908,6 +913,8 @@ struct View {
     q: String,
     /// the group whose call is asking the person, opened so the call can be read
     force: Option<Act>,
+    /// the Lua renderer for one tool's ledger rows
+    lua: Option<std::rc::Rc<lua::Ext>>,
 }
 
 fn result_spans(c: &Call) -> Vec<Span<'static>> {
@@ -1053,6 +1060,7 @@ fn group_lines(g: &Group, gid: Act, w: usize, v: &View) -> Vec<Row> {
                 };
                 ledger.push(row(vec![sp(gutter, dim()), sp(t, dim().add_modifier(Modifier::ITALIC))]));
             }
+            Item::C(c) if let Some(rows) = v.lua.as_ref().filter(|x| x.tool == c.name).and_then(|x| x.rows(c, &gutter, w)) => ledger.extend(rows),
             Item::C(c) => {
                 let glyph = match c.st {
                     St::Running | St::Pending => sp("○", fg(ORANGE)),
@@ -1166,7 +1174,8 @@ fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
                 let body = fit(&r.spans, iw);
                 s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
                 s.push(sp(" ", Style::new()));
-                Row { spans: s, bg: None, pre: r.pre + 1, ..r }
+                let hot = r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect();
+                Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
             })
             .collect();
         out.extend(slab(rows, BW, None, w));
@@ -2162,9 +2171,11 @@ struct Args {
     commands: Option<String>,
     log_input: Option<String>,
     wheel: usize,
+    lua: Option<String>,
+    lua_uncached: bool,
 }
 fn args() -> Args {
-    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false, commands: None, log_input: None, wheel: 1 };
+    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false, commands: None, log_input: None, wheel: 1, lua: None, lua_uncached: false };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -2178,8 +2189,10 @@ fn args() -> Args {
             "--commands" => a.commands = it.next(),
             "--log-input" => a.log_input = it.next(),
             "--wheel-lines" => a.wheel = it.next().and_then(|v| v.parse().ok()).expect("--wheel-lines N"),
+            "--lua-renderer" => a.lua = it.next(),
+            "--lua-uncached" => a.lua_uncached = true,
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2230,7 +2243,13 @@ type Term = Terminal<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>;
 
 fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Term, t0: Instant) -> io::Result<String> {
     let v0 = Instant::now();
-    let mut v = View { reduced: a.reduced, ..Default::default() };
+    let lua = match &a.lua {
+        Some(p) => Some(std::rc::Rc::new(lua::Ext::new(p, &std::fs::read_to_string(p)?, !a.lua_uncached).map_err(|e| io::Error::other(format!("{p}: {e}")))?)),
+        None => None,
+    };
+    let mut v = View { reduced: a.reduced, lua, ..Default::default() };
+    // Lua calls when the measurement window opens, and the Lua state's memory after the first frame
+    let (mut lua_calls0, mut lua_mem) = (0u64, 0usize);
     // replay clock: an event is due `gap / speed` after the one before it
     let ts_of = |i: usize| events[i]["ts"].as_i64().unwrap_or(0);
     let mut due = Instant::now();
@@ -2318,6 +2337,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         }
         if window.is_none() && now_i >= v0 + Duration::from_secs_f64(a.warmup) {
             window = Some((now_i, BYTES.load(Relaxed), frames, FLUSHES.load(Relaxed), rusage()));
+            lua_calls0 = v.lua.as_ref().map_or(0, |x| x.calls.get());
         }
         // dragging past the top or bottom edge keeps scrolling while the button is held
         if ui.drag_edge != 0 && now_i >= next_auto {
@@ -2365,6 +2385,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             if conv_cache.as_ref().is_none_or(|(w, k, _)| *w != cw || *k != key) {
                 conv_cache = Some((cw, key, conversation(f, cw, &v)));
                 conv_gen += 1;
+                if let Some(n) = v.lua.as_ref().and_then(|x| x.take_notice()) {
+                    f.notices.push(("extension".into(), n, false));
+                }
             }
             if panel_cache.is_none() && !narrow {
                 panel_cache = Some(panel_rows(f, vnow, &ui.keys));
@@ -2400,6 +2423,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             hits.clear();
             geom = (conv_w, cols);
             let panel = panel_cache.as_ref();
+            let uncached = v.lua.as_deref().filter(|x| !x.cached);
             let (search, sel) = (ui.search.as_ref(), ui.sel);
             // synchronised output (DEC mode 2026): the terminal shows the frame only once it is
             // all written, however many writes and flushes it takes
@@ -2418,9 +2442,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 // conversation
                 for (k, r) in vis.iter().enumerate().filter(|_| vrows.is_none()) {
                     let y = (top_pad + k) as u16;
-                    paint(buf, 1, y, cw as u16, r);
+                    // uncached: Lua is called again for every visible row it drew, every frame
+                    let fresh = r.lua.as_ref().zip(uncached).and_then(|(src, x)| x.frame_spans(src, cw, BW));
+                    match fresh {
+                        Some(spans) => paint(buf, 1, y, cw as u16, &Row { spans, ..Default::default() }),
+                        None => paint(buf, 1, y, cw as u16, r),
+                    }
                     if let Some(act) = r.act {
                         hits.push((y, 1, 1 + cw as u16, act));
+                    }
+                    for &(x0, x1, act) in &r.hot {
+                        hits.push((y, 1 + x0, 1 + x1, act));
                     }
                 }
                 let ys = |r: usize| (r >= start && r < start + vis.len()).then(|| (top_pad + r - start) as u16);
@@ -2558,6 +2590,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
             if first_frame.is_none() {
                 first_frame = Some(t0.elapsed());
+                lua_mem = v.lua.as_ref().map_or(0, |x| x.used_memory());
                 // kitty's flags query, then primary device attributes: a terminal that
                 // answers the second but not the first does not speak the protocol
                 let be = term.backend_mut();
@@ -2893,6 +2926,10 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     ui.vscroll = 0;
                 }
                 Act::Back => ui.ctx_view = false,
+                Act::Ext(i) => {
+                    let id = v.lua.as_ref().map(|x| x.clicks.borrow()[i].clone()).unwrap_or_default();
+                    say(&mut ui, format!("extension click: {id}"));
+                }
                 Act::Choice(i) => {
                     ui.choice = i;
                     approve(f, &mut ui, &mut cmds, ts, i);
@@ -2942,6 +2979,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         Some((false, _)) => "legacy".into(),
         None => "no reply".into(),
     });
+    if let Some(x) = &v.lua {
+        let n = x.calls.get();
+        let _ = writeln!(s, "lua_cached\t{}\nlua_calls\t{n}\nlua_calls_window\t{}", x.cached, n - lua_calls0);
+        let _ = writeln!(s, "lua_us_per_call\t{:.2}\nlua_us_in_render\t{:.2}", x.ns.get() as f64 / 1000.0 / n.max(1) as f64, x.ns_in.get() as f64 / 1000.0 / n.max(1) as f64);
+        let _ = writeln!(s, "lua_mem_bytes\t{lua_mem}");
+    }
     let Some((t0w, b0, f0, fl0, r0)) = window else { return Ok(s) };
     let secs = t0w.elapsed().as_secs_f64();
     let r1 = rusage();
@@ -3069,6 +3112,73 @@ mod tests {
         assert!(text.iter().any(|l| l.contains("system prompt") && l.contains("~") && l.contains("1.0k")));
         assert!(text.iter().any(|l| l.contains("not attributed")));
         assert!(rows.iter().all(|r| width(&r.spans) <= 90));
+    }
+
+    fn shell_fold(exit: i64) -> Fold {
+        let call = Call { name: "shell".into(), args: json!({ "command": "cargo test -p log" }), st: St::Completed, start: 0, end: Some(2500), err: None, lines: 42, exit: Some(exit), changes: vec![], content: String::new(), step: 1, asked: None };
+        let g = Group { items: vec![Item::C(call)], steps: 1, step_closed: true, open: true, last_ts: 2500 };
+        Fold { turns: vec![Turn { prompt: "p".into(), ts: 0, blocks: vec![Block::Group(g)] }], ..Default::default() }
+    }
+    fn lua_view(src: &str, cached: bool) -> View {
+        View { lua: Some(std::rc::Rc::new(lua::Ext::new("test.lua", src, cached).unwrap())), ..Default::default() }
+    }
+    const SHELL_ROW: &str = include_str!("../lua/shell_row.lua");
+
+    #[test]
+    fn search_select_and_click_work_on_rows_lua_drew() {
+        let v = lua_view(SHELL_ROW, true);
+        let rows = conversation(&shell_fold(1), 100, &v);
+        let r = find(&rows, "exit 1");
+        assert!(rows[r].lua.is_some(), "Lua drew the row");
+        // search matches the text Lua drew
+        assert_eq!(find_all(&rows, "exit 1").len(), 1);
+        assert_eq!(find_all(&rows, "2.5s").len(), 1);
+        // a copy of the row is the text behind its cells
+        let t = selection_text(&rows, (r, 0), (r, 999));
+        assert!(t.contains("exit 1  cargo test -p log") && t.contains("▰") && t.ends_with("42 lines"), "{t}");
+        // the badge's click region covers its cells
+        let p = plain(&rows[r]);
+        let x = p[..p.find(" exit 1").unwrap()].width() as u16;
+        let &(x0, x1, act) = rows[r].hot.first().unwrap();
+        assert_eq!((x0, x1 - x0, act), (x, 8, Act::Ext(0)));
+        assert_eq!(v.lua.as_ref().unwrap().clicks.borrow()[0], "badge exit 1 ");
+    }
+
+    #[test]
+    fn a_failing_or_misshapen_renderer_falls_back_with_one_notice() {
+        for src in [
+            "return { tool = 'shell', render = function() error('boom') end }",
+            "return { tool = 'shell', render = function() return 'text' end }",
+            "return { tool = 'shell', render = function() return {{ { text = '\\27[31mred' } }} end }",
+            "return { tool = 'shell', render = function() return {{ { text = 'x', fg = 'mauve' } }} end }",
+        ] {
+            let v = lua_view(src, false);
+            for _ in 0..2 {
+                let rows = conversation(&shell_fold(0), 100, &v);
+                let r = find(&rows, "cargo test");
+                assert!(rows[r].lua.is_none() && plain(&rows[r]).contains("exit 0 · 42 lines"), "the built-in row: {src}");
+            }
+            let x = v.lua.as_ref().unwrap();
+            assert!(x.take_notice().is_some_and(|n| n.contains("shell renderer failed")), "{src}");
+            assert!(x.take_notice().is_none(), "one notice");
+        }
+    }
+
+    #[test]
+    fn a_cached_renderer_runs_once_per_row_content() {
+        for (cached, calls) in [(true, 1), (false, 3)] {
+            let v = lua_view(SHELL_ROW, cached);
+            for _ in 0..3 {
+                conversation(&shell_fold(0), 100, &v);
+            }
+            assert_eq!(v.lua.as_ref().unwrap().calls.get(), calls);
+        }
+        // a new width or new content is a new row
+        let v = lua_view(SHELL_ROW, true);
+        conversation(&shell_fold(0), 100, &v);
+        conversation(&shell_fold(0), 90, &v);
+        conversation(&shell_fold(2), 90, &v);
+        assert_eq!(v.lua.as_ref().unwrap().calls.get(), 3);
     }
 
     #[test]

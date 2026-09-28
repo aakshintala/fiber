@@ -25,6 +25,8 @@ cargo run --release -- fixtures/session.jsonl
 | `--commands FILE` | appends each command the TUI would send to FILE, one JSON line each |
 | `--log-input FILE` | writes every read from the terminal, the events parsed from it, and each frame's scroll position, bytes and flushes to FILE |
 | `--wheel-lines N` | rows scrolled per wheel event; the default is 1 |
+| `--lua-renderer FILE.lua` | draws one tool's ledger rows with a Lua renderer, such as `lua/shell_row.lua`; see `SEAMS.md` |
+| `--lua-uncached` | calls the Lua renderer for every visible row on every frame, instead of caching its rows |
 
 The key map is under "Stage 2".
 
