@@ -140,6 +140,7 @@ as soon as a delegate relays its own messages onto the same stdout.
 | `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
 | `steering_queue` | no | every steering message still queued, in order: the id of the `steer` command that sent it, its text, and where it came from; written whenever the queue changes |
 | `shell_command` | yes | a command the person ran with `send` true (`docs/invocation.md`, `shell`): the command, its output cut as a tool result is, `artifact` when cut, and `process` as on `tool_call_completed`; it joins the next turn's input |
+| `clients` | no | `count`, the clients attached to the session, this one included; written whenever a client attaches or leaves |
 | `context_added` | yes | the text a hook added to the conversation, the extension's name and the hook point (`docs/extensions.md`, "Hooks") |
 
 A **steering message** — input sent while a turn is running — joins that turn
@@ -151,6 +152,8 @@ after that becomes the next turn's input, and it appears on the next
 threading this rests on is the concurrency section of `docs/architecture.md`;
 the driver commands that send, amend and withdraw one — `steer`, `steer_amend`
 and `steer_drop` — are `docs/invocation.md`.
+
+`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/invocation.md`, "Lifecycle"). The latest wins, and a client that attaches is sent the latest.
 
 `steering_queue` lets every attached client show and edit the queue, not only
 the client that sent a message. It is ephemeral because `steering_applied`

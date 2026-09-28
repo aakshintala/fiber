@@ -207,8 +207,15 @@ model's final answer — twenty minutes if it takes twenty minutes — on the sa
 path; its caller's turn ending changes nothing, because the caller's turn was
 never holding the pipe.
 
-There is no detach command. A session that exits is resumed from its log, so
-reattaching to one needs nothing kept running.
+There is no detach command. A client detaches by closing its connection, and
+a session that exits is resumed from its log, so reattaching to one needs
+nothing kept running.
+
+The terminal offers two ways to leave. Detach (a second Ctrl+D on an empty
+input box, or `/detach`) closes its connection, and the rule above applies.
+Quit (a second Ctrl+C, or `/quit`) stops everything: it sends `cancel`, stops
+each running job and delegate, then sends `close`. When the `clients` event
+says another client is attached, quit asks first, and offers detach instead.
 
 **A pending approval or question does not keep a session alive.** An
 approval is raised before its tool call runs, and an `ask_user` question runs
