@@ -37,6 +37,7 @@ const BU: Color = rgb(0x343541); // the person's bubble
 const BI: Color = rgb(0x1a1a22); // input box
 const BW: Color = rgb(0x101017); // turn card
 const BK: Color = rgb(0x181821); // code block
+const BH: Color = rgb(0x1f1a2e); // handoff band
 const HD: Color = rgb(0xff9f43);
 const SX_KW: Color = rgb(0x6eaafe);
 const SX_FN: Color = rgb(0x7dd3fc);
@@ -450,6 +451,17 @@ enum Block {
     Done(String),
     /// a resolved form: (header, answer, skipped) per question, the note, when, declined
     Answer(Vec<(String, String, bool)>, Option<String>, i64, bool),
+    /// breaks the turn's card with a band
+    Handoff(Handoff),
+}
+struct Handoff {
+    trigger: String,
+    before: u64,
+    /// the context size the first request after the handoff reports
+    after: Option<u64>,
+    ts: i64,
+    /// none while the note is being written
+    outcome: Option<String>,
 }
 /// An approval or a question waiting on the person.
 struct Pending {
@@ -522,6 +534,8 @@ struct Fold {
     tooldef_chars: usize,
     instr_chars: usize,
     skills_chars: usize,
+    /// the latest handoff's band, while it waits on its outcome or on the size after it
+    ho: Option<(usize, usize)>,
 }
 
 fn heading(text: &str, last: bool) -> Option<String> {
@@ -568,6 +582,13 @@ fn clock(ts: i64) -> String {
 impl Fold {
     fn turn(&mut self) -> Option<&mut Turn> {
         self.turns.last_mut()
+    }
+    fn band(&mut self) -> Option<&mut Handoff> {
+        let (ti, bi) = self.ho?;
+        match self.turns.get_mut(ti)?.blocks.get_mut(bi)? {
+            Block::Handoff(h) => Some(h),
+            _ => None,
+        }
     }
     /// A call's tool and arguments, from this session's turns or a delegate's relayed lines.
     fn call_of(&self, sid: &str, aid: &str) -> (String, Value) {
@@ -780,7 +801,9 @@ impl Fold {
             }
             "assistant_message_delta" | "assistant_message_completed" => {
                 let text = p["text"].as_str().unwrap_or("");
-                if !self.at.contains_key(&aid) && !text.is_empty() && !self.turns.is_empty() {
+                // the handoff note belongs to the band, not the card
+                let noting = self.band().is_some_and(|h| h.outcome.is_none());
+                if !self.at.contains_key(&aid) && !text.is_empty() && !self.turns.is_empty() && !noting {
                     let ti = self.turns.len() - 1;
                     let t = &mut self.turns[ti];
                     t.blocks.push(Block::Text(String::new()));
@@ -867,11 +890,41 @@ impl Fold {
                 self.output += o;
                 self.ctx = i + r + cw + o;
                 self.cost += p["cost"].as_f64().unwrap_or(0.0);
+                let ctx = self.ctx;
+                if let Some(h) = self.band().filter(|h| h.outcome.as_deref() == Some("completed")) {
+                    h.after = Some(ctx);
+                    self.ho = None;
+                }
                 if let Some(a) = p["action_id"].as_str() {
                     if let Some(d) = self.text_dur.get(a) {
                         self.text_ms += d;
                         self.text_out += o;
                     }
+                }
+            }
+            "handoff_started" => {
+                let Some(t) = self.turns.last_mut() else { return };
+                t.blocks.push(Block::Handoff(Handoff { trigger: p["trigger"].as_str().unwrap_or("").into(), before: 0, after: None, ts, outcome: None }));
+                let bi = t.blocks.len() - 1;
+                self.ho = Some((self.turns.len() - 1, bi));
+            }
+            "handoff_completed" => {
+                // a tool-started handoff writes no handoff_started
+                if !self.band().is_some_and(|h| h.outcome.is_none()) {
+                    let Some(t) = self.turns.last_mut() else { return };
+                    t.blocks.push(Block::Handoff(Handoff { trigger: "tool".into(), before: 0, after: None, ts, outcome: None }));
+                    let bi = t.blocks.len() - 1;
+                    self.ho = Some((self.turns.len() - 1, bi));
+                }
+                let outcome = p["outcome"].as_str().unwrap_or("completed").to_string();
+                let done = outcome == "completed";
+                if let Some(h) = self.band() {
+                    h.outcome = Some(outcome);
+                    h.before = p["tokens_before"].as_u64().unwrap_or(0);
+                    h.ts = ts;
+                }
+                if !done {
+                    self.ho = None;
                 }
             }
             "steering_applied" => {
@@ -1167,6 +1220,24 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
     out
 }
 
+/// A handoff's band: the trigger, the context before and after, and the time.
+fn band_rows(h: &Handoff, w: usize) -> Vec<Row> {
+    let why = match h.trigger.as_str() {
+        "auto" => format!("automatic at {}", k(HANDOFF_AT)),
+        "person" => "you asked with /handoff".into(),
+        "overflow" => "the request did not fit".into(),
+        "tool" => "the model handed off".into(),
+        x => x.into(),
+    };
+    let size = match h.outcome.as_deref() {
+        None => sp("writing the note…", dim()),
+        Some("completed") => sp(format!("{} → {}", k(h.before), h.after.map_or("…".into(), k)), bold()),
+        Some(o) => sp(format!("{o} · the context is unchanged"), fg(ORANGE)),
+    };
+    let s = vec![sp(" ⇄ ", fg(PURPLE)), sp("handoff", fg(PURPLE).add_modifier(Modifier::BOLD)), sp(format!(" · {why}"), dim()), t(), size, sp(format!(" · {} ", clock(h.ts)), dim())];
+    slab(vec![row(s)], BH, None, w)
+}
+
 fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
     f.turns.iter().enumerate().flat_map(|(ti, t)| turn_rows(ti, t, w, v, true, true)).collect()
 }
@@ -1182,9 +1253,14 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
             out.push(Row::default());
             out.extend(bubble(&t.prompt, t.ts, w));
         }
-        let mut inner: Vec<Row> = vec![];
+        // a handoff breaks the card: each band starts a new piece of it
+        let mut segs: Vec<(Option<&Handoff>, Vec<Row>)> = vec![(None, vec![])];
         for (bi, b) in t.blocks.iter().enumerate() {
             let r: Vec<Row> = match b {
+                Block::Handoff(h) => {
+                    segs.push((Some(h), vec![]));
+                    continue;
+                }
                 Block::Text(s) => md(s, iw).into_iter().map(|r| Row { link: true, ..r }).collect(),
                 Block::Group(g) => group_lines(g, Act::Group(ti, bi), iw, v),
                 Block::Steer(s, ts) => {
@@ -1214,34 +1290,45 @@ fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) ->
             if r.is_empty() {
                 continue;
             }
+            let first = segs.len() == 1;
+            let inner = &mut segs.last_mut().unwrap().1;
             // a piece that starts mid-turn follows blocks another piece drew
-            if !inner.is_empty() || !head {
+            if !inner.is_empty() || (!head && first) {
                 inner.push(Row::default());
             }
             inner.extend(r);
         }
-        if inner.is_empty() {
+        if segs.len() == 1 && segs[0].1.is_empty() {
             return out;
         }
         if head {
             out.push(Row::default());
         }
-        let rows = inner
-            .into_iter()
-            .map(|r| {
-                let mut s = vec![sp(" ", Style::new())];
-                let body = fit(&r.spans, iw);
-                s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
-                s.push(sp(" ", Style::new()));
-                let hot = r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect();
-                Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
-            })
-            .collect();
-        let mut card = slab(rows, BW, None, w);
-        if !tail {
-            card.pop();
+        let n = segs.len();
+        for (k, (h, inner)) in segs.into_iter().enumerate() {
+            if let Some(h) = h {
+                out.extend(band_rows(h, w));
+            }
+            if inner.is_empty() {
+                continue;
+            }
+            let rows = inner
+                .into_iter()
+                .map(|r| {
+                    let mut s = vec![sp(" ", Style::new())];
+                    let body = fit(&r.spans, iw);
+                    s.extend(if let Some(bg) = r.bg { tint(body, bg) } else { body });
+                    s.push(sp(" ", Style::new()));
+                    let hot = r.hot.iter().map(|&(a, b, k)| (a + 1, b + 1, k)).collect();
+                    Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
+                })
+                .collect();
+            let mut card = slab(rows, BW, None, w);
+            if !tail && k + 1 == n {
+                card.pop();
+            }
+            out.extend(if head || k > 0 { card } else { card.split_off(1) });
         }
-        out.extend(if head { card } else { card.split_off(1) });
     }
     out
 }
@@ -1548,9 +1635,21 @@ fn context_view(f: &Fold, w: usize) -> Vec<Row> {
     let tok = |chars: usize| chars as u64 / 4;
     let (mut you, mut replies, mut reasoning, mut calls, mut results) = (0, 0, 0, 0, 0);
     let mut largest: Vec<(String, u64)> = vec![];
-    for t in &f.turns {
-        you += t.prompt.len();
-        for b in &t.blocks {
+    // only what follows the last completed handoff is in context
+    let cut = f
+        .turns
+        .iter()
+        .enumerate()
+        .flat_map(|(ti, t)| t.blocks.iter().enumerate().filter(|(_, b)| matches!(b, Block::Handoff(h) if h.outcome.as_deref() == Some("completed"))).map(move |(bi, _)| (ti, bi)))
+        .last();
+    for (ti, t) in f.turns.iter().enumerate() {
+        if cut.is_none_or(|c| ti > c.0) {
+            you += t.prompt.len();
+        }
+        for (bi, b) in t.blocks.iter().enumerate() {
+            if cut.is_some_and(|c| (ti, bi) <= c) {
+                continue;
+            }
             match b {
                 Block::Text(x) => replies += x.len(),
                 Block::Steer(x, _) => you += x.len(),
@@ -3597,6 +3696,56 @@ mod tests {
         let (_, after) = pg.rows(0, pg.total() - 1, &v);
         assert_eq!(after[r].act, Some(Act::Item(key.0, key.1, key.2)));
         assert_eq!(after[r + 1].pre, 9, "the call's output sits under its row");
+    }
+
+    fn handoff_fold(outcome: Option<&str>) -> Fold {
+        let e = |kind: &str, aid: &str, payload: Value| json!({ "kind": kind, "session_id": "s", "ts": 1000, "action_id": aid, "payload": payload });
+        let usage = |n: u64| e("usage_recorded", "", json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } }));
+        let mut ev = vec![
+            e("turn_started", "", json!({ "input": [{ "type": "text", "text": "go" }] })),
+            e("assistant_message_started", "a1", json!({})),
+            e("assistant_message_completed", "a1", json!({ "text": "before the handoff" })),
+            usage(402_000),
+        ];
+        match outcome {
+            // a tool-started handoff writes no handoff_started and makes no note request
+            None => ev.push(e("handoff_completed", "", json!({ "outcome": "completed", "tokens_before": 402_000 }))),
+            Some(o) => ev.extend([
+                e("handoff_started", "", json!({ "trigger": "auto" })),
+                e("assistant_message_started", "a2", json!({})),
+                e("assistant_message_completed", "a2", json!({ "text": "THE NOTE" })),
+                usage(403_000),
+                e("handoff_completed", "", json!({ "outcome": o, "tokens_before": 402_000, "note": ["a2"] })),
+            ]),
+        }
+        let after = if outcome == Some("failed") { 404_000 } else { 32_000 };
+        ev.extend([usage(after), e("assistant_message_started", "a3", json!({})), e("assistant_message_completed", "a3", json!({ "text": "after the handoff" })), e("turn_completed", "", json!({ "outcome": "completed" }))]);
+        fold_of(&ev)
+    }
+
+    #[test]
+    fn a_handoff_breaks_the_card_with_a_band() {
+        let f = handoff_fold(Some("completed"));
+        let rows: Vec<String> = conversation(&f, 90, &View::default()).iter().map(plain).collect();
+        let at = |s: &str| rows.iter().position(|l| l.contains(s));
+        let (b, band, a, done) = (at("before the handoff").unwrap(), at("automatic at 400k").unwrap(), at("after the handoff").unwrap(), at("▣ completed").unwrap());
+        assert!(b < band && band < a && a < done);
+        assert!(rows[band].contains("402k → 32k"), "{}", rows[band]);
+        assert!(at("THE NOTE").is_none(), "the note is not a reply");
+        assert_eq!(rows.iter().filter(|l| !l.is_empty() && l.chars().all(|c| c == '▄')).count(), 3, "two cards and the band");
+        // the context follows the size after the handoff, and counts nothing before it
+        assert_eq!(f.ctx, 32_000);
+        assert!(context_view(&f, 90).iter().any(|r| plain(r).contains("32k tokens")));
+        // before the first request after it, the size after is not known
+        let mut g = handoff_fold(Some("completed"));
+        if let Some(Block::Handoff(h)) = g.turns[0].blocks.iter_mut().find(|b| matches!(b, Block::Handoff(_))) {
+            h.after = None;
+        }
+        assert!(conversation(&g, 90, &View::default()).iter().any(|r| plain(r).contains("402k → …")));
+        let failed: Vec<String> = conversation(&handoff_fold(Some("failed")), 90, &View::default()).iter().map(plain).collect();
+        assert!(failed.iter().any(|l| l.contains("failed · the context is unchanged")));
+        let tool: Vec<String> = conversation(&handoff_fold(None), 90, &View::default()).iter().map(plain).collect();
+        assert!(tool.iter().any(|l| l.contains("the model handed off") && l.contains("402k → 32k")));
     }
 
     #[test]
