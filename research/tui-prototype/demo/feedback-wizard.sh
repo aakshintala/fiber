@@ -207,6 +207,21 @@ rate() {
   write_env "$key" "$v${n:+ — $n}"
 }
 
+# done_already KEY: true when KEY already has a saved value.
+done_already() {
+  [[ -n "$(_existing "$1" || true)" ]]
+}
+
+# skipping KEY "label" returns success (after counting the stage and printing
+# one line) when KEY is already saved, so the caller skips the whole stage.
+skipping() {
+  done_already "$1" || return 1
+  _STAGE_INDEX=$((_STAGE_INDEX + 1))
+  skip_line "$2"
+}
+
+skip_line() { printf '  %s✓ %s already rated — skipping%s\n' "$GREEN" "$1" "$RESET"; }
+
 # show_clipboard prints whatever a system clipboard tool can read back, so
 # the person can see what actually got copied.
 show_clipboard() {
@@ -289,86 +304,117 @@ else
 fi
 pause "Press Enter once your window is wide enough."
 
-stage "First look"
-say "This loads a whole recorded session at once, already finished streaming in."
-step "Look at the overall layout: the conversation on the left, the cards on the right."
-step "Look at the colours and how replies, tool calls and cards are marked out."
-step "Check that everything is legible at a glance."
-run_demo "$FIXTURE" --static
-rate FIRST_LOOK "First look: layout, cards, colours, legibility"
+if ! skipping FIRST_LOOK "First look"; then
+  stage "First look"
+  say "This loads a whole recorded session at once, already finished streaming in."
+  step "Look at the overall layout: the conversation on the left, the cards on the right."
+  step "Look at the colours and how replies, tool calls and cards are marked out."
+  step "Check that everything is legible at a glance."
+  run_demo "$FIXTURE" --static --no-pending
+  rate FIRST_LOOK "First look: layout, cards, colours, legibility"
+fi
 
-stage "Watching it happen live"
-say "This one replays the session as it originally happened, streaming in."
-step "Watch text stream in as it's \"written\"."
-step "Watch the \"Working\" line while a turn is running — it has a small moving glimmer."
-run_demo "$FIXTURE"
-rate LIVE_REPLAY "Watching the live replay"
+if ! skipping LIVE_REPLAY "Watching it happen live"; then
+  stage "Watching it happen live"
+  say "This one replays the session as it originally happened, streaming in."
+  step "Watch text stream in as it's \"written\"."
+  step "Watch the \"Working\" line while a turn is running — it has a small moving glimmer."
+  step "After you answer the approval and the question form, the turn finishes on its own. Quit with Ctrl+C when you're done."
+  run_demo "$FIXTURE"
+  rate LIVE_REPLAY "Watching the live replay"
+fi
 
-stage "Tool groups and the ledger"
-say "Tool calls (reading files, running commands, and so on) are grouped."
-step "Press Ctrl+O to open every group's ledger of individual calls."
-step "Click a group's summary line to open or close just that one."
-run_demo "$FIXTURE" --static
-rate TOOL_LEDGER "Tool groups and the ledger"
+if ! skipping TOOL_LEDGER "Tool groups and the ledger"; then
+  stage "Tool groups and the ledger"
+  say "Tool calls (reading files, running commands, and so on) are grouped."
+  step "Press Ctrl+O to open every group's ledger of individual calls."
+  step "Click a group's summary line to open or close just that one."
+  step "Click a row in the ledger to open that call's output; click a thinking line to read it."
+  run_demo "$FIXTURE" --static --no-pending
+  rate TOOL_LEDGER "Tool groups and the ledger"
+fi
 
-stage "Scrolling"
-say "Scroll the conversation and see how it behaves."
-step "Scroll up with your mouse wheel or trackpad."
-step "While scrolled up, look for a pill telling you there are new messages below — click it, or press End, to jump back to the bottom."
-run_demo "$FIXTURE" --static
-rate SCROLLING "Scrolling with the wheel or trackpad, and the pill"
+if ! skipping SCROLLING "Scrolling"; then
+  stage "Scrolling"
+  say "Scroll the conversation and see how it behaves."
+  step "Scroll up with your mouse wheel or trackpad."
+  step "While scrolled up, look for a pill telling you there are new messages below — click it, or press End, to jump back to the bottom."
+  run_demo "$FIXTURE" --static --no-pending
+  rate SCROLLING "Scrolling with the wheel or trackpad, and the pill"
+fi
 
-stage "Search"
-say "Search looks across the whole session."
-step "Press Ctrl+F and type a word you can see on screen, such as a filename."
-step "Press Enter to jump to the next match, and Shift+Enter for the previous one."
-note "In Ghostty, Cmd+F is Ghostty's own search unless it's been unbound — use Ctrl+F if Cmd+F doesn't open the prototype's own search box."
-run_demo "$FIXTURE" --static
-rate SEARCH "Search: the floating box, and moving between matches"
+if ! skipping SEARCH "Search"; then
+  stage "Search"
+  say "Search looks across the whole session."
+  step "Press Ctrl+F and type the word \"lock\" — it has dozens of matches in this session."
+  step "Press Enter to jump to the next match, and Shift+Enter for the previous one."
+  note "In Ghostty, Cmd+F is Ghostty's own search unless it's been unbound — use Ctrl+F if Cmd+F doesn't open the prototype's own search box."
+  run_demo "$FIXTURE" --static --no-pending
+  rate SEARCH "Search: the floating box, and moving between matches"
+fi
 
-stage "Select and copy"
-say "Text in the conversation can be dragged over and copied, like a normal terminal."
-step "Drag over a paragraph of a reply, then release the mouse button."
-note "If a link doesn't open with a plain click, your terminal may need a modifier — in Ghostty, try Cmd+Shift+click while mouse capture is on."
-run_demo "$FIXTURE" --static
-show_clipboard
-rate SELECT_COPY "Selecting and copying text"
+if ! skipping SELECT_COPY "Select and copy"; then
+  stage "Select and copy"
+  say "Text in the conversation can be dragged over and copied, like a normal terminal."
+  step "Drag over a paragraph of a reply, then release the mouse button."
+  step "A \"Copied\" marker appears in the top-right corner of the conversation."
+  note "If a link doesn't open with a plain click, your terminal may need a modifier — in Ghostty, try Cmd+Shift+click while mouse capture is on."
+  run_demo "$FIXTURE" --static --no-pending
+  show_clipboard
+  rate SELECT_COPY "Selecting and copying text"
+fi
 
-stage "Approvals and questions"
-say "The end of this session has a tool call waiting for approval, then a question form."
-step "Press Esc to see the approval step aside, then look at the question form that comes up."
-step "Choose an answer and look for the \"would send\" row that shows what would go back."
-run_demo "$FIXTURE" --static
-rate APPROVAL_FORM "The approval panel and the question form"
+if ! skipping APPROVAL_FORM "Approvals and questions"; then
+  stage "Approvals and questions"
+  say "The end of this session has a tool call waiting for approval, then a question form."
+  step "Press Esc to see the approval step aside, then look at the question form that comes up."
+  step "Choose an answer and look for the \"would send\" row that shows what would go back."
+  step "For the multi-choice question, space toggles an option; Next → moves on."
+  run_demo "$FIXTURE" --static
+  rate APPROVAL_FORM "The approval panel and the question form"
+fi
 
-stage "The context view"
-say "There's a separate view that shows how the session's context is used."
-step "Type /context and press Enter to open it."
-step "Press Esc to go back to exactly where you were."
-run_demo "$FIXTURE" --static
-rate CONTEXT_VIEW "The context view"
+if ! skipping CONTEXT_VIEW "The context view"; then
+  stage "The context view"
+  say "There's a separate view that shows how the session's context is used."
+  step "Type /context and press Enter to open it."
+  step "You can also click the context bar in the side panel's Session card to open the same view."
+  step "Press Esc to go back to exactly where you were."
+  run_demo "$FIXTURE" --static --no-pending
+  rate CONTEXT_VIEW "The context view"
+fi
 
-stage "A narrow window"
-say "See how the screen copes with less room."
-step "While it's running, shrink the window narrower than 118 columns, then widen it again."
-run_demo "$FIXTURE" --static
-rate NARROW_WINDOW "How it looks in a narrow window"
+if ! skipping NARROW_WINDOW "A narrow window"; then
+  stage "A narrow window"
+  say "See how the screen copes with less room."
+  step "While it's running, shrink the window narrower than 118 columns, then widen it again."
+  run_demo "$FIXTURE" --static --no-pending
+  rate NARROW_WINDOW "How it looks in a narrow window"
+fi
 
-stage "A heavy session"
-say "This is a much longer, busier recorded session — thousands of lines."
-step "Scroll around it, and search for a common word to see how it holds up."
-run_demo "$HEAVY_FIXTURE" --static --paged
-rate HEAVY_SESSION "The heavy session: scrolling and searching a long one"
+if ! skipping HEAVY_SESSION "A heavy session"; then
+  stage "A heavy session"
+  if [[ -f fixtures/real.jsonl ]]; then
+    say "This is a real, long session, including where the context handed off."
+    HEAVY_FIXTURE=fixtures/real.jsonl
+  else
+    say "This is a much longer, busier recorded session — thousands of lines."
+  fi
+  step "Scroll around it, and search for a common word to see how it holds up."
+  run_demo "$HEAVY_FIXTURE" --static --paged
+  rate HEAVY_SESSION "The heavy session: scrolling and searching a long one"
+fi
 
-stage "A few closing questions"
-say "Last thing — three open questions, then one overall rating."
-ask Q_BEST "What felt best?"
-write_env Q_BEST "$Q_BEST"
-ask Q_WORST "What felt worst, or most confusing?"
-write_env Q_WORST "$Q_WORST"
-ask Q_MISSING "What would you want that's missing?"
-write_env Q_MISSING "$Q_MISSING"
-rate OVERALL "Overall rating"
+if done_already Q_BEST && done_already Q_WORST && done_already Q_MISSING && done_already OVERALL; then
+  skipping Q_BEST "The closing questions"
+else
+  stage "A few closing questions"
+  say "Last thing — three open questions, then one overall rating."
+  done_already Q_BEST    && skip_line "What felt best?"                     || { ask Q_BEST "What felt best?"; write_env Q_BEST "$Q_BEST"; }
+  done_already Q_WORST   && skip_line "What felt worst?"                    || { ask Q_WORST "What felt worst, or most confusing?"; write_env Q_WORST "$Q_WORST"; }
+  done_already Q_MISSING && skip_line "What would you want that's missing?" || { ask Q_MISSING "What would you want that's missing?"; write_env Q_MISSING "$Q_MISSING"; }
+  done_already OVERALL   && skip_line "Overall rating"                      || rate OVERALL "Overall rating"
+fi
 
 _clear
 printf '\n%s%s  ✓ All done — thank you%s\n\n' "$BOLD" "$GREEN" "$RESET"
