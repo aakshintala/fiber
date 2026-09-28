@@ -2211,6 +2211,7 @@ struct Args {
     page_lines: usize,
     verify_copy: bool,
     bench: bool,
+    no_pending: bool,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -2232,6 +2233,7 @@ fn args() -> Args {
         page_lines: 64,
         verify_copy: false,
         bench: false,
+        no_pending: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -2253,8 +2255,9 @@ fn args() -> Args {
             "--page-lines" => a.page_lines = it.next().and_then(|v| v.parse().ok()).expect("--page-lines N"),
             "--verify-copy" => a.verify_copy = true,
             "--paging-bench" => a.bench = true,
+            "--no-pending" => a.no_pending = true,
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2270,9 +2273,43 @@ fn args() -> Args {
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 
+/// `--no-pending`: drops the requests nobody answered and the calls that asked them, drops the
+/// open turn's calls that never finished, and ends that turn, so the screen opens settled.
+fn settle(mut ev: Vec<Value>) -> Vec<Value> {
+    let me = ev.first().and_then(|e| e["session_id"].as_str()).unwrap_or("").to_string();
+    let kind = |e: &Value| e["kind"].as_str().unwrap_or("").to_string();
+    let asks = |e: &Value| matches!(e["kind"].as_str(), Some("permission_requested" | "interaction_requested"));
+    let calls = |e: &Value| matches!(e["kind"].as_str(), Some("tool_call_requested" | "tool_call_started"));
+    let resolved: HashSet<String> = ev.iter().filter(|e| kind(e).ends_with("_resolved")).filter_map(|e| e["payload"]["request_id"].as_str().map(str::to_string)).collect();
+    let done: HashSet<String> = ev.iter().filter(|e| kind(e) == "tool_call_completed").filter_map(|e| e["action_id"].as_str().map(str::to_string)).collect();
+    let unasked = |e: &Value| asks(e) && !resolved.contains(e["payload"]["request_id"].as_str().unwrap_or(""));
+    let asked: HashSet<String> = ev.iter().filter(|e| unasked(e)).filter_map(|e| e["payload"]["action_id"].as_str().or(e["action_id"].as_str()).map(str::to_string)).collect();
+    let mine = |e: &Value, k: &str| kind(e) == k && e["session_id"] == me.as_str();
+    let open = ev.iter().rposition(|e| mine(e, "turn_started")).filter(|&s| !ev[s..].iter().any(|e| mine(e, "turn_completed")));
+    let ts = ev.last().map_or(0, |e| e["ts"].as_i64().unwrap_or(0));
+    let mut i = 0;
+    ev.retain(|e| {
+        i += 1;
+        let aid = e["action_id"].as_str().unwrap_or("");
+        let unfinished = open.is_some_and(|s| i > s) && e["session_id"] == me.as_str() && calls(e) && !done.contains(aid);
+        !(unasked(e) || (calls(e) && asked.contains(aid)) || unfinished)
+    });
+    if open.is_some() {
+        ev.push(json!({ "kind": "turn_completed", "session_id": me, "ts": ts, "schema_version": 1, "payload": { "outcome": "completed" } }));
+    }
+    ev
+}
+
 fn main() -> io::Result<()> {
     let t0 = Instant::now();
-    let a = args();
+    let mut a = args();
+    if a.no_pending {
+        // the settled lines go to a file of their own, so the paged mode reads them too
+        let ev: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        let p = std::env::temp_dir().join(format!("tui-prototype-settled-{}.jsonl", std::process::id()));
+        std::fs::write(&p, settle(ev).iter().map(|e| e.to_string() + "\n").collect::<String>())?;
+        a.path = p.to_string_lossy().into_owned();
+    }
     if a.bench {
         // the conversation's text width and height at 160 by 48: 160 less the panel less
         // two margins, 48 less the input box
@@ -3400,6 +3437,31 @@ mod tests {
         assert!(!texts(&ui).iter().any(|l| l.contains("Next →") || l.contains("Review →")), "single choice has no Next row");
         ui.form.tab = 2;
         assert!(texts(&ui).iter().any(|l| l.contains("Review →")), "the last question reads Review");
+    }
+
+    fn fixture(path: &str) -> Vec<Value> {
+        std::fs::read_to_string(path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+    }
+    fn fold_of(ev: &[Value]) -> Fold {
+        let mut f = Fold::default();
+        for e in ev {
+            f.apply(e);
+        }
+        f
+    }
+
+    #[test]
+    fn no_pending_opens_the_demo_settled() {
+        let whole = fold_of(&fixture("fixtures/session.jsonl"));
+        assert!(whole.running && !whole.pending.is_empty(), "the fixture ends waiting on the person");
+        let f = fold_of(&settle(fixture("fixtures/session.jsonl")));
+        assert!(!f.running && f.pending.is_empty());
+        let t = f.turns.last().unwrap();
+        assert!(matches!(t.blocks.last(), Some(Block::Done(s)) if s.starts_with("completed")));
+        assert!(f.running_calls().is_empty(), "no call of the settled turn still runs");
+        // a settled log is left as it is
+        let again = settle(fixture("fixtures/idle.jsonl"));
+        assert_eq!(again, fixture("fixtures/idle.jsonl"));
     }
 
     #[test]
