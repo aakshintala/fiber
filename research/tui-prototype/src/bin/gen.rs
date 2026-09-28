@@ -35,6 +35,8 @@ enum R {
     Proc { lines: usize, exit: i32, dur: i64 },
     Fail { code: &'static str, msg: String, exit: Option<i32> },
     Running,
+    /// `ask_user`: one `form` interaction; `None` leaves it pending
+    Ask { answer: Option<Value>, result: String },
 }
 
 struct C {
@@ -197,6 +199,13 @@ impl G {
             };
             let (dt, p) = match &c.r {
                 R::Running => continue,
+                R::Ask { answer, result } => {
+                    let rid = self.id("ir");
+                    self.m("interaction_requested", 60, Some(a), json!({ "request_id": rid, "action_id": a, "kind": "form", "fields": c.args["questions"] }));
+                    let Some(ans) = answer else { continue };
+                    self.m("interaction_resolved", 38_000, Some(a), json!({ "request_id": rid, "answer": ans, "by": "person" }));
+                    (20, json!({ "status": "completed", "content": [{ "type": "text", "text": result }] }))
+                }
                 R::Ok { lines: n, head } => (250, json!({ "status": "completed", "content": lines(*n, head) })),
                 R::Changed { path, added, removed } => (300, json!({
                     "status": "completed",
@@ -237,7 +246,7 @@ impl G {
 
 const REPLY1: &str = "## Why the lock test is flaky
 
-The test races. `second_writer_is_refused` spawns the child after a fixed `thread::sleep(200ms)` and assumes the parent's lock file exists by then.
+The test races. `second_writer_is_refused` spawns the child after a fixed `thread::sleep(200ms)` and assumes the parent's lock file exists by then. The race is in crates/log/tests/lock.rs; the CI runs that failed are listed at https://github.com/aakshintala/fiber/actions/workflows/ci.yml.
 
 - On a loaded runner the parent has not flushed the lock yet.
 - The child takes the lock, and the assertion fails.
@@ -276,6 +285,10 @@ const REPLY2: &str = "## Done: one helper, 23 sleeps replaced
 | tools | 6 | 31 | 16 |
 
 A background stress run is still going, and a reviewer delegate is reading the diff.";
+
+fn ask(questions: Value, answer: Option<Value>, result: &str) -> C {
+    C { name: "ask_user", args: json!({ "questions": questions }), r: R::Ask { answer, result: result.into() } }
+}
 
 fn main() {
     let mut g = G {
@@ -321,6 +334,27 @@ fn main() {
     g.ts += 40_000;
     g.turn("Fix it properly: wait on the lock file's creation instead of sleeping, then sweep every test in the workspace that sleeps to wait for a child process. Use one helper in crates/testutil.");
     g.say(Some(("**Plan**\nAdd `wait_for_path(path, deadline)` to testutil, built on polling with backoff. Then visit each sleep site; some are not waits for a child and must stay.\n\n**Order**\nHelper first, then the lock test, then crate by crate.", 14)), "I'll add one helper, `testutil::wait_for_path`, fix the lock test with it, then go crate by crate and run each crate's tests after its edits.");
+    g.step(None, vec![ask(
+        json!([
+            { "header": "Helper", "question": "Where should the wait helper live?", "options": [
+                { "label": "crates/testutil (Recommended)", "description": "every crate's tests already depend on it" },
+                { "label": "Each crate", "description": "a copy per crate; no new dependency edges" }] },
+            { "header": "Deadline", "question": "What deadline should wait_for_path give a child before it fails the test?", "options": [
+                { "label": "5 s (Recommended)", "description": "enough for a loaded CI runner" },
+                { "label": "10 s", "description": "more headroom, but a real hang takes 10 s to fail" }] },
+            { "header": "Loop timing", "question": "Which crates' timing tests should keep their sleeps?", "multiSelect": true, "options": [
+                { "label": "loop" }, { "label": "tools" }, { "label": "doors" }] },
+        ]),
+        Some(json!({
+            "answers": [
+                { "labels": ["crates/testutil (Recommended)"] },
+                { "labels": ["5 s (Recommended)"], "text": "10 s for the doors tests" },
+                "skipped",
+            ],
+            "note": "Keep the diff small; no refactors on the way.",
+        })),
+        "Helper: crates/testutil (Recommended)\nDeadline: 5 s (Recommended) \"10 s for the doors tests\"\nLoop timing: skipped\nnote: Keep the diff small; no refactors on the way.",
+    )]);
     g.step(None, vec![read("crates/testutil/src/lib.rs", 64), edit("crates/testutil/src/child.rs", 14, 0)]);
     g.step(None, vec![edit("crates/log/tests/lock.rs", 3, 1), cargo("cargo test -p log --test lock", 0, 12, 19000)]);
     let tests = [
@@ -394,7 +428,26 @@ fn main() {
     );
     g.queue(&[("c_8b04", "If it passes, run it on the Linux box too.")]);
     g.delegate_calls(&["crates/loop/tests/cancel.rs", "crates/tools/tests/jobs_wait.rs"]);
-    g.step(None, vec![C { name: "shell", args: json!({ "command": "cargo nextest run -p log --stress-count 400 -j 16" }), r: R::Running }]);
+    // the reviewer delegate hits a standing ask rule: its approval is relayed to the person
+    let da = g.id("a");
+    g.emit(DELEGATE, "tool_call_requested", 600, Some(&da), json!({ "name": "shell", "arguments": { "command": "cargo mutants -p testutil --in-place --timeout 60" }, "provider_id": format!("toolu_{da}") }));
+    let dr = g.id("pr");
+    g.emit(DELEGATE, "permission_requested", 40, Some(&da), json!({ "request_id": dr, "action_id": da, "effects": ["executes", "writes"], "reversible": false, "paths": [], "step": "standing_ask" }));
+    g.step(None, vec![
+        C { name: "shell", args: json!({ "command": "cargo nextest run -p log --stress-count 400 -j 16" }), r: R::Running },
+        ask(json!([
+            { "header": "Timeout", "question": "wait_for_path now names the path when it times out. What deadline should the 23 call sites pass?", "options": [
+                { "label": "5 s (Recommended)", "description": "what every site passes now; enough for a loaded CI runner" },
+                { "label": "10 s", "description": "twice the headroom, but a real hang takes 10 s to fail" },
+                { "label": "Per crate", "description": "the doors tests bind sockets and may need longer" }] },
+            { "header": "Kept sites", "question": "8 sleep sites stay because they time something rather than wait for it. Which crates should get a comment at each one saying why?", "multiSelect": true, "options": [
+                { "label": "loop (2)" }, { "label": "tools (4)" }, { "label": "others (2)" }] },
+            { "header": "Vendor", "question": "If the third_party/ audit finds sleep-waits in vendored tests, what should happen to them?", "options": [
+                { "label": "Report only (Recommended)", "description": "list them in the final message; vendored code stays untouched" },
+                { "label": "Patch in place", "description": "the next vendor sync overwrites the patch" }] },
+            { "header": "Reviewer", "question": "Should anyone besides the reviewer delegate see the helper before it lands? See https://github.com/aakshintala/fiber/issues/15 for the thread." },
+        ]), None, ""),
+    ]);
 
     let write = |path: &str, lines: &[Value]| {
         let s: String = lines.iter().map(|v| v.to_string() + "\n").collect();
