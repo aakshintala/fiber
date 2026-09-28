@@ -1,6 +1,6 @@
 # TUI prototype
 
-A throwaway ratatui program for [#15](https://github.com/aakshintala/fiber/issues/15). It replays a fixture session of `docs/events.md` lines in a real terminal, draws the ruled layout, and measures what the working line's glimmer costs. Stage 2 adds selection and copy, search, keyboard protocol detection, the approval panel and the question form. It is not a workspace member and nothing in Fiber depends on it.
+A throwaway ratatui program for [#15](https://github.com/aakshintala/fiber/issues/15). It replays a fixture session of `docs/events.md` lines in a real terminal, draws the ruled layout, and measures what the working line's glimmer costs. Stage 2 adds selection and copy, search, keyboard protocol detection, the approval panel and the question form. Stage 3 fixes trackpad scrolling and the running group's line, floats the search box and the jump to the end over the conversation, and adds one swapped view, the context breakdown. It is not a workspace member and nothing in Fiber depends on it.
 
 The prototype has no Fiber process to talk to. Each command it would send (`reply`, `cancel`, `steer`, `steer_amend`, `steer_drop`, `prompt`) shows as a "→ would send" row above the input box and is appended to `--commands FILE`. It then plays Fiber's part: it applies the lines Fiber would write back (`permission_resolved`, `interaction_resolved`, `tool_call_completed`, `turn_completed`, `steering_queue`), so the state after an answer renders.
 
@@ -23,6 +23,8 @@ cargo run --release -- fixtures/session.jsonl
 | `--warmup S` | starts the measurement window after S seconds; default 2 |
 | `--diff-audit` | also counts the cells and rows ratatui rewrites per frame (costs CPU, so the CPU runs leave it off) |
 | `--commands FILE` | appends each command the TUI would send to FILE, one JSON line each |
+| `--log-input FILE` | writes every read from the terminal, the events parsed from it, and each frame's scroll position, bytes and flushes to FILE |
+| `--wheel-lines N` | rows scrolled per wheel event; the default is 1 |
 
 The key map is under "Stage 2".
 
@@ -47,7 +49,7 @@ The key map is under "Stage 2".
 
 Stage 2 covers selection and copy, search, keyboard protocol detection, the approval and question panels and the full key map. Beyond those, the prototype leaves out:
 
-- clicking a ledger row to open that call's diff, output or error, and every panel item's view (model picker, context breakdown, usage, tools, a delegate's or job's transcript, a file's diff);
+- clicking a ledger row to open that call's diff, output or error, and every panel item's view but the context breakdown (model picker, usage, tools, a delegate's or job's transcript, a file's diff);
 - the Delegates card scrolling on its own, and the Jobs card's list;
 - the start page, the session list, handoff bands, the nudge, rewind, retries, a failed turn, crash recovery and interrupts, because the fixture has none of them;
 - paging history from the log: the prototype folds the whole file into memory;
@@ -100,7 +102,7 @@ Measured on macOS arm64 (Darwin 25.6.0), inside tmux 160 columns by 48 rows, rel
 ### What it adds
 
 - Free text selection. Dragging over the conversation selects its text and highlights it. The copy is unwrapped: a line that wrapping broke copies as one line, and margins, stripes and surface edges are left out. The panel is never selected. Dragging past the top or bottom edge keeps scrolling while the button is held, so a selection can run over text scrolled off screen. Releasing the button copies through OSC 52 and, when not over SSH, also through `pbcopy`, `wl-copy` or `xclip`, and a row says what was copied. Shift-drag is left to the terminal.
-- Search. Ctrl+F, or Cmd+F where the terminal forwards it, puts a search bar in place of the input box. It matches the rendered rows of the whole session, never the JSON lines, marks every match, and says "3 of 5". Enter, Shift+Enter and the arrows move between matches, and the view centres the current one. Once the query has three characters, every collapsed tool group with a match in its ledger opens, as in the mock. Esc closes the bar and the groups fall back.
+- Search. Ctrl+F, or Cmd+F where the terminal forwards it, opens search, in a box over the conversation (see stage 3). It matches the rendered rows of the whole session, never the JSON lines, marks every match, and says "3 of 5". Enter, Shift+Enter and the arrows move between matches, and the view centres the current one. Once the query has three characters, every collapsed tool group with a match in its ledger opens, as in the mock. Esc closes the box and the groups fall back.
 - Keyboard protocol detection. After the first frame the program writes kitty's flags query (`CSI ? u`) and then the primary device attributes query (`CSI c`), and reads the replies from the ordinary input stream. If the kitty reply comes before the DA1 reply it pushes flag 1 (disambiguate escape codes). The Session card's "keys" line says "detecting…", then "kitty · N ms" or "legacy · N ms". `--stats` records the times.
 - The approval panel and the question form, each in place of the input box, sharing one queue in arrival order. The fixture's last turn ends with an approval from the reviewer delegate (`cargo mutants`, raised by a standing ask rule) and then a four-question form from the main session. The panel reads "Approval 1 of 2 · ◆ review: the wait_for_path sweep (s_d417a0)"; the form reads "Question from main · 4 questions … · 2 of 2".
 - The approval choices: allow once; allow and add a rule, with the prefix shown; deny, where typing goes to the feedback. Esc puts the approval aside behind a "1 approval waiting · click to reopen" row.
@@ -137,7 +139,7 @@ tmux answers the DA1 query itself and does not answer kitty's query, so under tm
 | Quit, printing the resume line | Ctrl+C | Ctrl+C | no |
 | Scroll the conversation | wheel, ↑ ↓, Page Up, Page Down | same | no |
 | Scroll the panel | wheel over the panel | same | no |
-| Jump to the end | End | End, or click "↓ N lines below" | no |
+| Jump to the end | End | End, or click the "↓ N lines below" overlay | no |
 | Open or close every ledger | Ctrl+O | Ctrl+O | no |
 | Open or close one ledger | click the group's summary line | same | no |
 | Dismiss a notice | click its row | same | no |
@@ -148,6 +150,9 @@ tmux answers the DA1 query itself and does not answer kitty's query, so under tm
 | Next match | Enter, ↓, Ctrl+F | same | no |
 | Previous match | Shift+Enter, ↑ | ↑ | Shift+Enter: yes; a legacy terminal sends it as Enter |
 | Close search | Esc | Esc, after a 30 ms wait | an immediate Esc: yes |
+| Open the context breakdown | `/context` and Enter | same, or click the Session card's context bar or its "ctx" summary | no |
+| Scroll a swapped view | wheel, ↑ ↓, Page Up, Page Down | same | no |
+| Leave a swapped view, back to where the conversation was | Esc | Esc, or click the view's header | an immediate Esc: yes |
 | Type a prompt or a steer | keys, Enter sends | same | no |
 | Interrupt the turn, when nothing is open | Esc | Esc, after a 30 ms wait | an immediate Esc: yes |
 | Edit a queued steering message | ⌥↑, ⌥↓ | click the row | no, where the terminal sends Option as Alt; see findings |
@@ -210,3 +215,65 @@ What needs the kitty protocol, and the fallback without it:
 - Slash commands, so no `/approvals` or `/search`.
 - Search over history paged from the log: the whole fixture is in memory, so "the whole session" is the whole fixture.
 - Allowing an approval does not continue the delegate's call, and a prompt sent between turns starts nothing: only the lines that close a request are played back.
+
+## Stage 3
+
+### What it adds
+
+- Trackpad scrolling that holds still. The causes and the fixes are under the findings.
+- A running group's summary line is always one row.
+- Search floats over the conversation's top-right corner as an editor's find box does: a tinted surface with ▄ and ▀ edges, "⌕ query" and "3 of 19". The input box stays in place with its draft, without a cursor while typing goes to the search box. Matches are marked as before, the current one brighter and centred. A click inside the box does not start a selection.
+- While scrolled up, a small pill centred at the bottom of the conversation, " ↓ 212 lines below · End ", jumps to the end on a click, as End does. The input box no longer says anything about it.
+- One swapped view, the context breakdown. `/context` and Enter in the input box opens it, as does a click on the Session card's context bar or the line under it, or on the "ctx" summary in the narrow layout. It takes the conversation area under a header row ("Context  /context", "esc returns"). The side panel and the input box stay, and typing still goes to the input box. The wheel and the arrow keys scroll the view. Esc, or a click on the header, returns to the conversation at exactly the row it showed; while following the output, it is still following. `/context` is the only slash command, since the slash command panel is not designed.
+- The view draws one bar of the context by category against the handoff point, marked "handoff 400k", then a row per category with its size and share, the five largest tool results, and a note on what is estimated.
+- `--log-input FILE` records the raw input and each frame's scroll position, so the owner can capture what Ghostty sends for a trackpad movement.
+
+Not built: the model picker. The stream names only the current model, so the list of models and their roles would be made up.
+
+`cargo test` adds tests for the scroll anchor, the one-row group line and the context view's totals, and for the sideways wheel buttons in the input parser.
+
+### Findings
+
+#### Scrolling: diagnosis and fix
+
+Reproduced in tmux at 160 by 48, `fixtures/idle.jsonl --static`, by sending SGR wheel events with `tmux send-keys -H`. `--log-input` recorded what was read and drawn. The trackpad itself was not observed: `CHECK.md` asks the owner for a log from Ghostty.
+
+- The bounce: the input parser read a wheel event's direction from the lowest bit of its button, so 64 and 66 both scrolled up and 65 and 67 both scrolled down. 66 and 67 are the sideways wheel buttons, which a terminal sends for sideways scrolling, and a trackpad movement is rarely straight up. A small upward swipe that drifts sideways mixes 64 with 66 or 67, and each 67 scrolled down. That Ghostty sends 66 and 67 for a trackpad's drift is what the owner's log is to confirm. Five events, "64 67 64 67 67", meant as a small scroll up, moved the view 3 rows down; repeated six times, the view went down 18 rows while the person scrolled up. The parser now reads the two direction bits, and sideways events are ignored and draw no frame. After the fix the same six gestures move the view up 2 rows each, and a burst of 30 events in mixed directions and all four buttons lands exactly on its net count of 14 rows.
+- Scrolling too far per step: each wheel event scrolled 3 rows. Ghostty already scales its events (`mouse-scroll-multiplier = precision:1,discrete:3`): one event per row of trackpad movement, three per notch of a mouse wheel. Scrolling 3 rows per event made the trackpad move 3 rows for every row the finger moved. It is now one row per event, with `--wheel-lines N` to tune. Terminals that send one event per notch may feel slow at 1; `docs/tui.md` should name the terminals checked.
+- The view moving while scrolled up: the position was counted as rows above the end, and only growth was made up for. When rows went away below the view (a group's line going from two rows back to one) or the area under the conversation changed height (a notice, a "copied" row), everything shown moved. The position is now the first row shown, which nothing below it can move. Scrolling to the end follows the output again.
+- Not a cause: nothing re-engaged following or reset the position. Only End, a click on the jump target, and scrolling to the end went back to following. The glimmer's timer never touched the position, and the replay only added to it as rows arrived.
+- The flicker: nothing clears the screen per frame; ratatui clears only when the size changes. But a scroll moves every row, so each frame rewrote almost the whole conversation, about 7 KB in three flushes (ratatui's cursor hide, its own flush, then the link rewrite's), with no synchronised output. Ghostty draws on its own thread, so it can show a frame half written. Each frame is now wrapped in DEC mode 2026 (`CSI ? 2026 h` before the first byte, `CSI ? 2026 l` after the last, including the OSC 8 link rewrite), so the terminal shows only whole frames.
+- A frame per wheel event: every event drew its own frame. Frames are now at most one every 16 ms, so a burst of wheel events is one frame. 30 events sent as fast as tmux sends them drew 12 frames.
+- Every input event also threw away the conversation's rendered rows and rendered the whole session again, once per wheel event. Now only events that change the fold or the rows (keys and clicks that reach the panels or the input box, a group opened) do. Scrolling, selecting, searching and opening a view reuse the rows. The cost grows with the session, so the large session will show it; it was not measured here.
+- The cost: the mode 2026 pair adds 16 bytes to every frame, so a glimmer frame went from 85 bytes to about 103 (one 10-second run). Idle is unchanged: no frame, no byte.
+
+For `docs/tui.md`: every frame is written inside synchronised output; a frame is drawn at most every 16 ms; the scroll position is the first row shown; sideways wheel buttons are ignored; and the rendered rows survive scrolling.
+
+#### The group line
+
+- The summary line was word-wrapped, and while a group runs it lists every call in flight. As calls started and finished the line grew past the width and shrank again, going from one row to two and back. While following the output, every row above it moved up or down a row each time.
+- The kinds were already in a fixed order. A kind appearing for the first time is inserted in its place, which moves the text after it along the row but does not change its height.
+- The line is now always one row: "● Read 3 files, ran 1 command, thought once · cargo test -p log --test lock", with the duration and the ▸ toggle right-aligned. When it is too long, what is in flight is cut first with "…", then the kinds. The duration and the toggle are never cut.
+- This also cuts a finished group's summary at narrow widths. At 122 columns, the conversation's width beside the panel in a 160-column window, the fixture's largest group reads "…ran 4 commands, started 1 d…  2m 08s ▸" and loses "thought once". `docs/tui.md` should say the line is one row, and what gives way first.
+
+#### Search and the jump overlay
+
+- The search box covers the right-hand end of the conversation's first three rows. The current match is centred, so it is never under the box, but other matches in those rows can be.
+- The box's edges take the colour of whatever is under them, so they meet a bubble, a card or the plain background without a seam in tmux. Whether that holds in Ghostty is in `CHECK.md`.
+- The jump overlay sits on the conversation's last row and hides the middle of it while scrolled up.
+- "N lines below" counts rendered rows, so the number changes when the window's width does.
+
+#### The swapped view
+
+- Returning to exactly where the person was needs nothing extra once the position is the first row shown: the view keeps its own scroll and never touches the conversation's.
+- Esc now has one more thing to close. The order is: the selection's highlight, the search box, the swapped view, then the approval or form, then the turn.
+- Ctrl+F closes the view and opens search over the conversation. Searching inside a view is not designed.
+- Slash commands are the TUI's own: `/context` is caught before Enter would send a `prompt` or `steer`. The slash command design should say that a slash command never reaches Fiber as text.
+- The view is rebuilt every frame, walking the whole session, a cost that grows with the session. Fiber should keep running totals in the fold.
+
+#### Data the stream does not carry
+
+- The size of each part of the context. The stream carries the text of every part: the system prompt and tool definitions in `preamble_built`, instruction files and the skills listing in `opening_message`, and messages, reasoning, calls and results in their own lines. But `usage_recorded` counts tokens only for the whole request, and nothing counts them per part. The prototype estimates each part at 4 characters a token and shows the rest of the reported total as "not attributed". The fixture shortens the system prompt and instruction files to "…", so 94% of its context is not attributed. A real split needs Fiber to count tokens per part, with the provider's token counting or a local tokenizer, and write the counts where the view can read them, such as on `preamble_built` and each result.
+- The handoff point and the model's context window, as in stage 1. The bar is drawn against them.
+- What is in context now. After a handoff or a rewind only part of the log is in context; the view has to work out which part from `handoff_completed` and the rewind lines. The fixture has neither, so the prototype counts the whole session.
+- For the model picker, the models and their roles. The stream names only the current model (`preamble_built`, `model_changed`). The cache rebuild size can be estimated from the last `usage_recorded`.
