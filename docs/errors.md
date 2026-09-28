@@ -189,6 +189,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `model_not_found` | model call, turn | the provider does not know the model |
+| `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit | nothing chose a model |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
@@ -218,7 +219,6 @@ Notices, for a failure outside any action:
 | Code | Meaning |
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
-| `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `config_key_ignored` | an unknown key, or a key a repository may not set |
 | `extension_failed` | an extension failed to start or missed its deadline |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
