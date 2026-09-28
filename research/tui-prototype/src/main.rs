@@ -1426,6 +1426,8 @@ struct Ui {
     ctx_view: bool,
     /// the view's own scroll, rows from its top
     vscroll: usize,
+    /// the person answered an approval or a form since the last input was handled
+    answered: bool,
 }
 impl Ui {
     /// The request on top: the first in arrival order not put aside, or the one clicked through to.
@@ -2012,6 +2014,7 @@ fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64,
     ui.feedback.clear();
     ui.choice = 0;
     ui.shown = 0;
+    ui.answered = true;
 }
 fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let Some((_, p)) = ui.top(f) else { return };
@@ -2047,6 +2050,20 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
     synth(f, "interaction_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "answer": ans, "by": "person" }));
     synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }));
     ui.shown = 0;
+    ui.answered = true;
+}
+/// The fixture ends waiting on the person, so once nothing waits the turn ends as Fiber
+/// would end it: the calls complete, a short reply, then `turn_completed`.
+fn finish_turn(f: &mut Fold, ts: i64) {
+    let me = f.session_id.clone();
+    for a in f.running_calls() {
+        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "completed" }));
+    }
+    let aid = format!("a_end_{}", f.turns.len());
+    synth(f, "assistant_message_started", &me, Some(&aid), ts, json!({}));
+    let text = "Thanks — that's everything I needed. Stopping here for the demo.";
+    synth(f, "assistant_message_completed", &me, Some(&aid), ts, json!({ "text": text, "outcome": "completed" }));
+    synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "completed" }));
 }
 /// "Chat about this", and Esc on a form: reply declined, then cancel.
 fn decline_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
@@ -3179,6 +3196,11 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                 Act::QDrop(i) => queue_drop(f, &mut ui, &mut cmds, ts, i),
             }
         }
+        // the last answer the turn waited on, once the replay has nothing more to play
+        if std::mem::take(&mut ui.answered) && f.running && f.pending.is_empty() && *next >= events.len() {
+            finish_turn(f, ts);
+            changed = true;
+        }
         // a key or click that reached the panels or the input box may change the fold
         if changed {
             conv_cache = None;
@@ -3462,6 +3484,22 @@ mod tests {
         // a settled log is left as it is
         let again = settle(fixture("fixtures/idle.jsonl"));
         assert_eq!(again, fixture("fixtures/idle.jsonl"));
+    }
+
+    #[test]
+    fn answering_the_last_request_ends_the_turn() {
+        let mut f = fold_of(&fixture("fixtures/session.jsonl"));
+        let mut ui = Ui::default();
+        approve(&mut f, &mut ui, &mut None, 1, 0);
+        ui.sync_form(&f);
+        assert!(f.running && f.pending.len() == 1, "the form still waits");
+        submit_form(&mut f, &mut ui, &mut None, 2);
+        assert!(ui.answered && f.pending.is_empty());
+        finish_turn(&mut f, 3);
+        assert!(!f.running && f.running_calls().is_empty());
+        let rows: Vec<String> = conversation(&f, 100, &View::default()).iter().map(plain).collect();
+        let (reply, done) = (rows.iter().position(|l| l.contains("Stopping here for the demo")).unwrap(), rows.iter().rposition(|l| l.contains("▣ completed")).unwrap());
+        assert!(done > reply, "the card closes with its ▣ line after the reply");
     }
 
     #[test]
