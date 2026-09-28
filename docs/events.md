@@ -261,6 +261,13 @@ per field (`docs/mcp.md`, "Elicitation, sampling and roots"). They are durable
 for the reasons approvals are, and a reply naming a request that is no longer
 pending is rejected in the same way.
 
+A `form` carries `fields`, one per `ask_user` question as the model called it:
+`header`, `question`, `options` (each a `label` and an optional
+`description`) and `multiSelect`. Its answer carries `answers`, one per field
+in the same order, each either `skipped` or the chosen option `labels` with
+the typed `text` when there is any, and the form's `note` when the person
+added one. A declined form carries `declined` and no `answers`.
+
 ### Usage and notices
 
 | Kind | Durable | Payload |
