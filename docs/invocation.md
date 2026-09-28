@@ -146,7 +146,8 @@ the person typed it, and a client that can attach already controls the session
   terminal's side panel reads git state this way.
 - With `send` true, the output is logged as `shell_command`
   (`docs/events.md`) and joins the next turn's input, never the running turn.
-  The terminal sends it for `!command`.
+  The terminal sends it for `!command`, and sends `!!command` with `send`
+  false.
 
 pi does the same with `!` and `!!` (`excludeFromContext`). Settled by
 [#148](https://github.com/aakshintala/fiber/issues/148).
