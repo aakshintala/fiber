@@ -7,6 +7,8 @@ cd research/tui-prototype
 cargo run --release -- fixtures/session.jsonl --commands /tmp/fiber-cmds.jsonl
 ```
 
+`./check-wizard.sh` walks through these one run at a time, makes the Ghostty config changes two of them need and removes them afterwards, and writes each result to `/tmp/fiber-tui-check-results.env`.
+
 Each line is one check: what to do, then what to look for.
 
 - Stripe: look at the ▌ on the input box and the approval panel, and the ▐ on your prompts. Each should be one unbroken bar, with no gap between rows.
