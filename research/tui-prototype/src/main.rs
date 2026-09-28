@@ -4,6 +4,7 @@
 
 mod input;
 mod lua;
+mod paged;
 
 use crossterm::{execute, terminal};
 use input::{Ev, Key, Mouse};
@@ -455,10 +456,13 @@ enum Asking {
     Approval { tool: String, args: Value, effects: Vec<String>, reversible: bool, paths: Vec<String>, step: String },
     Form(Vec<Value>),
 }
+#[derive(Default)]
 struct Turn {
     prompt: String,
     ts: i64,
     blocks: Vec<Block>,
+    /// tool calls of this turn folded elsewhere: a paged piece of a turn starts mid-turn
+    calls_before: usize,
 }
 struct Job {
     id: String,
@@ -683,14 +687,14 @@ impl Fold {
             "mode_changed" => self.mode = p["after"].as_str().unwrap_or("").into(),
             "turn_started" => {
                 let text = p["input"].as_array().and_then(|a| a.iter().find_map(|i| i["text"].as_str())).unwrap_or("");
-                self.turns.push(Turn { prompt: text.into(), ts, blocks: vec![] });
+                self.turns.push(Turn { prompt: text.into(), ts, ..Default::default() });
                 self.running = true;
                 self.turn_start = ts;
             }
             "turn_completed" => {
                 let outcome = p["outcome"].as_str().unwrap_or("completed");
                 let Some(t) = self.turns.last_mut() else { return };
-                let n: usize = t.blocks.iter().map(|b| if let Block::Group(g) = b { g.items.iter().filter(|i| matches!(i, Item::C(_))).count() } else { 0 }).sum();
+                let n: usize = t.calls_before + t.blocks.iter().map(|b| if let Block::Group(g) = b { g.items.iter().filter(|i| matches!(i, Item::C(_))).count() } else { 0 }).sum::<usize>();
                 let s = format!("{outcome} · {} · {n} tool calls", dur(ts - t.ts));
                 t.blocks.push(Block::Done(s));
                 self.running = false;
@@ -1121,11 +1125,20 @@ fn bubble(text: &str, ts: i64, w: usize) -> Vec<Row> {
 }
 
 fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
+    f.turns.iter().enumerate().flat_map(|(ti, t)| turn_rows(ti, t, w, v, true, true)).collect()
+}
+
+/// One turn's rows. `head`: the turn starts here, so the gap, the bubble and the card's top
+/// edge; `tail`: it ends here, so the card's bottom edge. A paged TUI renders a turn in
+/// pieces, which join into exactly the rows of the whole turn.
+fn turn_rows(ti: usize, t: &Turn, w: usize, v: &View, head: bool, tail: bool) -> Vec<Row> {
     let mut out = vec![];
     let iw = w - 2;
-    for (ti, t) in f.turns.iter().enumerate() {
-        out.push(Row::default());
-        out.extend(bubble(&t.prompt, t.ts, w));
+    {
+        if head {
+            out.push(Row::default());
+            out.extend(bubble(&t.prompt, t.ts, w));
+        }
         let mut inner: Vec<Row> = vec![];
         for (bi, b) in t.blocks.iter().enumerate() {
             let r: Vec<Row> = match b {
@@ -1158,15 +1171,18 @@ fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
             if r.is_empty() {
                 continue;
             }
-            if !inner.is_empty() {
+            // a piece that starts mid-turn follows blocks another piece drew
+            if !inner.is_empty() || !head {
                 inner.push(Row::default());
             }
             inner.extend(r);
         }
         if inner.is_empty() {
-            continue;
+            return out;
         }
-        out.push(Row::default());
+        if head {
+            out.push(Row::default());
+        }
         let rows = inner
             .into_iter()
             .map(|r| {
@@ -1178,7 +1194,11 @@ fn conversation(f: &Fold, w: usize, v: &View) -> Vec<Row> {
                 Row { spans: s, bg: None, pre: r.pre + 1, hot, ..r }
             })
             .collect();
-        out.extend(slab(rows, BW, None, w));
+        let mut card = slab(rows, BW, None, w);
+        if !tail {
+            card.pop();
+        }
+        out.extend(if head { card } else { card.split_off(1) });
     }
     out
 }
@@ -2173,9 +2193,34 @@ struct Args {
     wheel: usize,
     lua: Option<String>,
     lua_uncached: bool,
+    paged: bool,
+    /// screens of rows kept rendered above and below the viewport
+    window: f64,
+    page_lines: usize,
+    verify_copy: bool,
+    bench: bool,
 }
 fn args() -> Args {
-    let mut a = Args { path: "fixtures/session.jsonl".into(), speed: 12.0, static_: false, reduced: false, stats: None, exit_after: None, warmup: 2.0, audit: false, commands: None, log_input: None, wheel: 1, lua: None, lua_uncached: false };
+    let mut a = Args {
+        path: "fixtures/session.jsonl".into(),
+        speed: 12.0,
+        static_: false,
+        reduced: false,
+        stats: None,
+        exit_after: None,
+        warmup: 2.0,
+        audit: false,
+        commands: None,
+        log_input: None,
+        wheel: 1,
+        lua: None,
+        lua_uncached: false,
+        paged: false,
+        window: 1.0,
+        page_lines: 64,
+        verify_copy: false,
+        bench: false,
+    };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
         match x.as_str() {
@@ -2191,8 +2236,13 @@ fn args() -> Args {
             "--wheel-lines" => a.wheel = it.next().and_then(|v| v.parse().ok()).expect("--wheel-lines N"),
             "--lua-renderer" => a.lua = it.next(),
             "--lua-uncached" => a.lua_uncached = true,
+            "--paged" => a.paged = true,
+            "--window" => a.window = it.next().and_then(|v| v.parse().ok()).expect("--window SCREENS"),
+            "--page-lines" => a.page_lines = it.next().and_then(|v| v.parse().ok()).expect("--page-lines N"),
+            "--verify-copy" => a.verify_copy = true,
+            "--paging-bench" => a.bench = true,
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2211,8 +2261,21 @@ const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
 fn main() -> io::Result<()> {
     let t0 = Instant::now();
     let a = args();
-    let events: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
-    let mut f = Fold::default();
+    if a.bench {
+        // the conversation's text width and height at 160 by 48: 160 less the panel less
+        // two margins, 48 less the input box
+        print!("{}", paged::bench(&a.path, a.page_lines, &[0, 1, 4], 160 - PANEL as usize - 2, 48 - 3, &["tool", "flaky"])?);
+        return Ok(());
+    }
+    // paged: one streaming pass for the offset table and the panel; no event is kept
+    let (events, mut f, pager, open_index) = if a.paged {
+        let t = Instant::now();
+        let (p, sum) = paged::Pager::open(&a.path, a.page_lines)?;
+        (vec![], sum, Some(p), t.elapsed())
+    } else {
+        let events: Vec<Value> = std::fs::read_to_string(&a.path)?.lines().filter_map(|l| serde_json::from_str(l).ok()).collect();
+        (events, Fold::default(), None, Duration::ZERO)
+    };
     let mut next = 0;
     if a.static_ {
         for e in &events {
@@ -2226,7 +2289,7 @@ fn main() -> io::Result<()> {
     execute!(out, terminal::EnterAlternateScreen)?;
     out.write_all(MOUSE_ON.as_bytes())?;
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
-    let res = run(&a, &events, &mut f, &mut next, &mut term, t0);
+    let res = run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index);
     let b = term.backend_mut();
     b.write_all(MOUSE_OFF.as_bytes())?;
     execute!(b, terminal::LeaveAlternateScreen, crossterm::cursor::Show)?;
@@ -2241,8 +2304,17 @@ fn main() -> io::Result<()> {
 
 type Term = Terminal<CrosstermBackend<Counting<BufWriter<io::Stdout>>>>;
 
-fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Term, t0: Instant) -> io::Result<String> {
+#[allow(clippy::too_many_arguments)]
+fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Term, t0: Instant, mut pager: Option<paged::Pager>, open_index: Duration) -> io::Result<String> {
     let v0 = Instant::now();
+    // paged: rows in the whole conversation; the scans (count or search passes) and their
+    // times; frames that loaded pages, how long the loading took, and from the input event
+    // that caused the frame to its last byte; frames whose visible rows were not yet loaded
+    let mut total_rows = 0usize;
+    let mut scans: Vec<Duration> = vec![];
+    let (mut load_ms, mut ev_lat, mut vis_miss_n): (Vec<Duration>, Vec<Duration>, usize) = (vec![], vec![], 0);
+    let mut ev_at: Option<Instant> = None;
+    let mut copy_check: Option<bool> = None;
     let lua = match &a.lua {
         Some(p) => Some(std::rc::Rc::new(lua::Ext::new(p, &std::fs::read_to_string(p)?, !a.lua_uncached).map_err(|e| io::Error::other(format!("{p}: {e}")))?)),
         None => None,
@@ -2382,7 +2454,16 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             v.force = ui.top(f).filter(|(_, p)| p.sid == f.session_id).and_then(|(_, p)| f.at.get(&p.aid)).map(|&(ti, bi, _)| Act::Group(ti, bi));
             v.q = ui.search.as_ref().map(|s| s.q.to_lowercase()).filter(|q| q.chars().count() >= 3).unwrap_or_default();
             let key: Key3 = (v.all_open, v.force, v.q.clone());
-            if conv_cache.as_ref().is_none_or(|(w, k, _)| *w != cw || *k != key) {
+            if let Some(pg) = pager.as_mut() {
+                // no approval is folded into a page, and group ids name pages, not turns
+                v.force = None;
+                let find = ui.search.as_ref().map(|s| s.q.to_lowercase()).unwrap_or_default();
+                scans.extend(pg.sync(cw, &v, &find));
+                if let Some(s) = ui.search.as_mut() {
+                    s.hits = pg.hits.iter().map(|&(p, r, c, n)| (pg.start_of(p) + r, c, n)).collect();
+                    s.i = s.i.min(s.hits.len().saturating_sub(1));
+                }
+            } else if conv_cache.as_ref().is_none_or(|(w, k, _)| *w != cw || *k != key) {
                 conv_cache = Some((cw, key, conversation(f, cw, &v)));
                 conv_gen += 1;
                 if let Some(n) = v.lua.as_ref().and_then(|x| x.take_notice()) {
@@ -2392,14 +2473,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             if panel_cache.is_none() && !narrow {
                 panel_cache = Some(panel_rows(f, vnow, &ui.keys));
             }
-            let conv = &conv_cache.as_ref().unwrap().2;
-            if let Some(s) = ui.search.as_mut() {
+            let no_rows = vec![];
+            let conv: &Vec<Row> = conv_cache.as_ref().map_or(&no_rows, |c| &c.2);
+            total_rows = pager.as_ref().map_or(conv.len(), |p| p.total());
+            let total = total_rows;
+            if let Some(s) = ui.search.as_mut().filter(|_| pager.is_none()) {
                 s.hits = find_all(conv, &s.q.to_lowercase());
                 s.i = s.i.min(s.hits.len().saturating_sub(1));
             }
             let bot = bottom(f, conv_w as usize, tick, vnow, &v, narrow, &ui);
             let view_h = (rows as usize).saturating_sub(bot.len());
-            let max_top = conv.len().saturating_sub(view_h);
+            let max_top = total.saturating_sub(view_h);
             if let Some(s) = ui.search.as_mut().filter(|s| s.jump) {
                 s.jump = false;
                 if let Some(&(r, _, _)) = s.hits.get(s.i) {
@@ -2409,7 +2493,20 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             }
             top = top.filter(|&t| t < max_top);
             let start = top.unwrap_or(max_top);
-            let vis = &conv[start..(start + view_h).min(conv.len())];
+            let end = (start + view_h).min(total);
+            // paged: keep the pages of the viewport and `window` screens either side rendered
+            let mut loaded = (0, Duration::ZERO, false);
+            if let Some(pg) = pager.as_mut().filter(|_| end > start) {
+                let m = (a.window * view_h as f64) as usize;
+                let miss = (pg.page_at(start)..=pg.page_at(end - 1)).any(|p| !pg.resident(p));
+                let t = Instant::now();
+                let n = pg.ensure(start.saturating_sub(m), (end + m).min(total), &v);
+                loaded = (n, t.elapsed(), miss);
+            }
+            let vis: Vec<&Row> = match pager.as_ref() {
+                Some(pg) => (start..end).map(|r| pg.row(r)).collect(),
+                None => conv[start..end].iter().collect(),
+            };
             let top_pad = view_h - vis.len();
             // a swapped view: its header, then its rows from its own scroll
             let vrows: Option<Vec<Row>> = ui.ctx_view.then(|| {
@@ -2476,16 +2573,17 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                     }
                 }
                 // scroll thumb
-                if conv.len() > view_h && vrows.is_none() {
-                    let th = (view_h * view_h / conv.len()).max(1);
-                    let tt = (view_h - th) * start / (conv.len() - view_h);
+                if total > view_h && vrows.is_none() {
+                    let th = (view_h * view_h / total).max(1);
+                    let tt = (view_h - th) * start / (total - view_h);
                     for y in tt..tt + th {
                         buf.set_string(conv_w - 1, y as u16, "┃", fg(rgb(0x808080)));
                     }
                 }
                 // scrolled up: a pill centred at the bottom of the conversation jumps to the end
                 if start < max_top && vrows.is_none() && view_h > 0 {
-                    let label = format!(" ↓ {} lines below · End ", max_top - start);
+                    // paged: the rows below are not all rendered, and the ruling needs no count
+                    let label = if pager.is_some() { " ↓ New messages below · End ".to_string() } else { format!(" ↓ {} lines below · End ", max_top - start) };
                     let pw = label.width() as u16 + 2;
                     let (x0, y) = (1 + (cw as u16).saturating_sub(pw) / 2, view_h as u16 - 1);
                     for x in x0..x0 + pw {
@@ -2578,12 +2676,18 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             let be = term.backend_mut();
             be.write_all(b"\x1b[?2026l")?;
             be.flush()?;
+            if loaded.0 > 0 {
+                load_ms.push(loaded.1);
+                vis_miss_n += loaded.2 as usize;
+                ev_lat.extend(ev_at.map(|t| t.elapsed()));
+            }
+            ev_at = None;
             if let Some(l) = log.as_mut() {
                 let _ = writeln!(
                     l,
                     "{:>9.1} frame  top {top:?} start {start} end {max_top} rows {} bytes {} flushes {}",
                     v0.elapsed().as_secs_f64() * 1000.0,
-                    conv.len(),
+                    total,
                     BYTES.load(Relaxed) - b0,
                     FLUSHES.load(Relaxed) - fl0
                 );
@@ -2624,6 +2728,9 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         }
         let timeout = deadline.map(|d| d.saturating_duration_since(Instant::now()));
         let (evs, resized) = rd.wait(timeout)?;
+        if !evs.is_empty() && ev_at.is_none() {
+            ev_at = Some(Instant::now());
+        }
         if resized {
             dirty = true;
             conv_cache = None;
@@ -2638,7 +2745,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         let (start, top_pad, shown, view_h, max_top) = lay;
         // only what changes the fold or the rows throws the caches away; scrolling and selecting do not
         let mut changed = false;
-        let conv_len = conv_cache.as_ref().map_or(0, |c| c.2.len());
+        let conv_len = total_rows;
         // a screen point in the conversation, as (row, cell), clamped to what is shown
         let at = |x: u16, y: u16| -> Option<(usize, usize)> {
             if conv_len == 0 || shown == 0 {
@@ -2896,8 +3003,29 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                     // a click, not a drag: the row's target, if it has one
                                     ui.sel = None;
                                     click = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| h.3);
-                                } else if let Some((_, _, conv)) = &conv_cache {
-                                    let text = selection_text(conv, s.a, s.b);
+                                } else {
+                                    let text = match pager.as_mut() {
+                                        // pages dropped since the drag began are read and rendered again
+                                        Some(pg) => {
+                                            let (base, rows) = pg.rows(s.a.0.min(s.b.0), s.a.0.max(s.b.0), &v);
+                                            selection_text(&rows, (s.a.0 - base, s.a.1), (s.b.0 - base, s.b.1))
+                                        }
+                                        None => conv_cache.as_ref().map(|c| selection_text(&c.2, s.a, s.b)).unwrap_or_default(),
+                                    };
+                                    if a.verify_copy && pager.is_some() {
+                                        // the same selection over the whole file folded and rendered at once
+                                        let mut wf = Fold::default();
+                                        for l in std::fs::read_to_string(&a.path)?.lines() {
+                                            if let Ok(e) = serde_json::from_str::<Value>(l) {
+                                                wf.apply(&e);
+                                            }
+                                        }
+                                        let whole = conversation(&wf, conv_w as usize - 2, &v);
+                                        copy_check = Some(selection_text(&whole, s.a, s.b) == text);
+                                        if let Some(p) = &a.stats {
+                                            let _ = std::fs::write(format!("{p}.copied"), &text);
+                                        }
+                                    }
                                     if !text.is_empty() {
                                         let how = copy(term.backend_mut(), &text);
                                         say(&mut ui, format!("✓ copied {} characters, {} lines · {how}", text.chars().count(), text.lines().count()));
@@ -2912,6 +3040,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
             let Some(act) = click else { continue };
             changed = true;
             match act {
+                Act::Group(p, bi) if pager.is_some() => pager.as_mut().unwrap().toggle(p, bi, &v),
                 Act::Group(ti, bi) => {
                     if let Block::Group(g) = &mut f.turns[ti].blocks[bi] {
                         g.open = !g.open;
@@ -2985,6 +3114,20 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         let _ = writeln!(s, "lua_us_per_call\t{:.2}\nlua_us_in_render\t{:.2}", x.ns.get() as f64 / 1000.0 / n.max(1) as f64, x.ns_in.get() as f64 / 1000.0 / n.max(1) as f64);
         let _ = writeln!(s, "lua_mem_bytes\t{lua_mem}");
     }
+    if let Some(pg) = &pager {
+        let q = |v: &mut Vec<Duration>, p: f64| {
+            v.sort();
+            ms(v.get(((v.len().max(1) - 1) as f64 * p).round() as usize).copied())
+        };
+        let _ = writeln!(s, "open_index_ms\t{}", ms(Some(open_index)));
+        let _ = writeln!(s, "open_count_ms\t{}", ms(scans.first().copied()));
+        let _ = writeln!(s, "pages\t{}\ntotal_rows\t{total_rows}\nresident_now\t{}\nresident_max\t{}", pg.pages.len(), pg.resident_count(), pg.resident_max);
+        let _ = writeln!(s, "scans\t{}\nscan_max_ms\t{}", scans.len(), q(&mut scans, 1.0));
+        let _ = writeln!(s, "load_frames\t{}\nvis_miss_frames\t{vis_miss_n}", load_ms.len());
+        let _ = writeln!(s, "load_median_ms\t{}\nload_max_ms\t{}", q(&mut load_ms, 0.5), q(&mut load_ms, 1.0));
+        let _ = writeln!(s, "ev_to_flush_n\t{}\nev_to_flush_median_ms\t{}\nev_to_flush_max_ms\t{}", ev_lat.len(), q(&mut ev_lat, 0.5), q(&mut ev_lat, 1.0));
+        let _ = writeln!(s, "copy_matches_whole\t{}", copy_check.map_or("none".into(), |c| c.to_string()));
+    }
     let Some((t0w, b0, f0, fl0, r0)) = window else { return Ok(s) };
     let secs = t0w.elapsed().as_secs_f64();
     let r1 = rusage();
@@ -3011,7 +3154,7 @@ mod tests {
 
     fn fold_with(prompt: &str, reply: &str) -> Fold {
         let mut f = Fold::default();
-        f.turns.push(Turn { prompt: prompt.into(), ts: 0, blocks: vec![Block::Text(reply.into())] });
+        f.turns.push(Turn { prompt: prompt.into(), blocks: vec![Block::Text(reply.into())], ..Default::default() });
         f
     }
     fn find(rows: &[Row], s: &str) -> usize {
@@ -3117,7 +3260,7 @@ mod tests {
     fn shell_fold(exit: i64) -> Fold {
         let call = Call { name: "shell".into(), args: json!({ "command": "cargo test -p log" }), st: St::Completed, start: 0, end: Some(2500), err: None, lines: 42, exit: Some(exit), changes: vec![], content: String::new(), step: 1, asked: None };
         let g = Group { items: vec![Item::C(call)], steps: 1, step_closed: true, open: true, last_ts: 2500 };
-        Fold { turns: vec![Turn { prompt: "p".into(), ts: 0, blocks: vec![Block::Group(g)] }], ..Default::default() }
+        Fold { turns: vec![Turn { prompt: "p".into(), blocks: vec![Block::Group(g)], ..Default::default() }], ..Default::default() }
     }
     fn lua_view(src: &str, cached: bool) -> View {
         View { lua: Some(std::rc::Rc::new(lua::Ext::new("test.lua", src, cached).unwrap())), ..Default::default() }
