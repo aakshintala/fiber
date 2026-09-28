@@ -62,6 +62,11 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   not recognise a tool's `details` shows `content` instead: tool identity is an
   opaque name and an extension can replace any tool, so no client may depend
   on one tool's `details`.
+- `changes`: the lines each file gained and lost, as
+  `{ path, added, removed }` per file, on a call that changed files. It is the
+  one tool-neutral account of a change: a client draws a group's "+442 −12"
+  and the side panel's per-file counts from it, never from `details`. Any
+  tool that changes files sets it, an extension's included.
 - `artifact`: the path to the full output, present when the result was cut or
   when an `after_tool` hook returned text for the artifact.
 - `control`: instructions to the loop, absent on most results. The one field
@@ -190,7 +195,8 @@ the credential deny (`docs/permissions.md`) judge where the bytes really go.
 - Replacing a file keeps that file's line-ending style (CRLF or LF) and its
   byte order mark. A new file is stored as given.
 - The result says whether the file was created or replaced, with its size in
-  bytes and lines.
+  bytes and lines. `changes` gives the lines added and removed: every line of
+  a new file is added.
 - Effects: creating a file is a reversible `writes`; replacing one is an
   irreversible `writes`. Both carry the resolved path.
 
@@ -216,7 +222,8 @@ the credential deny (`docs/permissions.md`) judge where the bytes really go.
   `unsupported_file`.
 - The result gives, for each block, the lines it replaced and the lines the new
   text now occupies, and says when a block matched only after normalising.
-  The diff goes in `details` for clients and is not sent to the model.
+  The diff goes in `details` for clients and is not sent to the model, and
+  `changes` gives the lines added and removed.
 - Effects: an irreversible `writes`, with the resolved path.
 - In the owner's pi sessions, 32.5% of 3,837 edits carried more than one
   block, and up to 27. Claude Code's replace-all was used in none of 505

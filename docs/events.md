@@ -138,6 +138,7 @@ as soon as a delegate relays its own messages onto the same stdout.
 | `turn_started` | yes | the input that started it, including each `shell_command` since the last turn; for a turn started by jobs, a source naming those `job_id`s |
 | `turn_completed` | yes | `outcome` (`completed`, `interrupted`, `failed`), `error` on failure (`docs/errors.md`, "What ends a turn"), `questions` when an `ask_user` call ended the turn for a driver that is a program (`docs/tools.md`, "Asking the person") |
 | `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
+| `steering_queue` | no | every steering message still queued, in order: the id of the `steer` command that sent it, its text, and where it came from; written whenever the queue changes |
 | `shell_command` | yes | a command the person ran with `send` true (`docs/invocation.md`, `shell`): the command, its output cut as a tool result is, `artifact` when cut, and `process` as on `tool_call_completed`; it joins the next turn's input |
 | `context_added` | yes | the text a hook added to the conversation, the extension's name and the hook point (`docs/extensions.md`, "Hooks") |
 
@@ -150,6 +151,11 @@ after that becomes the next turn's input, and it appears on the next
 threading this rests on is the concurrency section of `docs/architecture.md`;
 the driver commands that send, amend and withdraw one — `steer`, `steer_amend`
 and `steer_drop` — are `docs/invocation.md`.
+
+`steering_queue` lets every attached client show and edit the queue, not only
+the client that sent a message. It is ephemeral because `steering_applied`
+makes each entry obsolete. The latest wins, and a client that attaches is sent
+the latest, as with `extension_ui`.
 
 `turn_completed` means settled. Retries and handoffs happen inside the turn
 and appear as actions, so there is never a second "really finished" event.
@@ -194,6 +200,9 @@ separate error channel, so no failure is ever reported twice.
   keyed on whether the field is present rather than on the tool's name.
 - `content`, `details` and, when the result was cut, `artifact`; their meaning
   is `docs/tools.md`.
+- `changes`, on a call that changed files: one `{ path, added, removed }` per
+  file, counting lines. Any tool may set it, so a client shows the counts
+  without knowing which tool ran (`docs/tools.md`, "What a result carries").
 
 An unknown `error.code` is a generic failure and an unknown `reason` is a
 generic denial; the consumer shows the message. Adding either value is additive.

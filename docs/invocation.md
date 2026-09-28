@@ -83,8 +83,8 @@ acknowledgements carry no `seq`, so they never reach the log.
 |---|---|
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. A steering message also moves any running shell call to the background, so it reaches the model at the next step boundary. Takes an optional `session_id` naming a delegate. |
-| `steer_amend` | Replaces a steering message's text while it is still queued. |
-| `steer_drop` | Removes a queued steering message, so nothing is applied. |
+| `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
+| `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
 | `cancel` | Ends the running turn. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input, form or status. Takes an optional `session_id` naming a delegate. |
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
@@ -448,5 +448,5 @@ supervisor that knows only about Fiber is worth less than one that does not.
 
 ## Not settled here
 
-- The TUI's own shape, including whether it edits a queued steering message:
+- The TUI's own shape:
   [TUI: scrollback or full screen?](https://github.com/aakshintala/fiber/issues/15)
