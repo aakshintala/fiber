@@ -85,11 +85,24 @@ The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A vendor with no listing endpoint ships a
 static list instead.
 
-This is the only Lua a provider runs. It never runs on the request path.
+This and `quota()` are the only Lua a provider runs. Neither runs on the
+request path.
 Nothing transforms a request on its way to a provider. A transform such as
 redacting secrets runs where the text enters the session, in the
 `before_message` and `after_tool` hooks (`docs/extensions.md`, "Hooks"), so
 the secret never reaches the log or any request.
+
+### Quota
+
+A provider may declare a Lua `quota()` function that returns how much quota
+it has left: windows, each with percent used and a reset time where the vendor
+reports one, or credit remaining with its limit. It asks the vendor's usage
+endpoint through `host.http`. Each vendor reports quota differently, and
+overage past a cap is invisible in every response Fiber has seen
+([fiber-zig#96](https://github.com/aakshintala/fiber-zig/issues/96)), so the
+shape stays in the provider's package rather than in the protocol. When it
+runs, and what the model and the person see, is `docs/tools.md`, "Provider
+quota".
 
 ## Naming a model
 

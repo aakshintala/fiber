@@ -21,8 +21,8 @@ survive anyway.
 
 Reading configuration never runs code. A repository's configuration is read
 before anyone has approved anything, so Lua is not a configuration format. The
-only Lua a provider runs is its optional `models()` function
-(`docs/model-routing.md`, "Model discovery").
+only Lua a provider runs is its optional `models()` and `quota()` functions
+(`docs/model-routing.md`, "Model discovery" and "Quota").
 
 Configuration never holds a secret. Secrets live in `credentials/`
 ("Secrets").
@@ -106,6 +106,7 @@ set the key.
 | `tools."<name>".deferred` | the tool's own | yes | Whether the tool is deferred (`docs/tools.md`, "What is deferred by default"). |
 | `web_search.backend` | the one installed | no | The search backend `web_search` uses when more than one is installed (`docs/tools.md`, "Web fetch and web search"). |
 | `shell.read_only."<command>".flags` | none | no | Adds a command to the shell classifier's read-only list, with the flags it may take and stay read-only, such as `["--json", "-p"]` (`docs/tools.md`, "Search", "Other command-line tools"). |
+| `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
 | `extensions."<name>".version` | none | yes, with approval | Declares an extension for the repository, to be fetched (`docs/extensions.md`, "Extensions a repository brings"). |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
