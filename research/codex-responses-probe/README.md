@@ -9,7 +9,7 @@ Facts below are for that model, that day and that platform.
 `probe.py <group>` sends one streaming request per case (raw `urllib`, no zstd) and saves status, response headers,
 request body, the full SSE event list and usage to `raw/<case>.json`. The access token, account id and refresh token are
 read inside the script and never printed or saved; the account id header is not recorded. `raw/count.txt` holds the
-request count: 49 of the 60 allowed, sent at least 3 seconds apart. The raw `sent_headers` field lists header names only; the values are in `probe.py`. No 429 or other error except the deliberate 400s
+request count: 49 of the 60 allowed, sent at least 3 seconds apart. The raw `sent_headers` field lists header names only; `probe.py` shows how each value was generated (stable within a pair or fresh per request); the actual values were not recorded. No 429 or other error except the deliberate 400s
 below. Cost is plan quota, not dollars: the `x-codex-primary-used-percent` response header (5-hour window) moved from
 30 to 57 and the secondary (weekly) from 8 to 13 across the run, almost all of it from the 13 distinct 9,000-token cache
 prompts, each sent twice. Cache groups use random prompts, so no group could hit another's cache.
