@@ -210,10 +210,61 @@ pub(crate) fn is_test_file(rel: &str) -> bool {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct TestFile {
     pub(crate) path: String,
-    /// The module file that declares it, relative to the repository, and the
-    /// declaration. None for a file under a crate's `tests/`, which Cargo
-    /// finds on its own.
-    pub(crate) declared_in: Option<(String, String)>,
+    /// The module files that may declare it, relative to the repository, in
+    /// the order to try them, each with the declaration that file needs.
+    /// Empty for a file under a crate's `tests/`, which Cargo finds on its
+    /// own.
+    pub(crate) declared_in: Vec<(String, String)>,
+}
+
+/// For a unit-test file `stem`.rs in `dir`: the module its tests sit in,
+/// when that is not `dir`'s own, and the files that may declare it with the
+/// declaration each needs (`docs/code-quality.md`, "Size"). A `#[path]` is
+/// relative to the declaring file's directory. `root` says `dir` is the
+/// crate's `src`.
+fn declarations<'a>(
+    dir: &str,
+    root: bool,
+    stem: &'a str,
+) -> (Option<&'a str>, Vec<(String, String)>) {
+    let plain = || "#[cfg(test)]\nmod tests;".to_owned();
+    let with_path = |path: &str| format!("#[cfg(test)]\n#[path = \"{path}\"]\nmod tests;");
+    match stem.strip_suffix("_tests") {
+        None if root => (
+            None,
+            vec![
+                (format!("{dir}/lib.rs"), plain()),
+                (format!("{dir}/main.rs"), plain()),
+            ],
+        ),
+        None => (
+            None,
+            vec![
+                (format!("{dir}.rs"), plain()),
+                (format!("{dir}/mod.rs"), plain()),
+            ],
+        ),
+        Some(crate_root @ ("lib" | "main")) if root => (
+            None,
+            vec![(
+                format!("{dir}/{crate_root}.rs"),
+                with_path(&format!("{stem}.rs")),
+            )],
+        ),
+        Some(module) => (
+            Some(module),
+            vec![
+                (
+                    format!("{dir}/{module}.rs"),
+                    with_path(&format!("{stem}.rs")),
+                ),
+                (
+                    format!("{dir}/{module}/mod.rs"),
+                    with_path(&format!("../{stem}.rs")),
+                ),
+            ],
+        ),
+    }
 }
 
 /// The nextest filter selecting every test in the test files among
@@ -240,38 +291,26 @@ pub(crate) fn test_filter(
         let (term, declared_in) = match parts.as_slice() {
             ["tests", binary, ..] => {
                 let binary = binary.strip_suffix(".rs").unwrap_or(binary);
-                (format!("binary_id({name}::{binary})"), None)
+                (format!("binary_id({name}::{binary})"), vec![])
             }
             ["src", modules @ .., file] => {
                 let stem = file.strip_suffix(".rs").unwrap_or(file);
-                let mut path_modules: Vec<&str> = modules.to_vec();
                 let dir = format!(
                     "{}/src{}",
                     member.dir,
                     modules.iter().map(|m| format!("/{m}")).collect::<String>()
                 );
-                let declared_in = if stem == "tests" {
-                    // A crate root may be main.rs, and a module dir.rs may
-                    // be dir/mod.rs; scripts/bug-base falls back to those.
-                    let parent = if modules.is_empty() {
-                        format!("{dir}/lib.rs")
-                    } else {
-                        format!("{dir}.rs")
-                    };
-                    (parent, "#[cfg(test)]\nmod tests;".to_owned())
-                } else {
-                    let module = stem.strip_suffix("_tests").unwrap_or(stem);
-                    path_modules.push(module);
-                    (
-                        format!("{dir}/{module}.rs"),
-                        format!("#[cfg(test)]\n#[path = \"{stem}.rs\"]\nmod tests;"),
-                    )
-                };
-                path_modules.push("tests");
-                let prefix: String = path_modules.iter().map(|m| format!("{m}::")).collect();
+                let (module, declared_in) = declarations(&dir, modules.is_empty(), stem);
+                let prefix: String = modules
+                    .iter()
+                    .copied()
+                    .chain(module)
+                    .chain(["tests"])
+                    .map(|m| format!("{m}::"))
+                    .collect();
                 (
                     format!("(package({name}) & test(/^{prefix}/))"),
-                    Some(declared_in),
+                    declared_in,
                 )
             }
             _ => continue,

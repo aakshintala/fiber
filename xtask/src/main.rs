@@ -140,12 +140,14 @@ fn run(args: &[String]) -> Result<bool, String> {
                 println!("package\t{package}");
             }
             for file in files {
-                let (parent, declaration) = file.declared_in.unwrap_or_default();
-                println!(
-                    "file\t{}\t{parent}\t{}",
-                    file.path,
-                    declaration.replace('\n', " ")
-                );
+                let candidates: String = file
+                    .declared_in
+                    .iter()
+                    .map(|(parent, declaration)| {
+                        format!("\t{parent}\t{}", declaration.replace('\n', " "))
+                    })
+                    .collect();
+                println!("file\t{}{candidates}", file.path);
             }
             Ok(true)
         }

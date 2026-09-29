@@ -31,43 +31,38 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .collect()
 }
 
-/// `source` with comments, string literals and char literals removed, so
-/// what is left is code. Every step consumes at least one character.
+/// `source` with comments and literals removed, so what is left is code.
+/// It knows every Rust literal form: strings, raw strings, byte and C
+/// strings with or without `r`, chars and byte chars, and tells a char from
+/// a lifetime. Block comments nest. Every step consumes at least one
+/// character.
 pub(crate) fn code_only(source: &str) -> String {
     let mut out = String::new();
     let mut it = source.chars();
     let mut prev = ' ';
     while let Some(c) = it.next() {
-        let hashes = it.clone().take_while(|h| *h == '#').count();
         if c == '/' && peek(&it, 0) == '/' {
             if it.by_ref().any(|c| c == '\n') {
                 out.push('\n');
             }
         } else if c == '/' && peek(&it, 0) == '*' {
-            // ponytail: nested block comments end at the first `*/`.
             it.next();
-            skip_past(&mut it, "*/");
+            skip_block_comment(&mut it);
             out.push(' ');
-        } else if c == 'r' && !is_ident(prev) && peek(&it, hashes) == '"' {
-            it.nth(hashes);
-            skip_past(&mut it, &format!("\"{}", "#".repeat(hashes)));
-            out.push_str("\"\"");
-        } else if c == '"' {
-            while let Some(c) = it.next() {
-                if c == '\\' {
-                    it.next();
-                } else if c == '"' {
-                    break;
+        } else if !is_ident(prev)
+            && let Some(literal) = literal_start(c, &it)
+        {
+            match literal {
+                Literal::Quoted { opening, quote } => {
+                    it.by_ref().take(opening).for_each(drop);
+                    skip_quoted(&mut it, quote);
+                }
+                Literal::Raw { opening, hashes } => {
+                    it.by_ref().take(opening).for_each(drop);
+                    skip_past(&mut it, &format!("\"{}", "#".repeat(hashes)));
                 }
             }
             out.push_str("\"\"");
-        } else if c == '\'' && peek(&it, 0) == '\\' {
-            it.nth(1);
-            skip_past(&mut it, "'");
-            out.push_str("' '");
-        } else if c == '\'' && peek(&it, 1) == '\'' {
-            it.nth(1);
-            out.push_str("' '");
         } else {
             out.push(c);
         }
@@ -76,8 +71,83 @@ pub(crate) fn code_only(source: &str) -> String {
     out
 }
 
+/// A literal that starts at the character just taken from `it`. `opening`
+/// counts the characters still to consume up to and including the opening
+/// quote.
+enum Literal {
+    /// A string, char, byte or C literal ending at an unescaped `quote`.
+    Quoted { opening: usize, quote: char },
+    /// A raw literal ending at `"` and `hashes` hashes.
+    Raw { opening: usize, hashes: usize },
+}
+
+fn literal_start(c: char, it: &std::str::Chars<'_>) -> Option<Literal> {
+    let hashes_at = |n: usize| it.clone().skip(n).take_while(|h| *h == '#').count();
+    // `n` is where the hashes start, after `c`.
+    let raw = |n: usize| {
+        let hashes = hashes_at(n);
+        (peek(it, n + hashes) == '"').then_some(Literal::Raw {
+            opening: n + hashes + 1,
+            hashes,
+        })
+    };
+    // A char literal is one character or one escape between quotes; any
+    // other `'` starts a lifetime or a label.
+    let char_literal = |n: usize| peek(it, n) == '\\' || peek(it, n + 1) == '\'';
+    match (c, peek(it, 0)) {
+        ('"', _) => Some(Literal::Quoted {
+            opening: 0,
+            quote: '"',
+        }),
+        ('\'', _) if char_literal(0) => Some(Literal::Quoted {
+            opening: 0,
+            quote: '\'',
+        }),
+        ('b', '\'') if char_literal(1) => Some(Literal::Quoted {
+            opening: 1,
+            quote: '\'',
+        }),
+        ('b' | 'c', '"') => Some(Literal::Quoted {
+            opening: 1,
+            quote: '"',
+        }),
+        ('b' | 'c', 'r') => raw(1),
+        ('r', _) => raw(0),
+        _ => None,
+    }
+}
+
 fn peek(it: &std::str::Chars<'_>, n: usize) -> char {
     it.clone().nth(n).unwrap_or('\0')
+}
+
+/// Consumes `it` through the `*/` that closes a block comment whose `/*`
+/// was just consumed, counting nested comments.
+fn skip_block_comment(it: &mut std::str::Chars<'_>) {
+    let mut depth = 1usize;
+    while let Some(c) = it.next() {
+        if c == '/' && peek(it, 0) == '*' {
+            it.next();
+            depth += 1;
+        } else if c == '*' && peek(it, 0) == '/' {
+            it.next();
+            depth -= 1;
+            if depth == 0 {
+                return;
+            }
+        }
+    }
+}
+
+/// Consumes `it` through the first `quote` no backslash escapes.
+fn skip_quoted(it: &mut std::str::Chars<'_>, quote: char) {
+    while let Some(c) = it.next() {
+        if c == '\\' {
+            it.next();
+        } else if c == quote {
+            return;
+        }
+    }
 }
 
 /// Consumes `it` through the first `close`.

@@ -305,6 +305,15 @@ fn there_is_no_ticket_without_a_closing_keyword() {
     }
 }
 
+fn declared(declared_in: &[(String, String)]) -> Vec<(&str, &str)> {
+    declared_in
+        .iter()
+        .map(|(p, d)| (p.as_str(), d.as_str()))
+        .collect()
+}
+
+const PLAIN: &str = "#[cfg(test)]\nmod tests;";
+
 #[test]
 fn test_files_map_to_their_tests() {
     let files = strings(&[
@@ -314,6 +323,8 @@ fn test_files_map_to_their_tests() {
         "crates/loop/tests/turns.rs",
         "crates/loop/tests/support/mod.rs",
         "crates/log/src/fold/inner_tests.rs",
+        "crates/log/src/lib_tests.rs",
+        "crates/loop/src/main_tests.rs",
         "crates/log/src/writer.rs",
         "crates/log/build_tests.rs",
         "docs/events.md",
@@ -328,46 +339,74 @@ fn test_files_map_to_their_tests() {
             "binary_id(loop::turns)",
             "binary_id(loop::support)",
             "(package(log) & test(/^fold::inner::tests::/))",
+            "(package(log) & test(/^tests::/))",
+            "(package(loop) & test(/^tests::/))",
         ]
     );
     assert_eq!(packages, strings(&["log", "loop"]));
-    let declared: Vec<(&str, Option<(&str, &str)>)> = tests
-        .iter()
-        .map(|t| {
-            (
-                t.path.as_str(),
-                t.declared_in
-                    .as_ref()
-                    .map(|(p, d)| (p.as_str(), d.as_str())),
-            )
-        })
-        .collect();
+    let paths: Vec<&str> = tests.iter().map(|t| t.path.as_str()).collect();
+    assert_eq!(paths, files.get(..8).unwrap());
+    let all: Vec<Vec<(&str, &str)>> = tests.iter().map(|t| declared(&t.declared_in)).collect();
     assert_eq!(
-        declared,
+        all,
         [
-            (
-                "crates/log/src/writer_tests.rs",
-                Some((
+            vec![
+                (
                     "crates/log/src/writer.rs",
                     "#[cfg(test)]\n#[path = \"writer_tests.rs\"]\nmod tests;"
-                ))
-            ),
-            (
-                "crates/log/src/fold/tests.rs",
-                Some(("crates/log/src/fold.rs", "#[cfg(test)]\nmod tests;"))
-            ),
-            (
-                "crates/log/src/tests.rs",
-                Some(("crates/log/src/lib.rs", "#[cfg(test)]\nmod tests;"))
-            ),
-            ("crates/loop/tests/turns.rs", None),
-            ("crates/loop/tests/support/mod.rs", None),
-            (
-                "crates/log/src/fold/inner_tests.rs",
-                Some((
+                ),
+                (
+                    "crates/log/src/writer/mod.rs",
+                    "#[cfg(test)]\n#[path = \"../writer_tests.rs\"]\nmod tests;"
+                ),
+            ],
+            vec![
+                ("crates/log/src/fold.rs", PLAIN),
+                ("crates/log/src/fold/mod.rs", PLAIN)
+            ],
+            vec![
+                ("crates/log/src/lib.rs", PLAIN),
+                ("crates/log/src/main.rs", PLAIN)
+            ],
+            vec![],
+            vec![],
+            vec![
+                (
                     "crates/log/src/fold/inner.rs",
                     "#[cfg(test)]\n#[path = \"inner_tests.rs\"]\nmod tests;"
-                ))
+                ),
+                (
+                    "crates/log/src/fold/inner/mod.rs",
+                    "#[cfg(test)]\n#[path = \"../inner_tests.rs\"]\nmod tests;"
+                ),
+            ],
+            vec![(
+                "crates/log/src/lib.rs",
+                "#[cfg(test)]\n#[path = \"lib_tests.rs\"]\nmod tests;"
+            )],
+            vec![(
+                "crates/loop/src/main.rs",
+                "#[cfg(test)]\n#[path = \"main_tests.rs\"]\nmod tests;"
+            )],
+        ]
+    );
+}
+
+#[test]
+fn only_a_crate_root_file_is_a_crate_root() {
+    let (expression, _, tests) =
+        test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members());
+    assert_eq!(expression, "(package(log) & test(/^fold::lib::tests::/))");
+    assert_eq!(
+        declared(&tests.first().unwrap().declared_in),
+        [
+            (
+                "crates/log/src/fold/lib.rs",
+                "#[cfg(test)]\n#[path = \"lib_tests.rs\"]\nmod tests;"
+            ),
+            (
+                "crates/log/src/fold/lib/mod.rs",
+                "#[cfg(test)]\n#[path = \"../lib_tests.rs\"]\nmod tests;"
             ),
         ]
     );

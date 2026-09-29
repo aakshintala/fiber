@@ -23,21 +23,26 @@ git worktree add --quiet --detach "$tree" "$base"
 trap 'git worktree remove --force "$tree"' EXIT
 
 package_args=()
-while IFS=$'\t' read -r kind path parent declaration; do
+while IFS=$'\t' read -r -a fields; do
+  kind=${fields[0]:-}
   case $kind in
-    package) package_args+=(-p "$path") ;;
+    package) package_args+=(-p "${fields[1]}") ;;
     file)
+      path=${fields[1]}
       mkdir -p "$tree/$(dirname "$path")"
       git show "HEAD:$path" >"$tree/$path"
-      if [ -n "$parent" ] && ! git cat-file -e "$base:$path" 2>/dev/null; then
-        # A crate root may be main.rs, and a module dir.rs may be dir/mod.rs.
-        if [ ! -f "$tree/$parent" ]; then
-          case $parent in
-            */lib.rs) parent=${parent%lib.rs}main.rs ;;
-            *) parent=${parent%.rs}/mod.rs ;;
-          esac
-        fi
-        if [ ! -f "$tree/$parent" ]; then
+      if [ ${#fields[@]} -gt 2 ] && ! git cat-file -e "$base:$path" 2>/dev/null; then
+        # The candidates are parent-file and declaration pairs; the first
+        # parent that exists at the base commit declares the new file.
+        parent=
+        for ((i = 2; i + 1 < ${#fields[@]}; i += 2)); do
+          if [ -f "$tree/${fields[i]}" ]; then
+            parent=${fields[i]}
+            declaration=${fields[i + 1]}
+            break
+          fi
+        done
+        if [ -z "$parent" ]; then
           echo "bug-base: $path has no parent module at the base commit"
         elif ! grep -qE '(^|[^[:alnum:]_])mod[[:space:]]+tests([^[:alnum:]_]|$)' "$tree/$parent"; then
           printf '\n%s\n' "$declaration" >>"$tree/$parent"

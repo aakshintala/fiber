@@ -37,7 +37,16 @@ for p in $packages; do package_args+=(-p "$p"); done
 
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
-count() { grep -oE "$1" "$log" | grep -oE '[0-9]+' | awk '{ s += $1 } END { print s + 0 }'; }
+# Sums the numbers in every match of $1 in the last command's output, with
+# colour codes removed (CI sets CARGO_TERM_COLOR=always). No match is an error.
+count() {
+  local matches
+  matches=$(sed $'s/\033\\[[0-9;]*m//g' "$log" | grep -oE "$1") || {
+    echo "scripts/check: no \"$1\" in the output, so the test count is unknown" >&2
+    return 1
+  }
+  grep -oE '[0-9]+' <<<"$matches" | awk '{ s += $1 } END { print s + 0 }'
+}
 
 if [ "$scope" != platform ]; then
   echo "== docs check"

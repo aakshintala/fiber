@@ -181,23 +181,94 @@ fn code_only_keeps_code_and_blanks_the_rest() {
     let cases = [
         ("a // c\nb // d", "a \nb "),
         ("a /* c */ b", "a   b"),
+        ("a /* x /* y */ z */ b", "a   b"),
         ("a / b * c", "a / b * c"),
         ("x \"s\\\"t\" y", "x \"\" y"),
         ("x \"a\\\\\" y", "x \"\" y"),
         ("x r#\"a\"b\"# z", "x \"\" z"),
         ("x r\"a\\\" z", "x \"\" z"),
         ("x r##\"a\"#b\"## z", "x \"\" z"),
-        ("for\"a\" x", "for\"\" x"),
-        ("r#type", "r#type"),
-        ("a '\\n' b '\\'' c 'x' d", "a ' ' b ' ' c ' ' d"),
-        ("a '\\u{1F600}' b", "a ' ' b"),
-        ("f<'a>(x: &'a T)", "f<'a>(x: &'a T)"),
+        ("x br#\"a\"# z", "x \"\" z"),
+        ("x cr\"a\" z", "x \"\" z"),
+        ("x b\"a\" c\"b\" z", "x \"\" \"\" z"),
+        ("x b'a' b'\\n' z", "x \"\" \"\" z"),
+        ("a '\\n' b '\\'' c 'x' d", "a \"\" b \"\" c \"\" d"),
+        ("a '\\u{1F600}' b", "a \"\" b"),
         ("\"unterminated unsafe", "\"\""),
         ("/* unterminated", " "),
+        ("/* a /* b */ unterminated", " "),
         ("// only", ""),
         ("r\"open", "\"\""),
     ];
     for (source, code) in cases {
         assert_eq!(code_only(source), code, "{source:?}");
+    }
+}
+
+/// Each Rust literal and comment form, holding quotes, backslashes and the
+/// word itself, so a scanner that misreads its end sees the wrong code.
+const FORMS: [&str; 17] = [
+    r#""a\"b unsafe \\""#,
+    r##"r#"a"b unsafe"#"##,
+    r###"r##"a"#b"##"###,
+    r#"r"a\""#,
+    r#"b"a\"b unsafe""#,
+    r##"br#"a"b unsafe"#"##,
+    r#"br"a\""#,
+    r#"c"a\"b unsafe""#,
+    r##"cr#"a"b unsafe"#"##,
+    r"'\''",
+    r"'\u{22}'",
+    "'\"'",
+    r"b'\''",
+    "b'\"'",
+    "/* a \" /* b ' */ \" unsafe */",
+    "/* \" */",
+    "// \" unsafe\n",
+];
+
+#[test]
+fn unsafe_after_every_literal_form_is_found() {
+    for form in FORMS {
+        assert!(
+            uses_unsafe(&format!("let x = {form}; unsafe {{}}")),
+            "{form}"
+        );
+    }
+}
+
+#[test]
+fn unsafe_inside_every_literal_form_is_not_code() {
+    for form in FORMS {
+        assert!(!uses_unsafe(&format!("let x = {form};")), "{form}");
+    }
+}
+
+#[test]
+fn lifetimes_and_labels_are_code() {
+    assert!(uses_unsafe(
+        "fn f<'a>(x: &'a str) -> &'a str { unsafe { x } }"
+    ));
+    assert!(uses_unsafe("'outer: loop { break 'outer; } unsafe {}"));
+    assert_eq!(code_only("fn f<'a>(x: &'a T) {}"), "fn f<'a>(x: &'a T) {}");
+    assert_eq!(
+        code_only("'outer: loop { break 'outer; }"),
+        "'outer: loop { break 'outer; }"
+    );
+}
+
+#[test]
+fn identifiers_that_look_like_prefixes_are_code() {
+    for source in [
+        "r#type",
+        "for x in xs",
+        "abr(\"a\")",
+        "c(1)",
+        "b (2)",
+        "br",
+        "cr",
+    ] {
+        let expected = source.replace("\"a\"", "\"\"");
+        assert_eq!(code_only(source), expected, "{source}");
     }
 }

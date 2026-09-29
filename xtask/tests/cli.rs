@@ -246,8 +246,10 @@ fn bug_filter_prints_the_filter_packages_and_declarations() {
         out,
         "filter\t(package(b) & test(/^fold::tests::/)) | binary_id(a::t)\n\
          package\ta\npackage\tb\n\
-         file\tcrates/b/src/fold_tests.rs\tcrates/b/src/fold.rs\t#[cfg(test)] #[path = \"fold_tests.rs\"] mod tests;\n\
-         file\tcrates/a/tests/t.rs\t\t\n"
+         file\tcrates/b/src/fold_tests.rs\
+         \tcrates/b/src/fold.rs\t#[cfg(test)] #[path = \"fold_tests.rs\"] mod tests;\
+         \tcrates/b/src/fold/mod.rs\t#[cfg(test)] #[path = \"../fold_tests.rs\"] mod tests;\n\
+         file\tcrates/a/tests/t.rs\n"
     );
 }
 
