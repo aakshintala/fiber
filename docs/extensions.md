@@ -568,8 +568,9 @@ process extension is restarted. Both are handed their folded state again.
   instruction once the deadline passes, so an extension cannot swallow the
   deadline with `pcall`. Measured in `research/extension-runtime/pass1/`. A
   Lua hook belongs to one coroutine, not to the VM: Fiber arms it on every
-  coroutine a callback runs on and on each one the extension creates with
-  `coroutine.wrap`, or a loop inside a coroutine is never stopped
+  coroutine a callback runs on, and it replaces `coroutine.create` and
+  `coroutine.wrap` with versions that arm it on each new coroutine. With either
+  one left as Lua ships it, a loop inside a coroutine is never stopped
   (`research/extension-runtime/linux-containment/`). A
   process extension is not interrupted: Fiber stops waiting, and its late
   reply is dropped.

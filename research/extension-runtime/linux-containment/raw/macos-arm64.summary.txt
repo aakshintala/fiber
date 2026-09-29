@@ -12,8 +12,11 @@ debug           hook_staged_in_coro_retry        exit=None sig=Some(9) TIMEOUT
 debug           hook_staged_rust_thread_resume   exit=None sig=Some(9) TIMEOUT
 debug           hook_thread_staged               exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
 debug           hook_coro_replaced_wrap          exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
+debug           hook_coro_create_unreplaced      exit=None sig=Some(9) TIMEOUT
+debug           hook_coro_replaced_create        exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
+debug           hook_coro_replaced_both_nested   exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
 debug           oom_plain                        exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
-debug           oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
+debug           oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:276:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
 debug           oom_in_pcall_retry               exit=Some(0) sig=None | script_returned=String("not enough memory") | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 debug           oom_in_coroutine                 exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 debug           oom_rust_create_string           exit=Some(0) sig=None | Ok((false, "memory error: not enough memory")) | vm_after=Ok(2)
@@ -22,7 +25,7 @@ debug           oom_reuse_after                  exit=Some(0) sig=None | lua_err
 debug           oom_in_hook                      exit=Some(0) sig=None | err=Err("memory error: not enough memory") | vm_after=Ok(2)
 debug           lock_lua_error_in_callback       exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true contents=Some([1])
 debug           lock_deadline_in_call            exit=Some(0) sig=None | err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
-debug           lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+debug           lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:369:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
 debug           lock_lua_error_longjmp_frames    exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true
 release         panic_pcall                      exit=None sig=Some(6)
 release         panic_bare                       exit=None sig=Some(6)
@@ -38,8 +41,11 @@ release         hook_staged_in_coro_retry        exit=None sig=Some(9) TIMEOUT
 release         hook_staged_rust_thread_resume   exit=None sig=Some(9) TIMEOUT
 release         hook_thread_staged               exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
 release         hook_coro_replaced_wrap          exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
+release         hook_coro_create_unreplaced      exit=None sig=Some(9) TIMEOUT
+release         hook_coro_replaced_create        exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
+release         hook_coro_replaced_both_nested   exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
 release         oom_plain                        exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
-release         oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
+release         oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:276:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
 release         oom_in_pcall_retry               exit=Some(0) sig=None | script_returned=String("not enough memory") | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 release         oom_in_coroutine                 exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 release         oom_rust_create_string           exit=Some(0) sig=None | Ok((false, "memory error: not enough memory")) | vm_after=Ok(2)
@@ -48,7 +54,7 @@ release         oom_reuse_after                  exit=Some(0) sig=None | lua_err
 release         oom_in_hook                      exit=Some(0) sig=None | err=Err("memory error: not enough memory") | vm_after=Ok(2)
 release         lock_lua_error_in_callback       exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true contents=Some([1])
 release         lock_deadline_in_call            exit=Some(0) sig=None | err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
-release         lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+release         lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:369:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
 release         lock_lua_error_longjmp_frames    exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true
 dev-unwind      panic_pcall                      exit=Some(0) sig=None | unwound_to_rust_caller_as_panic | vm_after=Ok(2)
 dev-unwind      panic_bare                       exit=Some(0) sig=None | unwound_to_rust_caller_as_panic | vm_after=Ok(2)
@@ -64,8 +70,11 @@ dev-unwind      hook_staged_in_coro_retry        exit=None sig=Some(9) TIMEOUT
 dev-unwind      hook_staged_rust_thread_resume   exit=None sig=Some(9) TIMEOUT
 dev-unwind      hook_thread_staged               exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
 dev-unwind      hook_coro_replaced_wrap          exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
+dev-unwind      hook_coro_create_unreplaced      exit=None sig=Some(9) TIMEOUT
+dev-unwind      hook_coro_replaced_create        exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
+dev-unwind      hook_coro_replaced_both_nested   exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
 dev-unwind      oom_plain                        exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
-dev-unwind      oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
+dev-unwind      oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:276:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
 dev-unwind      oom_in_pcall_retry               exit=Some(0) sig=None | script_returned=String("not enough memory") | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 dev-unwind      oom_in_coroutine                 exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 dev-unwind      oom_rust_create_string           exit=Some(0) sig=None | Ok((false, "memory error: not enough memory")) | vm_after=Ok(2)
@@ -74,7 +83,7 @@ dev-unwind      oom_reuse_after                  exit=Some(0) sig=None | lua_err
 dev-unwind      oom_in_hook                      exit=Some(0) sig=None | err=Err("memory error: not enough memory") | vm_after=Ok(2)
 dev-unwind      lock_lua_error_in_callback       exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true contents=Some([1])
 dev-unwind      lock_deadline_in_call            exit=Some(0) sig=None | err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
-dev-unwind      lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+dev-unwind      lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:369:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
 dev-unwind      lock_lua_error_longjmp_frames    exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true
 release-unwind  panic_pcall                      exit=Some(0) sig=None | unwound_to_rust_caller_as_panic | vm_after=Ok(2)
 release-unwind  panic_bare                       exit=Some(0) sig=None | unwound_to_rust_caller_as_panic | vm_after=Ok(2)
@@ -90,8 +99,11 @@ release-unwind  hook_staged_in_coro_retry        exit=None sig=Some(9) TIMEOUT
 release-unwind  hook_staged_rust_thread_resume   exit=None sig=Some(9) TIMEOUT
 release-unwind  hook_thread_staged               exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
 release-unwind  hook_coro_replaced_wrap          exit=Some(0) sig=None | script_error  err=runtime error: deadline exceeded
+release-unwind  hook_coro_create_unreplaced      exit=None sig=Some(9) TIMEOUT
+release-unwind  hook_coro_replaced_create        exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
+release-unwind  hook_coro_replaced_both_nested   exit=Some(0) sig=None | Ok("MultiValue([Boolean(false), Error(RuntimeError(\"deadline exceeded\"))])")
 release-unwind  oom_plain                        exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
-release-unwind  oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
+release-unwind  oom_huge_string                  exit=Some(0) sig=None | lua_error kind=other err=runtime error: src/main.rs:276:1: resulting string too large | used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000)
 release-unwind  oom_in_pcall_retry               exit=Some(0) sig=None | script_returned=String("not enough memory") | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 release-unwind  oom_in_coroutine                 exit=Some(0) sig=None | lua_error kind=MemoryError err=memory error: not enough memory | used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000)
 release-unwind  oom_rust_create_string           exit=Some(0) sig=None | Ok((false, "memory error: not enough memory")) | vm_after=Ok(2)
@@ -100,5 +112,5 @@ release-unwind  oom_reuse_after                  exit=Some(0) sig=None | lua_err
 release-unwind  oom_in_hook                      exit=Some(0) sig=None | err=Err("memory error: not enough memory") | vm_after=Ok(2)
 release-unwind  lock_lua_error_in_callback       exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true contents=Some([1])
 release-unwind  lock_deadline_in_call            exit=Some(0) sig=None | err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
-release-unwind  lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+release-unwind  lock_hook_holds_lock             exit=Some(0) sig=None | err=Err("runtime error: src/main.rs:369:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
 release-unwind  lock_lua_error_longjmp_frames    exit=Some(0) sig=None | pcall=(false,msg) poisoned=false try_lock_ok=true

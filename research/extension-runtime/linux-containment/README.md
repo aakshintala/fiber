@@ -14,14 +14,16 @@ measurements in `research/extension-runtime/` were macOS arm64. Ticket: #90.
 - Four build profiles (`run.sh`): `dev` and `release` set `panic = "abort"`, as
   `docs/code-quality.md` says Fiber's profiles do. `dev-unwind` and
   `release-unwind` set `panic = "unwind"` to show what the abort setting changes.
-- Linux: GitHub Actions `ubuntu-24.04`, kernel 6.17.0-1022-azure, rustc 1.98.1,
-  2026-09-29 (`raw/linux-uname.txt`). The workflow is `probe.yml` here (it ran
-  from the temporary branch `probe/90-lua`, now deleted). macOS: Darwin 25.6.0
-  arm64, rustc 1.98.1, same day.
+- Linux: GitHub Actions `ubuntu-24.04`, x86_64, kernel 6.17.0-1022-azure,
+  rustc 1.98.1 (`raw/linux-uname.txt`). The workflow is `probe.yml` here.
+  macOS: arm64, run locally (`os` and `arch` are in the raw output).
+- Three cases (`hook_coro_create_unreplaced`, `hook_coro_replaced_create`,
+  `hook_coro_replaced_both_nested`) were added after the Linux run and ran on
+  macOS only. `raw/macos-arm64.txt` has them; `raw/linux-x86_64.txt` does not.
 - Raw output: `raw/linux-x86_64.txt`, `raw/macos-arm64.txt`. One line per case
   and profile, timings removed: `raw/*.summary.txt` (made by `summarize.py`).
-- The Linux and macOS summaries are identical, apart from the panic message's
-  thread id and line numbers. Nothing here differs by platform.
+- For every case that ran on both, the Linux and macOS outcomes match. Timings
+  differ slightly (for example 100 ms against 102 ms for the deadline).
 
 ## 1. A Rust panic inside a Lua callback
 
@@ -62,7 +64,21 @@ whether it was created before or after the hook was set, so a loop inside one
 runs past the deadline. The doc's two-stage design holds when armed per
 coroutine; the fix is to arm it with `Thread::set_hook` on every coroutine the
 callback runs on, and to replace `coroutine.wrap` so ones the script creates
-get it too. Only `coroutine.wrap` was measured; `coroutine.create` was not.
+get it too. 
+
+Fiber must cover both `coroutine.create` and `coroutine.wrap`: they are
+separate C functions, so replacing one leaves the other open. Measured on
+macOS only (four profiles):
+
+| Case | Result |
+|---|---|
+| `coroutine.create` left as it is, loop inside the coroutine | never stops (`hook_coro_create_unreplaced`) |
+| host `coroutine.create` that returns a `Thread` armed with the two-stage hook, resumed with `coroutine.resume` | `coroutine.resume` returns `false, deadline exceeded` at about 100 ms (`hook_coro_replaced_create`) |
+| both replaced, a `create` coroutine inside a `wrap` coroutine | same result (`hook_coro_replaced_both_nested`) |
+
+The stripped standard library (table, string, math, utf8, coroutine) has no
+other way to make a coroutine. `coroutine.resume` reports the deadline as a
+return value, not a raised error.
 
 Rows: `hook_*`.
 
@@ -73,20 +89,21 @@ Rows: `hook_*`.
 - Plain, inside `pcall`, inside a coroutine, inside the instruction hook, and
   from a Rust callback (`create_string` of 64 MiB, `create_table` in a loop):
   a Lua `memory error: not enough memory` every time. No abort, exit status 0.
-  The VM stays usable and holds 34 KiB after a collection, and it hit the cap
-  again on three further rounds.
+  The VM stays usable. In the Lua growth cases it holds 34 KiB after a
+  collection, and it hit the cap again on three further rounds
+  (`oom_reuse_after`).
 - `pcall` catches the memory error, so a script can keep running after it. It
   is an ordinary error to the script.
 - `string.rep("x", 1 << 40)` fails earlier with `resulting string too large`, a
-  runtime error with no allocation attempted.
+  runtime error.
 
 Rows: `oom_*`.
 
 ## 4. A Lua error while Rust holds a lock
 
 - A host function holds a `Mutex` guard and calls a Lua function that calls
-  `error()`, under `pcall`, nested through three frames: the error comes back
-  as an `Err`, the guard drops, the mutex is not poisoned and `try_lock`
+  `error()`, under `pcall`, also nested one level deep: `pcall` returns
+  `false` with the message (`pcall=Ok((false, ...))`), the guard drops, the mutex is not poisoned and `try_lock`
   succeeds.
 - The instruction hook holds the guard while calling a Lua function that
   errors: same result.
@@ -103,7 +120,8 @@ None. No model was called.
 
 ## For the owner
 
-- `docs/extensions.md` is corrected: the hook is per coroutine ("It loops or
+- `docs/extensions.md` is corrected: the hook is per coroutine, and Fiber must
+  replace both `coroutine.create` and `coroutine.wrap` ("It loops or
   hangs"). Every callback runs as a coroutine (#39), so this is the case that
   matters, not an edge.
 - `docs/code-quality.md`, "Panics", says that under unwind a panic in a
@@ -113,5 +131,5 @@ None. No model was called.
   (abort still ends the process). That sentence is left unchanged because it is
   outside this ticket.
 - The cap, the error boundary and the lock claims hold as written.
-- Not measured: `coroutine.create`, Lua's `xpcall` handlers, and RSS after the
+- Not measured: Lua's `xpcall` handlers, the three new cases on Linux, and RSS after the
   cap (pass1 has that).

@@ -13,7 +13,8 @@ const CASES: &[&str] = &[
     "hook_naive_pcall", "hook_staged_pcall", "hook_coro_created_in_script",
     "hook_coro_created_before_arm", "hook_coro_yield_resume", "hook_thread_set_hook",
     "hook_staged_in_coro_retry", "hook_staged_rust_thread_resume", "hook_thread_staged",
-    "hook_coro_replaced_wrap",
+    "hook_coro_replaced_wrap", "hook_coro_create_unreplaced", "hook_coro_replaced_create",
+    "hook_coro_replaced_both_nested",
     "oom_plain", "oom_huge_string", "oom_in_pcall_retry", "oom_in_coroutine",
     "oom_rust_create_string", "oom_rust_create_table", "oom_reuse_after", "oom_in_hook",
     "lock_lua_error_in_callback", "lock_deadline_in_call", "lock_hook_holds_lock",
@@ -227,6 +228,38 @@ fn run_case(name: &str) {
             lua.globals().get::<mlua::Table>("coroutine").unwrap().set("wrap", wrap).unwrap();
             let t0 = Instant::now();
             report(name, t0, lua.load(&format!("local co=coroutine.wrap(function() {RETRY} end) return co()")).eval());
+        }
+        "hook_coro_create_unreplaced" | "hook_coro_replaced_create" | "hook_coro_replaced_both_nested" => {
+            let lua = lua();
+            let flag = arm_watchdog(100);
+            staged_hook(&lua, flag.clone());
+            if name != "hook_coro_create_unreplaced" {
+                let fl = flag.clone();
+                let create = lua.create_function(move |lua, f: mlua::Function| {
+                    let th = lua.create_thread(f)?;
+                    staged_thread_hook(&th, fl.clone());
+                    Ok(th)
+                }).unwrap();
+                let fl = flag.clone();
+                let wrap = lua.create_function(move |lua, f: mlua::Function| {
+                    let th = lua.create_thread(f)?;
+                    staged_thread_hook(&th, fl.clone());
+                    lua.create_function(move |_, args: mlua::MultiValue| th.resume::<mlua::MultiValue>(args))
+                }).unwrap();
+                let co = lua.globals().get::<mlua::Table>("coroutine").unwrap();
+                co.set("create", create).unwrap();
+                if name == "hook_coro_replaced_both_nested" { co.set("wrap", wrap).unwrap(); }
+            }
+            let src = if name == "hook_coro_replaced_both_nested" {
+                // a coroutine made with create, inside one made with wrap, loops under pcall
+                format!("local outer=coroutine.wrap(function() local inner=coroutine.create(function() {RETRY} end) return coroutine.resume(inner) end) return outer()")
+            } else {
+                format!("local co=coroutine.create(function() {RETRY} end) return coroutine.resume(co)")
+            };
+            let t0 = Instant::now();
+            // coroutine.resume returns (false, err) instead of raising, so show the values.
+            let r = lua.load(&src).eval::<mlua::MultiValue>();
+            println!("RESULT {name} {:?} after_ms={}", r.map(|v| format!("{v:?}").chars().take(110).collect::<String>()).map_err(|e| err_msg(&e)), t0.elapsed().as_millis());
         }
         // ---- 3. allocation past the cap ----
         "oom_plain" | "oom_huge_string" | "oom_in_pcall_retry" | "oom_in_coroutine" | "oom_reuse_after" => {
