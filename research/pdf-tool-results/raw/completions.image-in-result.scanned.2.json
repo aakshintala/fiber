@@ -23,7 +23,7 @@
       "type": "function",
       "function": {
        "name": "read",
-       "arguments": "{\"path\": \"scanned.pdf\"}"
+       "arguments": "{\"path\": \"text.pdf\"}"
       }
      }
     ]
@@ -61,26 +61,36 @@
   ]
  },
  "response": {
-  "id": "chatcmpl-ETNykqUgLYyU26AI412KbVk8WyRDG",
+  "id": "chatcmpl-ETO8rzQHB4X8pscrAh97uGRElRcY7",
   "object": "chat.completion",
-  "created": 1790672394,
+  "created": 1790673021,
   "model": "gpt-6-luna",
   "choices": [
    {
     "index": 0,
     "message": {
      "role": "assistant",
-     "content": "I can\u2019t access the PDF\u2019s page image from the file read result, so I can\u2019t reliably identify the shape, colour, or number.",
+     "content": null,
+     "tool_calls": [
+      {
+       "id": "call_DUPh488k9yvXxoLVuZcpw896",
+       "type": "function",
+       "function": {
+        "name": "read",
+        "arguments": "{\"path\":\"scanned.pdf\"}"
+       }
+      }
+     ],
      "refusal": null,
      "annotations": []
     },
-    "finish_reason": "stop"
+    "finish_reason": "tool_calls"
    }
   ],
   "usage": {
-   "prompt_tokens": 6802,
-   "completion_tokens": 32,
-   "total_tokens": 6834,
+   "prompt_tokens": 6801,
+   "completion_tokens": 18,
+   "total_tokens": 6819,
    "prompt_tokens_details": {
     "cached_tokens": 6771,
     "cache_write_tokens": 0,

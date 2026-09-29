@@ -190,8 +190,7 @@ path's directory, ending in `/`.
   `openai-responses` an `input_file` in the `function_call_output` array, and
   `google-generative-ai` an `inlineData` part in `functionResponse.parts`.
   `openai-completions` rejects a file part in a tool message, so it gets the
-  pages rendered as images in a user message after the tool message; an image
-  inside its tool message is not seen by the model.
+  pages rendered as images in a user message after the tool message.
 - A path that does not exist fails with `not_found`.
 - Any other file that is not UTF-8 text, and any directory or device, fails
   with `unsupported_file`, giving its size and detected type.

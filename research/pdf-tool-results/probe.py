@@ -1,4 +1,4 @@
-"""PDF inside a tool result, per protocol. Usage: python3 probe.py anthropic|responses|completions|gemini
+"""PDF inside a tool result, per protocol. Usage: python3 probe.py anthropic|responses|completions|gemini|extras
 Fake history (user ask, assistant read call, tool result carrying the PDF), then a question.
 Each accepted case is followed by a second request that extends the first, to read cached tokens."""
 import base64, json, os, random, sys, time, urllib.request, urllib.error, hashlib
@@ -92,7 +92,7 @@ def run_responses():
         import subprocess
         r = subprocess.run(["curl", "-s", "https://api.openai.com/v1/files", "-H", "Authorization: Bearer " + key("openai"), "-F", "purpose=user_data", "-F", f"file=@{HERE}/{k}.pdf"], capture_output=True, text=True)
         return json.loads(r.stdout)["id"]
-    for shape in ("in-result-file_id",):
+    for shape in ("in-result-file_data", "in-result-file_id", "after-result"):
         for k in ("text", "scanned"):
             fid = None
             if shape.endswith("file_id"): fid = fids.setdefault(k, upload(k))
@@ -154,6 +154,41 @@ def run_gemini():
             time.sleep(3)
             gem(f"gemini.{shape}.{k}.2", c + [{"role": "model", "parts": [{"text": t}]}, {"role": "user", "parts": [{"text": FOLLOW}]}])
 
+def run_extras():
+    """Requests outside the shape loops: the 404, three 400s, the Gemini repeat, the completions image cases."""
+    global GMODEL
+    keep, GMODEL = GMODEL, "gemini-2.5-flash-lite"
+    gem("gemini.404-2.5-flash-lite", [{"role": "user", "parts": [{"text": "hi"}]}])
+    GMODEL = keep
+    inl = {"inlineData": {"mimeType": "application/pdf", "data": PDFS["text"]}}
+    fc = {"functionCall": {"name": "read", "args": {"path": "text.pdf"}}}
+    c = [{"role": "user", "parts": [{"text": "Read text.pdf with the read tool, then answer: " + Q["text"]}]},
+         {"role": "model", "parts": [{**fc, "thoughtSignature": "skip_thought_signature_validator"}]},
+         {"role": "user", "parts": [{"functionResponse": {"name": "read", "response": {"output": "file attached"}, "parts": [inl]}}]},
+         {"role": "model", "parts": [{"text": "The launch code is PELICAN-4471."}]}, {"role": "user", "parts": [{"text": FOLLOW}]}]
+    for i in range(3):
+        gem(f"gemini.cache-repeat.in-result-parts.text.{i+1}", c); time.sleep(8)
+    gem("gemini.no-thought-signature.text.1", [c[0], {"role": "model", "parts": [fc]}, c[2]])
+    T = [{"type": "function", "function": {"name": "read", "parameters": {"type": "object", "properties": {"path": {"type": "string"}}}}}]
+    hist = [{"role": "system", "content": FILLER}, {"role": "user", "content": "Read text.pdf with the read tool."},
+            {"role": "assistant", "content": None, "tool_calls": [{"id": "call_probe", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": "text.pdf"})}}]}]
+    oai("completions.reasoning-effort-with-tools.1", "/v1/chat/completions", {"model": "gpt-6-luna", "messages": hist + [{"role": "tool", "tool_call_id": "call_probe", "content": "ok"}], "max_completion_tokens": 100, "reasoning_effort": "low", "tools": T})
+    import subprocess
+    r = subprocess.run(["curl", "-s", "https://api.openai.com/v1/files", "-H", "Authorization: Bearer " + key("openai"), "-F", "purpose=user_data", "-F", f"file=@{HERE}/text.pdf"], capture_output=True, text=True)
+    fid = json.loads(r.stdout)["id"]
+    oai("responses.file_id-with-filename.1", "/v1/responses", {"model": "gpt-6-luna", "store": False, "max_output_tokens": 100, "input": [
+        {"role": "user", "content": "Read text.pdf."}, {"type": "function_call", "call_id": "call_probe", "name": "read", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "call_probe", "output": [{"type": "input_file", "file_id": fid, "filename": "text.pdf"}]}]})
+    urllib.request.urlopen(urllib.request.Request("https://api.openai.com/v1/files/" + fid, method="DELETE", headers={"authorization": "Bearer " + key("openai")}))
+    # image cases need a PNG of the scan: sips -s format png scanned.pdf --out /tmp/p121.png
+    png = base64.b64encode(open("/tmp/p121.png", "rb").read()).decode()
+    img = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + png}}
+    base = hist[:1] + [{"role": "user", "content": "Read scanned.pdf with the read tool, then answer: " + Q["scanned"]}] + hist[2:]
+    b = lambda m: {"model": "gpt-6-luna", "messages": m, "max_completion_tokens": 600, "reasoning_effort": "none", "tools": T}
+    oai("completions.image-in-result.scanned.1", "/v1/chat/completions", b(base + [{"role": "tool", "tool_call_id": "call_probe", "content": [img]}]))
+    oai("completions.image-in-result.scanned.2", "/v1/chat/completions", b(base + [{"role": "tool", "tool_call_id": "call_probe", "content": [img]}]))
+    oai("completions.image-after-result.scanned.1", "/v1/chat/completions", b(base + [{"role": "tool", "tool_call_id": "call_probe", "content": "The page image follows."}, {"role": "user", "content": [img]}]))
+
 if __name__ == "__main__":
-    {"anthropic": run_anthropic, "responses": run_responses, "completions": run_completions, "gemini": run_gemini}[sys.argv[1]]()
+    {"anthropic": run_anthropic, "responses": run_responses, "completions": run_completions, "gemini": run_gemini, "extras": run_extras}[sys.argv[1]]()
     print("spend so far:", {v: round(load(v), 4) for v in PRICE})

@@ -1,5 +1,5 @@
 {
- "status": 200,
+ "status": 400,
  "headers": {
   "Content-Type": "application/json; charset=UTF-8"
  },
@@ -29,8 +29,7 @@
        "args": {
         "path": "text.pdf"
        }
-      },
-      "thoughtSignature": "skip_thought_signature_validator"
+      }
      }
     ]
    },
@@ -52,22 +51,6 @@
         }
        ]
       }
-     }
-    ]
-   },
-   {
-    "role": "model",
-    "parts": [
-     {
-      "text": "The launch code is PELICAN-4471."
-     }
-    ]
-   },
-   {
-    "role": "user",
-    "parts": [
-     {
-      "text": "In one short sentence, say again what the file was about."
      }
     ]
    }
@@ -95,49 +78,10 @@
   ]
  },
  "response": {
-  "candidates": [
-   {
-    "content": {
-     "parts": [
-      {
-       "text": "The file provides information about a fiber probe and a backup color.",
-       "thoughtSignature": "EnMKcQFpFH0TV88qESDQAQ2Um8pJPrSqWUuXxfTIVotDIkf5SnCMA43LwG2HWorQtXUlsMAcQnh7P6Ona7E2no7op7+7l7XsiNwft5tEio7++ZKB3Dt3K8iIbbD2ncqhT7qfkOKMMy1gKqu0KqmzGvGVYn9/"
-      }
-     ],
-     "role": "model"
-    },
-    "finishReason": "STOP",
-    "index": 0
-   }
-  ],
-  "usageMetadata": {
-   "promptTokenCount": 9365,
-   "candidatesTokenCount": 13,
-   "totalTokenCount": 9378,
-   "cachedContentTokenCount": 4016,
-   "promptTokensDetails": [
-    {
-     "modality": "TEXT",
-     "tokenCount": 8325
-    },
-    {
-     "modality": "IMAGE",
-     "tokenCount": 1040
-    }
-   ],
-   "cacheTokensDetails": [
-    {
-     "modality": "TEXT",
-     "tokenCount": 3570
-    },
-    {
-     "modality": "IMAGE",
-     "tokenCount": 446
-    }
-   ],
-   "serviceTier": "standard"
-  },
-  "modelVersion": "gemini-3.1-flash-lite",
-  "responseId": "ZIC7ar2YF6rTjMcP2K3S8AM"
+  "error": {
+   "code": 400,
+   "message": "Function call is missing a thought_signature in functionCall parts. This is required for tools to work correctly, and missing thought_signature may lead to degraded model performance. Additional data, function call `default_api:read` , position 2. Please refer to https://ai.google.dev/gemini-api/docs/thought-signatures for more details.",
+   "status": "INVALID_ARGUMENT"
+  }
  }
 }

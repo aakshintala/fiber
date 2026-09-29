@@ -1,0 +1,42 @@
+{
+ "status": 400,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "store": false,
+  "max_output_tokens": 100,
+  "input": [
+   {
+    "role": "user",
+    "content": "Read text.pdf."
+   },
+   {
+    "type": "function_call",
+    "call_id": "call_probe",
+    "name": "read",
+    "arguments": "{}"
+   },
+   {
+    "type": "function_call_output",
+    "call_id": "call_probe",
+    "output": [
+     {
+      "type": "input_file",
+      "file_id": "file-BkAxgTA6yfSmnwrihvTJGe",
+      "filename": "text.pdf"
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "error": {
+   "message": "Mutually exclusive parameters: 'input[2].output[0]'. Ensure you are only providing one of: 'file_id' or 'filename'.",
+   "type": "invalid_request_error",
+   "param": "input[2].output[0]",
+   "code": "mutually_exclusive_parameters"
+  }
+ }
+}

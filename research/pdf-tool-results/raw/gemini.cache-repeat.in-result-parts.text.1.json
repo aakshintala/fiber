@@ -100,8 +100,8 @@
     "content": {
      "parts": [
       {
-       "text": "The file contains a launch code on the first page and a backup color on the second.",
-       "thoughtSignature": "EnMKcQFpFH0TNeNPEN+/tylO0NyqG5ZHpEDBYOxQbFvfMbn5Y+IgOCTGsm3dM/1UYP5SffVjQfKlTyPWSDhD22psyW/duf4WOUUagtmsnDq5vK7kSptUcayqBmvtTyoGo4h4K90Xn6tgEecr7vkF+HH724Qx"
+       "text": "The file contains basic information, specifically a launch code on the first page and a backup color on the second.",
+       "thoughtSignature": "EnMKcQFpFH0TbH3HBTGltW3xGyjykWdacqR+ksK45B8rVYAMh9cmB373tBnlPZz8L+0/1QxJsagnbY4vAkATvf3hE097riG0kpX5TF8lOUoz4vFoumPbAmvKO/WBMOdjQZptv2jP6UZEXOygVtrXsykFEa61"
       }
      ],
      "role": "model"
@@ -112,9 +112,8 @@
   ],
   "usageMetadata": {
    "promptTokenCount": 9365,
-   "candidatesTokenCount": 18,
-   "totalTokenCount": 9383,
-   "cachedContentTokenCount": 4016,
+   "candidatesTokenCount": 22,
+   "totalTokenCount": 9387,
    "promptTokensDetails": [
     {
      "modality": "IMAGE",
@@ -125,19 +124,9 @@
      "tokenCount": 8325
     }
    ],
-   "cacheTokensDetails": [
-    {
-     "modality": "TEXT",
-     "tokenCount": 3570
-    },
-    {
-     "modality": "IMAGE",
-     "tokenCount": 446
-    }
-   ],
    "serviceTier": "standard"
   },
   "modelVersion": "gemini-3.1-flash-lite",
-  "responseId": "zH27aqiBOIOa9MoP3dGDyAQ"
+  "responseId": "W4C7aqqWH9vVjMcPj7q6-QY"
  }
 }

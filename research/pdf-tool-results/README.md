@@ -9,7 +9,7 @@ macOS, directly against each vendor (OpenRouter is left out: it would test only 
 |---|---|---|
 | `anthropic-messages` | accepted | native: a `document` block (base64 `application/pdf`) inside `tool_result.content` |
 | `openai-responses` | accepted | native: an `input_file` item (`file_data` data URI with `filename`, or `file_id`) in the `function_call_output.output` array |
-| `openai-completions` | refused (400) | a `file` part in a tool message is rejected. A `file` part in a user message after the tool message works, and the cached prefix survives. An `image_url` part in a tool message returns 200 but the model said it could not see it |
+| `openai-completions` | refused (400) | a `file` part in a tool message is rejected. A `file` part in a user message after the tool message works, and the cached prefix survives. An `image_url` part in a tool message returns 200, and in two requests the model did not answer about it (see below) |
 | `google-generative-ai` | accepted | native: `functionResponse.parts[]` with `inlineData` (`application/pdf`), on `gemini-3.1-flash-lite` |
 
 The text PDF answered the quote question and the scanned PDF answered the figure question on every
@@ -25,8 +25,10 @@ into `scanned.pdf` (image only, no text layer). Both are under 20 KB.
 `read`, the tool result carries the PDF), asks the question, then sends a second request that extends
 the first with the assistant's answer and a follow-up, to read cached tokens. Each vendor runs the PDF
 in the tool result and, as a comparison, as a user-message part right after the tool result. Raw
-requests (base64 and filler replaced by placeholders) and responses are in `raw/<protocol>.<shape>.<file>.<n>.json`.
-System prompt filler makes the prefix longer than each vendor's cache minimum.
+requests (any string over 2,000 characters, such as the scanned PDF's base64 and the filler, is replaced by a
+placeholder; the 1.2 KB base64 of `text.pdf` stays in full) and responses are in `raw/<protocol>.<shape>.<file>.<n>.json`.
+System prompt filler makes the prefix several thousand tokens long. `probe.py extras` sends the requests outside the
+shape loops (the 404, the three 400s, the Gemini repeat, the completions image cases).
 
 Models and prices (per million tokens):
 
@@ -39,9 +41,9 @@ Models and prices (per million tokens):
 The Gemini key gets HTTP 404 "no longer available to new users" for `gemini-2.5-flash-lite`
 (`raw/gemini.404-2.5-flash-lite.json`), so all Gemini rows use `gemini-3.1-flash-lite`.
 
-Spend (estimated from response usage, under the $1.00 cap each): Anthropic about $0.49 (three runs;
-the first two were re-run after the filler changed, see Malformed replies), OpenAI about $0.01
-across both protocols, Google about $0.03.
+Spend (estimated from response usage, under the $1.00 cap each): the committed Anthropic raw files account
+for about $0.22; the rest of the Anthropic spend (about $0.27 more) is from two discarded runs with no
+raw kept. OpenAI about $0.01 across both protocols, Google about $0.03.
 
 ## Per protocol
 
@@ -53,8 +55,7 @@ across both protocols, Google about $0.03.
   (`raw/anthropic.after-result.*`).
 - Cache: `cache_control` on the `tool_result` block wrote 12,839 tokens (text) and 11,249 (scanned);
   the follow-up read all of them (`raw/anthropic.in-result.text.2.json`: 12,839 read, 80 new). So the
-  PDF is inside the cached prefix. The minimum cacheable length was not the limit here (the prefix
-  was over 11,000 tokens); the docs' per-model minimum was not looked up.
+  PDF is inside the cached prefix.
 - Limits (https://platform.claude.com/docs/en/build-with-claude/pdf-support): 32 MB request size
   (varies by platform), 600 pages per request, or 100 when the request's context window is under 1M
   tokens; standard PDF, no password. Both limits cover the whole payload. Not tested: no request
@@ -64,10 +65,9 @@ across both protocols, Google about $0.03.
 
 - In the tool result: `function_call_output.output` as an array holding one `input_file`. With
   `file_data` (data URI) plus `filename`: 200 (`raw/responses.in-result-file_data.*`). With `file_id`
-  from `POST /v1/files` (`purpose=user_data`): 200 (`raw/responses.in-result-file_id.*`). While
-  writing the script, `file_id` together with `filename` returned 400 "Mutually exclusive
-  parameters ... only one of 'file_id' or 'filename'"; that raw file was overwritten by the corrected
-  run, so the message is from the run log only.
+  from `POST /v1/files` (`purpose=user_data`): 200 (`raw/responses.in-result-file_id.*`). With `file_id` together with `filename`: 400 "Mutually exclusive
+  parameters: 'input[2].output[0]'. Ensure you are only providing one of: 'file_id' or 'filename'."
+  (`raw/responses.file_id-with-filename.1.json`).
 - After the tool result, as an `input_file` in a user message: 200 (`raw/responses.after-result.*`).
 - Both questions were answered in all three shapes.
 - Cache: the follow-up read 6,772 of 6,820 input tokens (text, in the result) and 7,388 of 7,428
@@ -85,16 +85,17 @@ across both protocols, Google about $0.03.
   answered "23" then "23" on the follow-up (`raw/completions.after-result.scanned.1.json`); the
   figure is a 73. The model ran with `reasoning_effort: none`, the only setting this model accepts
   with function tools on `/v1/chat/completions` (400 "Function tools with reasoning_effort are not
-  supported ... set reasoning_effort to 'none'"), and the Responses probe with `low` read it right.
+  supported ... set reasoning_effort to 'none'", `raw/completions.reasoning-effort-with-tools.1.json`), and the Responses probe with `low` read it right.
   Read the wrong digit as this run's model result, not as a protocol fact.
 - Cache: the follow-up read 7,056 of 7,112 (text) and 6,784 of 7,336 (scanned). The user-message
   PDF sits inside the cached prefix.
 - Rendered pages: a PNG of the scanned page as an `image_url` part inside the tool message returned
-  200, but the model twice said it could not see the image ("I can't access the PDF's page image
-  from the file read result", `raw/completions.image-in-result.scanned.1.json` and `.2.json`). The
-  same PNG in a user message after the tool message was seen (`raw/completions.image-after-result.scanned.1.json`,
-  which read the digits as "3", again a weak read of pixel digits). Tested with one PNG and two
-  requests; not a proof that no tool-message image is ever seen.
+  200. In the two committed requests the model answered with a second `read` call and no text
+  (`raw/completions.image-in-result.scanned.1.json` and `.2.json`). An earlier run of the same request,
+  whose raw files were overwritten, answered in words that it could not access the page image. The same PNG in a
+  user message after the tool message was answered "73" in the committed run
+  (`raw/completions.image-after-result.scanned.1.json`; an earlier run read "3"). Two requests with one PNG:
+  this shows the model did not use the image in the tool message, not that no such image is ever used.
 - Limits: same page as Responses (50 MB per file, 50 MB combined). `file_data` and `file_id` only;
   no URL.
 
@@ -112,12 +113,14 @@ across both protocols, Google about $0.03.
   (`raw/gemini.after-result.*`).
 - A model turn made up by the script needs `thoughtSignature`; the script uses the documented
   placeholder `skip_thought_signature_validator`. Without any signature: 400 "Function call is
-  missing a thought_signature".
-- Cache: implicit caching. The cached count stayed at about 4,016 of 9,365 tokens through three
-  identical repeats eight seconds apart (`raw/gemini.cache-repeat.in-result-parts.text.*`); that is
-  the system prompt and tool prefix. The PDF did not show as cached. Cause not found (it may be
-  a block boundary or a minimum). The docs' minimum for this model was not found; the caching page
-  lists 2,048 for 2.5 Flash and 4,096 for 3.x Flash models.
+  missing a thought_signature" (`raw/gemini.no-thought-signature.text.1.json`).
+- Cache: implicit caching. In `raw/gemini.cache-repeat.in-result-parts.text.*` (three identical
+  requests, 8 seconds apart in the script) the first reported no cached tokens; the second and third
+  reported 4,016 of 9,365, made up of 3,570 text and 446 IMAGE tokens (`cacheTokensDetails`). The PDF is the
+  only image input, and its prompt count is 1,040 IMAGE tokens, so 446 of the PDF's 1,040 tokens were
+  cached and the rest was not. The cached part stops short of the whole prompt, so the follow-up does not
+  re-read all of it. The cause of the cutoff is not known. The caching page lists 2,048 as the minimum for
+  2.5 Flash and 4,096 for 3.x Flash models (https://ai.google.dev/gemini-api/docs/caching); no figure for this model.
 - Limits (https://ai.google.dev/gemini-api/docs/document-processing): 50 MB, 1,000 pages, 258
   tokens per page. Not tested.
 
@@ -125,9 +128,10 @@ across both protocols, Google about $0.03.
 
 - Anthropic, `claude-sonnet-5-5`, 2026-09-29: with a filler of random lowercase words in the system
   prompt, six of eight requests in the second run (both PDFs, in-result and after-result, first and
-  follow-up) returned `stop_reason: "refusal"`, `stop_details.category: "bio"`, empty `content`,
-  HTTP 200, and were billed (`raw/anthropic-bio-refusals/`). In the first run, with a longer filler
-  of the same kind, the scanned in-result request refused too. Replacing the filler with plain
+  follow-up) returned `stop_reason: "refusal"`, `stop_details.category: "bio"`, HTTP 200, and were
+  billed (`raw/anthropic-bio-refusals/`). Five had empty `content`; `anthropic.in-result.text.2.json`
+  had two `thinking` blocks and no text. In the first run, with a longer filler of the same kind, the
+  scanned in-result request also refused; no raw was kept. Replacing the filler with plain
   build-log sentences gave eight normal replies. Cause not isolated; the PDFs and questions were benign.
 - OpenAI `gpt-6-luna` on completions read the pixel digits "73" as "23"; the Responses run read them right.
 - Gemini `gemini-3.1-flash-lite` answered one request with a `functionCall` and no text
