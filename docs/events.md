@@ -83,13 +83,101 @@ event where it is display-only.
   (`session_id`, `action_id`); nothing has to be globally unique.
 - Random, not a counter: a crash before the first durable write would let a
   resumed session remint a number a consumer already saw.
-- A provider's own id for a tool call is recorded in the payload of the durable
-  completed line, so provider history can be rebuilt on resume. It is never used
+- A provider's own id for a tool call is recorded in the payload of
+  `tool_call_requested`, so provider history can be rebuilt on resume. It is never used
   for correlation — it means a different thing per provider, redaction can
   rewrite it, and switching model mid-session can move it under a consumer.
 - `seq` is the cursor. Ids say what a line is about; `seq` says where it sits.
   Several durable lines share one action, and some sit between turns, so no id
   can serve as a cursor.
+
+## Payload types
+
+These rules and shapes hold for every kind's `payload`. Each kind's table
+below names a shape from this section by its name.
+
+- Keys are snake_case. The one exception is an `ask_user` question, whose keys
+  are the tool's argument names, `multiSelect` included.
+- An optional key is absent when it does not apply, never `null`. A key whose
+  row says "or null" gives `null` a meaning of its own.
+- A time is milliseconds since the epoch, as `ts` is. A duration is in
+  milliseconds, and its key ends `_ms`.
+- Ids are strings. A token count is an integer.
+- A path to a file in the session directory is relative to that directory,
+  such as `artifacts/j_5e10.log`. Every other path is absolute.
+- A value listed as a closed set is breaking to extend ("Versioning"). An open
+  set is additive, and a consumer treats an unknown value as the table says.
+
+### `error`
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `code` | string | yes | a stable label from `docs/errors.md`, "Registry"; an open set, and an unknown code is a generic failure |
+| `message` | string | yes | Fiber's own sentence, saying what to do when there is a fix |
+| `retry_after` | number | no | on a failed model call, the seconds the provider asked Fiber to wait |
+| `provider` | object | no | on a failed model call: `name` (string), `status` (integer, the HTTP status) and `message` (string, the provider's own message) |
+
+### `process`
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `exit_code` | integer | no | the exit code, when the process exited |
+| `signal` | string | no | the signal's name, such as `SIGKILL`, when a signal ended the process |
+| `timed_out` | boolean | yes | whether Fiber stopped it at its timeout |
+
+A consumer keys on whether `process` is present, never on the tool's name.
+
+### Content parts
+
+`content` is an array of parts, in order. `type` is an open set, and a
+consumer shows an unknown part as a placeholder.
+
+| `type` | Keys | Meaning |
+|---|---|---|
+| `text` | `text` (string) | text |
+| `image` | `path` (string), `mime_type` (string), `width` (integer), `height` (integer) | an image file in the session's `artifacts/`, its type, such as `image/png`, and its size in pixels, so a client lays it out without decoding it |
+
+The log never holds an image's bytes. A tool's image and a pasted image are
+both written to `artifacts/` and named by path.
+
+### Declared effects
+
+Three keys, on `tool_call_started` and `permission_requested`, in the
+vocabulary of `docs/permissions.md`, "Effects":
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `effects` | array of strings | yes | each of `reads`, `writes`, `executes` and `network` that applies, a closed set; empty when the call declared none |
+| `reversible` | boolean | yes | whether the call is reversible |
+| `paths` | array of strings | no | the paths the call touches, where the tool declared them |
+
+### `tokens`
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `input` | integer | yes | input tokens neither read from nor written to the cache |
+| `cache_read` | integer | yes | input tokens read from the cache |
+| `cache_write` | object | yes | input tokens written to the cache, keyed by cache lifetime (`"5m"`, `"1h"`); `{}` when nothing was written |
+| `output` | integer | yes | output tokens, reasoning included |
+
+### `questions`
+
+An array of `ask_user` questions as the model called them: `header`,
+`question`, `options` (each a `label` and an optional `description`) and an
+optional `multiSelect` (`docs/tools.md`, "The call").
+
+### Where a message came from
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `source` | string | yes | `driver`, a client's command, or `extension`, an extension's `host.drive`; a closed set |
+| `extension` | string | no | the extension's name, when `source` is `extension` |
+| `command_id` | string | yes | the id of the `prompt` or `steer` command that sent it |
+
+### `changed_by`
+
+An array of the names of the extensions whose hooks changed the line's
+content, in the order they ran. Absent when no hook changed it.
 
 ## Kinds
 
@@ -97,12 +185,34 @@ Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
 of their own: both raise interactions ("Interactions") that every driver
 answers with `reply`.
 
+Each kind's table lists the keys of its `payload`. The envelope's fields,
+`turn_id` and `action_id` included, are never repeated in it.
+
 ### Process boundary
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `fiber_started` | yes | Fiber version, `schema_version`, new session or resumed, and `mode`, the permission mode this process opened the session in (`docs/permissions.md`, "Modes") |
-| `fiber_exited` | yes | exit code, the final message's `action_id` and its text, `error` if it failed (`docs/errors.md`, "What a caller gets"), `suspended_on` naming the `request_id` when the process exited on a pending approval or question (`docs/invocation.md`, "Lifecycle"), `questions` copied from the last `turn_completed` when its turn ended on questions |
+#### `fiber_started`
+
+Durable. The first line a process writes for a session. The schema version is
+the envelope's `schema_version`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `version` | string | yes | the Fiber version, such as `0.0.1` |
+| `resumed` | boolean | yes | `false` for a new session, `true` for a resumed one |
+| `mode` | string | yes | the permission mode this process opened the session in: `auto`, `ask`, `readonly` or `yolo` (`docs/permissions.md`, "Modes") |
+
+#### `fiber_exited`
+
+Durable. The last line a process writes for a session.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `exit_code` | integer | yes | the process's exit code (`docs/invocation.md`, "Lifecycle") |
+| `final_action_id` | string | no | the `action_id` of the final assistant message, when there is one |
+| `text` | string | no | that message's text; present exactly when `final_action_id` is |
+| `error` | `error` | no | why the process failed (`docs/errors.md`, "What a caller gets") |
+| `suspended_on` | string | no | the `request_id` of the pending approval or question the process exited on (`docs/invocation.md`, "Lifecycle") |
+| `questions` | `questions` | no | copied from the last `turn_completed`, when its turn ended on questions |
 
 A process is not a named unit in the glossary; these two lines record its
 boundary without inventing one. They are durable for one reason: a
@@ -131,19 +241,117 @@ as soon as a delegate relays its own messages onto the same stdout.
 
 ### Session and turn
 
-| Kind | Durable | Payload |
+#### `session_started`
+
+Durable. The first line of every session's log. The session's creation time is
+the envelope's `ts`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `workspace` | string | yes | the workspace root |
+| `parent` | object | no | for a delegate: `session_id`, its parent session, and `delegate_id`, the delegate's `job_id` there (`docs/delegates.md`) |
+| `forked_from` | object | no | for a fork or a rewind: `session_id` and `seq`, the point it continues from (`docs/delegates.md`, "Forks"; "Rewind" below) |
+| `rewind` | object | no | for a rewind: `summary` (string, optional), `note` (string) and `jobs` (array of strings, the `job_id`s adopted) |
+
+#### `rewound`
+
+Durable. The last line of a session that was rewound ("Rewind" below).
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `new_session_id` | string | yes | the session that continues this one |
+| `seq` | integer | yes | the point |
+| `jobs` | array of strings | yes | the `job_id`s handed to the new session; empty when none |
+
+#### `turn_started`
+
+Durable. Its envelope carries the new `turn_id`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `input` | array | yes | everything that started the turn, in arrival order, as items below |
+
+Each item has a `type`, an open set; a consumer skips an item it does not know.
+
+| `type` | Keys | Meaning |
 |---|---|---|
-| `session_started` | yes | creation time, workspace root; optional `parent { session_id, delegate_id }` for a delegate and `forked_from { session_id, seq }` for a fork or a rewind (`docs/delegates.md`, "Forks"; "Rewind" below); for a rewind, `rewind { summary?, note, jobs }` |
-| `rewound` | yes | the new session's `session_id`, the `seq` of the point, and the `job_id`s handed to the new session (`jobs`); the last line of a session that was rewound ("Rewind" below) |
-| `turn_started` | yes | the input that started it, including each `shell_command` since the last turn; for a turn started by jobs, a source naming those `job_id`s |
-| `step_started` | yes | nothing beyond the envelope's `turn_id`; opens a step (below) |
-| `turn_completed` | yes | `outcome` (`completed`, `interrupted`, `failed`), `error` on failure (`docs/errors.md`, "What ends a turn"), `questions` when an `ask_user` call ended the turn for a driver that is a program (`docs/tools.md`, "Asking the person") |
-| `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
-| `steering_queue` | no | every steering message still queued, in order: the id of the `steer` command that sent it, its text, and where it came from; written whenever the queue changes |
-| `shell_command` | yes | a command the person ran with `send` true (`docs/invocation.md`, `shell`): the command, its output cut as a tool result is, `artifact` when cut, and `process` as on `tool_call_completed`; it joins the next turn's input |
-| `session_named` | yes | `name`, or `null` when the person clears theirs, and `by` (`person` or `model`); the latest is the session's name, and a `person` name pins it (`docs/tools.md`, "Naming the session") |
-| `clients` | no | `count`, the clients attached to the session, this one included; written whenever a client attaches or leaves |
-| `context_added` | yes | the text a hook added to the conversation, the extension's name and the hook point (`docs/extensions.md`, "Hooks") |
+| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver or an extension |
+| `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
+| `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
+| `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
+
+#### `step_started`
+
+Durable. The payload is `{}`; the envelope's `turn_id` is all it carries. It
+opens a step (below).
+
+#### `turn_completed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `outcome` | string | yes | `completed`, `interrupted` or `failed`; a closed set |
+| `error` | `error` | no | on `failed` (`docs/errors.md`, "What ends a turn") |
+| `questions` | `questions` | no | when an `ask_user` call ended the turn for a driver that is a program (`docs/tools.md`, "Asking the person") |
+
+#### `steering_applied`
+
+Durable. A steering message a running turn received at a step boundary.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `content` | content parts | yes | the message as the turn received it |
+| `source`, `extension`, `command_id` | | | "Where a message came from"; `command_id` names the `steer` command |
+| `changed_by` | `changed_by` | no | |
+
+#### `steering_queue`
+
+Ephemeral. Written whenever the queue changes; the latest wins.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `messages` | array | yes | every steering message still queued, oldest first, each with `content` and the keys of "Where a message came from"; empty when the queue is |
+
+#### `shell_command`
+
+Durable. A command the person ran with `send` true (`docs/invocation.md`,
+`shell`). It joins the next turn's input.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `command` | string | yes | the command as typed |
+| `output` | string | yes | its output, cut as a shell call's result is (`docs/tools.md`, "Result and output") |
+| `artifact` | string | no | the full output's path, when cut |
+| `process` | `process` | yes | how it ended |
+
+#### `session_named`
+
+Durable. The latest is the session's name (`docs/tools.md`, "Naming the
+session").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string or null | yes | the name; `null` when the person cleared theirs |
+| `by` | string | yes | `person`, from the `name` command, which pins the name, or `model`, from `name_session`; a closed set |
+
+#### `clients`
+
+Ephemeral. Written whenever a client attaches or leaves.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `count` | integer | yes | the clients attached to the session, the receiving client included |
+
+#### `context_added`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | yes | the text a hook added to the conversation |
+| `extension` | string | yes | the hook's extension |
+| `hook` | string | yes | the hook point, such as `turn_start` (`docs/extensions.md`, "The hook points") |
 
 A **steering message** — input sent while a turn is running — joins that turn
 at its next step boundary, and `steering_applied` is how the log shows what
@@ -176,64 +384,149 @@ counting `assistant_message_started` gives attempts, never steps.
 
 ### Actions
 
-Every line carries `action_id`. Deltas are ephemeral; everything else is
-durable.
+Every line carries the envelope's `action_id`. Deltas are ephemeral;
+everything else is durable.
 
-- `assistant_message_started` / `_delta` / `_completed`
-- `reasoning_started` / `_delta` / `_completed` — `_completed` carries the
-  readable text and the provider's reasoning item exactly as it arrived
-  (`docs/loop.md`, "What the model is sent").
-- `tool_call_requested` — the model finished emitting the call: name, full
-  arguments, provider id.
-- `tool_call_started` — execution began, wherever it runs, including a
-  provider-hosted tool the provider reports as in progress. Carries the call's
-  declared effects, whether it is reversible, and its paths, where the tool
-  declared them (`docs/permissions.md`, "Effects"). When a `before_tool` hook
-  rewrote the arguments, it also carries the arguments that ran.
-- `tool_call_delta` — streamed output and progress. Ephemeral.
-- `tool_call_completed` — outcome.
+#### `assistant_message_started`
+
+Durable. The payload is `{}`. Every model call the loop makes for the
+conversation opens with one, the note request included, written before the
+request is sent ("Writing").
+
+#### `assistant_message_delta`
+
+Ephemeral.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | yes | the text added since the last delta |
+
+#### `assistant_message_completed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `outcome` | string | yes | `completed` or `failed`; a closed set |
+| `text` | string | yes | the reply's whole text; `""` for a reply with only tool calls, or a failed call |
+| `error` | `error` | no | on `failed`, with `retry_after` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
+| `attempt` | integer | no | on `failed`: 1 for the first attempt at this request, 2 for its first retry, and so on |
+
+#### `reasoning_started`
+
+Durable. The payload is `{}`.
+
+#### `reasoning_delta`
+
+Ephemeral.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | yes | the readable reasoning added since the last delta |
+
+#### `reasoning_completed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | yes | the readable reasoning; `""` when the provider sent none |
+| `provider_item` | any JSON | no | the provider's reasoning item exactly as it arrived (`docs/loop.md`, "What the model is sent"); absent when the provider sent none |
+
+#### `tool_call_requested`
+
+Durable. The model finished emitting the call.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string | yes | the tool's name as the model called it |
+| `arguments` | any JSON | yes | the arguments as the model sent them: an object, or a string holding the raw text when it was not JSON |
+| `provider_id` | string | yes | the provider's own id for the call ("Identity and ordering") |
+
+#### `tool_call_started`
+
+Durable. Execution began, wherever it runs, including a provider-hosted tool
+the provider reports as in progress.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `effects`, `reversible`, `paths` | | | "Declared effects" |
+| `arguments` | object | no | the arguments that ran, when a `before_tool` hook rewrote them |
+| `changed_by` | `changed_by` | no | with `arguments` |
+
+#### `tool_call_delta`
+
+Ephemeral. Streamed output and progress, paced as `docs/tools.md`,
+"Progress", says.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | no | output added since the last delta |
+| `details` | any JSON | no | progress for clients, shaped as the tool chooses; a client that does not recognise it ignores it |
+
+#### `tool_call_completed`
+
+Durable. The call's outcome.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `status` | string | yes | `completed`, `failed`, `denied` or `cancelled`; a closed set |
+| `reason` | string | no | on `denied`, why; an open set, and an unknown reason is a generic denial |
+| `error` | `error` | no | on `failed` |
+| `process` | `process` | no | on any call that ran a process |
+| `content` | content parts | yes | exactly what the model is sent (`docs/tools.md`, "What a result carries") |
+| `details` | any JSON | no | data for clients, such as an edit's diff; never sent to the model |
+| `artifact` | string | no | the full output's path, when the result was cut or a hook returned text for it |
+| `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
+| `control` | object | no | instructions to the loop; the one key is `handoff` (string), a handoff note (`docs/handoff.md`) |
+| `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
 
 A failed model call is an assistant message that completed with a failed
 outcome, an `error` and an attempt number; the retry is a new action. Its codes
 are `docs/errors.md`, "A failed model call". There is no
 separate error channel, so no failure is ever reported twice.
 
-`tool_call_completed` carries:
+On `tool_call_completed`, `error.code` lets a consumer treat `timeout`
+differently from `invalid_arguments` or `unknown_tool` without parsing
+English. A nonzero exit is `failed` with code `nonzero_exit`. Every error code
+is listed in `docs/errors.md`. `changes` is the one tool-neutral account of a
+change: any tool may set it, so a client shows the counts without knowing
+which tool ran (`docs/tools.md`, "What a result carries").
 
-- `status`, a closed set: `completed | failed | denied | cancelled`. Adding a
-  value here is a breaking change.
-- `reason`, an open set, on a denial.
-- `error { code, message }` on a failure, with a stable `code` so a consumer can
-  treat `timeout` differently from `invalid_arguments` or `unknown_tool`
-  without parsing English. A nonzero exit is `failed` with code `nonzero_exit`.
-- `process { exit_code?, signal?, timed_out }` on any call that ran a process,
-  keyed on whether the field is present rather than on the tool's name.
-- `content`, `details` and, when the result was cut, `artifact`; their meaning
-  is `docs/tools.md`.
-- `changes`, on a call that changed files: one `{ path, added, removed }` per
-  file, counting lines. Any tool may set it, so a client shows the counts
-  without knowing which tool ran (`docs/tools.md`, "What a result carries").
-
-An unknown `error.code` is a generic failure and an unknown `reason` is a
-generic denial; the consumer shows the message. Adding either value is additive.
-Every error code is listed in `docs/errors.md`.
-
-A line whose content a hook changed carries `changed_by`, the names of the
-extensions that changed it, in the order they ran. It appears on
+A line whose content a hook changed carries `changed_by`. It appears on
 `tool_call_started` for rewritten arguments, on `tool_call_completed` for a
-rewritten result, and on `turn_started` and `steering_applied` for a rewritten
-message. The line holds what the hook returned; the original is never logged
-(`docs/extensions.md`, "Hooks").
+rewritten result, and on a `turn_started` message and `steering_applied` for
+a rewritten message. The line holds what the hook returned; the original is
+never logged (`docs/extensions.md`, "Hooks").
 
 A call stopped by Fiber or the user is `cancelled`, not a signal failure. An
 interrupt is not a crash.
 
 ### Approval
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `permission_requested` | yes | `request_id`, the tool call's `action_id`, what is being asked |
-| `permission_resolved` | yes | the decision, any feedback, who answered |
+#### `permission_requested`
+
+Durable. The envelope's `action_id` is the tool call.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the id a `reply` names |
+| `effects`, `reversible`, `paths` | | | the call's "Declared effects" |
+| `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3), `readonly` (4) or `review` (9); a closed set |
+
+#### `permission_resolved`
+
+Durable. The envelope's `action_id` is the tool call.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | no | the request it answers; absent when the decision raised none |
+| `decision` | string | yes | `allow` or `deny`; a closed set. On a `readonly` request, `allow` means leave `readonly`, and the call is then judged from step 5 |
+| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer` or `mode`; a closed set |
+| `reason` | string | no | why, in words, such as the reviewer's reason |
+| `feedback` | string | no | what the person typed with a denial, which the model receives |
+| `grant` | object | no | on an `allow` that is a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
+| `reviewer` | object | no | when `decided_by` is `reviewer`: `model` (string, a model reference) and `stage` (integer, `1` or `2`) |
 
 Both are durable so that a driver reconnecting to an unattended session learns
 it is blocked on a human rather than hanging on silence, and so that a session
@@ -243,25 +536,52 @@ rejected and does nothing, so a late approval can never authorise a different
 action.
 
 The full shape of approvals, and what happens with no human present, is
-`docs/permissions.md`. It fixes these two payloads' contents: a request
-carries the tool call's `action_id`, the call's declared effects and paths,
-and why it was raised; a resolution carries the decision, the reason, and what
-decided it — the credential deny, a human, a standing rule, a session grant,
-the reviewer, or the mode.
+`docs/permissions.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `mode_changed` | yes | the permission mode before and after, and what changed it: the `mode` command, the `request_id` of the question to leave `readonly`, or the parent session's change |
+#### `mode_changed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `before` | string | yes | the permission mode before |
+| `after` | string | yes | the permission mode after |
+| `by` | string | yes | `command`, the `mode` command; `request`, a yes to leaving `readonly`; or `parent`, the parent session's change; a closed set |
+| `request_id` | string | no | with `by` `request`, the question answered |
 
 A mode change applies to the next tool call judged after it. It never reaches
 the model and never rebuilds the preamble.
 
 ### Interactions
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `interaction_requested` | yes | `request_id`, the `action_id` of the tool call that raised it, the kind (`confirm`, `select`, `multi-select`, `text input` or `form`), and its prompt, options or fields |
-| `interaction_resolved` | yes | `request_id`, the answer, or `declined`, and who answered |
+#### `interaction_requested`
+
+Durable. The envelope carries no `action_id`; the payload names the calls.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the id a `reply` names |
+| `kind` | string | yes | `confirm`, `select`, `multi_select`, `text_input` or `form`; a closed set |
+| `action_ids` | array of strings | no | the tool calls that raised it: one, or for an MCP elicitation with several calls in flight on its server, each of them (`docs/mcp.md`, "Elicitation, sampling and roots"); absent when no tool call raised it |
+| `extension` | string | no | the extension that raised it with `host.ask` |
+| `prompt` | string | no | the question, on every kind but `form` |
+| `options` | array | no | on `select` and `multi_select`: each a `label` (string) and an optional `description` (string) |
+| `fields` | `questions` | no | on `form`, one per question |
+
+#### `interaction_resolved`
+
+Durable. A declined interaction carries `declined` and no answer keys.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the request it answers |
+| `by` | string | yes | `person`, a client's `reply`, or `fiber`, which declines when no answer is possible; a closed set |
+| `declined` | boolean | no | `true` when declined |
+| `confirmed` | boolean | no | the answer to `confirm` |
+| `labels` | array of strings | no | the chosen options' labels, on `select` (one) and `multi_select` |
+| `text` | string | no | the typed answer, on `text_input` |
+| `answers` | array | no | on `form`, one per field in field order: `{ "skipped": true }`, or `labels` (array of strings, possibly empty) with `text` (string) when the person typed any |
+| `note` | string | no | on `form`, the person's note on the whole form |
 
 These carry every interaction except approval, which keeps
 `permission_requested` and `permission_resolved` because `docs/permissions.md`
@@ -271,24 +591,57 @@ per field (`docs/mcp.md`, "Elicitation, sampling and roots"). They are durable
 for the reasons approvals are, and a reply naming a request that is no longer
 pending is rejected in the same way.
 
-A `form` carries `fields`, one per `ask_user` question as the model called it:
-`header`, `question`, `options` (each a `label` and an optional
-`description`) and `multiSelect`. Its answer carries `answers`, one per field
-in the same order, each either `skipped` or the chosen option `labels` with
-the typed `text` when there is any, and the form's `note` when the person
-added one. A declined form carries `declined` and no `answers`.
-
 ### Usage and notices
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `usage_recorded` | yes | generation id, model, tokens (uncached input, input read from the cache, input written to the cache by lifetime, output), hosted web searches where the provider reports them, cost or `null` when unknown, `action_id` where it belongs to one |
-| `quota_noticed` | yes | provider, window, percent used, reset time, and `notice_at`, the threshold it crossed |
-| `retry_scheduled` | no | cause, attempt, delay |
-| `notice` | no | open-set `code` and message, for a failure outside any action |
+#### `usage_recorded`
+
+Durable. One per model call, whatever started it. The envelope's `action_id` is
+the action the call belongs to; a reviewer's or an extension's call belongs to
+none.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `generation_id` | string | yes | the provider's id for the generation |
+| `model` | string | yes | the model reference, `provider/model` |
+| `tokens` | `tokens` | yes | the call's tokens |
+| `web_searches` | integer | no | hosted web searches, where the provider reports them |
+| `cost` | number or null | yes | in US dollars; `null` when unknown |
+| `extension` | string | no | the extension whose `host.model` made the call |
+
+#### `quota_noticed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `provider` | string | yes | the provider's name |
+| `window` | string | yes | the window's name, as the provider reports it |
+| `percent_used` | number | yes | the percent used when the notice was given |
+| `resets_at` | integer | no | when the window resets, where the provider reports it |
+| `notice_at` | number | yes | the threshold it crossed, `quota.notice_at` |
+
+#### `retry_scheduled`
+
+Ephemeral. The envelope's `action_id` is the failed assistant message.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `code` | string | yes | the failed call's `error.code` |
+| `attempt` | integer | yes | the attempt about to be made |
+| `delay_ms` | integer | yes | the wait before it |
+
+#### `notice`
+
+Ephemeral. A failure outside any action.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `code` | string | yes | an open set (`docs/errors.md`, "Registry"); a consumer shows the message for an unknown code |
+| `message` | string | yes | Fiber's own sentence |
+| `extension` | string | no | the extension it concerns |
 
 One `usage_recorded` per model call, whatever started it. A cost that settles
-late is a second `usage_recorded` with the same generation id, replacing the
+late is a second `usage_recorded` with the same `generation_id`, replacing the
 first. Consumers sum; resume rebuilds the ledger by folding. No pending queue,
 no watermarks, no reconciliation file.
 
@@ -296,48 +649,128 @@ no watermarks, no reconciliation file.
 
 Behaviour is `docs/prompt-cache.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `preamble_built` | yes | `reason` (`start`, `resume`, `reload`, `switch`), model, the model's `context_window` in tokens, `trigger_at`, the context size at which an automatic handoff runs (`docs/handoff.md`, "Automatic"), effort, thinking, `tool_choice`, cache lifetime, the system prompt text, and the tool definitions as sent, each marked whether it is deferred |
-| `model_changed` | yes | the model, effort, thinking and cache lifetime before and after the switch, and who asked for it |
+#### `preamble_built`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `reason` | string | yes | `start`, `resume`, `reload` or `switch`; a closed set |
+| `model` | string | yes | the model reference |
+| `context_window` | integer | yes | the model's context window, in tokens |
+| `trigger_at` | integer | no | the context size, in tokens, at which an automatic handoff runs (`docs/handoff.md`, "Automatic"); absent when automatic handoff is off |
+| `effort` | string | no | the reasoning effort, where the model takes one |
+| `thinking` | string | no | the thinking level, where the model takes one (`docs/model-routing.md`, "Naming a model") |
+| `tool_choice` | string | yes | the tool choice as sent |
+| `cache_lifetime` | string | yes | `5m` or `1h` |
+| `system_prompt` | string | yes | the system prompt text as sent |
+| `tools` | array | yes | each tool as sent: `name` (string), `deferred` (boolean) and `definition` (object, the definition in the protocol's own shape) |
+
+#### `model_changed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `before` | object | yes | `model`, `effort`, `thinking` and `cache_lifetime` before the switch, as on `preamble_built` |
+| `after` | object | yes | the same keys after it |
+| `source` | string | yes | who asked for it: `driver` or `extension`, as in "Where a message came from" |
+| `extension` | string | no | the extension's name, when `source` is `extension` |
 
 `preamble_built` follows `session_started` or `fiber_started`, `reloaded`, or
 `model_changed`, before the next model request. A fork or a rewind sends the
-latest `preamble_built` before its point. `reason` is a closed set: adding a
-value is a breaking change.
+latest `preamble_built` before its point.
 
 ### Opening message
 
 Behaviour is `docs/system-prompt.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `opening_message` | yes | the environment (date, platform, shell, workspace, git, session log path), each instruction file's path and content, and the skills listing |
-| `instruction_file` | yes | `path`, `reason` (`subdirectory`, `created`, `changed`, `deleted`, `own_edit`), the file's `content` now (absent when deleted), and `sent` (`full`, `diff`, `deleted`, `none`) |
-| `date_changed` | yes | `date` |
+#### `opening_message`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `environment` | object | yes | as below |
+| `instruction_files` | array | yes | each file sent, in order: `path` and `content` (strings) |
+| `skills` | array | yes | the skills listing; its entries are not yet specified (`docs/system-prompt.md`, "Skills listing") |
+
+| `environment` key | Type | Required | Meaning |
+|---|---|---|---|
+| `date` | string | yes | the date, `YYYY-MM-DD` |
+| `os` | string | yes | the operating system, such as `linux` or `macos` |
+| `arch` | string | yes | the architecture, such as `x86_64` or `aarch64` |
+| `shell` | string | yes | the shell |
+| `workspace` | string | yes | the workspace |
+| `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
+| `session_log` | string | yes | the session log's path |
+
+#### `instruction_file`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `path` | string | yes | the file's path |
+| `reason` | string | yes | `subdirectory`, `created`, `changed`, `deleted` or `own_edit`; a closed set |
+| `content` | string | no | the file's content now; absent when deleted |
+| `sent` | string | yes | what the model was sent: `full`, `diff`, `deleted` or `none`; a closed set |
+
+#### `date_changed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `date` | string | yes | the new date, `YYYY-MM-DD` |
 
 `opening_message` is written at session start and after each completed
 handoff. `instruction_file` with `own_edit` records the content after the
 session's own call changed the file, and sends nothing. A diff is rendered from
 `content` and the content the model last had, both in the log. The texts are
-rendered from these payloads. `reason` and `sent` are closed sets: adding a
-value is a breaking change.
+rendered from these payloads.
 
 ### Handoff
 
 Behaviour is `docs/handoff.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `handoff_started` | yes | `trigger` (`auto`, `person`, `overflow`, `tool`); written before the note request, and not written for a tool-started handoff, which makes none |
-| `handoff_completed` | yes | `outcome` (`completed`, `failed`, `cancelled`), `error { code, message }` on failure, `note` (the `action_id`s of the actions carrying the note, in call order), `tokens_before`, and the person's `instructions` when there were any; for a note a `before_handoff` hook wrote, `note_text` and the extension's name in place of `note` |
-| `context_nudged` | yes | `tokens`, the context size when the nudge was given, and `trigger_at`, the size at which an automatic handoff runs |
+#### `handoff_started`
+
+Durable. Written before the note request. A tool-started handoff makes no note
+request and writes none.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `trigger` | string | yes | `auto`, `person`, `overflow` or `tool`; a closed set |
+
+#### `handoff_completed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `outcome` | string | yes | `completed`, `failed` or `cancelled`; a closed set |
+| `error` | `error` | no | on `failed` |
+| `note` | array of strings | no | the `action_id`s of the actions carrying the note, in call order |
+| `note_text` | string | no | a note a `before_handoff` hook wrote, in place of `note` |
+| `extension` | string | no | with `note_text`, the hook's extension |
+| `tokens_before` | integer | yes | the context size before the handoff, in tokens |
+| `instructions` | string | no | the person's instructions, when there were any |
+
+#### `context_nudged`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `tokens` | integer | yes | the context size when the nudge was given |
+| `trigger_at` | integer | yes | the context size at which an automatic handoff runs |
 
 The note request is an ordinary assistant message action with its own
 `usage_recorded`. `handoff_completed` points at the note and never copies its
-text ("Writing"), except a note a hook wrote, which appears on no earlier line. `outcome` is a closed set: adding a value is a breaking
-change. `context_nudged` is durable because the model saw it; the nudge's text
-is generated from its payload.
+text ("Writing"), except a note a hook wrote, which appears on no earlier line.
+`context_nudged` is durable because the model saw it; the nudge's text is
+generated from its payload.
 
 A handoff that fails or is cancelled leaves the model's context as it was. A
 cancelled handoff is a person's cancellation of the turn, which then completes
@@ -347,11 +780,35 @@ cancelled handoff is a person's cancellation of the turn, which then completes
 
 Behaviour is `docs/mcp.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `mcp_server_failed` | yes | the server's name, why it failed (did not start, missed its startup deadline, not logged in, died), whether Fiber will restart it, and `error { code, message }` with code `mcp_server_unavailable` (`docs/errors.md`, "The shape") |
-| `mcp_server_ready` | yes | the server's name; written when a server that died is running again after its restart, so a client clears the failure it showed |
-| `reloaded` | yes | the servers kept, restarted, started and stopped, the extensions reloaded, and any server that failed, with why |
+#### `mcp_server_failed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `server` | string | yes | the server's name |
+| `reason` | string | yes | `start_failed`, `deadline` (missed its startup deadline), `not_logged_in` or `died`; a closed set |
+| `will_restart` | boolean | yes | whether Fiber will restart it |
+| `error` | `error` | yes | with code `mcp_server_unavailable` (`docs/errors.md`, "The shape") |
+
+#### `mcp_server_ready`
+
+Durable. A server that died is running again after its restart, so a client
+clears the failure it showed.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `server` | string | yes | the server's name |
+
+#### `reloaded`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `servers` | object | yes | `kept`, `restarted`, `started` and `stopped`, each an array of server names |
+| `extensions` | array of strings | yes | the extensions reloaded |
+| `failed` | array | no | each server that failed: `server`, `reason` and `error`, as on `mcp_server_failed` |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
 follows it. The next model request misses the prompt cache.
@@ -360,13 +817,58 @@ follows it. The next model request misses the prompt cache.
 
 Behaviour is `docs/extensions.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `extension_state_set` | yes | the extension's name, `key`, the whole new `value` (JSON, at most 64 KiB), and `on_fork` (`at_point`, `latest`, `fresh`) |
-| `extension_state_unset` | yes | the extension's name and `key` |
-| `extension_ui` | no | the extension's name, and either its `status` line or a `widget` id with its lines; latest wins, and a client that attaches is sent the latest of each |
-| `extension_message` | no | the extension's name and the data its session half sent to its own TUI extension with `host.emit` |
-| `extension_exec` | yes | the extension's name, the program, its arguments and working directory, and `process` as on `tool_call_completed`; for a program an extension ran outside a tool call |
+#### `extension_state_set`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `key` | string | yes | the state key |
+| `value` | any JSON | yes | the key's whole new value, at most 64 KiB |
+| `on_fork` | string | yes | `at_point`, `latest` or `fresh`; a closed set |
+
+#### `extension_state_unset`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `key` | string | yes | the state key removed |
+
+#### `extension_ui`
+
+Ephemeral. Carries either `status` or `widget` with `lines`. The latest of each
+wins, and a client that attaches is sent the latest of each.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `status` | string | no | its status line; `""` clears it |
+| `widget` | string | no | a widget's id |
+| `lines` | array of strings | no | with `widget`, its lines; empty removes it |
+
+#### `extension_message`
+
+Ephemeral.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `data` | any JSON | yes | what its session half sent its own TUI extension with `host.emit` |
+
+#### `extension_exec`
+
+Durable. A program an extension ran outside a tool call.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `program` | string | yes | the program |
+| `args` | array of strings | yes | its arguments |
+| `cwd` | string | yes | its working directory |
+| `process` | `process` | yes | how it ended |
 
 Extension state is a fold: the latest `extension_state_set` or
 `extension_state_unset` for each extension and key, up to the point being
@@ -384,43 +886,128 @@ last write up to the point decides what the new session gets:
 | `latest` | the value at the end of the parent's log when the new session starts |
 | `fresh` | nothing |
 
-`on_fork` is a closed set: adding a value is a breaking change.
-
 ### Jobs
 
 Behaviour is `docs/tools.md` ("Background jobs"); delegates are
 `docs/delegates.md`.
 
-| Kind | Durable | Payload |
-|---|---|---|
-| `job_started` | yes | `job_id`, the `action_id` of the tool call that started it or the name of the extension that did (`host.delegate`), the tool name, a short description, the output file's path |
-| `delegate_started` | yes | `job_id`, the delegate's `session_id`, harness, model reference (role resolved), workspace, worktree path and branch when isolated, `forked_from` for a fork |
-| `job_delta` | no | progress for clients, paced like `tool_call_delta` (`docs/tools.md`, "Progress") |
-| `job_line` | yes | `job_id`, the batch of lines a monitor delivered to the model (cut as `docs/tools.md` describes), and a count of deliveries suppressed since the last one, when any were |
-| `delegate_finished` | yes | `job_id`, the final message (bounded, with `artifact` when cut), usage totals, worktree state (path, branch, dirty) |
-| `job_completed` | yes | `status` (`completed`, `failed`, `cancelled`), `error { code, message }`, `process` as on `tool_call_completed`, and for a failed job the tail of its output, capped |
-| `jobs_pending_notified` | yes | the `job_id`s named in the ending notice (`docs/tools.md`, "Background jobs") |
+#### `job_started`
 
-A delegate's `session_id` is on `delegate_started`, which is written after
-`job_started` for each run; `delegate_finished` is written just before
-`job_completed`. Both are keyed by `job_id`, as `job_line` is
-(`docs/delegates.md`, "Events"). There is no job-kind field: tool identity is
-an opaque name (`docs/tools.md`).
+Durable. The envelope's `action_id` is the tool call that started the job;
+absent when an extension started it.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_id` | string | yes | the job's id |
+| `tool` | string | no | the name of the tool that started it |
+| `extension` | string | no | the extension that started it with `host.delegate` |
+| `description` | string | yes | a short description |
+| `output_path` | string | yes | the job's output file |
+
+#### `delegate_started`
+
+Durable. Written after `job_started`, for each run.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_id` | string | yes | the delegate's job |
+| `delegate_session_id` | string | yes | the delegate's `session_id` |
+| `harness` | string | yes | the harness, such as `fiber` |
+| `model` | string | yes | the model reference, with any role resolved |
+| `workspace` | string | yes | the delegate's workspace |
+| `worktree` | object | no | when isolated: `path` and `branch` (strings) |
+| `forked_from` | object | no | for a fork: `session_id` and `seq` |
+
+#### `job_delta`
+
+Ephemeral. Progress for clients, paced as `tool_call_delta` is.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_id` | string | yes | the job |
+| `text` | string | no | output added since the last delta |
+| `details` | any JSON | no | progress, as on `tool_call_delta` |
+
+#### `job_line`
+
+Durable. What a monitor delivered to the model.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_id` | string | yes | the monitor's job |
+| `lines` | string | yes | the batch of lines delivered, cut as `docs/tools.md`, "Background jobs", says |
+| `suppressed` | integer | no | deliveries suppressed since the last one, when any were |
+
+#### `delegate_finished`
+
+Durable. Written just before `job_completed`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_id` | string | yes | the delegate's job |
+| `text` | string | yes | the final message, bounded as `docs/tools.md`, "Bounded results", says |
+| `artifact` | string | no | the full final message's path, when cut |
+| `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
+| `usage` | object | yes | the run's totals: `tokens` (`tokens`) and `cost` (number or null) |
+| `worktree` | object | no | when isolated: `path` and `branch` (strings) and `dirty` (boolean) |
+
+#### `job_completed`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_id` | string | yes | the job |
+| `status` | string | yes | `completed`, `failed` or `cancelled`; a closed set |
+| `error` | `error` | no | on `failed` |
+| `process` | `process` | no | for a job that ran a process |
+| `output_tail` | string | no | for a failed job, the tail of its output, capped |
+
+#### `jobs_pending_notified`
+
+Durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `job_ids` | array of strings | yes | the jobs named in the ending notice (`docs/tools.md`, "Background jobs") |
+
+A delegate's `session_id` is on `delegate_started`, and `delegate_finished` is
+keyed by `job_id`, as `job_line` is (`docs/delegates.md`, "Events"). There is
+no job-kind field: tool identity is an opaque name (`docs/tools.md`).
 
 `job_line` is durable because the model saw it, and resume must rebuild what
 the model saw.
 
 `job_completed` has no `denied`: the starting call is what gets denied.
-`status` is a closed set. `error.code` values defined here are `nonzero_exit`
-and `timeout` (as on `tool_call_completed`), `signal` (a process killed by a
-signal Fiber did not send), `indeterminate`, `orphaned`,
-`flooded`, and `output_cap`. The output tail is the first time those bytes
-enter the log.
+`error.code` values defined here are `nonzero_exit` and `timeout` (as on
+`tool_call_completed`), `signal` (a process killed by a signal Fiber did not
+send), `indeterminate`, `orphaned`, `flooded`, and `output_cap`. The output
+tail is the first time those bytes enter the log.
 
 Only the loop thread writes durable events, and it drains its inbox at step
 boundaries (`docs/architecture.md`, "One inbox"), so `job_completed` and
 `job_line` are written at the step boundary where the model receives them.
 Their position in the log is the delivery point.
+
+### Command acknowledgements
+
+Every driver command is answered with exactly one of these, echoing its id
+(`docs/invocation.md`, "Driver commands"). Both are ephemeral.
+
+#### `command_accepted`
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `command_id` | string | yes | the command's id |
+| `result` | any JSON | no | what the command answers with: the new session's id for `rewind`, the tool list for `tools`, the output for a `shell` sent with `send` false |
+
+#### `command_rejected`
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `command_id` | string | no | the command's id; absent when the line was `malformed` and carried none that could be read |
+| `code` | string | yes | the rejection code (`docs/invocation.md`, "Driver commands") |
+| `message` | string | yes | Fiber's own sentence |
 
 ## Resume
 
