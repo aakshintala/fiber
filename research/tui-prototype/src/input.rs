@@ -43,6 +43,8 @@ pub enum Mouse {
     Drag,
     WheelUp,
     WheelDown,
+    /// motion with no button held, reported only under mode 1003 (`--hover`)
+    Move,
     Other,
 }
 
@@ -151,6 +153,8 @@ fn csi(b: &[u8]) -> Option<(Option<Ev>, usize)> {
                 1 => Mouse::WheelDown,
                 _ => Mouse::Other,
             }
+        } else if cb & 35 == 35 {
+            Mouse::Move
         } else if cb & 3 != 0 {
             Mouse::Other
         } else if fin == b'm' {
@@ -327,6 +331,7 @@ mod tests {
         assert_eq!(one(b"\x1b[<0;5;3M"), Some(Ev::Mouse(Mouse::Down, 4, 2, Mods::default())));
         assert_eq!(one(b"\x1b[<32;6;3M"), Some(Ev::Mouse(Mouse::Drag, 5, 2, Mods::default())));
         assert_eq!(one(b"\x1b[<0;6;3m"), Some(Ev::Mouse(Mouse::Up, 5, 2, Mods::default())));
+        assert_eq!(one(b"\x1b[<35;7;4M"), Some(Ev::Mouse(Mouse::Move, 6, 3, Mods::default())));
         assert_eq!(one(b"\x1b[<64;5;3M"), Some(Ev::Mouse(Mouse::WheelUp, 4, 2, Mods::default())));
         assert_eq!(one(b"\x1b[<65;5;3M"), Some(Ev::Mouse(Mouse::WheelDown, 4, 2, Mods::default())));
         // sideways wheel, as a trackpad's drift sends it: not up and down
