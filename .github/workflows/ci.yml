@@ -32,7 +32,7 @@ jobs:
       issues: read
       actions: read
     outputs:
-      base: $BASE
+      base: ${{ steps.base.outputs.base }}
       mode: ${{ steps.plan.outputs.mode }}
       packages: ${{ steps.plan.outputs.packages }}
       jobs: ${{ steps.plan.outputs.jobs }}
@@ -82,8 +82,13 @@ jobs:
         run: |
           bug=false
           number=$(python3 scripts/ci.py ticket <<<"$PR_BODY")
-          if [ -n "$number" ] && gh issue view "$number" --json labels -q '.labels[].name' | grep -qx bug; then
-            bug=true
+          if [ -n "$number" ]; then
+            # A failed lookup fails the selection rather than skipping the
+            # bug-fix check.
+            labels=$(gh issue view "$number" --json labels -q '.labels[].name')
+            if grep -qx bug <<<"$labels"; then
+              bug=true
+            fi
           fi
           echo "ticket: ${number:-none}; bug: $bug"
           echo "bug=$bug" >>"$GITHUB_OUTPUT"
