@@ -1,4 +1,4 @@
-# 5. No MCP server; the supervisor is external
+# 5. The delegation supervisor is external
 
 Date: 2026-09-21
 
@@ -6,7 +6,9 @@ Date: 2026-09-21
 
 Accepted. Settled by
 [Front doors: which invocation modes does v0.0.1 have?](https://github.com/aakshintala/fiber/issues/10).
-The contract is `docs/invocation.md`.
+The contract is `docs/invocation.md`. The one MCP server Fiber ships, for
+session messages, was added by
+[Intercom: messaging a session you did not start](https://github.com/aakshintala/fiber/issues/78).
 
 ## Context
 
@@ -45,7 +47,7 @@ existence of one is no argument against shipping an API over it.
 
 ## Decision
 
-Fiber ships no MCP server. The supervisor that spawns delegations, tracks
+Fiber ships no MCP server for delegating to Fiber. The supervisor that spawns delegations, tracks
 several at once, waits on them, cancels them and runs verification gates lives
 outside Fiber, in a tool that wraps both `fiber` and `cursor-agent`.
 
@@ -57,6 +59,17 @@ workspace path it runs in rather than creates.
 Fiber is an MCP client, consuming tool servers, and that client is built in
 ([ADR 0008](0008-the-mcp-client-is-built-in.md)). This decision is only about
 serving.
+
+Fiber ships one MCP server, for a different job: `fiber mcp serve`, which
+gives a delegate running on another harness `session_list` and
+`session_message` (`docs/delegates.md`, "Delegates on another harness"). It is
+the stateless kind rejected below for delegation. It reads `~/.fiber/run/` and
+writes to one socket, and it lists no tools unless a Fiber parent started it.
+This ADR's own discoverability argument is why it is a server and not a
+command. A delegate on Claude Code already has `SendMessage` and `ListAgents`,
+which reach Claude Code's subagents and sessions, never Fiber's. A command named
+only in a prompt would lose to those tools. Two tools in the catalog, each
+saying what it reaches, do not.
 
 ## Why
 

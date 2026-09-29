@@ -12,8 +12,8 @@ Accepted. Settled by
 ## Context
 
 MCP is the industry standard for giving an agent tools from outside. The owner
-uses many MCP servers on a work machine. Fiber serves no MCP
-([ADR 0005](0005-no-mcp-server-the-supervisor-is-external.md)); this decision is
+uses many MCP servers on a work machine. Fiber serves no MCP for delegating to Fiber
+([ADR 0005](0005-the-delegation-supervisor-is-external.md)); this decision is
 about consuming servers.
 
 The owner considers extensions better than MCP. An extension registers through

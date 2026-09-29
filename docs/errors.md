@@ -176,6 +176,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
 | `authentication_failed` | model call, turn | the provider rejected the credential |
 | `blocked` | turn | the block budget ran out with no human to answer |
+| `closing` | tool call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions") |
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
@@ -195,6 +196,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_server_unapproved` | exit | a repository's MCP server is not approved |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
+| `message_refused` | tool call | the target session's `before_message` refused a session message |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
@@ -217,6 +219,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `timeout` | tool call, job | a deadline passed |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
+| `unreachable` | tool call | `session_message` named an id no running session has |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
@@ -233,7 +236,8 @@ Notices, for a failure outside any action:
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
 Driver command rejections (`malformed`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`)
+`session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
+`closing`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

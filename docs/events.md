@@ -170,9 +170,10 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `source` | string | yes | `driver`, a client's command, or `extension`, an extension's `host.drive`; a closed set |
+| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; or `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
-| `command_id` | string | yes | the id of the `prompt` or `steer` command that sent it |
+| `from_session_id` | string | no | the sending session's id, when `source` is `session` |
+| `command_id` | string | yes | the id of the `prompt`, `steer` or `message` command that sent it |
 
 ### `changed_by`
 
@@ -275,7 +276,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 
 | `type` | Keys | Meaning |
 |---|---|---|
-| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver or an extension |
+| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver, an extension or another session |
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
 | `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
@@ -304,7 +305,8 @@ Durable. A steering message a running turn received at a step boundary.
 | `content` | content parts | yes | the message as the turn received it |
 | `source` | string | yes | as in "Where a message came from" |
 | `extension` | string | no | as in "Where a message came from" |
-| `command_id` | string | yes | the id of the `steer` command that sent it |
+| `from_session_id` | string | no | as in "Where a message came from" |
+| `command_id` | string | yes | the id of the `steer` or `message` command that sent it |
 | `changed_by` | `changed_by` | no | when a hook rewrote the message |
 
 #### `steering_queue`
