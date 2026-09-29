@@ -883,14 +883,16 @@ The text is plain text; a session message carries no images.
 **A session message reaches only a running session.** The sender connects to
 the target's socket, sends the driver command `message`, reads the answer and
 closes the connection at once, so it never keeps the target alive
-(`docs/invocation.md`, "Lifecycle"). The call answers `delivered`, meaning
-the target accepted the message; the target's `before_message` may still
-refuse it, and a refused message is neither logged nor applied. Otherwise it
-fails with one of:
+(`docs/invocation.md`, "Lifecycle"). The target runs `before_message` before
+it answers, so the call answers `delivered` only once the message is in the
+target's inbox. Otherwise it fails with one of:
 
 - `unreachable`: no running session has this id, whether it exited or never
   existed
 - `closing`: the target was sent `close` (`docs/invocation.md`)
+- `message_refused`: the target's `before_message` refused it, with the
+  hook's reason (`docs/extensions.md`, "Hooks")
+- `hook_failed`: the target's `blocking` `before_message` failed
 
 A session may message itself. The message arrives as steering at its own next
 step, which lets a test drive the whole path with one session.

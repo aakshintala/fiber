@@ -304,7 +304,9 @@ As Lua, none of which runs on a model request:
 
 - **Configuration.** The harness loads the person's configuration for it.
   `command` passes only what drives the program: print mode, the JSON output
-  stream, the session id, the model and effort, the mode, and resume.
+  stream, the session id, the model and effort, the mode, resume, and where
+  the harness takes one per run, `fiber mcp serve` ("Delegates on another
+  harness").
 - **Session id.** Fiber fixes the harness's session id before the program
   starts, so a delegate stopped before its first line can still be resumed.
   It is the delegate's `session_id` on `delegate_started`.
@@ -359,8 +361,8 @@ in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):
 
 Each tool's description says what it reaches. The harness's own tools stay
 switched on: Claude Code's `SendMessage` and `ListAgents` reach its own
-subagents and other Claude Code sessions, and `session_message` reaches Fiber
-sessions only, by a Fiber session id.
+subagents and other Claude Code sessions, and `session_message` reaches the
+sessions `session_list` shows, by a Fiber session id.
 
 The parent stays on the receiving path because it holds the one input the harness
 documents. Probed on Claude Code 2.1.285, headless:
