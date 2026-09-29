@@ -1,0 +1,37 @@
+{
+ "name": "sse-long-gen-cut",
+ "model": "gemini-2.5-flash",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+ "status": 404,
+ "headers": {
+  "Vary": "Origin",
+  "Content-Type": "text/event-stream",
+  "Date": "Tue, 29 Sep 2026 08:53:59 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "Content-Length": "349",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=109",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Connection": "close"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 404,\n    \"message\": \"This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/gemini-3.8-flash for the latest features and improvements. We recommend you to use the Interactions API (https://ai.google.dev/gemini-api/docs/get-started).\",\n    \"status\": \"NOT_FOUND\"\n  }\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Count from 1 to 3000 separated by spaces."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 8000,
+   "temperature": 2.0
+  }
+ }
+}

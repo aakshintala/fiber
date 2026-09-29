@@ -1,0 +1,46 @@
+{
+ "name": "sysrole-model-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:53:49 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=319",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"PINEAPPLE\",\n            \"thoughtSignature\": \"EnMKcQFpFH0TXoy8JETu3hxUIqSJE44YqgiAbi8gV1a9FZlp8RX0dcPvoWHHHhQAjaD8sJ+TWXwIREVfRtvumMYHMatrR36JwOjhLdXs+776n2d8V2KGs/UfjeKbI03i5PdugJ30W/zFWK4MOuqwTUnxd5XS\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 18,\n    \"candidatesTokenCount\": 3,\n    \"totalTokenCount\": 21,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 18\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"nXy7auEX37nf0g-Y0eS4Ag\"\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Say hello."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 30
+  },
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "Reply with exactly one word: PINEAPPLE. Nothing else."
+    }
+   ],
+   "role": "model"
+  }
+ }
+}

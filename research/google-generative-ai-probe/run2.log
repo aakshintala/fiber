@@ -1,0 +1,58 @@
+x2-flash-image-tool                      gemini-2.5-flash-image   400 {   "error": {     "code": 400,     "message": "Function calling is not enabled for this model",     "status": "INVALID_ARGUMENT"   } } 
+{
+  "error": {
+    "code": 400,
+    "message": "Function calling is not enabled for this model",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+x2-flash-image-imgparts                  gemini-2.5-flash-image   400 {   "error": {     "code": 400,     "message": "Function calling is not enabled for this model",     "status": "INVALID_ARGUMENT"   } } 
+{
+  "error": {
+    "code": 400,
+    "message": "Function calling is not enabled for this model",
+    "status": "INVALID_ARGUMENT"
+  }
+}
+
+auth2-header-gemini-3.1-flash-lite       gemini-3.1-flash-lite    200 
+auth2-query-gemini-3.1-flash-lite        gemini-3.1-flash-lite    200 
+auth2-badheader-goodquery                gemini-3.1-flash-lite    200 
+badheader+goodquery 200
+query stream 200
+id2-good-gemini-3.1-flash-lite           gemini-3.1-flash-lite    200 
+  -> The current temperature in Paris is 20°C.
+id2-bad-space-slash-gemini-3.1-flash-lite gemini-3.1-flash-lite    200 
+  -> The current temperature in Paris is 20°C.
+id2-long65-gemini-3.1-flash-lite         gemini-3.1-flash-lite    200 
+  -> The current temperature in Paris is 20°C.
+id2-mismatch-gemini-3.1-flash-lite       gemini-3.1-flash-lite    200 
+  -> The current temperature in Paris is 20°C.
+id2-emitted-gemini-3.1-flash-lite        gemini-3.1-flash-lite    200 
+['"id": "call_603161"']
+imgparts2-blue-gemini-3.1-flash-lite     gemini-3.1-flash-lite    200 
+  -> The single color of the image is blue.
+imgparts2-none-gemini-3.1-flash-lite     gemini-3.1-flash-lite    200 
+  -> 
+sse2-stream-ok                           gemini-3.1-flash-lite    200 
+sse2-huge-maxoutput                      gemini-3.1-flash-lite    200 
+sse2-long-gen                            gemini-3.1-flash-lite    200 
+val-AUTO-0                               gemini-3.1-flash-lite    200 
+val-AUTO-1                               gemini-3.1-flash-lite    200 
+val-AUTO-2                               gemini-3.1-flash-lite    200 
+val-AUTO-3                               gemini-3.1-flash-lite    200 
+AUTO [(200, ''), (200, ''), (200, ''), (200, '')]
+val-VALIDATED-0                          gemini-3.1-flash-lite    200 
+val-VALIDATED-1                          gemini-3.1-flash-lite    200 
+val-VALIDATED-2                          gemini-3.1-flash-lite    200 
+val-VALIDATED-3                          gemini-3.1-flash-lite    200 
+VALIDATED [(200, ''), (200, ''), (200, ''), (200, '')]
+val-ANY-0                                gemini-3.1-flash-lite    200 
+val-ANY-1                                gemini-3.1-flash-lite    200 
+val-ANY-2                                gemini-3.1-flash-lite    200 
+val-ANY-3                                gemini-3.1-flash-lite    200 
+ANY [(200, ''), (200, ''), (200, ''), (200, '')]
+val-allowed-names                        gemini-3.1-flash-lite    200 
+mode-lowercase-validated                 gemini-3.1-flash-lite    200 
+requests 31 est spend $0.00571

@@ -1,0 +1,72 @@
+{
+ "name": "val-AUTO-2",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:54:53 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=410",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"conv\",\n              \"args\": {\n                \"n\": 20,\n                \"unit\": \"c\"\n              },\n              \"id\": \"call_136803\"\n            },\n            \"thoughtSignature\": \"EnMKcQFpFH0TzKeQvrrMcaoCE1T9Tpq4tKsyd40eoe08aome0RXgYmL5wAnCfQV7WHQa9Dyz5okbsH8VijBcZ4utSu43OAb4w0TbQsprcevlgQzB2MBV+RRZXbsq6HqlTtAMdzH5a5sTXGsjgBwysFb6d/94\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 75,\n    \"candidatesTokenCount\": 19,\n    \"totalTokenCount\": 94,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 75\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"3Xy7atXZA-_VjMcPhKWe-QM\"\n}\n",
+ "request": {
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "conv",
+      "description": "Convert temperature",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "unit": {
+         "type": "string",
+         "enum": [
+          "c",
+          "f"
+         ]
+        },
+        "n": {
+         "type": "integer"
+        }
+       },
+       "required": [
+        "unit",
+        "n"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "AUTO"
+   }
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Convert about twenty degrees kelvin please, use whichever unit letter you like."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 200
+  }
+ }
+}

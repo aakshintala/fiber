@@ -1,0 +1,79 @@
+{
+ "name": "mode-NONE-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:54:02 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=691",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"Hi.\",\n            \"thoughtSignature\": \"EnMKcQFpFH0TJ99+sq+vfPeaZCcE8s4KyKFkLDYYthQpMW1EJlKTuZeEQ2xtYj4tSKgOosPHe8I9G8OYe5/jHl1ZpFxYfj+3kOPv3CuyGmXj2YlJ5QUP8gb3u6O/Ge17wWYkWNmppZy6812RNLkeNVG5wwDD\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 84,\n    \"candidatesTokenCount\": 2,\n    \"totalTokenCount\": 86,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 84\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"qny7asqsC8Gg1MkP_4ax4Qg\"\n}\n",
+ "request": {
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "plot",
+      "description": "Plot a point",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "p": {
+         "type": "object",
+         "properties": {
+          "x": {
+           "type": "integer"
+          },
+          "y": {
+           "type": "integer"
+          }
+         },
+         "required": [
+          "x",
+          "y"
+         ]
+        },
+        "v": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "p"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "NONE"
+   }
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Say hi in one word, no tools."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 100
+  }
+ }
+}

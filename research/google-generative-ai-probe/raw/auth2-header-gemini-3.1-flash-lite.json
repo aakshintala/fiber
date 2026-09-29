@@ -1,0 +1,38 @@
+{
+ "name": "auth2-header-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:54:36 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=414",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"Hello! How can I help you today?\",\n            \"thoughtSignature\": \"EnMKcQFpFH0ThIF+Zv1k8rTajelRSZmOfOpljot5VxdjPWYOrg80wbwiQXpN/37u//SQQYCg51Fj6Ko/DIsZx+myKiLMgNBBHQixJ/WZ2Snb9MhBRveAt7ikl+b6JXcKHIRIXomGzRxEjCzQG7az52ZJeVS+\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 2,\n    \"candidatesTokenCount\": 9,\n    \"totalTokenCount\": 11,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 2\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"zHy7atWBC8qx1MkP5ZaQmQc\"\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 30
+  }
+ }
+}

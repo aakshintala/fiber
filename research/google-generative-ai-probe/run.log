@@ -1,0 +1,90 @@
+auth-header                              gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+auth-query                               gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+auth-badheader                           gemini-2.5-flash         400 {   "error": {     "code": 400,     "message": "API key not valid. Please pass a valid API key.",     "status": "INVALID_ARGUMENT",     "details": [       {    
+auth-none                                gemini-2.5-flash         403 {   "error": {     "code": 403,     "message": "Method doesn't allow unregistered callers (callers without established identity). Please use API Key or other fo
+auth-both                                gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+auth-both-badheader-goodquery 404
+sysrole-user-gemini-2.5-flash            gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+sysrole-user-gemini-3.1-flash-lite       gemini-3.1-flash-lite    200 
+   -> PINEAPPLE
+sysrole-model-gemini-2.5-flash           gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+sysrole-model-gemini-3.1-flash-lite      gemini-3.1-flash-lite    200 
+   -> PINEAPPLE
+sysrole-None-gemini-2.5-flash            gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+sysrole-None-gemini-3.1-flash-lite       gemini-3.1-flash-lite    200 
+   -> PINEAPPLE
+schema-json-schema-in-parametersJsonSchema-gemini-2.5-flash gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+schema-json-schema-in-parameters-gemini-2.5-flash gemini-2.5-flash         400 {   "error": {     "code": 400,     "message": "Invalid JSON payload received. Unknown name \"$ref\" at 'tools[0].function_declarations[0].parameters.properties
+schema-openapi-subset-in-parameters-gemini-2.5-flash gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+schema-json-schema-in-parametersJsonSchema-gemini-3.1-flash-lite gemini-3.1-flash-lite    200 
+   -> ['"functionCall": {\n              "name": "plot",\n              "args": {\n                "v": "a",\n                "p": {\n                  "x": 3,\n                  "y": 4\n                }\n              }']
+schema-json-schema-in-parameters-gemini-3.1-flash-lite gemini-3.1-flash-lite    400 {   "error": {     "code": 400,     "message": "Invalid JSON payload received. Unknown name \"$ref\" at 'tools[0].function_declarations[0].parameters.properties
+schema-openapi-subset-in-parameters-gemini-3.1-flash-lite gemini-3.1-flash-lite    200 
+   -> {
+  "candidates": [
+    {
+      "content": {
+        "parts": [
+          {
+            "functionCall": {
+              "name": "plot",
+              "args": {
+                "p": {
+                 
+schema-anyof-only-in-parameters-gemini-2.5-flash gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+id-none-gemini-2.5-flash                 gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+id-good-gemini-2.5-flash                 gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+id-bad-space-slash-gemini-2.5-flash      gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+id-long65-gemini-2.5-flash               gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+id-none-gemini-3.1-flash-lite            gemini-3.1-flash-lite    200 
+id-good-gemini-3.1-flash-lite            gemini-3.1-flash-lite    200 
+id-bad-space-slash-gemini-3.1-flash-lite gemini-3.1-flash-lite    200 
+id-long65-gemini-3.1-flash-lite          gemini-3.1-flash-lite    200 
+id-emitted-gemini-2.5-flash              gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   emitted id present: False
+id-emitted-gemini-3.1-flash-lite         gemini-3.1-flash-lite    200 
+   emitted id present: True
+imgparts-gemini-2.5-flash                gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+imgparts-gemini-3.1-flash-lite           gemini-3.1-flash-lite    200 
+   -> The single color of the image is red.
+img-plain-user-part-gemini-2.5-flash     gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+sse-huge-maxoutput                       gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   sse error events: [] lines 7
+sse-bad-mime                             gemini-2.5-flash         400 {   "error": {     "code": 400,     "message": "* GenerateContentRequest.generation_config.response_mime_type: allowed mimetypes are `text/plain`, `application/
+   sse error events: [] lines 7
+sse-empty-contents                       gemini-2.5-flash         400 {   "error": {     "code": 400,     "message": "* GenerateContentRequest.contents: contents is not specified\n",     "status": "INVALID_ARGUMENT"   } } 
+   sse error events: [] lines 7
+sse-toolresponse-noname                  gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   sse error events: [] lines 7
+sse-long-gen-cut                         gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   sse error events: [] lines 7
+mode-AUTO-gemini-2.5-flash               gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None 
+mode-ANY-gemini-2.5-flash                gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None 
+mode-VALIDATED-gemini-2.5-flash          gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None 
+mode-NONE-gemini-2.5-flash               gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None 
+mode-AUTO-gemini-3.1-flash-lite          gemini-3.1-flash-lite    200 
+   -> Hi. 
+mode-ANY-gemini-3.1-flash-lite           gemini-3.1-flash-lite    200 
+   ->  | fc
+mode-VALIDATED-gemini-3.1-flash-lite     gemini-3.1-flash-lite    200 
+   -> Hi. 
+mode-NONE-gemini-3.1-flash-lite          gemini-3.1-flash-lite    200 
+   -> Hi. 
+mode-tempt-AUTO-gemini-2.5-flash         gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+mode-tempt-VALIDATED-gemini-2.5-flash    gemini-2.5-flash         404 {   "error": {     "code": 404,     "message": "This model models/gemini-2.5-flash is no longer available to new users. Please update your code to use models/ge
+   -> None
+mode-tempt-AUTO-gemini-3.1-flash-lite    gemini-3.1-flash-lite    200 
+   -> ['"functionCall": {\n              "name": "plot",\n              "args": {\n                "p": {\n                  "x": 3,\n                  "y": 4\n                }\n              }']
+mode-tempt-VALIDATED-gemini-3.1-flash-lite gemini-3.1-flash-lite    200 
+   -> ['"functionCall": {\n              "name": "plot",\n              "args": {\n                "p": {\n                  "x": 3,\n                  "y": 4\n                }\n              }']
+requests 49 est spend $0.00086

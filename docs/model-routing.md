@@ -66,6 +66,29 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
 - More than 4 `cache_control` blocks across `tools`, `system` and `messages`
   returned 400.
 
+### Google Generative AI wire facts
+
+Measured against `gemini-3.1-flash-lite` on the Gemini API:
+
+- The `x-goog-api-key` header and the `?key=` query parameter both authenticate.
+- `systemInstruction.role` set to `user`, `model` or left out is accepted, and
+  the instruction is obeyed in all three.
+- `parametersJsonSchema` accepted a schema with `$ref`, `$defs` and `anyOf`.
+  `parameters` rejected the same `$ref` with HTTP 400.
+- A replayed `functionCall` part without a `thoughtSignature` fails with
+  HTTP 400. In the calls sampled, the model put an `id` on each `functionCall`
+  it emitted. Four replay cases were accepted: a conforming id, an id outside
+  `[a-zA-Z0-9_-]{1,64}`, a 65-character id, and a `functionResponse` id that
+  differs from the call's.
+- A `functionResponse` may carry an image in `parts`, and the model read it.
+- Function-calling mode `VALIDATED` returned schema-valid arguments where
+  `AUTO` returned arguments that broke an enum and an integer type. In the
+  sample it did not force a call.
+
+The Gemini API answers HTTP 404 "no longer available to new users" for
+`gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
+in September 2026.
+
 ## What a provider extension declares
 
 Most of a provider is data. For the provider:

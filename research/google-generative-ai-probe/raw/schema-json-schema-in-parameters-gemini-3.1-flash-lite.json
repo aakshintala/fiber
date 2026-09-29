@@ -1,0 +1,91 @@
+{
+ "name": "schema-json-schema-in-parameters-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 400,
+ "headers": {
+  "Vary": "X-Origin",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Date": "Tue, 29 Sep 2026 08:53:51 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=70",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid JSON payload received. Unknown name \\\"$ref\\\" at 'tools[0].function_declarations[0].parameters.properties[0].value': Cannot find field.\\nInvalid JSON payload received. Unknown name \\\"additionalProperties\\\" at 'tools[0].function_declarations[0].parameters': Cannot find field.\\nInvalid JSON payload received. Unknown name \\\"$defs\\\" at 'tools[0].function_declarations[0].parameters': Cannot find field.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"tools[0].function_declarations[0].parameters.properties[0].value\",\n            \"description\": \"Invalid JSON payload received. Unknown name \\\"$ref\\\" at 'tools[0].function_declarations[0].parameters.properties[0].value': Cannot find field.\"\n          },\n          {\n            \"field\": \"tools[0].function_declarations[0].parameters\",\n            \"description\": \"Invalid JSON payload received. Unknown name \\\"additionalProperties\\\" at 'tools[0].function_declarations[0].parameters': Cannot find field.\"\n          },\n          {\n            \"field\": \"tools[0].function_declarations[0].parameters\",\n            \"description\": \"Invalid JSON payload received. Unknown name \\\"$defs\\\" at 'tools[0].function_declarations[0].parameters': Cannot find field.\"\n          }\n        ]\n      }\n    ]\n  }\n}\n",
+ "request": {
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "plot",
+      "description": "Plot a point",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "p": {
+         "$ref": "#/$defs/Pt"
+        },
+        "v": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "integer"
+          }
+         ]
+        }
+       },
+       "required": [
+        "p"
+       ],
+       "additionalProperties": false,
+       "$defs": {
+        "Pt": {
+         "type": "object",
+         "properties": {
+          "x": {
+           "type": "integer"
+          },
+          "y": {
+           "type": "integer"
+          }
+         },
+         "required": [
+          "x",
+          "y"
+         ]
+        }
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "ANY"
+   }
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Plot point x=3 y=4 with v \"a\"."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 100
+  }
+ }
+}

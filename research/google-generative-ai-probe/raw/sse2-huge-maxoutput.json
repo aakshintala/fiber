@@ -1,0 +1,37 @@
+{
+ "name": "sse2-huge-maxoutput",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse",
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream",
+  "Content-Disposition": "attachment",
+  "Vary": "Origin",
+  "Transfer-Encoding": "chunked",
+  "Date": "Tue, 29 Sep 2026 08:54:44 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=450",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Connection": "close"
+ },
+ "body": "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"Hello\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 2,\"candidatesTokenCount\": 1,\"totalTokenCount\": 3,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 2}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-3.1-flash-lite\",\"responseId\": \"1Hy7auGVBYLJ-sAP0pbh2Qg\"}\r\n\r\ndata: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"! How can I help you today?\"}],\"role\": \"model\"},\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 2,\"candidatesTokenCount\": 9,\"totalTokenCount\": 11,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 2}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-3.1-flash-lite\",\"responseId\": \"1Hy7auGVBYLJ-sAP0pbh2Qg\"}\r\n\r\ndata: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"\",\"thoughtSignature\": \"EnMKcQFpFH0TH9gVVX9fxxYpH1w+LoJImrFF+ZllJZ7Ey130EO450PIJ1wjlvD8tkXUjg4eCI1q6bg+twCq+OPzp2lQvRo7HF5w/1P3tHo5mT89ToeuodkHbpP0QLY0UAtiZqoKx5XYY6AIUtAkxp9fYzW3/\"}],\"role\": \"model\"},\"finishReason\": \"STOP\",\"index\": 0}],\"usageMetadata\": {\"promptTokenCount\": 2,\"candidatesTokenCount\": 9,\"totalTokenCount\": 11,\"promptTokensDetails\": [{\"modality\": \"TEXT\",\"tokenCount\": 2}],\"serviceTier\": \"standard\"},\"modelVersion\": \"gemini-3.1-flash-lite\",\"responseId\": \"1Hy7auGVBYLJ-sAP0pbh2Qg\"}\r\n\r\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 10000000
+  }
+ }
+}

@@ -1,0 +1,72 @@
+{
+ "name": "val2-VALIDATED-4",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:55:28 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=532",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"conv\",\n              \"args\": {\n                \"unit\": \"c\",\n                \"n\": 3\n              },\n              \"id\": \"call_597785\"\n            },\n            \"thoughtSignature\": \"EnMKcQFpFH0TDgxkBKCsFBMofzCBWt4s1dGx79gK1gzu5aB5wANGCm1VGVelPlQyGoL3piCnPSR5nMDJWdGZPkrVIrRlnBNid9GYaUQp/Np9uFsvzc/E8Gu/Unn/xtcLVEKonVl7uty2NkFUqG5jE1jnQvO+\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 90,\n    \"candidatesTokenCount\": 18,\n    \"totalTokenCount\": 108,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 90\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"AH27asaoB6q0_PUP9on72AE\"\n}\n",
+ "request": {
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "conv",
+      "description": "Convert temperature. unit must be c or f",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "unit": {
+         "type": "string",
+         "enum": [
+          "c",
+          "f"
+         ]
+        },
+        "n": {
+         "type": "integer"
+        }
+       },
+       "required": [
+        "unit",
+        "n"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "VALIDATED"
+   }
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Call conv with unit exactly \"kelvin\" and n = 3.7. Do not change either value."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 200
+  }
+ }
+}

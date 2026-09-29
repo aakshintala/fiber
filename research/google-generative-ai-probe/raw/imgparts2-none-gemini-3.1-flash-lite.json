@@ -1,0 +1,73 @@
+{
+ "name": "imgparts2-none-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:54:43 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=418",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"shot\",\n              \"args\": {},\n              \"id\": \"call_454110\"\n            },\n            \"thoughtSignature\": \"EnMKcQFpFH0TDoA8xiIVKQN1k5cxguPK+pCiHqZA56392y1/RdPEz4SmxkVTN72TaUrcLYeSN4JREawZRh/3xaRWbG9sdneJSe3htlNiUvvnpg5/Uqju+Fwhq5zdjz+dkAjoBbF2eoy68OalTBK/eF1byIKP\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 47,\n    \"candidatesTokenCount\": 8,\n    \"totalTokenCount\": 55,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 47\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"03y7avt8qa_UyQ-XqMawBw\"\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Take a screenshot then tell me the single colour of the image."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "shot",
+       "args": {}
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "shot",
+       "response": {
+        "note": "screenshot attached"
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "shot",
+      "description": "screenshot"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 60
+  }
+ }
+}

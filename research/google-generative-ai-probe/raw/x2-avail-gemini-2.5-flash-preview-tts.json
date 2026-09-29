@@ -1,0 +1,38 @@
+{
+ "name": "x2-avail-gemini-2.5-flash-preview-tts",
+ "model": "gemini-2.5-flash-preview-tts",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-tts:generateContent",
+ "status": 400,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Vary": "X-Origin",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Date": "Tue, 29 Sep 2026 08:54:23 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=169",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"The requested combination of response modalities (TEXT) is not supported by the model. models/gemini-2.5-flash-preview-tts accepts the following combination of response modalities:\\n* AUDIO\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 30
+  }
+ }
+}

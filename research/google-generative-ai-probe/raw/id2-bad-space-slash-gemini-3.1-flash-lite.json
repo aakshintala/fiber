@@ -1,0 +1,85 @@
+{
+ "name": "id2-bad-space-slash-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:54:39 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=467",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"The current temperature in Paris is 20\u00b0C.\",\n            \"thoughtSignature\": \"EnMKcQFpFH0T/JRYDVyOlAyhQGDeoSU7jCxcAwADO6a4kGpQEe9k4+B7IW4b+IXrR+jLbQtSNGxIiAF105CobmWQxBSodJ61be2cPM+odKoDQmTqdDndwPQ//hmE55AqVypzQgPV7u3pzmZ0vqt4EjCadO9J\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 66,\n    \"candidatesTokenCount\": 12,\n    \"totalTokenCount\": 78,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 66\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"z3y7atiMJqiq1MkPg8-duAg\"\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Weather in Paris?"
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "get_w",
+       "args": {
+        "city": "Paris"
+       },
+       "id": "call abc/123!"
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "get_w",
+       "response": {
+        "temp": 20
+       },
+       "id": "call abc/123!"
+      }
+     }
+    ]
+   }
+  ],
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "get_w",
+      "description": "weather",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "city": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 40
+  }
+ }
+}

@@ -1,0 +1,38 @@
+{
+ "name": "x2-avail-gemini-2.5-computer-use-preview-10-2025",
+ "model": "gemini-2.5-computer-use-preview-10-2025",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-computer-use-preview-10-2025:generateContent",
+ "status": 400,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Vary": "X-Origin",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Date": "Tue, 29 Sep 2026 08:54:23 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=210",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"This model requires the use of the Computer Use tool. See https://ai.google.dev/gemini-api/docs/computer-use#send-request for instructions on adding the tool. If you want to use a custom set of functions instead, see https://ai.google.dev/gemini-api/docs/computer-use#custom-functions.\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 30
+  }
+ }
+}

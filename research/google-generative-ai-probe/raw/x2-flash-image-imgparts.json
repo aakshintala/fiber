@@ -1,0 +1,80 @@
+{
+ "name": "x2-flash-image-imgparts",
+ "model": "gemini-2.5-flash-image",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-image:generateContent",
+ "status": 400,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Vary": "X-Origin",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Date": "Tue, 29 Sep 2026 08:54:35 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=137",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Function calling is not enabled for this model\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Take a screenshot then tell me the single colour of the image."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "shot",
+       "args": {}
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "shot",
+       "response": {
+        "note": "screenshot attached"
+       },
+       "parts": [
+        {
+         "inlineData": {
+          "mimeType": "image/png",
+          "data": "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAAF0lEQVR4nGP4z8BAEiJN9aiGUQ1DSgMAkPn/Afnh+ngAAAAASUVORK5CYII="
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "shot",
+      "description": "screenshot"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 60
+  }
+ }
+}
