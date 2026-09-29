@@ -43,7 +43,7 @@ Bursts:
 
 Not among the statuses reached. Statuses seen, all vendors: 200, 400, 401,
 403, 404, 405, 429, and 503 once. No 409, 425 or 501 in any raw file. Scope:
-about 60 saved responses, cheap failure triggers only, macOS, one day, and
+about 50 saved responses, cheap failure triggers only, macOS, one day, and
 429s only at Anthropic `count_tokens` and muse. Databricks and OpenCode were
 not reached: no keys.
 
@@ -68,8 +68,7 @@ which is separate from the messages limit (1,000 a minute). Its message says
 
 ### Gemini: does a 429 carry `Retry-After` or only `RetryInfo`?
 
-Not reached. 400 requests (100 model calls, 300 `countTokens` in the last run,
-more in earlier runs) produced no 429. Gemini's 400, 404 and 200 responses carry
+Not reached. About 100 model calls and 1,200 `countTokens` calls produced no 429. Gemini's 400, 404 and 200 responses carry
 no retry header. The two 503s in the first `countTokens` run were not saved.
 
 ### ChatGPT/codex: does it return 501?
@@ -90,8 +89,7 @@ whether the backend sends 501 in other states.
 ## For the owner
 
 Decide item, a failure with no HTTP status. This probe produced no such
-failure: every request got a status, and the one transport-level surprise was
-none. It gives no evidence either way.
+failure: every request got an HTTP status. It gives no evidence either way.
 
 Evidence bearing on `x-should-retry`: among the vendors reached, only
 Anthropic sends it, so the override only ever fires for Anthropic (and
