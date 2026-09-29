@@ -31,6 +31,10 @@ rule in `docs/model-routing.md`, "Credentials": lock the credential file,
 re-read it, refresh once. A headless start with no valid token counts as
 the server failing to start (see [Starting servers](#starting-servers)).
 
+Fiber is an MCP server in one place: `fiber mcp serve`, which a delegate on
+another harness uses to send session messages (`docs/delegates.md`,
+"Delegates on another harness").
+
 ## Tools and their names
 
 Each tool a server offers becomes a Fiber tool named `mcp__<server>__<tool>`,

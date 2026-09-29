@@ -102,6 +102,10 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   addressed to a descendant down the tree. How the terminal shows and steers
   delegates is `docs/tui.md`.
 - `delegate_message` acts only on the caller's own delegates, as `jobs` does.
+- Any session reaches any running delegate, a sibling included, with
+  `session_message` (`docs/tools.md`, "Messaging other sessions"). A Fiber
+  delegate takes it on its own socket. A delegate on another harness takes it
+  through its parent ("Delegates on another harness").
 
 ## Identity and resume
 
@@ -326,6 +330,44 @@ As Lua, none of which runs on a model request:
 - **Program missing.** A harness whose program is not installed lists no
   models in `delegate_models`.
 
+### Delegates on another harness
+
+A delegate on another harness has no socket of its own, so its parent stands
+in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):
+
+- **The parent binds its socket.** It listens at `~/.fiber/run/<session_id>`
+  for the delegate while the delegate runs, and `session_list` lists it like
+  any delegate. The socket accepts only `message`.
+- **A message in is delivered as `delegate_message` delivers one.** A harness
+  that takes messages while running gets it as a line on its input. For any
+  other harness it waits and is delivered as a resume ("Talking to a
+  delegate"). The parent keeps the largest `hops` it has delivered to the
+  delegate since the delegate's run began.
+- **The delegate sends through `fiber mcp serve`.** It is a stdio MCP server
+  that the harness extension's `command` adds to the harness's MCP
+  configuration. It offers `session_list` and `session_message`. A send goes
+  into the delegate's own socket, and the parent stamps its `hops` as the
+  largest delivered, plus 1, then forwards it to the target. The hop rule
+  lives in one place.
+
+The parent stays on the path because it holds the one input the harness
+documents. Probed on Claude Code 2.1.285, headless:
+
+- A message from another Claude Code session, sent with `SendMessage` to a
+  session started with `crossSessionInbound` `accept`, joined the running
+  turn. Its frame is one JSON line with `msgV`, `msg_id`, `type` `user`,
+  `message`, `priority` and `from`.
+- The same frame from a process that was not Claude Code was not delivered,
+  with no token, with the `CLAUDE_CODE_MESSAGING_TOKEN` value as a first line,
+  or with it as JSON. How the socket authenticates a sender is undocumented.
+- An MCP server declaring `claude/channel` pushed
+  `notifications/claude/channel` during a running tool call, under both
+  `--channels` and `--dangerously-load-development-channels`. The model never
+  saw it.
+
+If Claude Code documents its inbound socket, a Claude Code delegate could take
+session messages directly and the parent would drop out of the path.
+
 ### Claude Code
 
 | What | How |
@@ -384,5 +426,6 @@ harness declares no `quota()`.
 
 ## Not settled here
 
-- Messaging a session that was not started as a delegate:
-  [Intercom: messaging a session you did not start](https://github.com/aakshintala/fiber/issues/78).
+- Whether a parent relays its delegates' streams, or every client connects
+  to each session it watches:
+  [Tree or peers: should a parent relay its delegates' streams?](https://github.com/aakshintala/fiber/issues/226)

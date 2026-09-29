@@ -301,6 +301,13 @@ boundary rather than starting a new one. A steering message the turn ends
 before applying becomes the next turn's input.
 _Avoid_: follow-up, queued prompt, interjection
 
+**Session message**:
+A message one running session sends another with `session_message`: a session
+it did not start, a sibling delegate, or a session in another project. The
+target takes it as steering during a turn, or as a new turn between turns. It
+is never the person's voice.
+_Avoid_: intercom, peer message, cross-session message
+
 **Shutdown**:
 Fiber stopping because a signal told it to: within a bound, stopping everything
 the session started, asking nobody anything. Distinct from exiting because the

@@ -856,6 +856,89 @@ first prompt.
   CI").
 - Each name is written as `session_named` (`docs/events.md`).
 
+## Messaging other sessions
+
+Settled by
+[Intercom: messaging a session you did not start](https://github.com/aakshintala/fiber/issues/78);
+that ticket's resolution holds the probes and the rejected alternatives.
+
+A session sends a session message to another running session of the same
+account: one it did not start, a sibling delegate, or a session in another
+project. Messaging a session's own delegates is `delegate_message`
+(`docs/delegates.md`).
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `session_list` | none | Lists every running session of the account, delegates included. |
+| `session_message` | `id`, `text` | Sends a session message to one running session. |
+
+**`session_list` shows running sessions only.** Each entry has the session's
+id, its name, its workspace, its parent's id when it is a delegate, and
+whether a turn is running. A session is running when its socket accepts a
+connection (`docs/invocation.md`, "Processes"). The tool declares `reads`.
+
+**`session_message` addresses a session by its full id.** The model lists
+sessions first, so a name or a prefix would add ambiguity and save nothing.
+The text is plain text; a session message carries no images.
+
+**A session message reaches only a running session.** The sender connects to
+the target's socket, sends the driver command `message`, reads the answer and
+closes the connection at once, so it never keeps the target alive
+(`docs/invocation.md`, "Lifecycle"). The call answers `delivered`, or fails
+with one of:
+
+- `not_running`: nothing accepts on the target's socket
+- `unknown_session`: no session with that id exists in Fiber home
+- `own_session`: the id is the sender's own
+- `closing`: the target was sent `close` (`docs/invocation.md`)
+- `hop_limit`: the message's hop count exceeds the target's
+  `session_message.hop_limit` (below)
+
+A message for a session that has exited belongs on the ticket or with
+whoever orchestrates the work. Fiber keeps no mailbox. An extension that runs
+persistent seats replaces `session_list` and `session_message` with its own,
+and keeps what mail it needs (`docs/extensions.md`, "Registering").
+
+**The target takes it as it takes any message.** It enters the loop's inbox
+(`docs/architecture.md`, "One inbox"). During a turn it is a steering message
+and joins at the next step boundary. Between turns it starts a turn
+(`docs/loop.md`, "Starting a turn"). `before_message` runs on it, so an
+extension can rewrite or refuse it. It is logged with `source` `session`
+(`docs/events.md`, "Where a message came from"). The model sees it framed
+with the sender's id and name.
+
+**A session message is not the person's voice.** The target's reviewer never
+reads one as the person's instructions (`docs/permissions.md`, "The
+reviewer"). It is a request from another session, and the target acts on it
+under its own mode.
+
+**Sending declares `writes`, not reversible.** It changes what another session
+does. So a `readonly` session asks to leave `readonly` first, and in `auto` the
+reviewer judges the send. Without it, a `readonly` session could ask a `yolo`
+peer to make the change for it.
+
+**A hop count stops runaway exchanges.** Every session message carries
+`hops`:
+
+- A message sent from a turn a person or a driver started carries 1.
+- A message sent from a turn that a session message started, or joined as
+  steering, carries the largest `hops` among those messages, plus 1.
+- The target rejects a message whose `hops` exceeds its
+  `session_message.hop_limit`, default 10 (`docs/configuration.md`), and the call
+  fails with `hop_limit`.
+
+Each hop can wake a turn, so the limit bounds how many turns two or more
+sessions spend on each other with no person in the loop. Any turn a person
+starts begins again at 0.
+
+**Delegates on another harness take part through their parent.** The parent
+binds the delegate's socket and relays both ways ("Delegates on another
+harness", `docs/delegates.md`).
+
+Both tools are declared in every session, so the tool set never differs
+between sessions. Their definitions count toward the built-in budget ("Size
+budget in CI").
+
 ## Provider quota
 
 Settled by

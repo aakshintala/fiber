@@ -114,6 +114,7 @@ and logs the part with its `path`, `mime_type`, `width` and `height`.
 | `steer` | `content` |
 | `steer_amend` | `command_id` (string), the `steer` command's id; `content`, the new message |
 | `steer_drop` | `command_id` (string), as `steer_amend` |
+| `message` | `from_session_id` (string), `hops` (integer), `text` (string) |
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
 | `job_stop` | `job_id` (string) |
@@ -137,6 +138,7 @@ and logs the part with its `path`, `mime_type`, `width` and `height`.
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. A steering message also moves any running shell call to the background, so it reaches the model at the next step boundary. Takes an optional `session_id` naming a delegate. |
 | `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
+| `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`, and `hop_limit` when `hops` exceeds this session's `session_message.hop_limit`. |
 | `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"). Rejected `stale_request` if no turn is running. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). Takes an optional `session_id` naming a delegate. |
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
@@ -154,7 +156,7 @@ and logs the part with its `path`, `mime_type`, `width` and `height`.
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `busy`, `stale_request`, `not_step_boundary`, `session_held`,
-`delegate_session`.
+`delegate_session`, `closing`, `hop_limit`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
