@@ -9,10 +9,10 @@ Facts below are for that model, that day and that platform.
 `probe.py <group>` sends one streaming request per case (raw `urllib`, no zstd) and saves status, response headers,
 request body, the full SSE event list and usage to `raw/<case>.json`. The access token, account id and refresh token are
 read inside the script and never printed or saved; the account id header is not recorded. `raw/count.txt` holds the
-request count: 49 of the 60 allowed, sent at least 3 seconds apart. No 429 or other error except the deliberate 400s
+request count: 49 of the 60 allowed, sent at least 3 seconds apart. The raw `sent_headers` field lists header names only; the values are in `probe.py`. No 429 or other error except the deliberate 400s
 below. Cost is plan quota, not dollars: the `x-codex-primary-used-percent` response header (5-hour window) moved from
-30 to 57 and the secondary (weekly) from 8 to 13 across the run, almost all of it from the nine 9,000-token cache
-prompts. Cache groups use random prompts, so no group could hit another's cache.
+30 to 57 and the secondary (weekly) from 8 to 13 across the run, almost all of it from the 13 distinct 9,000-token cache
+prompts, each sent twice. Cache groups use random prompts, so no group could hit another's cache.
 
 Baseline body: `model`, `instructions: "You are a helpful assistant."`, `store: false`, `stream: true`, `input`,
 `include: ["reasoning.encrypted_content"]`. Headers: `Authorization`, `chatgpt-account-id`, `originator`, `User-Agent`,
@@ -39,7 +39,8 @@ the WebSocket transport was not probed.
 No. Same request with `responses=experimental` (`raw/beta-with.json`), without the header (`raw/beta-without.json`),
 without it and without any session id (`raw/beta-without-nosid.json`), and with pi's WebSocket value
 `responses_websockets=2026-02-06` on the SSE endpoint (`raw/beta-other.json`): all four 200, same 13 events, same
-22 input tokens. The header changed nothing visible.
+22 input tokens. Status, event count and input tokens matched; the reply text varied between requests
+("Hi there, friend!" and "Hi there, friend."). One request body only.
 
 ## Which fields does the endpoint accept, and do they change behaviour?
 
@@ -64,7 +65,7 @@ endpoint would reject. pi's `resolveCodexServiceTier` premise holds: a request f
 ## Does a per-request id lose the cache?
 
 The prompt was about 9,000 input tokens (random words, distinct per group). Each group sent the prompt twice, the
-second 20 seconds after the first. "Stable" means one uuid reused; "fresh" a new uuid each request.
+second 24 to 27 seconds after the first (`probe.py` sleeps 20 seconds plus 3 seconds of pacing; gaps are from the response `Date` headers). "Stable" means one uuid reused; "fresh" a new uuid each request.
 
 | Group | Request 2 cached tokens | Raw |
 |---|---|---|
@@ -81,9 +82,9 @@ second 20 seconds after the first. "Stable" means one uuid reused; "fresh" a new
 
 Answer: yes. On this endpoint the cache is routed by the `session_id` header (either spelling). `prompt_cache_key`
 and `x-client-request-id` alone did not hit. A per-request session id loses the whole cache, as rig's does. Round 1
-(`cache-1-*.json`) sent the second request 3 seconds after the first and got 0 cached tokens even with all three ids
-stable; the gap was raised to 20 seconds for every later group, so a cache write may need more than 3 seconds to land.
-The hit is 7,936 tokens of about 9,000 (a multiple of 128, so the reused prefix is rounded down).
+(`cache-1-*.json`) sent the second request 4 to 5 seconds after the first (script pacing 3 seconds) and got 0 cached tokens even with all three ids
+stable; the gap was raised to 20 seconds of sleep for every later group. Whether the gap explains the miss is untested.
+The hit is 7,936 tokens of about 9,000.
 
 ## Malformed replies
 
