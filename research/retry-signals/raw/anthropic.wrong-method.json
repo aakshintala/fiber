@@ -1,0 +1,23 @@
+{
+ "case": "anthropic.wrong-method",
+ "method": "GET",
+ "url": "https://api.anthropic.com/v1/messages",
+ "request_bytes": 0,
+ "status": 405,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:26 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "112",
+  "Connection": "close",
+  "Cache-Control": "private, max-age=0, no-store, no-cache, must-revalidate, post-check=0, pre-check=0",
+  "Expires": "Thu, 01 Jan 1970 00:00:01 GMT",
+  "Referrer-Policy": "same-origin",
+  "X-Frame-Options": "SAMEORIGIN",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "X-Robots-Tag": "none",
+  "Server": "cloudflare",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\n  \"type\": \"error\",\n  \"error\": {\n    \"type\": \"invalid_request_error\",\n    \"message\": \"Method Not Allowed\"\n  }\n}",
+ "seconds": 0.112
+}

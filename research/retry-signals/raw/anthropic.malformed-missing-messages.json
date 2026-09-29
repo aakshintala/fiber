@@ -1,0 +1,27 @@
+{
+ "case": "anthropic.malformed-missing-messages",
+ "method": "POST",
+ "url": "https://api.anthropic.com/v1/messages",
+ "request_bytes": 46,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:25 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "x-should-retry": "false",
+  "request-id": "[redacted]",
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "anthropic-organization-id": "[redacted]",
+  "anthropic-workspace-id": "[redacted]",
+  "traceresponse": "00-980e4e76a85287a6830666b9b6dd1c59-704cb6c4f9203992-01",
+  "Server": "cloudflare",
+  "vary": "Accept-Encoding",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "cf-cache-status": "[redacted]",
+  "X-Robots-Tag": "none",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages: Field required\"},\"request_id\":\"[redacted]\"}",
+ "seconds": 0.349
+}

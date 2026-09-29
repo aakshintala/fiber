@@ -1,0 +1,27 @@
+{
+ "case": "anthropic.unknown-model",
+ "method": "POST",
+ "url": "https://api.anthropic.com/v1/messages",
+ "request_bytes": 92,
+ "status": 404,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:25 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "x-should-retry": "false",
+  "request-id": "[redacted]",
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "anthropic-organization-id": "[redacted]",
+  "anthropic-workspace-id": "[redacted]",
+  "traceresponse": "00-b6cb45d8f9cec8314801872dde135c40-21c35f5839bc37d7-01",
+  "Server": "cloudflare",
+  "vary": "Accept-Encoding",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "cf-cache-status": "[redacted]",
+  "X-Robots-Tag": "none",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"not_found_error\",\"message\":\"model: no-such-model\"},\"request_id\":\"[redacted]\"}",
+ "seconds": 0.339
+}

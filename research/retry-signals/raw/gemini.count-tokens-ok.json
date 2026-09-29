@@ -1,0 +1,23 @@
+{
+ "case": "gemini.count-tokens-ok",
+ "method": "POST",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:countTokens",
+ "request_bytes": 43,
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 09:05:39 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "[redacted]",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"totalTokens\": 1,\n  \"promptTokensDetails\": [\n    {\n      \"modality\": \"TEXT\",\n      \"tokenCount\": 1\n    }\n  ]\n}\n",
+ "seconds": 0.247
+}

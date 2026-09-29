@@ -1,0 +1,8 @@
+{
+ "case": "gemini.model-burst",
+ "requests_sent": 100,
+ "status_counts": {
+  "200": 100
+ },
+ "first_429": null
+}

@@ -1,0 +1,23 @@
+{
+ "case": "gemini.malformed-not-json",
+ "method": "POST",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "request_bytes": 9,
+ "status": 400,
+ "headers": {
+  "Vary": "X-Origin",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Date": "Tue, 29 Sep 2026 09:05:38 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "[redacted]",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid JSON payload received. Expected : between key:value pair.\\n{not json\\n     ^\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+ "seconds": 0.196
+}

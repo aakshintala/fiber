@@ -1,0 +1,25 @@
+{
+ "case": "openrouter.max-tokens-huge",
+ "method": "POST",
+ "url": "https://openrouter.ai/api/v1/chat/completions",
+ "request_bytes": 104,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:06:05 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "Server-Timing": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Expose-Headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+  "X-Generation-Id": "[redacted]",
+  "set-cookie": "[redacted]",
+  "Permissions-Policy": "payment=(self \"https://checkout.stripe.com\" \"https://connect-js.stripe.com\" \"https://js.stripe.com\" \"https://*.js.stripe.com\" \"https://hooks.stripe.com\")",
+  "Referrer-Policy": "no-referrer, strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "Server": "cloudflare",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"error\":{\"message\":\"This endpoint's maximum context length is 1310720 tokens. However, you requested about 50000001 tokens (1 of text input, 50000000 in the output). Please reduce the length of either one, or use the context-compression plugin to compress your prompt automatically.\",\"code\":400,\"metadata\":{\"provider_name\":null}}}",
+ "seconds": 0.126
+}

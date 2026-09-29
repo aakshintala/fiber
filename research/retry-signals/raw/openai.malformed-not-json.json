@@ -1,0 +1,29 @@
+{
+ "case": "openai.malformed-not-json",
+ "method": "POST",
+ "url": "https://api.openai.com/v1/responses",
+ "request_bytes": 9,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:35 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "311",
+  "Connection": "close",
+  "CF-Ray": "[redacted]",
+  "CF-Cache-Status": "[redacted]",
+  "Server": "cloudflare",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Content-Type-Options": "nosniff",
+  "access-control-expose-headers": "X-Request-ID",
+  "Access-Control-Expose-Headers": "X-Request-ID",
+  "openai-organization": "[redacted]",
+  "openai-processing-ms": "21",
+  "openai-project": "[redacted]",
+  "openai-version": "2020-10-01",
+  "x-request-id": "[redacted]",
+  "set-cookie": "[redacted]",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "body": "{\n  \"error\": {\n    \"message\": \"Invalid body: failed to parse JSON value. Please check the value to ensure it is valid JSON. (Common errors include trailing commas, missing closing brackets, missing quotation marks, etc.)\",\n    \"type\": \"invalid_request_error\",\n    \"param\": null,\n    \"code\": \"invalid_json\"\n  }\n}",
+ "seconds": 0.169
+}

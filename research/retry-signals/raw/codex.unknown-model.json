@@ -1,0 +1,28 @@
+{
+ "case": "codex.unknown-model",
+ "method": "POST",
+ "url": "https://chatgpt.com/backend-api/codex/responses",
+ "request_bytes": 167,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:54 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "96",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "x-oai-request-id": "[redacted]",
+  "x-openai-proxy-wasm": "[redacted]",
+  "X-Content-Type-Options": "nosniff",
+  "cf-cache-status": "[redacted]",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "Nel": "[redacted]",
+  "Report-To": "[redacted]",
+  "Set-Cookie": "[redacted]",
+  "set-cookie": "[redacted]",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"detail\":\"The 'no-such-model' model is not supported when using Codex with a ChatGPT account.\"}",
+ "seconds": 0.362
+}
