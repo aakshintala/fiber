@@ -44,6 +44,13 @@ One JSON object per line, one event per line, every line valid on its own.
 | `seq` | durable lines only | position; contiguous per session, never reset or reused |
 | `payload` | every line | kind-specific body, nested so it can never collide with the envelope |
 
+A durable line, which carries `seq`, and an ephemeral one, which does not:
+
+```json
+{"kind":"turn_started","session_id":"s_4c1d","ts":1759150000000,"schema_version":1,"turn_id":"t_9a02","seq":7,"payload":{"input":[{"command_id":"c_7f3a","content":[{"text":"fix the failing test","type":"text"}],"source":"driver","type":"message"}]}}
+{"kind":"assistant_message_delta","session_id":"s_4c1d","ts":1759150000123,"schema_version":1,"turn_id":"t_9a02","action_id":"a_03f7","payload":{"text":"Hel"}}
+```
+
 Kind-specific fields live under `payload`. A consumer skips any `kind` it does
 not recognise and ignores fields it does not know.
 

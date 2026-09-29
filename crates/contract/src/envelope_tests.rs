@@ -1,24 +1,36 @@
 use super::*;
 
-const DURABLE: &str = r#"{"kind":"turn_started","session_id":"s_4c1d","ts":1759150000000,"schema_version":1,"turn_id":"t_9a02","seq":7,"payload":{"input":[]}}"#;
-const EPHEMERAL: &str = r#"{"kind":"assistant_message_delta","session_id":"s_4c1d","ts":1759150000123,"schema_version":1,"turn_id":"t_9a02","action_id":"a_03f7","payload":{"text":"Hel"}}"#;
+/// The example lines under `docs/events.md`, "The envelope".
+fn doc_examples() -> Vec<&'static str> {
+    let doc = include_str!("../../../docs/events.md");
+    let section = doc.split("## The envelope").nth(1).unwrap();
+    let block = section.split("```json\n").nth(1).unwrap();
+    block.split("```").next().unwrap().lines().collect()
+}
 
 fn parse(line: &str) -> Envelope {
     serde_json::from_str(line).unwrap()
 }
 
 #[test]
-fn a_durable_line_round_trips_byte_for_byte() {
-    let envelope = parse(DURABLE);
-    assert_eq!(serde_json::to_string(&envelope).unwrap(), DURABLE);
+fn the_doc_examples_round_trip_byte_for_byte() {
+    let lines = doc_examples();
+    assert_eq!(lines.len(), 2);
+    for line in &lines {
+        assert_eq!(serde_json::to_string(&parse(line)).unwrap(), *line);
+    }
+}
+
+#[test]
+fn the_durable_example_carries_seq() {
+    let envelope = parse(doc_examples()[0]);
     assert_eq!(envelope.seq, Some(Seq(7)));
     assert!(envelope.is_durable());
 }
 
 #[test]
-fn an_ephemeral_line_round_trips_byte_for_byte() {
-    let envelope = parse(EPHEMERAL);
-    assert_eq!(serde_json::to_string(&envelope).unwrap(), EPHEMERAL);
+fn the_ephemeral_example_carries_no_seq() {
+    let envelope = parse(doc_examples()[1]);
     assert_eq!(envelope.action_id, Some(ActionId("a_03f7".into())));
     assert!(!envelope.is_durable());
 }
