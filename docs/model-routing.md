@@ -178,8 +178,10 @@ needs is declared, or it is not set.
   `reasoning_content` and `reasoning_details` on a replayed assistant message.
 - OpenRouter, with `z-ai/glm-5.3-flash`, accepts `cache_control` on a system
   part, the last message and a tool, and accepts `ttl` on the system part. It also accepted one request with
-  an invalid `type`. This shows acceptance only. Whether OpenRouter passes
-  any placement or `ttl` upstream is not settled.
+  an invalid `type`. This shows acceptance only. With
+  `anthropic/claude-haiku-4.5` pinned to the Anthropic upstream, OpenRouter
+  passes markers on the system part, the last message and a tool, and `ttl`,
+  through to Anthropic (`research/openai-completions-probe`).
 - Tool-call deltas from `gpt-6-luna` and from OpenRouter with
   `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.

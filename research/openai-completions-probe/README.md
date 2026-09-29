@@ -36,7 +36,37 @@ Both ran on macOS, 2026-09-29.
 5. `reasoning_details` types in an OpenRouter stream: only `reasoning.text` (fields `type`, `text`, `format: "unknown"`, `index`), each chunk beside the same text in `reasoning` (`raw/openrouter-stream-reasoning.json`). No `reasoning.summary` or `reasoning.encrypted` among the three streams with reasoning deltas on this model (`stream-no_include_usage`, `stream-reasoning`, `stream-length`). Those types come from other models, which are not permitted here.
 6. `finish_reason: network_error`: not seen. OpenAI gave `stop`, `tool_calls`, `length`; OpenRouter gave `stop`, `tool_calls`, `length`, with `native_finish_reason` equal in each. Other vendors unreached.
 7. Tool-call `index`: present on every tool-call delta from OpenAI and from OpenRouter (`raw/openai-stream-tool.json`, `raw/openrouter-stream-tool.json`). Other vendors unreached. OpenRouter interleaves `: OPENROUTER PROCESSING` comment lines in the stream.
-8. `cache_control` on OpenRouter, with a non-Anthropic model. Placed on a system text part (no `ttl`, `ttl: 1h`, `ttl: 5m`; `ttl` was sent only on the system part), on the last message's text part, on the last tool inside `function`, on the last tool at the top level: all 200. One request with `{"type":"bogus"}` also returned 200, so that value was accepted on that request. Whether it passes any placement or `ttl` upstream cannot be seen: GLM has no cache-write price, and `cache_write_tokens` was 0 throughout (`raw/openrouter-cc-*.json`). That needs an Anthropic model, which was outside the permitted list. OpenAI direct also returned 200 for `cache_control` on a text part (`raw/openai-cache_control-on-openai.json`); it was accepted; whether it has any effect is not measured.
+8. `cache_control` on OpenRouter, with a non-Anthropic model. Placed on a system text part (no `ttl`, `ttl: 1h`, `ttl: 5m`; `ttl` was sent only on the system part), on the last message's text part, on the last tool inside `function`, on the last tool at the top level: all 200. One request with `{"type":"bogus"}` also returned 200, so that value was accepted on that request. Whether it passes any placement or `ttl` upstream cannot be seen: GLM has no cache-write price, and `cache_write_tokens` was 0 throughout (`raw/openrouter-cc-*.json`). That needs an Anthropic model, which was outside the permitted list. The Anthropic-model run is "OpenRouter to Anthropic: cache_control pass-through" below. OpenAI direct also returned 200 for `cache_control` on a text part (`raw/openai-cache_control-on-openai.json`); it was accepted; whether it has any effect is not measured.
+
+## OpenRouter to Anthropic: cache_control pass-through
+
+With an Anthropic model pinned to the Anthropic upstream, OpenRouter passes
+`cache_control` through to Anthropic on the system part, the last message and a
+tool, and passes `ttl` too.
+
+Run on September 29, 2026 against `anthropic/claude-haiku-4.5` through
+OpenRouter Chat Completions, pinned with
+`provider: {only: ["anthropic"], allow_fallbacks: false}`. Each case sent the
+same request of about 9,100 prompt tokens twice, with a fresh nonce per case so
+one case's cache could not serve another. Every reply was 200 and named
+Anthropic as the provider.
+
+| Case | First send: `cache_write_tokens` | Second send: `cached_tokens` | First send cost |
+|---|---|---|---|
+| no marker | 0 of 9,125 | 0 | $0.00917 |
+| system part | 9,116 of 9,128 | 9,116 | $0.011452 |
+| system part, `ttl: "1h"` | 9,115 of 9,127 | 9,115 | $0.018292 |
+| last user message | 9,131 of 9,134 | 9,131 | $0.01146675 |
+| tool (marker at the tool's top level) | 9,322 of 9,663 | 9,322 | $0.0120135 |
+
+The `ttl` reached Anthropic. The 1-hour first send cost 1.60 times the default
+one, which is Anthropic's 1-hour write price (2 times base input) over its
+5-minute price (1.25 times).
+
+To re-run, put an OpenRouter key in `/tmp/openrouter-key`, then run
+`python3 probe_or_anthropic_cache.py raw/openrouter-anthropic-cache` from this
+directory. It writes one `<case>.json` per case, holding the request and both
+replies' usage. Raw results: `raw/openrouter-anthropic-cache/`.
 
 ## Malformed replies
 
