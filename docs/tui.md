@@ -178,7 +178,7 @@ the conversation. The views are:
 - **Changed files:** a file list with the chosen file's hunks.
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
   tool by source, full or deferred, and its approximate size. An MCP server or
-  an extension has an on/off switch that writes `tools.enabled` and
+  an extension has an on/off switch that writes its `tools.enabled` and
   `tools.disabled` (`docs/configuration.md`). A change takes effect on
   reload, and the view says what the reload's cache rebuild costs. Built-in
   tools have no switch: they are always declared, so every session sends the
@@ -755,8 +755,11 @@ CPU and time to first frame. The design keeps to them this way:
 - **Nothing runs while nothing happens.** With no turn, delegate or job
   running, there is no timer: no frame, no byte written. A still pointer sends
   nothing under hover.
-- **The first frame waits on nothing.** Keyboard detection, the logo's image
-  and session listing each arrive after it.
+- **The first frame waits on nothing but the opening pass.** Keyboard
+  detection, the logo's image and session listing each arrive after it.
+  Attaching to a session reads its whole log once before the first frame
+  ("History and paging"): about 8.5 ms per MiB of log on macOS arm64, so a
+  large session takes longer to open than a new one.
 - **Memory follows the window, not the session,** because history is paged.
 - **A frame redraws only the rows that changed.**
 
@@ -777,7 +780,8 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 | `tui.inline_images` | Inline images |
 | `tui.logo_glyph` | ⌇ or ≈ in the logo |
 
-The tools view writes `tools.enabled` and `tools.disabled`.
+The tools view writes an MCP server's or an extension's `tools.enabled` and
+`tools.disabled`.
 
 ## Not settled here
 
