@@ -239,7 +239,7 @@ calls rather than of a race.
 ### Tool calls in a step
 
 A step may request several tool calls. **Permission decisions are made in
-order, before any of them runs**, so `ask` mode never raises four prompts at
+order, before any of them runs**, so a person is never asked about four calls at
 once and the reviewer is never asked about a call whose sibling has already
 changed the workspace. Once they are all decided, they **run concurrently**,
 one thread each, and their results are returned to the model in the order the

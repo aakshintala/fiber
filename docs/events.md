@@ -199,7 +199,7 @@ the envelope's `schema_version`.
 |---|---|---|---|
 | `version` | string | yes | the Fiber version, such as `0.0.1` |
 | `resumed` | boolean | yes | `false` for a new session, `true` for a resumed one |
-| `mode` | string | yes | the permission mode this process opened the session in: `auto`, `ask`, `readonly` or `yolo` (`docs/permissions.md`, "Modes") |
+| `mode` | string | yes | the permission mode this process opened the session in: `auto`, `readonly` or `yolo` (`docs/permissions.md`, "Modes") |
 
 #### `fiber_exited`
 
@@ -520,7 +520,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `paths` | array of strings | no | as in "Declared effects" |
 | `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3), `readonly` (4) or `review` (9); a closed set |
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
-| `escalation` | object | no | on `review` in `auto`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed`. Absent in `ask`, where every review is a person's |
+| `escalation` | object | no | on `review` in `auto`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
 | `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
 
 #### `permission_resolved`
@@ -939,9 +939,10 @@ Durable. Written after `job_started`, for each run.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `job_id` | string | yes | the delegate's job |
-| `delegate_session_id` | string | yes | the delegate's `session_id` |
+| `delegate_session_id` | string | yes | the delegate's `session_id`; on another harness, the harness's own session id, which Fiber sets before it starts |
 | `harness` | string | yes | the harness, such as `fiber` |
 | `model` | string | yes | the model reference, with any role resolved |
+| `mode` | string | yes | the permission mode it starts in: `readonly`, `auto` or `yolo` (`docs/permissions.md`, "Delegates") |
 | `workspace` | string | yes | the delegate's workspace |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) |
 | `forked_from` | object | no | for a fork: `session_id` and `seq` |

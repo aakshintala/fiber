@@ -528,7 +528,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - The credential deny (`docs/permissions.md`, "Credentials") sees paths
   only for commands the recogniser understands. A command it does not
   understand, such as `python -c` opening a file, declares no paths, so
-  the deny cannot see it; in `auto` and `ask` it is still reviewed, and in
+  the deny cannot see it; in `auto` it is still reviewed, and in
   `yolo` nothing stops it. Fiber does not confine the shell
   (`docs/permissions.md`, "Confinement").
 - The read-only list is trusted. A command on it that writes after all, or
@@ -879,23 +879,31 @@ the five Fiber ships:
 muse's `x-ratelimit-remaining-*` headers are a per-minute rate limit, not
 quota. No provider's quota is read from response headers.
 
+A harness extension may declare `quota()` in the same shape
+(`docs/delegates.md`, "Harness extensions"). It is the only source for quota
+that no Fiber provider can see, such as the Claude subscription, which Fiber
+reaches only by running Claude Code.
+
+| Harness | Source | Reports |
+|---|---|---|
+| Claude Code | `/api/oauth/usage` with Claude Code's own login, and the `rate_limit_event` lines a running delegate prints | percent used of the five-hour and seven-day windows, with reset times |
+| cursor-agent | none yet | no quota reported |
+
 ### What the model sees
 
-`delegate_models` returns one quota entry per provider beside the models it
-lists (`docs/delegates.md`, "The tools"). There is no separate quota tool.
+`delegate_models` returns one quota entry per provider and per harness
+beside the models it lists (`docs/delegates.md`, "The tools"). There is no separate quota tool.
 Each entry is one of:
 
 - windows, each with its name, percent used and reset time where the provider
   reports one
 - credit remaining, and the limit where there is one
-- `no quota reported`, for a provider without `quota()`
+- `no quota reported`, for a provider or harness without `quota()`
 - `unreachable`, when the fetch failed or timed out, with the last value and
   its age if there is one
 
 A window whose reset time has passed shows as reset. Quota never appears in a
 tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
-Delegates on another harness show quota only if their harness extension
-declares it.
 
 ### The notice
 
@@ -954,8 +962,7 @@ Four kinds ship as extensions:
   hook that replaces `content`, with the full log in the artifact.
 - Delegate harnesses other than Fiber, such as Claude Code and cursor-agent:
   each runs another vendor's agent program (`docs/delegates.md`,
-  "Harnesses"). What a harness extension declares belongs to
-  [Harness extensions: running another agent as a delegate](https://github.com/aakshintala/fiber/issues/77).
+  "Harness extensions").
 
 ## Which tools the model sees
 
