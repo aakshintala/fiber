@@ -35,9 +35,11 @@ A step is one round-trip to the model. Each step does this, in order:
    (`docs/handoff.md`, "Triggers").
 3. Build the request: the preamble (`docs/prompt-cache.md`) followed by the
    conversation ("What the model is sent").
-4. Send it and stream the reply, emitting its actions as they arrive. A failed
-   call is retried as `docs/model-routing.md`, "When a model call fails",
-   says.
+4. Send it and stream the reply, emitting its actions as they arrive. A tool
+   call's arguments stream as raw text in `tool_call_arguments_delta`
+   (`docs/events.md`) and are parsed once, when the model finishes emitting
+   the call. A failed call is retried as `docs/model-routing.md`, "When a model
+   call fails", says.
 5. For each tool call in the reply, in the order the model emitted them: check
    the tool exists and the arguments match its schema, run its effects
    function, run `before_tool`, then decide permission (`docs/permissions.md`).
@@ -142,7 +144,9 @@ signatures, is logged exactly as the provider returned it, and sent back
 unchanged to the model that produced it. The provider checks only the opaque
 part, the signature or encrypted content, and refuses a request in which it
 was changed. Leaving it out is accepted but loses the prompt cache from that
-point on.
+point on. Reasoning is never sent back as plain assistant text, on any
+protocol or after a model switch. What a provider cannot take in its own form
+is left out.
 
 Each item goes only to the model that produced it, by its whole model
 reference, `provider/model` (`docs/model-routing.md`). After `/model` or the

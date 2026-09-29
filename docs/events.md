@@ -414,6 +414,18 @@ Durable.
 | `error` | `error` | no | on `failed`, with `retry_after` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
 | `attempt` | integer | no | on `failed`: 1 for the first attempt at this request, 2 for its first retry, and so on |
 
+#### `tool_call_arguments_delta`
+
+Ephemeral. A tool call the model is still emitting, under the assistant
+message's `action_id`. The arguments are parsed once, when the call finishes
+(`docs/loop.md`, "One step"); `tool_call_requested` then carries them.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `index` | integer | yes | the call's position within the message, from 0 |
+| `name` | string | no | the tool's name, once the provider has sent it |
+| `text` | string | yes | the raw argument text added since the last delta |
+
 #### `reasoning_started`
 
 Durable. The payload is `{}`.
@@ -443,7 +455,7 @@ Durable. The model finished emitting the call.
 |---|---|---|---|
 | `name` | string | yes | the tool's name as the model called it |
 | `arguments` | any JSON | yes | the arguments as the model sent them: an object, or a string holding the raw text when it was not JSON |
-| `provider_id` | string | yes | the provider's own id for the call ("Identity and ordering") |
+| `provider_id` | string | no | the provider's own id for the call ("Identity and ordering"); absent when the reply carried none |
 
 #### `tool_call_started`
 
