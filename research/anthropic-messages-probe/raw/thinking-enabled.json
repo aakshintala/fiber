@@ -1,0 +1,43 @@
+[
+ {
+  "label": "thinking enabled",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:59:16 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXTPQMowKqwxEFFKVS3q",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 2000,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is 17*23?"
+    }
+   ],
+   "thinking": {
+    "type": "enabled",
+    "budget_tokens": 1024
+   }
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "\"thinking.type.enabled\" is not supported for this model. Use \"thinking.type.adaptive\" and \"output_config.effort\" to control thinking behavior."
+   },
+   "request_id": "req_011CfXTPQMowKqwxEFFKVS3q"
+  }
+ }
+]

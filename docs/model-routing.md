@@ -47,6 +47,25 @@ are fetched and installed, not built into the binary. Installing Fiber
 installs these five. How extensions arrive and stay current is
 `docs/extensions.md`.
 
+### Anthropic messages wire facts
+
+Measured on `claude-sonnet-5-5` against api.anthropic.com
+(`research/anthropic-messages-probe`).
+
+- In 7 successful streams (text, tool use, `max_tokens`, `stop_sequence`,
+  adaptive thinking), `message_delta` carried the `stop_reason` and was followed
+  by `message_stop`, the last event.
+- `/v1/messages?beta=true` returned the same status, header names, body keys and
+  event names as `/v1/messages`.
+- Without `tools`, `tool_choice` of `auto` or `none` returned 200. `any` and
+  `tool` returned 400.
+- A `tool_use` block carries `caller`: `{"type": "direct"}` for a client tool
+  call, and `{"type": "code_execution_20250825", "tool_id": "srvtoolu_..."}`
+  when server-side code execution calls the tool. Replaying the block without
+  `caller` returned 200. An invalid `caller` returned 400.
+- More than 4 `cache_control` blocks across `tools`, `system` and `messages`
+  returned 400.
+
 ## What a provider extension declares
 
 Most of a provider is data. For the provider:

@@ -1,0 +1,309 @@
+[
+ {
+  "label": "tool_choice no tools auto",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:00 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:59Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:00Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:59Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:59Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSz4GgWeMYzSboz929b",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi."
+    }
+   ],
+   "tool_choice": {
+    "type": "auto"
+   }
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSz4oh7q6oReM6N4RGn",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hi there! \ud83d\udc4b How can I help you today?"
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 13,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 18,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "tool_choice no tools none",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:01 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:00Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:00Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:00Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:00Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSz84e8n58pXpwa2jL6",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "X-Robots-Tag": "none",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi."
+    }
+   ],
+   "tool_choice": {
+    "type": "none"
+   }
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSz8iL72HbbucpSXEkJ",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hi! \ud83d\udc4b How can I help you today?"
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 13,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 17,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "tool_choice no tools any",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:01 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXSzBtpqpwAxaxABWCFB",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi."
+    }
+   ],
+   "tool_choice": {
+    "type": "any"
+   }
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "tool_choice.any may only be specified while providing tools"
+   },
+   "request_id": "req_011CfXSzBtpqpwAxaxABWCFB"
+  }
+ },
+ {
+  "label": "tool_choice no tools tool",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:01 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXSzDQ7WGcaczXpc5Tpa",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi."
+    }
+   ],
+   "tool_choice": {
+    "type": "tool",
+    "name": "get_weather"
+   }
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "Tool 'get_weather' not found in provided tools"
+   },
+   "request_id": "req_011CfXSzDQ7WGcaczXpc5Tpa"
+  }
+ },
+ {
+  "label": "tool_choice with tools=[]",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:02 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:02Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:02Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:02Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:02Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSzEnxGy2dY4bvmb9pk",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi."
+    }
+   ],
+   "tools": [],
+   "tool_choice": {
+    "type": "auto"
+   }
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSzFJiNTpYd9meHTcMm",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hi! How can I help you today?"
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 13,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 13,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ }
+]
