@@ -1,0 +1,22 @@
+[package]
+name = "containment"
+version = "0.0.0"
+edition = "2021"
+
+[workspace]
+
+[dependencies]
+mlua = { version = "0.12", features = ["lua54", "vendored", "send"] }
+
+# docs/code-quality.md: release and debug both set panic = "abort".
+[profile.dev]
+panic = "abort"
+[profile.release]
+panic = "abort"
+# The unwind builds show what the abort setting changes.
+[profile.dev-unwind]
+inherits = "dev"
+panic = "unwind"
+[profile.release-unwind]
+inherits = "release"
+panic = "unwind"
