@@ -164,7 +164,8 @@ threads") already budgets.
 ## When a server dies
 
 A server that dies mid-session is restarted once, on the next call to one of its
-tools. Each death is recorded as `mcp_server_failed`. If it dies again, it
+tools. Each death is recorded as `mcp_server_failed`, and a restart that
+brings it back as `mcp_server_ready`. If it dies again, it
 stays dead for the rest of the session. Its tools
 stay declared, so the prompt cache holds, and every call to them fails with code
 `mcp_server_unavailable`.
