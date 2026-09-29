@@ -23,7 +23,7 @@ The two forms cache and answer the same, and they share a cache entry (`raw/prob
 
 The schema has properties `a` and `b`, with only `a` required and no `additionalProperties` key. Strict mode rejects it.
 
-- No `strict` key: request accepted (200), and the model called `f`. The response object's `tools` echo shows `"strict": true`, and OpenAI rewrote the schema to `"required": ["a","b"]` and `"additionalProperties": false`. So the default is strict, and OpenAI normalises the schema instead of rejecting it.
+- No `strict` key: the response has `status: "completed"` (the raw file records no HTTP status), and the output holds a `function_call` to `f`. The response object's `tools` echo shows `"strict": true`, and OpenAI rewrote the schema to `"required": ["a","b"]` and `"additionalProperties": false`. So the default is strict, and OpenAI normalises the schema instead of rejecting it.
 - `strict: true` sent explicitly with the same schema: 400 `invalid_function_parameters`, "'additionalProperties' is required to be supplied and to be false."
 - `strict: false`: accepted; echo shows `"strict": false` and the schema unchanged.
 

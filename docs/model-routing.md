@@ -29,11 +29,13 @@ declares: the request fields it requires or rejects, such as `store: false`,
 the headers its login supplies, and its usage-limit error body. Its streamed
 events, tool calls and reasoning items are parsed as plain Responses.
 
-On OpenAI's own endpoint, `instructions` and a system message in `input`
-give the same answer and the same prompt cache, and switching between the two
-keeps the cached prefix. A function tool with no `strict` key is treated as
-`strict: true`: OpenAI makes every property required and adds
-`additionalProperties: false`. Details:
+On OpenAI's own endpoint, with `gpt-6-luna`, `instructions` and a system
+message in `input` gave the same answer and the same prompt cache for one
+prompt, and switching between the two kept the cached prefix. For one tool
+schema with an optional property, a function tool with no `strict` key was
+accepted, and the response reported `strict: true` with the schema rewritten
+(every property required, `additionalProperties: false`). The same schema with
+an explicit `strict: true` was rejected with a 400. Details:
 [research/openai-responses-probe](../research/openai-responses-probe/README.md).
 
 An extension cannot add a protocol. A vendor with a new wire format needs a
