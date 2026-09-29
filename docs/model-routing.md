@@ -27,7 +27,13 @@ Protocols are native Rust in the `provider` module. There are four:
 ChatGPT/codex speaks `openai-responses` with compatibility flags its extension
 declares: the request fields it requires or rejects, such as `store: false`,
 the headers its login supplies, and its usage-limit error body. Its streamed
-events, tool calls and reasoning items are parsed as plain Responses.
+events, tool calls and reasoning items are parsed as plain Responses. A stream
+ends with `response.completed`: all 45 SSE streams sent to `gpt-6-luna`
+that returned 200 did, and none contained `response.done`. Requests with the
+`OpenAI-Beta` header omitted, tried with one request body, also returned 200.
+With `gpt-6-luna` the endpoint accepted
+`parallel_tool_calls`, `tool_choice` and `text.verbosity`. It rejected
+`temperature` with status 400, and a `service_tier` of `flex` or `auto`.
 
 On OpenAI's own endpoint, with `gpt-6-luna`, `instructions` and a system
 message in `input` gave the same answer and the same prompt cache for one

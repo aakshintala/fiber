@@ -1,0 +1,697 @@
+{
+ "name": "ev-text",
+ "n": 1,
+ "sent_headers": [
+  "originator",
+  "User-Agent",
+  "Accept",
+  "Content-Type",
+  "OpenAI-Beta",
+  "session_id"
+ ],
+ "request": {
+  "model": "gpt-6-luna",
+  "instructions": "You are a helpful assistant.",
+  "store": false,
+  "stream": true,
+  "input": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "Write two short sentences about rivers."
+     }
+    ]
+   }
+  ],
+  "include": [
+   "reasoning.encrypted_content"
+  ]
+ },
+ "status": 200,
+ "resp_headers": {
+  "Date": "Tue, 29 Sep 2026 08:53:14 GMT",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "x-codex-active-limit": "premium",
+  "x-codex-plan-type": "plus",
+  "x-codex-primary-used-percent": "30",
+  "x-codex-secondary-used-percent": "8",
+  "x-codex-primary-window-minutes": "300",
+  "x-codex-primary-over-secondary-limit-percent": "0",
+  "x-codex-secondary-window-minutes": "10080",
+  "x-codex-primary-reset-after-seconds": "11226",
+  "x-codex-secondary-reset-after-seconds": "481695",
+  "x-codex-primary-reset-at": "1790683219",
+  "x-codex-secondary-reset-at": "1791153688",
+  "x-codex-credits-has-credits": "False",
+  "x-codex-credits-balance": "0",
+  "x-codex-credits-unlimited": "False",
+  "x-models-etag": "W/\"eb4b4b8e276390070d28b48cdd93f050\"",
+  "x-codex-turn-state": "gAAAAABqu3x5doP0fSr9l_mKlaRfrwuQXgkchUGJrPIF9P8bBomcew1OviNN8ifeiGbyNECtqyywNoNGyeTsZrbAK0W0MRN16ri_9YF_rOp-WzYsEO4lOhnZz9vALz3r-hFYh_feiaUBXxdibrSvQm0Iend4dkLatugDbLAFBsN1EBI8TmwDEGEULVf8BcVOvI0MCWeYeBHgN4HtIQZ79woaSwGOv9zNrrjAM5FDC_UesNCUQprOAP9wPCxRaOseLEXgjcqdn4BO6dtqRSdEoxbliZDNtTWt4wzyonDcxZFg0-auxV-HwRlsvNw6CNQXU4OtLNR5rXAyOfrqD3CoVKandDi66qW7lhBqzUnhWBxnYF9uWR6sJIeHfRWhjjSMRuUtq-_MgSsq6EhZ5RHBlk0m8u2gwbAe_8EiNx_DGI-DQ_2-14yNKyh1pBp6LHtYVYLGfdwWSLbb23trNzLUKDdxtTMiyP-RskdqD5bQ0wfskw8dACpQ4ydXxRa830Xgwz6ycGlQvZSDmG6pjnVBewb1xGItofId5NAq8LPjegmV_13Ywbsi3vX8d5GbUFKIeF_HV89j6eAmpnjz3scdndob-7RjPVpWDc5Xi3KMpeT0kV3dPhZb5BH3_dxPoMODId2Nnzy0rM31Rdatqnm8qtuZg2rmKqc7UVwLLdFiA0lSanwag-CtWfSfzCcBe_nLqvzJ5MxITXOjabfrEEzA2uYPno3fCw8W1uA6fIRpxd3LGI8p2Q6oApp-B0lXE-BVDuk75FrbHZB9",
+  "x-oai-request-id": "040b9554-a0f7-40d1-8792-ef0e8bdd6fd7",
+  "x-openai-proxy-wasm": "v0.1",
+  "X-Content-Type-Options": "nosniff",
+  "cf-cache-status": "DYNAMIC",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "Nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+  "Report-To": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=EPKy%2FnJd%2Bp89VA%2B5jJiNaQJkODFV%2BIFG%2F4%2FoYeg8uc8yvb%2BMalrpykBaW%2FVSY0wE0Z73f7PqQ73%2B68L%2BwRlL2uu32fhttN2myYMi6Df7oc0Oxc%2BbP7DREegz9Nud\"}]}",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "a429c198aad4effe-SJC"
+ },
+ "events": [
+  {
+   "event": "response.created",
+   "data": {
+    "type": "response.created",
+    "response": {
+     "id": "resp_0dda6cb3c795f7bf016abb7c79fbe487d0837663ce224c884b",
+     "object": "response",
+     "created_at": 1790671994,
+     "status": "in_progress",
+     "access_programs": {
+      "cyber": "daybreak_blue"
+     },
+     "background": false,
+     "completed_at": null,
+     "error": null,
+     "frequency_penalty": 0.0,
+     "incomplete_details": null,
+     "instructions": "You are a helpful assistant.",
+     "max_output_tokens": null,
+     "max_tool_calls": null,
+     "model": "gpt-6-luna",
+     "moderation": null,
+     "output": [],
+     "parallel_tool_calls": true,
+     "presence_penalty": 0.0,
+     "previous_response_id": null,
+     "prompt_cache_key": "5c21101d-cf29-45af-a9c7-31c76c0a6800",
+     "prompt_cache_retention": "24h",
+     "reasoning": {
+      "context": "all_turns",
+      "effort": "medium",
+      "mode": "standard",
+      "summary": null
+     },
+     "safety_identifier": "user-rXiDsBOp1pmK1NOLHjrdBf5J",
+     "service_tier": "auto",
+     "store": false,
+     "temperature": 1.0,
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "tool_choice": "auto",
+     "tool_usage": {
+      "image_gen": {
+       "input_tokens": 0,
+       "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "output_tokens": 0,
+       "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "total_tokens": 0
+      },
+      "web_search": {
+       "num_requests": 0
+      }
+     },
+     "tools": [],
+     "top_logprobs": 0,
+     "top_p": 0.98,
+     "truncation": "disabled",
+     "usage": null,
+     "user": null,
+     "metadata": {}
+    },
+    "sequence_number": 0
+   }
+  },
+  {
+   "event": "response.in_progress",
+   "data": {
+    "type": "response.in_progress",
+    "response": {
+     "id": "resp_0dda6cb3c795f7bf016abb7c79fbe487d0837663ce224c884b",
+     "object": "response",
+     "created_at": 1790671994,
+     "status": "in_progress",
+     "access_programs": {
+      "cyber": "daybreak_blue"
+     },
+     "background": false,
+     "completed_at": null,
+     "error": null,
+     "frequency_penalty": 0.0,
+     "incomplete_details": null,
+     "instructions": "You are a helpful assistant.",
+     "max_output_tokens": null,
+     "max_tool_calls": null,
+     "model": "gpt-6-luna",
+     "moderation": null,
+     "output": [],
+     "parallel_tool_calls": true,
+     "presence_penalty": 0.0,
+     "previous_response_id": null,
+     "prompt_cache_key": "5c21101d-cf29-45af-a9c7-31c76c0a6800",
+     "prompt_cache_retention": "24h",
+     "reasoning": {
+      "context": "all_turns",
+      "effort": "medium",
+      "mode": "standard",
+      "summary": null
+     },
+     "safety_identifier": "user-rXiDsBOp1pmK1NOLHjrdBf5J",
+     "service_tier": "auto",
+     "store": false,
+     "temperature": 1.0,
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "tool_choice": "auto",
+     "tool_usage": {
+      "image_gen": {
+       "input_tokens": 0,
+       "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "output_tokens": 0,
+       "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "total_tokens": 0
+      },
+      "web_search": {
+       "num_requests": 0
+      }
+     },
+     "tools": [],
+     "top_logprobs": 0,
+     "top_p": 0.98,
+     "truncation": "disabled",
+     "usage": null,
+     "user": null,
+     "metadata": {}
+    },
+    "sequence_number": 1
+   }
+  },
+  {
+   "event": "response.output_item.added",
+   "data": {
+    "type": "response.output_item.added",
+    "item": {
+     "id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+     "type": "message",
+     "status": "in_progress",
+     "content": [],
+     "phase": "final_answer",
+     "role": "assistant"
+    },
+    "output_index": 0,
+    "sequence_number": 2
+   }
+  },
+  {
+   "event": "response.content_part.added",
+   "data": {
+    "type": "response.content_part.added",
+    "content_index": 0,
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "output_index": 0,
+    "part": {
+     "type": "output_text",
+     "annotations": [],
+     "logprobs": [],
+     "text": ""
+    },
+    "sequence_number": 3
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": "R",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "yVN4oQJh82tWyTh",
+    "output_index": 0,
+    "sequence_number": 4
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": "ivers",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "DcPq5O58mzm",
+    "output_index": 0,
+    "sequence_number": 5
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " carry",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "1fWqU6htT7",
+    "output_index": 0,
+    "sequence_number": 6
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " water",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "mO7Cipvj5F",
+    "output_index": 0,
+    "sequence_number": 7
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " across",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "hUNWMIwlv",
+    "output_index": 0,
+    "sequence_number": 8
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " the",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "Qa9qGAYHlFGc",
+    "output_index": 0,
+    "sequence_number": 9
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " land",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "kr81OoYKvwV",
+    "output_index": 0,
+    "sequence_number": 10
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": ".",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "BSqGRrAtaovmccy",
+    "output_index": 0,
+    "sequence_number": 11
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " They",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "mC6W7W1ffpl",
+    "output_index": 0,
+    "sequence_number": 12
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " provide",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "g6snOQsB",
+    "output_index": 0,
+    "sequence_number": 13
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " homes",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "a2AUWFtM4L",
+    "output_index": 0,
+    "sequence_number": 14
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " for",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "Ko3O2pEjyUbn",
+    "output_index": 0,
+    "sequence_number": 15
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " many",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "PBP4eAZxNlR",
+    "output_index": 0,
+    "sequence_number": 16
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " plants",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "xPW7sYNR7",
+    "output_index": 0,
+    "sequence_number": 17
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " and",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "YT40QnQ4zGyg",
+    "output_index": 0,
+    "sequence_number": 18
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": " animals",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "q7rz2Z1I",
+    "output_index": 0,
+    "sequence_number": 19
+   }
+  },
+  {
+   "event": "response.output_text.delta",
+   "data": {
+    "type": "response.output_text.delta",
+    "content_index": 0,
+    "delta": ".",
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "obfuscation": "g2gLxOzkoR1CYk9",
+    "output_index": 0,
+    "sequence_number": 20
+   }
+  },
+  {
+   "event": "response.output_text.done",
+   "data": {
+    "type": "response.output_text.done",
+    "content_index": 0,
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "logprobs": [],
+    "output_index": 0,
+    "sequence_number": 21,
+    "text": "Rivers carry water across the land. They provide homes for many plants and animals."
+   }
+  },
+  {
+   "event": "response.content_part.done",
+   "data": {
+    "type": "response.content_part.done",
+    "content_index": 0,
+    "item_id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+    "output_index": 0,
+    "part": {
+     "type": "output_text",
+     "annotations": [],
+     "logprobs": [],
+     "text": "Rivers carry water across the land. They provide homes for many plants and animals."
+    },
+    "sequence_number": 22
+   }
+  },
+  {
+   "event": "response.output_item.done",
+   "data": {
+    "type": "response.output_item.done",
+    "item": {
+     "id": "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "Rivers carry water across the land. They provide homes for many plants and animals."
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    },
+    "output_index": 0,
+    "sequence_number": 23
+   }
+  },
+  {
+   "event": "response.completed",
+   "data": {
+    "type": "response.completed",
+    "response": {
+     "id": "resp_0dda6cb3c795f7bf016abb7c79fbe487d0837663ce224c884b",
+     "object": "response",
+     "created_at": 1790671994,
+     "status": "completed",
+     "access_programs": {
+      "cyber": "daybreak_blue"
+     },
+     "background": false,
+     "completed_at": 1790671995,
+     "error": null,
+     "frequency_penalty": 0.0,
+     "incomplete_details": null,
+     "instructions": "You are a helpful assistant.",
+     "max_output_tokens": null,
+     "max_tool_calls": null,
+     "model": "gpt-6-luna",
+     "moderation": null,
+     "output": [],
+     "parallel_tool_calls": true,
+     "presence_penalty": 0.0,
+     "previous_response_id": null,
+     "prompt_cache_key": "5c21101d-cf29-45af-a9c7-31c76c0a6800",
+     "prompt_cache_retention": "24h",
+     "reasoning": {
+      "context": "all_turns",
+      "effort": "medium",
+      "mode": "standard",
+      "summary": null
+     },
+     "safety_identifier": "user-rXiDsBOp1pmK1NOLHjrdBf5J",
+     "service_tier": "default",
+     "store": false,
+     "temperature": 1.0,
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "tool_choice": "auto",
+     "tool_usage": {
+      "image_gen": {
+       "input_tokens": 0,
+       "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "output_tokens": 0,
+       "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "total_tokens": 0
+      },
+      "web_search": {
+       "num_requests": 0
+      }
+     },
+     "tools": [],
+     "top_logprobs": 0,
+     "top_p": 0.98,
+     "truncation": "disabled",
+     "usage": {
+      "attribution": {
+       "items": {
+        "msg_0dda6cb3c795f7bf016abb7c7a01ec87d0aae067858efced2c": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "content": [
+          {
+           "cache_write_tokens": 0,
+           "cached_tokens": 0,
+           "input_tokens": 11,
+           "output_tokens": 0
+          }
+         ],
+         "input_tokens": 11,
+         "output_tokens": 0
+        },
+        "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "content": [
+          {
+           "cache_write_tokens": 0,
+           "cached_tokens": 0,
+           "input_tokens": 2,
+           "output_tokens": 21
+          }
+         ],
+         "input_tokens": 2,
+         "output_tokens": 21
+        }
+       },
+       "request_fields": {
+        "instructions": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "input_tokens": 10,
+         "output_tokens": 0
+        }
+       }
+      },
+      "input_tokens": 23,
+      "input_tokens_details": {
+       "cache_write_tokens": 0,
+       "cached_tokens": 0
+      },
+      "output_tokens": 21,
+      "output_tokens_details": {
+       "reasoning_tokens": 0
+      },
+      "total_tokens": 44
+     },
+     "user": null,
+     "metadata": {}
+    },
+    "sequence_number": 24
+   }
+  }
+ ],
+ "text": "Rivers carry water across the land. They provide homes for many plants and animals.",
+ "usage": {
+  "attribution": {
+   "items": {
+    "msg_0dda6cb3c795f7bf016abb7c7a01ec87d0aae067858efced2c": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "content": [
+      {
+       "cache_write_tokens": 0,
+       "cached_tokens": 0,
+       "input_tokens": 11,
+       "output_tokens": 0
+      }
+     ],
+     "input_tokens": 11,
+     "output_tokens": 0
+    },
+    "msg_0dda6cb3c795f7bf016abb7c7abd9087d08b73395acaf60e66": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "content": [
+      {
+       "cache_write_tokens": 0,
+       "cached_tokens": 0,
+       "input_tokens": 2,
+       "output_tokens": 21
+      }
+     ],
+     "input_tokens": 2,
+     "output_tokens": 21
+    }
+   },
+   "request_fields": {
+    "instructions": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "input_tokens": 10,
+     "output_tokens": 0
+    }
+   }
+  },
+  "input_tokens": 23,
+  "input_tokens_details": {
+   "cache_write_tokens": 0,
+   "cached_tokens": 0
+  },
+  "output_tokens": 21,
+  "output_tokens_details": {
+   "reasoning_tokens": 0
+  },
+  "total_tokens": 44
+ }
+}

@@ -114,12 +114,20 @@ Providers that route by key are given the root session's id:
 
 | Provider | Field |
 |---|---|
-| OpenAI and ChatGPT/codex | `prompt_cache_key` |
+| OpenAI | `prompt_cache_key` |
+| ChatGPT/codex | the `session_id` header (`session-id` and `session_id` both work) |
 | OpenRouter | `session_id` |
 | OpenCode Go | the `x-opencode-session` header |
 
 A fork and every session in its lineage use the root's id. Probed: a different
 `prompt_cache_key` missed the whole cache on GPT-6 Luna.
+
+With `gpt-6-luna`, ChatGPT/codex hit the cache on the second request in each
+of 5 pairs sent 24 to 27 seconds apart with a stable `session_id` header (7,936 of
+about 9,000 tokens). A stable `prompt_cache_key` with a new header each time
+missed in its pair, as did a stable `prompt_cache_key` alone and a stable
+`x-client-request-id` alone (one pair each). A new id each request missed in 2
+pairs. Pairs 4 to 5 seconds apart missed even with every id stable.
 
 An extension that sets OpenRouter's `provider.order` loses sticky routing, and
 with it the cache.

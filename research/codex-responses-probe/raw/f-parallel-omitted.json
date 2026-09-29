@@ -1,0 +1,582 @@
+{
+ "name": "f-parallel-omitted",
+ "n": 12,
+ "sent_headers": [
+  "originator",
+  "User-Agent",
+  "Accept",
+  "Content-Type",
+  "OpenAI-Beta"
+ ],
+ "request": {
+  "model": "gpt-6-luna",
+  "instructions": "You are a helpful assistant.",
+  "store": false,
+  "stream": true,
+  "input": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "Weather in Rome and Oslo? Call the tool for each."
+     }
+    ]
+   }
+  ],
+  "include": [
+   "reasoning.encrypted_content"
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "name": "get_weather",
+    "description": "Get weather",
+    "strict": false,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "city": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "city"
+     ]
+    }
+   }
+  ]
+ },
+ "status": 200,
+ "resp_headers": {
+  "Date": "Tue, 29 Sep 2026 08:54:13 GMT",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "x-codex-active-limit": "premium",
+  "x-codex-plan-type": "plus",
+  "x-codex-primary-used-percent": "30",
+  "x-codex-secondary-used-percent": "8",
+  "x-codex-primary-window-minutes": "300",
+  "x-codex-primary-over-secondary-limit-percent": "0",
+  "x-codex-secondary-window-minutes": "10080",
+  "x-codex-primary-reset-after-seconds": "11167",
+  "x-codex-secondary-reset-after-seconds": "481636",
+  "x-codex-primary-reset-at": "1790683219",
+  "x-codex-secondary-reset-at": "1791153688",
+  "x-codex-credits-has-credits": "False",
+  "x-codex-credits-balance": "0",
+  "x-codex-credits-unlimited": "False",
+  "x-models-etag": "W/\"eb4b4b8e276390070d28b48cdd93f050\"",
+  "x-codex-turn-state": "gAAAAABqu3y1f7qEttdCOs11vRj7a2senOFtZBdTsPcLOQpmkc5ecNFmwZ7cVjGy3PI_dKNCV0RNLbHoL7xPheF2KJFtHTBDoyN1V6G2tNOT4uPowjYAqS0qcuZd8H0rJBfCkRP6vUEJMUAbw9cFjoVSTgF9aKFFyjTLUKiAYctAkxN-wBrakT564JavPfBUvWBj1frj4xbBVebsX09T5_15oPJyPlZH7J75WADXzNHMzSS6YzVrkSVDlU3XLNVuivo7hlsNWCBuvT6QG1zhJO93CRKmwCGCa_yBO0zJwTfEfhKlu10DxnX3DPGDBB0N3b6scNZ7SPcwhU41KYbSZQTntmdOA9MWnqPjhD4OCzRAjr0g55Ica7-WGz8HGSGqnc82R-UVcfp_sClKC9rTBN78ibue3mk3rFBcAfSAhNozm21CySqzAtgqn5BdMg--ypVHsQYIGT0z4z1IdE7mATGm0T0uFn5BDsJajRu_B6rVSPw4CXOK-crrZt1RjDCi3Gca8O8Ud36wYzLK5H4nz7lfPT5kHxUitOgLwC_OQ0fJkfrbA53fTCS4aaY14fIelBK7A1yOVaLTm4CyXAyqbA_JohBHynW9j7SkTSWJxB_Nol3J1-39oOvJflK29-F7VrusURhgcTUkeS3HbD9Qgyj38q2Wi1iMvlqCPKnB2WoTWZM6IL-vay4dbQJJcEuGnFIkPb_h5gofk4Q-ob86YkzVy6xse1ZKhkLYpUcTrroN2qmRH0f2a45JZPl4pKYVcdPerVzjCupr",
+  "x-oai-request-id": "a5f1b3b6-3075-4fbe-acc5-0a1f1dad2d2a",
+  "x-openai-proxy-wasm": "v0.1",
+  "X-Content-Type-Options": "nosniff",
+  "cf-cache-status": "DYNAMIC",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "Nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+  "Report-To": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=MVCpBYJ3hT1Rfwg5EYsLtlJopSx6P0HahNtaKB98T4dxd5arBWvvY1rxSM%2FBivb7YCVv0SheJA8PbJ9%2FWHNLzgKMZdIMdb61axdMAu%2B%2BjqTzDnsLoq5CrXQHtPaU\"}]}",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "a429c30b0f7215b2-SJC"
+ },
+ "events": [
+  {
+   "event": "response.created",
+   "data": {
+    "type": "response.created",
+    "response": {
+     "id": "resp_0aa1c22716369341016abb7cb53ca887d0b052a186d1f3008f",
+     "object": "response",
+     "created_at": 1790672053,
+     "status": "in_progress",
+     "access_programs": {
+      "cyber": "daybreak_blue"
+     },
+     "background": false,
+     "completed_at": null,
+     "error": null,
+     "frequency_penalty": 0.0,
+     "incomplete_details": null,
+     "instructions": "You are a helpful assistant.",
+     "max_output_tokens": null,
+     "max_tool_calls": null,
+     "model": "gpt-6-luna",
+     "moderation": null,
+     "output": [],
+     "parallel_tool_calls": true,
+     "presence_penalty": 0.0,
+     "previous_response_id": null,
+     "prompt_cache_key": "50a51801-1eb0-4863-a5a2-7ba602e216f3",
+     "prompt_cache_retention": "24h",
+     "reasoning": {
+      "context": "all_turns",
+      "effort": "medium",
+      "mode": "standard",
+      "summary": null
+     },
+     "safety_identifier": "user-rXiDsBOp1pmK1NOLHjrdBf5J",
+     "service_tier": "auto",
+     "store": false,
+     "temperature": 1.0,
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "tool_choice": "auto",
+     "tool_usage": {
+      "image_gen": {
+       "input_tokens": 0,
+       "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "output_tokens": 0,
+       "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "total_tokens": 0
+      },
+      "web_search": {
+       "num_requests": 0
+      }
+     },
+     "tools": [
+      {
+       "type": "function",
+       "description": "Get weather",
+       "name": "get_weather",
+       "output_schema": null,
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       },
+       "strict": false
+      }
+     ],
+     "top_logprobs": 0,
+     "top_p": 0.98,
+     "truncation": "disabled",
+     "usage": null,
+     "user": null,
+     "metadata": {}
+    },
+    "sequence_number": 0
+   }
+  },
+  {
+   "event": "response.in_progress",
+   "data": {
+    "type": "response.in_progress",
+    "response": {
+     "id": "resp_0aa1c22716369341016abb7cb53ca887d0b052a186d1f3008f",
+     "object": "response",
+     "created_at": 1790672053,
+     "status": "in_progress",
+     "access_programs": {
+      "cyber": "daybreak_blue"
+     },
+     "background": false,
+     "completed_at": null,
+     "error": null,
+     "frequency_penalty": 0.0,
+     "incomplete_details": null,
+     "instructions": "You are a helpful assistant.",
+     "max_output_tokens": null,
+     "max_tool_calls": null,
+     "model": "gpt-6-luna",
+     "moderation": null,
+     "output": [],
+     "parallel_tool_calls": true,
+     "presence_penalty": 0.0,
+     "previous_response_id": null,
+     "prompt_cache_key": "50a51801-1eb0-4863-a5a2-7ba602e216f3",
+     "prompt_cache_retention": "24h",
+     "reasoning": {
+      "context": "all_turns",
+      "effort": "medium",
+      "mode": "standard",
+      "summary": null
+     },
+     "safety_identifier": "user-rXiDsBOp1pmK1NOLHjrdBf5J",
+     "service_tier": "auto",
+     "store": false,
+     "temperature": 1.0,
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "tool_choice": "auto",
+     "tool_usage": {
+      "image_gen": {
+       "input_tokens": 0,
+       "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "output_tokens": 0,
+       "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "total_tokens": 0
+      },
+      "web_search": {
+       "num_requests": 0
+      }
+     },
+     "tools": [
+      {
+       "type": "function",
+       "description": "Get weather",
+       "name": "get_weather",
+       "output_schema": null,
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       },
+       "strict": false
+      }
+     ],
+     "top_logprobs": 0,
+     "top_p": 0.98,
+     "truncation": "disabled",
+     "usage": null,
+     "user": null,
+     "metadata": {}
+    },
+    "sequence_number": 1
+   }
+  },
+  {
+   "event": "response.output_item.added",
+   "data": {
+    "type": "response.output_item.added",
+    "item": {
+     "id": "fc_0aa1c22716369341016abb7cb7484887d08437035ba1be683e",
+     "type": "function_call",
+     "status": "in_progress",
+     "arguments": "",
+     "call_id": "call_MXimQoGf0UwQdYgsXD0hxORH",
+     "name": "get_weather"
+    },
+    "output_index": 0,
+    "sequence_number": 2
+   }
+  },
+  {
+   "event": "response.function_call_arguments.delta",
+   "data": {
+    "type": "response.function_call_arguments.delta",
+    "delta": "{\"city\":\"Rome\"}",
+    "item_id": "fc_0aa1c22716369341016abb7cb7484887d08437035ba1be683e",
+    "obfuscation": "d",
+    "output_index": 0,
+    "sequence_number": 3
+   }
+  },
+  {
+   "event": "response.function_call_arguments.done",
+   "data": {
+    "type": "response.function_call_arguments.done",
+    "arguments": "{\"city\":\"Rome\"}",
+    "item_id": "fc_0aa1c22716369341016abb7cb7484887d08437035ba1be683e",
+    "output_index": 0,
+    "sequence_number": 4
+   }
+  },
+  {
+   "event": "response.output_item.done",
+   "data": {
+    "type": "response.output_item.done",
+    "item": {
+     "id": "fc_0aa1c22716369341016abb7cb7484887d08437035ba1be683e",
+     "type": "function_call",
+     "status": "completed",
+     "arguments": "{\"city\":\"Rome\"}",
+     "call_id": "call_MXimQoGf0UwQdYgsXD0hxORH",
+     "name": "get_weather"
+    },
+    "output_index": 0,
+    "sequence_number": 5
+   }
+  },
+  {
+   "event": "response.output_item.added",
+   "data": {
+    "type": "response.output_item.added",
+    "item": {
+     "id": "fc_0aa1c22716369341016abb7cb7485c87d0899852373c46531a",
+     "type": "function_call",
+     "status": "in_progress",
+     "arguments": "",
+     "call_id": "call_lNvn3qlckGtdJJtpiQNOktc3",
+     "name": "get_weather"
+    },
+    "output_index": 1,
+    "sequence_number": 6
+   }
+  },
+  {
+   "event": "response.function_call_arguments.delta",
+   "data": {
+    "type": "response.function_call_arguments.delta",
+    "delta": "{\"city\":\"Oslo\"}",
+    "item_id": "fc_0aa1c22716369341016abb7cb7485c87d0899852373c46531a",
+    "obfuscation": "l",
+    "output_index": 1,
+    "sequence_number": 7
+   }
+  },
+  {
+   "event": "response.function_call_arguments.done",
+   "data": {
+    "type": "response.function_call_arguments.done",
+    "arguments": "{\"city\":\"Oslo\"}",
+    "item_id": "fc_0aa1c22716369341016abb7cb7485c87d0899852373c46531a",
+    "output_index": 1,
+    "sequence_number": 8
+   }
+  },
+  {
+   "event": "response.output_item.done",
+   "data": {
+    "type": "response.output_item.done",
+    "item": {
+     "id": "fc_0aa1c22716369341016abb7cb7485c87d0899852373c46531a",
+     "type": "function_call",
+     "status": "completed",
+     "arguments": "{\"city\":\"Oslo\"}",
+     "call_id": "call_lNvn3qlckGtdJJtpiQNOktc3",
+     "name": "get_weather"
+    },
+    "output_index": 1,
+    "sequence_number": 9
+   }
+  },
+  {
+   "event": "response.completed",
+   "data": {
+    "type": "response.completed",
+    "response": {
+     "id": "resp_0aa1c22716369341016abb7cb53ca887d0b052a186d1f3008f",
+     "object": "response",
+     "created_at": 1790672053,
+     "status": "completed",
+     "access_programs": {
+      "cyber": "daybreak_blue"
+     },
+     "background": false,
+     "completed_at": 1790672055,
+     "error": null,
+     "frequency_penalty": 0.0,
+     "incomplete_details": null,
+     "instructions": "You are a helpful assistant.",
+     "max_output_tokens": null,
+     "max_tool_calls": null,
+     "model": "gpt-6-luna",
+     "moderation": null,
+     "output": [],
+     "parallel_tool_calls": true,
+     "presence_penalty": 0.0,
+     "previous_response_id": null,
+     "prompt_cache_key": "50a51801-1eb0-4863-a5a2-7ba602e216f3",
+     "prompt_cache_retention": "24h",
+     "reasoning": {
+      "context": "all_turns",
+      "effort": "medium",
+      "mode": "standard",
+      "summary": null
+     },
+     "safety_identifier": "user-rXiDsBOp1pmK1NOLHjrdBf5J",
+     "service_tier": "default",
+     "store": false,
+     "temperature": 1.0,
+     "text": {
+      "format": {
+       "type": "text"
+      },
+      "verbosity": "medium"
+     },
+     "tool_choice": "auto",
+     "tool_usage": {
+      "image_gen": {
+       "input_tokens": 0,
+       "input_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "output_tokens": 0,
+       "output_tokens_details": {
+        "image_tokens": 0,
+        "text_tokens": 0
+       },
+       "total_tokens": 0
+      },
+      "web_search": {
+       "num_requests": 0
+      }
+     },
+     "tools": [
+      {
+       "type": "function",
+       "description": "Get weather",
+       "name": "get_weather",
+       "output_schema": null,
+       "parameters": {
+        "type": "object",
+        "properties": {
+         "city": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "city"
+        ]
+       },
+       "strict": false
+      }
+     ],
+     "top_logprobs": 0,
+     "top_p": 0.98,
+     "truncation": "disabled",
+     "usage": {
+      "attribution": {
+       "items": {
+        "msg_0aa1c22716369341016abb7cb5468087d08f772dcff9de001e": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "content": [
+          {
+           "cache_write_tokens": 0,
+           "cached_tokens": 0,
+           "input_tokens": 16,
+           "output_tokens": 0
+          }
+         ],
+         "input_tokens": 16,
+         "output_tokens": 0
+        },
+        "fc_0aa1c22716369341016abb7cb7484887d08437035ba1be683e": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "input_tokens": 2,
+         "output_tokens": 33
+        },
+        "fc_0aa1c22716369341016abb7cb7485c87d0899852373c46531a": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "input_tokens": 0,
+         "output_tokens": 16
+        }
+       },
+       "request_fields": {
+        "tools": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "input_tokens": 33,
+         "output_tokens": 0
+        },
+        "instructions": {
+         "cache_write_tokens": 0,
+         "cached_tokens": 0,
+         "input_tokens": 10,
+         "output_tokens": 0
+        }
+       }
+      },
+      "input_tokens": 61,
+      "input_tokens_details": {
+       "cache_write_tokens": 0,
+       "cached_tokens": 0
+      },
+      "output_tokens": 49,
+      "output_tokens_details": {
+       "reasoning_tokens": 0
+      },
+      "total_tokens": 110
+     },
+     "user": null,
+     "metadata": {}
+    },
+    "sequence_number": 10
+   }
+  }
+ ],
+ "text": "",
+ "usage": {
+  "attribution": {
+   "items": {
+    "msg_0aa1c22716369341016abb7cb5468087d08f772dcff9de001e": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "content": [
+      {
+       "cache_write_tokens": 0,
+       "cached_tokens": 0,
+       "input_tokens": 16,
+       "output_tokens": 0
+      }
+     ],
+     "input_tokens": 16,
+     "output_tokens": 0
+    },
+    "fc_0aa1c22716369341016abb7cb7484887d08437035ba1be683e": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "input_tokens": 2,
+     "output_tokens": 33
+    },
+    "fc_0aa1c22716369341016abb7cb7485c87d0899852373c46531a": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "input_tokens": 0,
+     "output_tokens": 16
+    }
+   },
+   "request_fields": {
+    "tools": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "input_tokens": 33,
+     "output_tokens": 0
+    },
+    "instructions": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0,
+     "input_tokens": 10,
+     "output_tokens": 0
+    }
+   }
+  },
+  "input_tokens": 61,
+  "input_tokens_details": {
+   "cache_write_tokens": 0,
+   "cached_tokens": 0
+  },
+  "output_tokens": 49,
+  "output_tokens_details": {
+   "reasoning_tokens": 0
+  },
+  "total_tokens": 110
+ }
+}
