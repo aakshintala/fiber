@@ -136,7 +136,7 @@ medium-specific surface may only add capability a client is free not to
 offer.**
 
 Fiber ships one closed, versioned set of interactions — approval, confirm,
-select, multi-select, text input, form and status — carried on the same
+select, multi-select, text input and form — carried on the same
 request events the loop uses to ask a human anything, and answerable by any
 connected client including a headless one. An extension raises the same
 interactions, and may also send status and widget lines as data for a client

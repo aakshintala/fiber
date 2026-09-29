@@ -176,8 +176,8 @@ A handoff happens inside a turn, as actions. The log is append-only
 lines and never rewrites earlier ones. The kinds are `docs/events.md`
 ("Handoff").
 
-- `handoff_started { trigger }`, where `trigger` is `auto`, `person`,
-  `overflow` or `tool`. It is durable and written before the note request, so a
+- `handoff_started { trigger }`, where `trigger` is `auto`, `person` or
+  `overflow`. It is durable and written before the note request, so a
   crash during a handoff can be read from the log. A tool-started handoff makes
   no note request and writes no `handoff_started`.
 - The note request is an ordinary assistant message action with its own

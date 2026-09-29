@@ -302,8 +302,10 @@ Durable. A steering message a running turn received at a step boundary.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `content` | content parts | yes | the message as the turn received it |
-| `source`, `extension`, `command_id` | | | "Where a message came from"; `command_id` names the `steer` command |
-| `changed_by` | `changed_by` | no | |
+| `source` | string | yes | as in "Where a message came from" |
+| `extension` | string | no | as in "Where a message came from" |
+| `command_id` | string | yes | the id of the `steer` command that sent it |
+| `changed_by` | `changed_by` | no | when a hook rewrote the message |
 
 #### `steering_queue`
 
@@ -450,7 +452,9 @@ the provider reports as in progress.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `effects`, `reversible`, `paths` | | | "Declared effects" |
+| `effects` | array of strings | yes | as in "Declared effects" |
+| `reversible` | boolean | yes | as in "Declared effects" |
+| `paths` | array of strings | no | as in "Declared effects" |
 | `arguments` | object | no | the arguments that ran, when a `before_tool` hook rewrote them |
 | `changed_by` | `changed_by` | no | with `arguments` |
 
@@ -511,7 +515,9 @@ Durable. The envelope's `action_id` is the tool call.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the id a `reply` names |
-| `effects`, `reversible`, `paths` | | | the call's "Declared effects" |
+| `effects` | array of strings | yes | as in "Declared effects" |
+| `reversible` | boolean | yes | as in "Declared effects" |
+| `paths` | array of strings | no | as in "Declared effects" |
 | `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3), `readonly` (4) or `review` (9); a closed set |
 
 #### `permission_resolved`
@@ -570,7 +576,16 @@ Durable. The envelope carries no `action_id`; the payload names the calls.
 
 #### `interaction_resolved`
 
-Durable. A declined interaction carries `declined` and no answer keys.
+Durable. It carries exactly one answer: `declined: true`, or the answer keys
+for its kind, and no others.
+
+| Kind | Answer keys |
+|---|---|
+| `confirm` | `confirmed` |
+| `select` | `labels`, one label |
+| `multi_select` | `labels`, possibly empty |
+| `text_input` | `text` |
+| `form` | `answers`, and `note` when the person wrote one |
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -741,7 +756,7 @@ request and writes none.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `trigger` | string | yes | `auto`, `person`, `overflow` or `tool`; a closed set |
+| `trigger` | string | yes | `auto`, `person` or `overflow`; a closed set |
 
 #### `handoff_completed`
 
@@ -837,10 +852,19 @@ Durable.
 | `extension` | string | yes | the extension's name |
 | `key` | string | yes | the state key removed |
 
+An unset carries no `on_fork`. The key keeps the rule of its last
+`extension_state_set`: when that rule reads the key after the unset, the new
+session gets no key.
+
 #### `extension_ui`
 
-Ephemeral. Carries either `status` or `widget` with `lines`. The latest of each
-wins, and a client that attaches is sent the latest of each.
+Ephemeral. One line is one of two variants: `extension` with `status`, or
+`extension` with `widget` and `lines`; never both. The latest status, and the
+latest of each widget, wins, and a client that attaches is sent them.
+
+Status lines and widgets are data for a client to show or ignore, not
+interactions (`docs/architecture.md`, "Asking a human"): they ask nothing and
+take no `reply`.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -999,7 +1023,13 @@ Every driver command is answered with exactly one of these, echoing its id
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `command_id` | string | yes | the command's id |
-| `result` | any JSON | no | what the command answers with: the new session's id for `rewind`, the tool list for `tools`, the output for a `shell` sent with `send` false |
+| `result` | object | no | on `rewind`, `tools` and a `shell` sent with `send` false, as below; absent for every other command |
+
+| Command | `result` keys |
+|---|---|
+| `rewind` | `new_session_id` (string), the session that continues this one |
+| `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
+| `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
 
 #### `command_rejected`
 
