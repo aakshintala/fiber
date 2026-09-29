@@ -129,14 +129,12 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    failed install never leaves half a binary
 5. installs to `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset, and
    warns without failing when that directory is not on `PATH`
-6. runs `fiber install` for the five first-party provider extensions
 
 `FIBER_VERSION=0.3.0` installs that version instead of the newest. Rolling
 back is installing an older version this way.
 
-If step 6 fails, such as when `git` is missing, the binary stays installed and
-`install.sh` exits non-zero with `fiber install`'s error. A later
-`fiber install` or the model picker installs the providers
+`install.sh` installs no provider. The model picker installs one when a person
+chooses it, and `fiber install <name>` installs one on a headless machine
 (`docs/extensions.md`, "A fresh install").
 
 There is no Homebrew formula and no `cargo install`.

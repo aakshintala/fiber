@@ -118,7 +118,7 @@ how a test proves the prompt-cache rule that "two requests built from the same
 inputs are the same bytes" (`docs/prompt-cache.md`), across turns, resume and
 fork.
 
-The five first-party provider extensions are tested in Fiber's CI, loaded into
+Every first-party provider extension is tested in Fiber's CI, loaded into
 the built binary by local path: against their vendor's recorded streams and
 against scripted streams. A protocol change that breaks a shipped provider
 fails the pull request that caused it.

@@ -61,9 +61,8 @@ protocol code. It needed four capabilities a Lua extension lacked:
   first time the extension is invoked, not at startup"
 
 A process extension now has all four (`docs/extensions.md`), so this is
-possible. It is still not how Fiber does it: MCP's OAuth would be native
-anyway, because `docs/model-routing.md` says "OAuth flows are native, like
-protocols", and every session would run the extension as one more process.
+possible. It is still not how Fiber does it: every session would run the
+extension as one more process, for a protocol every MCP server shares.
 
 No MCP client at all. MCP is the industry standard and the owner uses many MCP
 servers at work. Leaving it out invites someone to build an adapter, which is
