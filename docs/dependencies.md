@@ -237,6 +237,7 @@ dependency.
 | cargo-mutants | tool | the mutation check on every pull request |
 | cargo-deny | tool | licences, advisories and crate sources |
 | cargo-about | tool | the release's third-party notices file |
+| xtask | tool | the workspace's own CI helper, `cargo xtask`: selection, the `CI` verdict and the gate's checks (`docs/ci.md`). It uses serde_json, and no Fiber crate depends on it |
 
 ## Supply chain
 
