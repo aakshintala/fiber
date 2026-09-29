@@ -22,6 +22,6 @@
   "cf-cache-status": "[redacted]",
   "CF-RAY": "[redacted]"
  },
- "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: 50000000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001\"},\"request_id\":\"req_011CfXTrgEJJLvrnXnun8439\"}",
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: 50000000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001\"},\"request_id\":\"[redacted]\"}",
  "seconds": 0.389
 }

@@ -16,7 +16,8 @@ pe.SECRET_HEADERS |= {'anthropic-organization-id', 'openai-organization', 'opena
                       'cf-cache-status', 'server-timing', 'x-envoy-upstream-service-time', 'x-oai-request-id', 'x-openai-proxy-wasm', 'anthropic-workspace-id', 'x-codex-turn-state', 'report-to', 'nel'}
 import re
 def scrub(text):
-    return re.sub(r'org: [0-9a-f-]{36}', 'org: [redacted]', text)
+    text = re.sub(r'org: [0-9a-f-]{36}', 'org: [redacted]', text)
+    return re.sub(r'("request_id\\?":\\?")[^"\\]*', r'\1[redacted]', text)
 def scrub_file(p):
     d = json.load(open(p)); t = json.dumps(d, indent=1)
     def fix(o):
@@ -165,7 +166,12 @@ def burst(name, n, conc, method, url, hdrs, body, stop_on=429):
     if first: save(name.split('.')[0], name.split('.', 1)[1] + '-first-429', method, url, first)
     return res
 
+def muse_repeat():
+    _, m, u, h, b = next(x for x in muse(key('muse')) if x[0] == 'max-tokens-huge')
+    for i in (2, 3): save('muse', f'max-tokens-huge-repeat{i}', m, u, send(m, u, h, b))
+
 if __name__ == '__main__':
+    if sys.argv[1] == 'muse-repeat': muse_repeat(); sys.exit()
     if sys.argv[1] == 'scrub': [scrub_file(os.path.join(RAW, f)) for f in os.listdir(RAW)]
     elif sys.argv[1] == 'errors': errors(sys.argv[2:])
     elif sys.argv[1] == 'burst':

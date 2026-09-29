@@ -314,8 +314,8 @@ the header says.
 Among the responses probed, only Anthropic sent `x-should-retry`: `false` on its
 400 and 404 responses, `true` on a 429. Anthropic's 429 also carried
 `retry-after` in seconds. muse sent `retry-after: 60` on a 429 for an oversized
-`max_tokens`, a request that fails the same way every time, so a client that
-honours the header retries it in a loop. Among the responses OpenAI, Gemini,
+`max_tokens`; three sends of it returned the same 429, so a client that honours
+the header retries it in a loop. Among the responses OpenAI, Gemini,
 ChatGPT/codex and OpenRouter returned to cheap failing requests, none carried
 `x-should-retry`, `retry-after-ms` or `retry-after`, and none of those vendors
 reached a 429 (`research/retry-signals/`). No vendor sent `retry-after-ms`.
