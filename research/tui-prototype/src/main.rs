@@ -508,7 +508,6 @@ struct Fold {
     effort: String,
     thinking: String,
     branch: String,
-    dirty: bool,
     tools: usize,
     mcp_down: Vec<String>,
     ctx: u64,
@@ -658,7 +657,8 @@ impl Fold {
         match kind {
             "permission_requested" | "interaction_requested" => {
                 let rid = p["request_id"].as_str().unwrap_or("").to_string();
-                let caid = p["action_id"].as_str().unwrap_or(&aid).to_string();
+                // a tool call is the approval's envelope action; a form names its calls in `action_ids`
+                let caid = if kind == "permission_requested" { aid.clone() } else { p["action_ids"][0].as_str().unwrap_or("").to_string() };
                 let what = if kind == "permission_requested" {
                     let (tool, args) = self.call_of(sid, &caid);
                     let strs = |k: &str| p[k].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
@@ -698,7 +698,6 @@ impl Fold {
             "opening_message" => {
                 let g = &p["environment"]["git"];
                 self.branch = g["branch"].as_str().unwrap_or("").into();
-                self.dirty = g["dirty"].as_bool().unwrap_or(false);
                 self.instr_chars = p["instruction_files"].as_array().into_iter().flatten().map(|i| i["content"].as_str().map_or(0, str::len)).sum();
                 self.skills_chars = p["skills"].as_array().filter(|a| !a.is_empty()).map_or(0, |a| Value::from(a.clone()).to_string().len());
             }
@@ -710,7 +709,7 @@ impl Fold {
                 if let Some(t) = p["tools"].as_array() {
                     self.tools = t.len();
                     // deferred tools are not in context until loaded
-                    self.tooldef_chars = t.iter().filter(|d| d["deferred"] != true).map(|d| d.to_string().len()).sum();
+                    self.tooldef_chars = t.iter().filter(|d| d["deferred"] != true).map(|d| d["definition"].to_string().len()).sum();
                 }
                 if let Some(sp) = p["system_prompt"].as_str() {
                     self.sys_chars = sp.len();
@@ -718,7 +717,7 @@ impl Fold {
             }
             "mode_changed" => self.mode = p["after"].as_str().unwrap_or("").into(),
             "turn_started" => {
-                let text = p["input"].as_array().and_then(|a| a.iter().find_map(|i| i["text"].as_str())).unwrap_or("");
+                let text = p["input"].as_array().and_then(|a| a.iter().find(|i| i["type"] == "message")).and_then(|i| i["content"][0]["text"].as_str()).unwrap_or("");
                 self.turns.push(Turn { prompt: text.into(), ts, ..Default::default() });
                 self.running = true;
                 self.turn_start = ts;
@@ -736,8 +735,7 @@ impl Fold {
             }
             "interaction_resolved" => {
                 let Some((caid, fields)) = self.forms.get(p["request_id"].as_str().unwrap_or("")).cloned() else { return };
-                let a = &p["answer"];
-                let declined = a == "declined" || a["declined"].as_bool() == Some(true) || p["declined"].as_bool() == Some(true);
+                let declined = p["declined"].as_bool() == Some(true);
                 let rows = if declined {
                     vec![]
                 } else {
@@ -746,8 +744,8 @@ impl Fold {
                         .enumerate()
                         .map(|(k, f)| {
                             let h = f["header"].as_str().unwrap_or("").to_string();
-                            let x = &a["answers"][k];
-                            if x == "skipped" || x["skipped"].as_bool() == Some(true) || x.is_null() {
+                            let x = &p["answers"][k];
+                            if x["skipped"].as_bool() == Some(true) || x.is_null() {
                                 return (h, "skipped".into(), true);
                             }
                             let mut v: Vec<String> = x["labels"].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
@@ -758,7 +756,7 @@ impl Fold {
                         })
                         .collect()
                 };
-                let note = a["note"].as_str().map(str::to_string);
+                let note = p["note"].as_str().map(str::to_string);
                 if let Some(&(ti, bi, ii)) = self.at.get(&caid) {
                     if let Item::C(c) = &mut Self::group_at(&mut self.turns, ti, bi).items[ii] {
                         c.asked = Some(if declined { "declined" } else { "answered" });
@@ -900,8 +898,8 @@ impl Fold {
                     h.after = Some(ctx);
                     self.ho = None;
                 }
-                if let Some(a) = p["action_id"].as_str() {
-                    if let Some(d) = self.text_dur.get(a) {
+                if !aid.is_empty() {
+                    if let Some(d) = self.text_dur.get(&aid) {
                         self.text_ms += d;
                         self.text_out += o;
                     }
@@ -934,10 +932,10 @@ impl Fold {
             }
             "steering_applied" => {
                 if let Some(t) = self.turn() {
-                    t.blocks.push(Block::Steer(p["text"].as_str().unwrap_or("").into(), ts));
+                    t.blocks.push(Block::Steer(p["content"][0]["text"].as_str().unwrap_or("").into(), ts));
                 }
             }
-            "steering_queue" => self.queue = p["messages"].as_array().into_iter().flatten().map(|m| (m["id"].as_str().unwrap_or("").to_string(), m["text"].as_str().unwrap_or("").to_string())).collect(),
+            "steering_queue" => self.queue = p["messages"].as_array().into_iter().flatten().map(|m| (m["command_id"].as_str().unwrap_or("").to_string(), m["content"][0]["text"].as_str().unwrap_or("").to_string())).collect(),
             "notice" => self.notices.push((p["code"].as_str().unwrap_or("").into(), p["message"].as_str().unwrap_or("").into(), false)),
             "mcp_server_failed" => {
                 self.mcp_down.push(p["server"].as_str().unwrap_or("").into());
@@ -958,7 +956,7 @@ impl Fold {
             }),
             "delegate_started" => {
                 if let Some(j) = self.jobs.iter_mut().find(|j| j.id == p["job_id"].as_str().unwrap_or("")) {
-                    j.sid = p["session_id"].as_str().map(str::to_string);
+                    j.sid = p["delegate_session_id"].as_str().map(str::to_string);
                 }
             }
             "job_completed" => {
@@ -1378,7 +1376,7 @@ fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>)
     c.push(Card {
         title: vec![sp(f.cwd.clone(), bold()), t(), sp(mode.clone(), fg(ORANGE))],
         lines: vec![
-            vec![sp("git ", dim()), sp(f.branch.clone(), fg(PURPLE)), sp(if f.dirty { "*" } else { "" }, fg(ORANGE))],
+            vec![sp("git ", dim()), sp(f.branch.clone(), fg(PURPLE))],
             vec![sp(f.model.clone(), fg(BLUE)), t(), sp(f.effort.clone(), fg(ORANGE)), sp(if f.thinking.is_empty() { "" } else { " ∴" }, dim())],
             [bar(f.ctx as f64 / HANDOFF_AT as f64, 17, CYAN), vec![sp("│", fg(ORANGE)), t(), sp(k(f.ctx), Style::new())]].concat(),
             vec![sp(format!("handoff {}", k(HANDOFF_AT)), dim()), t(), sp(format!("{}% of {}M", f.ctx * 100 / WINDOW, WINDOW / 1_000_000), dim())],
@@ -1389,7 +1387,7 @@ fn cards(f: &Fold, now: i64, keys: &str) -> (Vec<Card>, Vec<Vec<Span<'static>>>)
         ],
         cap: 0,
     });
-    short.push(vec![sp(f.cwd.clone(), Style::new()), sp(" git ", dim()), sp(f.branch.clone(), fg(PURPLE)), sp(if f.dirty { "*" } else { "" }, fg(ORANGE))]);
+    short.push(vec![sp(f.cwd.clone(), Style::new()), sp(" git ", dim()), sp(f.branch.clone(), fg(PURPLE))]);
     short.push(vec![sp(f.model.clone(), fg(BLUE)), sp(format!(" {}", f.effort), fg(ORANGE))]);
     short.push(vec![sp(mode, fg(ORANGE))]);
     short.push([vec![sp("ctx ", dim())], bar(f.ctx as f64 / HANDOFF_AT as f64, 8, CYAN), vec![sp(format!(" {}", k(f.ctx)), Style::new())]].concat());
@@ -2133,14 +2131,14 @@ fn interrupt(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i6
     send(ui, cmds, json!({ "command": "cancel" }));
     let me = f.session_id.clone();
     for a in f.running_calls() {
-        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "cancelled" }));
+        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "cancelled", "content": [] }));
     }
     synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "interrupted" }));
 }
 fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, choice: usize) {
     let Some((_, p)) = ui.top(f) else { return };
     let Asking::Approval { tool, args, .. } = &p.what else { return };
-    let (rid, sid, prefix) = (p.rid.clone(), p.sid.clone(), rule_prefix(tool, &primary(args)));
+    let (rid, sid, aid, prefix) = (p.rid.clone(), p.sid.clone(), p.aid.clone(), rule_prefix(tool, &primary(args)));
     let mut c = json!({ "command": "reply", "request_id": rid, "decision": if choice == 2 { "deny" } else { "allow" } });
     if sid != f.session_id {
         c["session_id"] = json!(sid);
@@ -2153,7 +2151,7 @@ fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64,
     }
     let decision = c["decision"].clone();
     send(ui, cmds, c);
-    synth(f, "permission_resolved", &sid, None, ts, json!({ "request_id": rid, "decision": decision, "by": "person" }));
+    synth(f, "permission_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "decision": decision, "decided_by": "person" }));
     ui.feedback.clear();
     ui.choice = 0;
     ui.shown = 0;
@@ -2172,7 +2170,7 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
             let h = q["header"].as_str().unwrap_or("");
             if sel.is_empty() && txt.is_empty() {
                 lines.push(format!("{h}: skipped"));
-                return json!("skipped");
+                return json!({ "skipped": true });
             }
             let mut a = json!({ "labels": sel });
             let mut l = format!("{h}: {}", sel.join(", "));
@@ -2190,7 +2188,10 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
         lines.push(format!("note: {}", ui.form.note));
     }
     send(ui, cmds, json!({ "command": "reply", "request_id": rid, "answer": ans }));
-    synth(f, "interaction_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "answer": ans, "by": "person" }));
+    let mut res = ans.clone();
+    res["request_id"] = json!(rid);
+    res["by"] = json!("person");
+    synth(f, "interaction_resolved", &sid, None, ts, res);
     synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }));
     ui.shown = 0;
     ui.answered = true;
@@ -2200,7 +2201,7 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
 fn finish_turn(f: &mut Fold, ts: i64) {
     let me = f.session_id.clone();
     for a in f.running_calls() {
-        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "completed" }));
+        synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "completed", "content": [] }));
     }
     let aid = format!("a_end_{}", f.turns.len());
     synth(f, "assistant_message_started", &me, Some(&aid), ts, json!({}));
@@ -2213,7 +2214,7 @@ fn decline_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts:
     let Some((_, p)) = ui.top(f) else { return };
     let (rid, aid, sid) = (p.rid.clone(), p.aid.clone(), p.sid.clone());
     send(ui, cmds, json!({ "command": "reply", "request_id": rid, "answer": { "declined": true } }));
-    synth(f, "interaction_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "answer": { "declined": true }, "by": "person" }));
+    synth(f, "interaction_resolved", &sid, None, ts, json!({ "request_id": rid, "declined": true, "by": "person" }));
     synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": "declined" }] }));
     interrupt(f, ui, cmds, ts);
     ui.shown = 0;
@@ -2235,7 +2236,7 @@ fn form_choose(ui: &mut Ui, fields: &[Value]) {
     }
 }
 fn queue_msgs(q: &[(String, String)]) -> Value {
-    json!({ "messages": q.iter().map(|(id, t)| json!({ "id": id, "text": t, "source": "person" })).collect::<Vec<_>>() })
+    json!({ "messages": q.iter().map(|(id, t)| json!({ "command_id": id, "content": [{ "type": "text", "text": t }], "source": "driver" })).collect::<Vec<_>>() })
 }
 fn queue_pick(f: &Fold, ui: &mut Ui, i: usize) {
     if i >= f.queue.len() {
@@ -2457,7 +2458,7 @@ fn settle(mut ev: Vec<Value>) -> Vec<Value> {
     let resolved: HashSet<String> = ev.iter().filter(|e| kind(e).ends_with("_resolved")).filter_map(|e| e["payload"]["request_id"].as_str().map(str::to_string)).collect();
     let done: HashSet<String> = ev.iter().filter(|e| kind(e) == "tool_call_completed").filter_map(|e| e["action_id"].as_str().map(str::to_string)).collect();
     let unasked = |e: &Value| asks(e) && !resolved.contains(e["payload"]["request_id"].as_str().unwrap_or(""));
-    let asked: HashSet<String> = ev.iter().filter(|e| unasked(e)).filter_map(|e| e["payload"]["action_id"].as_str().or(e["action_id"].as_str()).map(str::to_string)).collect();
+    let asked: HashSet<String> = ev.iter().filter(|e| unasked(e)).filter_map(|e| e["action_id"].as_str().or(e["payload"]["action_ids"][0].as_str()).map(str::to_string)).collect();
     let mine = |e: &Value, k: &str| kind(e) == k && e["session_id"] == me.as_str();
     let open = ev.iter().rposition(|e| mine(e, "turn_started")).filter(|&s| !ev[s..].iter().any(|e| mine(e, "turn_completed")));
     let ts = ev.last().map_or(0, |e| e["ts"].as_i64().unwrap_or(0));
@@ -3759,7 +3760,7 @@ mod tests {
         let e = |kind: &str, aid: &str, payload: Value| json!({ "kind": kind, "session_id": "s", "ts": 1000, "action_id": aid, "payload": payload });
         let usage = |n: u64| e("usage_recorded", "", json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } }));
         let mut ev = vec![
-            e("turn_started", "", json!({ "input": [{ "type": "text", "text": "go" }] })),
+            e("turn_started", "", json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] })),
             e("assistant_message_started", "a1", json!({})),
             e("assistant_message_completed", "a1", json!({ "text": "before the handoff" })),
             usage(402_000),

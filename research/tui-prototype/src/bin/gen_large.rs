@@ -189,8 +189,9 @@ impl G {
 
     fn turn(&mut self, text: &str) {
         let t = self.id("t");
+        let cid = format!("c_{}", &t[2..]);
         self.turn = Some(t);
-        self.m("turn_started", 1_500, None, json!({ "input": [{ "type": "text", "text": text }] }));
+        self.m("turn_started", 1_500, None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": text }], "source": "driver", "command_id": cid }] }));
     }
     fn end_turn(&mut self) {
         self.m("turn_completed", 400, None, json!({ "outcome": "completed" }));
@@ -204,9 +205,8 @@ impl G {
             "model": "anthropic/claude-opus-5-5",
             "tokens": { "input": 1_400, "cache_read": self.ctx, "cache_write": { "1h": 2_600 }, "output": out },
             "cost": ((0.02 + self.ctx as f64 * 3e-7) * 1e4).round() / 1e4,
-            "action_id": aid,
         });
-        self.m("usage_recorded", 50, None, p);
+        self.m("usage_recorded", 50, aid, p);
     }
     fn say(&mut self, with_reasoning: bool, chars: usize) {
         let a = self.id("a");
@@ -313,23 +313,23 @@ impl G {
     }
 
     fn preamble(&mut self) {
-        self.m("fiber_started", 0, None, json!({ "version": "0.0.1", "schema_version": 1, "resumed": false }));
-        self.m("session_started", 5, None, json!({ "created_at": self.ts, "workspace": "~/work/fiber" }));
+        self.m("fiber_started", 0, None, json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }));
+        self.m("session_started", 5, None, json!({ "workspace": "~/work/fiber" }));
         self.m("opening_message", 5, None, json!({
-            "environment": { "date": "2026-09-28", "platform": "macos", "shell": "zsh", "workspace": "~/work/fiber",
-                "git": { "branch": "large-session", "dirty": true }, "session_log": format!("~/.fiber/projects/fiber/sessions/{MAIN}/events.jsonl") },
+            "environment": { "date": "2026-09-28", "os": "macos", "arch": "aarch64", "shell": "zsh", "workspace": "~/work/fiber",
+                "git": { "branch": "large-session" }, "session_log": format!("~/.fiber/projects/fiber/sessions/{MAIN}/events.jsonl") },
             "instruction_files": [{ "path": "AGENTS.md", "content": "…" }],
             "skills": [],
         }));
         let tools: Vec<Value> = ["read", "write", "edit", "shell", "jobs", "delegate_spawn", "delegate_fork", "ask_user", "web_fetch"]
             .iter()
-            .map(|n| json!({ "name": n, "deferred": false }))
+            .map(|n| json!({ "name": n, "deferred": false, "definition": { "name": n, "input_schema": { "type": "object" } } }))
             .collect();
         self.m("preamble_built", 5, None, json!({
-            "reason": "start", "model": "anthropic/claude-opus-5-5", "effort": "high", "thinking": "adaptive",
+            "reason": "start", "model": "anthropic/claude-opus-5-5", "context_window": 1_000_000, "trigger_at": 400_000, "effort": "high", "thinking": "adaptive",
             "tool_choice": "auto", "cache_lifetime": "1h", "system_prompt": "…", "tools": tools,
         }));
-        self.m("mode_changed", 3_000, None, json!({ "before": "ask", "after": "auto", "by": "mode" }));
+        self.m("mode_changed", 3_000, None, json!({ "before": "ask", "after": "auto", "by": "command" }));
     }
 }
 

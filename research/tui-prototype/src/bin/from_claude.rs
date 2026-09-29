@@ -182,27 +182,26 @@ fn flush(o: &mut Out, m: &mut Option<Msg>, calls: &mut Calls) {
         calls.insert(pid.clone(), (a, eff, json!(paths), changes));
     }
     o.ev("assistant_message_completed", m.ts, Some(&msg), json!({ "text": m.text, "outcome": "completed" }));
-    o.ev("usage_recorded", m.ts, None, json!({
+    o.ev("usage_recorded", m.ts, Some(&msg), json!({
         "generation_id": format!("gen_{:04}", o.n),
         "model": MODEL,
         "tokens": { "input": input, "cache_read": cr, "cache_write": { "1h": cc }, "output": out },
         "cost": 0.0,
-        "action_id": msg,
     }));
 }
 
 fn header(o: &mut Out, t0: i64) {
     o.ts = t0;
-    o.ev("fiber_started", t0, None, json!({ "version": "0.0.1", "schema_version": 1, "resumed": false }));
-    o.ev("session_started", t0, None, json!({ "created_at": t0, "workspace": "~/work/fiber" }));
+    o.ev("fiber_started", t0, None, json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }));
+    o.ev("session_started", t0, None, json!({ "workspace": "~/work/fiber" }));
     o.ev("opening_message", t0, None, json!({
-        "environment": { "date": "2026-09-28", "platform": "macos", "shell": "zsh", "workspace": "~/work/fiber",
-            "git": { "branch": "main", "dirty": true }, "session_log": format!("~/.fiber/projects/fiber/sessions/{SID}/events.jsonl") },
+        "environment": { "date": "2026-09-28", "os": "macos", "arch": "aarch64", "shell": "zsh", "workspace": "~/work/fiber",
+            "git": { "branch": "main" }, "session_log": format!("~/.fiber/projects/fiber/sessions/{SID}/events.jsonl") },
         "instruction_files": [{ "path": "AGENTS.md", "content": "…" }], "skills": [] }));
-    let tools: Vec<Value> = ["read", "write", "edit", "shell", "search", "delegate", "ask_user", "web_fetch"].iter().map(|n| json!({ "name": n, "deferred": false })).collect();
-    o.ev("preamble_built", t0, None, json!({ "reason": "start", "model": MODEL, "effort": "high", "thinking": "adaptive",
+    let tools: Vec<Value> = ["read", "write", "edit", "shell", "search", "delegate", "ask_user", "web_fetch"].iter().map(|n| json!({ "name": n, "deferred": false, "definition": { "name": n, "input_schema": { "type": "object" } } })).collect();
+    o.ev("preamble_built", t0, None, json!({ "reason": "start", "model": MODEL, "context_window": 1_000_000, "trigger_at": HANDOFF_AT, "effort": "high", "thinking": "adaptive",
         "tool_choice": "auto", "cache_lifetime": "1h", "system_prompt": "…", "tools": tools }));
-    o.ev("mode_changed", t0, None, json!({ "before": "ask", "after": "auto", "by": "mode" }));
+    o.ev("mode_changed", t0, None, json!({ "before": "ask", "after": "auto", "by": "command" }));
 }
 
 fn main() {
@@ -308,8 +307,9 @@ fn convert(src: &str, max: usize) -> Out {
             break;
         }
         let t = o.id("t");
+        let cid = format!("c_{}", &t[2..]);
         o.turn = Some(t);
-        o.ev("turn_started", ts, None, json!({ "input": [{ "type": "text", "text": pt }] }));
+        o.ev("turn_started", ts, None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": pt }], "source": "driver", "command_id": cid }] }));
     }
     flush(&mut o, &mut cur, &mut calls);
     let end = o.ts;
