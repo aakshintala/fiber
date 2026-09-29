@@ -567,6 +567,10 @@ process extension is restarted. Both are handed their folded state again.
   interrupt: a cheap instruction hook normally, escalating to fire on every
   instruction once the deadline passes, so an extension cannot swallow the
   deadline with `pcall`. Measured in `research/extension-runtime/pass1/`. A
+  Lua hook belongs to one coroutine, not to the VM: Fiber arms it on every
+  coroutine a callback runs on and on each one the extension creates with
+  `coroutine.wrap`, or a loop inside a coroutine is never stopped
+  (`research/extension-runtime/linux-containment/`). A
   process extension is not interrupted: Fiber stops waiting, and its late
   reply is dropped.
 - **It allocates without bound.** A per-extension memory cap turns this into an

@@ -1,0 +1,310 @@
+PROFILE debug os=macos arch=aarch64
+CASE panic_pcall profile=debug exit_code=None signal=Some(6) timed_out=false
+  out: BEFORE
+  err: 
+  err: thread 'main' (106100064) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_bare profile=debug exit_code=None signal=Some(6) timed_out=false
+  out: BEFORE
+  err: 
+  err: thread 'main' (106100067) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_coroutine profile=debug exit_code=None signal=Some(6) timed_out=false
+  out: BEFORE
+  err: 
+  err: thread 'main' (106100069) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_lock profile=debug exit_code=None signal=Some(6) timed_out=false
+  err: 
+  err: thread 'main' (106100071) panicked at src/main.rs:125:17:
+  err: panic while holding lock
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE hook_naive_pcall profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_naive_pcall script_returned=Integer(50) after_ms=110
+CASE hook_staged_pcall profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_staged_pcall script_error after_ms=102 err=runtime error: deadline exceeded
+CASE hook_coro_created_in_script profile=debug exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_created_before_arm profile=debug exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_yield_resume profile=debug exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_set_hook profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_set_hook script_returned=Integer(50) after_ms=103
+CASE hook_staged_in_coro_retry profile=debug exit_code=None signal=Some(9) timed_out=true
+CASE hook_staged_rust_thread_resume profile=debug exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_staged profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_staged script_error after_ms=101 err=runtime error: deadline exceeded
+CASE hook_coro_replaced_wrap profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_coro_replaced_wrap script_error after_ms=107 err=runtime error: deadline exceeded
+CASE oom_plain profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_plain lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_plain used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=23
+CASE oom_huge_string profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_huge_string lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large
+  out: RESULT oom_huge_string used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000) ms=0
+CASE oom_in_pcall_retry profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_pcall_retry script_returned=String("not enough memory")
+  out: RESULT oom_in_pcall_retry used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=475
+CASE oom_in_coroutine profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_coroutine lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_in_coroutine used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=24
+CASE oom_rust_create_string profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_string Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_string vm_after=Ok(2)
+CASE oom_rust_create_table profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_table Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_table vm_after=Ok(2)
+CASE oom_reuse_after profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_reuse_after lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_reuse_after used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=22
+  out: RESULT oom_reuse_after round=0 err_again=true
+  out: RESULT oom_reuse_after round=1 err_again=true
+  out: RESULT oom_reuse_after round=2 err_again=true
+CASE oom_in_hook profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_hook err=Err("memory error: not enough memory")
+  out: RESULT oom_in_hook vm_after=Ok(2)
+CASE lock_lua_error_in_callback profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_in_callback pcall=Ok((false, "runtime error: src/main.rs:311:1: lua error under lock\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:311:1: in function <src/main.rs:311:1>\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\nstack traceback:\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\n")) poisoned=false try_lock_ok=true contents=Some([1])
+CASE lock_deadline_in_call profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_deadline_in_call err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
+CASE lock_hook_holds_lock profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_hook_holds_lock err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+CASE lock_lua_error_longjmp_frames profile=debug exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_longjmp_frames pcall=Ok((false, "runtime error: src/main.rs:360:1: deep\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t(...tail calls...)\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\nstack traceback:\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\n")) poisoned=false try_lock_ok=true
+PROFILE release os=macos arch=aarch64
+CASE panic_pcall profile=release exit_code=None signal=Some(6) timed_out=false
+  out: BEFORE
+  err: 
+  err: thread 'main' (106103363) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_bare profile=release exit_code=None signal=Some(6) timed_out=false
+  out: BEFORE
+  err: 
+  err: thread 'main' (106103366) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_coroutine profile=release exit_code=None signal=Some(6) timed_out=false
+  out: BEFORE
+  err: 
+  err: thread 'main' (106103368) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_lock profile=release exit_code=None signal=Some(6) timed_out=false
+  err: 
+  err: thread 'main' (106103370) panicked at src/main.rs:125:17:
+  err: panic while holding lock
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE hook_naive_pcall profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_naive_pcall script_returned=Integer(50) after_ms=101
+CASE hook_staged_pcall profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_staged_pcall script_error after_ms=110 err=runtime error: deadline exceeded
+CASE hook_coro_created_in_script profile=release exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_created_before_arm profile=release exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_yield_resume profile=release exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_set_hook profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_set_hook script_returned=Integer(50) after_ms=102
+CASE hook_staged_in_coro_retry profile=release exit_code=None signal=Some(9) timed_out=true
+CASE hook_staged_rust_thread_resume profile=release exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_staged profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_staged script_error after_ms=106 err=runtime error: deadline exceeded
+CASE hook_coro_replaced_wrap profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_coro_replaced_wrap script_error after_ms=108 err=runtime error: deadline exceeded
+CASE oom_plain profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_plain lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_plain used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=14
+CASE oom_huge_string profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_huge_string lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large
+  out: RESULT oom_huge_string used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000) ms=0
+CASE oom_in_pcall_retry profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_pcall_retry script_returned=String("not enough memory")
+  out: RESULT oom_in_pcall_retry used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=256
+CASE oom_in_coroutine profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_coroutine lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_in_coroutine used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=14
+CASE oom_rust_create_string profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_string Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_string vm_after=Ok(2)
+CASE oom_rust_create_table profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_table Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_table vm_after=Ok(2)
+CASE oom_reuse_after profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_reuse_after lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_reuse_after used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=12
+  out: RESULT oom_reuse_after round=0 err_again=true
+  out: RESULT oom_reuse_after round=1 err_again=true
+  out: RESULT oom_reuse_after round=2 err_again=true
+CASE oom_in_hook profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_hook err=Err("memory error: not enough memory")
+  out: RESULT oom_in_hook vm_after=Ok(2)
+CASE lock_lua_error_in_callback profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_in_callback pcall=Ok((false, "runtime error: src/main.rs:311:1: lua error under lock\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:311:1: in function <src/main.rs:311:1>\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\nstack traceback:\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\n")) poisoned=false try_lock_ok=true contents=Some([1])
+CASE lock_deadline_in_call profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_deadline_in_call err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
+CASE lock_hook_holds_lock profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_hook_holds_lock err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+CASE lock_lua_error_longjmp_frames profile=release exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_longjmp_frames pcall=Ok((false, "runtime error: src/main.rs:360:1: deep\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t(...tail calls...)\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\nstack traceback:\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\n")) poisoned=false try_lock_ok=true
+PROFILE dev-unwind os=macos arch=aarch64
+CASE panic_pcall profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: BEFORE
+  out: RESULT panic_pcall unwound_to_rust_caller_as_panic
+  out: RESULT panic_pcall vm_after=Ok(2)
+  err: 
+  err: thread 'main' (106107704) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_bare profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: BEFORE
+  out: RESULT panic_bare unwound_to_rust_caller_as_panic
+  out: RESULT panic_bare vm_after=Ok(2)
+  err: 
+  err: thread 'main' (106107705) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_coroutine profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: BEFORE
+  out: RESULT panic_coroutine unwound_to_rust_caller_as_panic
+  out: RESULT panic_coroutine vm_after=Ok(2)
+  err: 
+  err: thread 'main' (106107706) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_lock profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT panic_lock outcome=panic_unwound_to_caller poisoned=true
+  err: 
+  err: thread 'main' (106107707) panicked at src/main.rs:125:17:
+  err: panic while holding lock
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE hook_naive_pcall profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_naive_pcall script_returned=Integer(50) after_ms=110
+CASE hook_staged_pcall profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_staged_pcall script_error after_ms=107 err=runtime error: deadline exceeded
+CASE hook_coro_created_in_script profile=dev-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_created_before_arm profile=dev-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_yield_resume profile=dev-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_set_hook profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_set_hook script_returned=Integer(50) after_ms=100
+CASE hook_staged_in_coro_retry profile=dev-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_staged_rust_thread_resume profile=dev-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_staged profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_staged script_error after_ms=105 err=runtime error: deadline exceeded
+CASE hook_coro_replaced_wrap profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_coro_replaced_wrap script_error after_ms=108 err=runtime error: deadline exceeded
+CASE oom_plain profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_plain lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_plain used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=24
+CASE oom_huge_string profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_huge_string lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large
+  out: RESULT oom_huge_string used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000) ms=0
+CASE oom_in_pcall_retry profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_pcall_retry script_returned=String("not enough memory")
+  out: RESULT oom_in_pcall_retry used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=473
+CASE oom_in_coroutine profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_coroutine lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_in_coroutine used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=24
+CASE oom_rust_create_string profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_string Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_string vm_after=Ok(2)
+CASE oom_rust_create_table profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_table Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_table vm_after=Ok(2)
+CASE oom_reuse_after profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_reuse_after lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_reuse_after used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=24
+  out: RESULT oom_reuse_after round=0 err_again=true
+  out: RESULT oom_reuse_after round=1 err_again=true
+  out: RESULT oom_reuse_after round=2 err_again=true
+CASE oom_in_hook profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_hook err=Err("memory error: not enough memory")
+  out: RESULT oom_in_hook vm_after=Ok(2)
+CASE lock_lua_error_in_callback profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_in_callback pcall=Ok((false, "runtime error: src/main.rs:311:1: lua error under lock\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:311:1: in function <src/main.rs:311:1>\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\nstack traceback:\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\n")) poisoned=false try_lock_ok=true contents=Some([1])
+CASE lock_deadline_in_call profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_deadline_in_call err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
+CASE lock_hook_holds_lock profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_hook_holds_lock err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+CASE lock_lua_error_longjmp_frames profile=dev-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_longjmp_frames pcall=Ok((false, "runtime error: src/main.rs:360:1: deep\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t(...tail calls...)\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\nstack traceback:\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\n")) poisoned=false try_lock_ok=true
+PROFILE release-unwind os=macos arch=aarch64
+CASE panic_pcall profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: BEFORE
+  out: RESULT panic_pcall unwound_to_rust_caller_as_panic
+  out: RESULT panic_pcall vm_after=Ok(2)
+  err: 
+  err: thread 'main' (106111122) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_bare profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: BEFORE
+  out: RESULT panic_bare unwound_to_rust_caller_as_panic
+  out: RESULT panic_bare vm_after=Ok(2)
+  err: 
+  err: thread 'main' (106111128) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_coroutine profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: BEFORE
+  out: RESULT panic_coroutine unwound_to_rust_caller_as_panic
+  out: RESULT panic_coroutine vm_after=Ok(2)
+  err: 
+  err: thread 'main' (106111134) panicked at src/main.rs:92:63:
+  err: boom from host callback
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE panic_lock profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT panic_lock outcome=panic_unwound_to_caller poisoned=true
+  err: 
+  err: thread 'main' (106111140) panicked at src/main.rs:125:17:
+  err: panic while holding lock
+  err: note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+CASE hook_naive_pcall profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_naive_pcall script_returned=Integer(50) after_ms=104
+CASE hook_staged_pcall profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_staged_pcall script_error after_ms=103 err=runtime error: deadline exceeded
+CASE hook_coro_created_in_script profile=release-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_created_before_arm profile=release-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_coro_yield_resume profile=release-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_set_hook profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_set_hook script_returned=Integer(50) after_ms=105
+CASE hook_staged_in_coro_retry profile=release-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_staged_rust_thread_resume profile=release-unwind exit_code=None signal=Some(9) timed_out=true
+CASE hook_thread_staged profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_thread_staged script_error after_ms=104 err=runtime error: deadline exceeded
+CASE hook_coro_replaced_wrap profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT hook_coro_replaced_wrap script_error after_ms=105 err=runtime error: deadline exceeded
+CASE oom_plain profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_plain lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_plain used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=12
+CASE oom_huge_string profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_huge_string lua_error kind=other err=runtime error: src/main.rs:243:1: resulting string too large
+  out: RESULT oom_huge_string used_at_fail_kib=18 used_after_gc_kib=34 vm_after=Ok(1000) ms=0
+CASE oom_in_pcall_retry profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_pcall_retry script_returned=String("not enough memory")
+  out: RESULT oom_in_pcall_retry used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=235
+CASE oom_in_coroutine profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_coroutine lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_in_coroutine used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=12
+CASE oom_rust_create_string profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_string Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_string vm_after=Ok(2)
+CASE oom_rust_create_table profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_rust_create_table Ok((false, "memory error: not enough memory"))
+  out: RESULT oom_rust_create_table vm_after=Ok(2)
+CASE oom_reuse_after profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_reuse_after lua_error kind=MemoryError err=memory error: not enough memory
+  out: RESULT oom_reuse_after used_at_fail_kib=8191 used_after_gc_kib=34 vm_after=Ok(1000) ms=12
+  out: RESULT oom_reuse_after round=0 err_again=true
+  out: RESULT oom_reuse_after round=1 err_again=true
+  out: RESULT oom_reuse_after round=2 err_again=true
+CASE oom_in_hook profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT oom_in_hook err=Err("memory error: not enough memory")
+  out: RESULT oom_in_hook vm_after=Ok(2)
+CASE lock_lua_error_in_callback profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_in_callback pcall=Ok((false, "runtime error: src/main.rs:311:1: lua error under lock\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:311:1: in function <src/main.rs:311:1>\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\nstack traceback:\n\t[C]: in function 'with_lock'\n\t[C]: in function 'pcall'\n\tsrc/main.rs:311:1: in main chunk\n")) poisoned=false try_lock_ok=true contents=Some([1])
+CASE lock_deadline_in_call profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_deadline_in_call err=Err("runtime error: deadline exceeded") poisoned=false try_lock_ok=true
+CASE lock_hook_holds_lock profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_hook_holds_lock err=Err("runtime error: src/main.rs:336:1: error called from hook") poisoned=false try_lock_ok=true hook_ran=Some(1)
+CASE lock_lua_error_longjmp_frames profile=release-unwind exit_code=Some(0) signal=None timed_out=false
+  out: RESULT lock_lua_error_longjmp_frames pcall=Ok((false, "runtime error: src/main.rs:360:1: deep\nstack traceback:\n\t[C]: in ?\n\t[C]: in function 'error'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t(...tail calls...)\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\nstack traceback:\n\t[C]: in function 'L'\n\tsrc/main.rs:360:1: in function <src/main.rs:360:1>\n\t[C]: in function 'pcall'\n\tsrc/main.rs:360:1: in main chunk\n")) poisoned=false try_lock_ok=true
