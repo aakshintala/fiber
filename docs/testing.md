@@ -104,8 +104,8 @@ Nothing in CI calls a live provider or the public network. Provider bytes in
 tests come from two sources:
 
 - **Recorded streams.** Real responses from each protocol, captured with live
-  keys by a manual script and checked in. They are replayed byte for byte
-  against the provider crate's decoders. A recording keeps response bytes only,
+  keys by the `provider` crate's `record` rig ("Rigs") and checked in. They
+  are replayed byte for byte against the provider crate's decoders. A recording keeps response bytes only,
   never request headers or keys. It is re-recorded when a vendor change is
   suspected.
 - **Scripted streams.** Hand-written in the real wire format, for scenarios a
@@ -138,8 +138,51 @@ is a real child `fiber serve`, because it is Fiber. The fakes are:
 - a local OAuth token endpoint
 - a second client on a session's socket, including a slow watcher
 
+The fakes live in one crate, `fakes`, which depends only on `contract` and
+is a test-only dependency of the crates that use it (`docs/architecture.md`,
+"The call rules").
+
 The concrete scenarios each area needs are that area's acceptance criteria,
 written when its implementation tickets are.
+
+## Rigs
+
+A rig runs one layer on its own, so an agent building or diagnosing that
+layer can see what it makes of a given input without writing a throwaway
+program or waiting on a test.
+
+- **A rig is a Cargo example in its layer's crate**, run as
+  `cargo run -p <crate> --example <rig> -- <args>`. It can use only what its
+  crate may depend on, so what it shows is that layer alone. It may use
+  `fakes`, as a test-only dependency. It reads its arguments with
+  `std::env::args`.
+- **It never ships.** No release binary contains a rig, and the shipped
+  `fiber` gains no switch for one. A rig that people need becomes a `fiber`
+  subcommand through its area's ticket, with the tests a feature carries.
+- **It is gated.** The tests and clippy compile every example, so a rig
+  that stops building fails `scripts/check`.
+- **It adds no fixture format.** It reads the files its layer already reads,
+  and what it saves for a test is a format tests already replay: a recorded
+  stream (the response bytes), an events file (JSON lines, the session log's
+  format), or a session directory. A bug a rig reproduces ships its test
+  ("What a change ships with"), built from the file the rig used or saved.
+
+A crate's first implementation ticket ships the rigs listed for it:
+
+| Crate | Rig | What it does |
+|---|---|---|
+| `log` | `dump` | Prints a session directory's events, one per line. |
+| `log` | `check` | Checks a session directory against the invariants the directory alone shows: every line parses as an event, and `seq` has no gaps. |
+| `config` | `resolve` | Prints the merged configuration for a Fiber home and project. |
+| `provider` | `decode` | Runs a recorded stream through one protocol's decoder and prints what it produced. |
+| `provider` | `record` | Captures a live response as a recorded stream, with live keys, response bytes only. |
+| `fakes` | `provider-server` | Serves a scripted or recorded stream on a local port and prints each request it receives. |
+| `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
+| `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |
+| `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
+
+`contract` has no rig: it holds types, not behaviour. A rig not in this table
+is added to it by the ticket that builds it.
 
 ## Live calls and evals
 
