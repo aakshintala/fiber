@@ -1,0 +1,87 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "system",
+    "content": [
+     {
+      "type": "text",
+      "text": "You are terse.",
+      "cache_control": {
+       "type": "ephemeral",
+       "ttl": "5m"
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_tokens": 50,
+  "reasoning": {
+   "effort": "low"
+  }
+ },
+ "events": [],
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "id": "gen-1790672053-E5dn4jJRW3jlXVB8BqMj",
+  "object": "chat.completion",
+  "created": 1790672053,
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "Parasail",
+  "system_fingerprint": null,
+  "service_tier": null,
+  "choices": [
+   {
+    "index": 0,
+    "logprobs": null,
+    "finish_reason": "stop",
+    "native_finish_reason": "stop",
+    "message": {
+     "role": "assistant",
+     "content": "Ok.",
+     "refusal": null,
+     "reasoning": "The user wants me to say \"ok\". Harmless request.",
+     "reasoning_details": [
+      {
+       "type": "reasoning.text",
+       "text": "The user wants me to say \"ok\". Harmless request.",
+       "format": "unknown",
+       "index": 0
+      }
+     ]
+    }
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 20,
+   "completion_tokens": 17,
+   "total_tokens": 37,
+   "cost": 1.15e-05,
+   "is_byok": false,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 0,
+    "audio_tokens": 0,
+    "video_tokens": 0
+   },
+   "cost_details": {
+    "upstream_inference_cost": 1.15e-05,
+    "upstream_inference_prompt_cost": 3e-06,
+    "upstream_inference_completions_cost": 8.5e-06
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 13,
+    "image_tokens": 0,
+    "audio_tokens": 0
+   }
+  }
+ }
+}

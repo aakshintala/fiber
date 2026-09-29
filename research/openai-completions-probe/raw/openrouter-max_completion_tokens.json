@@ -1,0 +1,66 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_completion_tokens": 300,
+  "reasoning": {
+   "effort": "low"
+  }
+ },
+ "events": [],
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "id": "gen-1790672019-r8yEqroClxnWAk2e4F1D",
+  "object": "chat.completion",
+  "created": 1790672019,
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "OpenInference",
+  "system_fingerprint": "vllm-dev-f9716369",
+  "service_tier": null,
+  "choices": [
+   {
+    "index": 0,
+    "logprobs": null,
+    "finish_reason": "stop",
+    "native_finish_reason": "stop",
+    "message": {
+     "role": "assistant",
+     "content": "Ok.\n\nIs there anything I can help you with?",
+     "refusal": null,
+     "reasoning": null
+    }
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 15,
+   "completion_tokens": 13,
+   "total_tokens": 28,
+   "cost": 4.05e-06,
+   "is_byok": false,
+   "prompt_tokens_details": {
+    "cached_tokens": 15,
+    "cache_write_tokens": 0,
+    "audio_tokens": 0,
+    "video_tokens": 0
+   },
+   "cost_details": {
+    "upstream_inference_cost": 4.05e-06,
+    "upstream_inference_prompt_cost": 1.5e-07,
+    "upstream_inference_completions_cost": 3.9e-06
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "image_tokens": 0,
+    "audio_tokens": 0
+   }
+  }
+ }
+}

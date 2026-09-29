@@ -93,6 +93,27 @@ For each model:
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
 
+### openai-completions facts
+
+- OpenAI's `gpt-6-luna` rejects `max_tokens` with a 400 and takes
+  `max_completion_tokens`. OpenRouter, with `z-ai/glm-5.3-flash`, accepts both.
+- OpenAI, with `gpt-6-luna`, sent a usage chunk (`choices: []`) in the one
+  stream that set `stream_options.include_usage` and none in the one that did not. OpenRouter, with
+  `z-ai/glm-5.3-flash`, sends a usage chunk either way, and repeats
+  `finish_reason` on it.
+- OpenRouter, with `z-ai/glm-5.3-flash`, streams reasoning as `reasoning` plus
+  `reasoning_details` entries of type `reasoning.text`. Across the streams run
+  on that model, it sent no `reasoning_content` or `reasoning_text`.
+- OpenRouter, with `z-ai/glm-5.3-flash` pinned to one upstream, reads `reasoning`,
+  `reasoning_content` and `reasoning_details` on a replayed assistant message.
+- OpenRouter, with `z-ai/glm-5.3-flash`, accepts `cache_control` on a system
+  part, the last message and a tool, and accepts `ttl` on the system part. It also accepted one request with
+  an invalid `type`. This shows acceptance only. Whether OpenRouter passes
+  any placement or `ttl` upstream is not settled.
+- Tool-call deltas from `gpt-6-luna` and from OpenRouter with
+  `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
+  `: OPENROUTER PROCESSING` comment lines to the stream.
+
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
 `reasoning_effort`. So the extension declares each Claude model with

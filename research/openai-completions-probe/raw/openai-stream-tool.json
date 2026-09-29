@@ -1,0 +1,251 @@
+{
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "user",
+    "content": "What is the weather in Paris? Use the tool."
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "get_weather",
+     "description": "Get weather",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   }
+  ],
+  "max_completion_tokens": 100,
+  "stream_options": {
+   "include_usage": true
+  },
+  "reasoning_effort": "none",
+  "stream": true
+ },
+ "events": [
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "role": "assistant",
+      "content": null,
+      "tool_calls": [
+       {
+        "index": 0,
+        "id": "call_NNqOvNB9xRwwbwvmyi2nzkNo",
+        "type": "function",
+        "function": {
+         "name": "get_weather",
+         "arguments": ""
+        }
+       }
+      ],
+      "refusal": null
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": "GcIjPvqBoCe"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "{\""
+        }
+       }
+      ]
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": "2AVmD"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "city"
+        }
+       }
+      ]
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": "pRRK"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "\":\""
+        }
+       }
+      ]
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": "aLE"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "Paris"
+        }
+       }
+      ]
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": "eYM"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "\"}"
+        }
+       }
+      ]
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": "0Mc62"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {},
+     "finish_reason": "tool_calls"
+    }
+   ],
+   "usage": null,
+   "obfuscation": "wPDA5n"
+  },
+  {
+   "id": "chatcmpl-ETNsRrtg1oWAF8QVY0RT7cL2v3yJ6",
+   "object": "chat.completion.chunk",
+   "created": 1790672003,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [],
+   "usage": {
+    "prompt_tokens": 132,
+    "completion_tokens": 17,
+    "total_tokens": 149,
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 0,
+     "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "audio_tokens": 0,
+     "accepted_prediction_tokens": 0,
+     "rejected_prediction_tokens": 0
+    }
+   },
+   "obfuscation": "O4gHqJzV"
+  },
+  "[DONE]"
+ ],
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream; charset=utf-8",
+  "openai-processing-ms": "621",
+  "x-request-id": "req_992dcdf69f1a4e0983bcff38d1711c0d"
+ }
+}

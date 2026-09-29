@@ -1,0 +1,88 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   },
+   {
+    "role": "assistant",
+    "content": "ok"
+   },
+   {
+    "role": "user",
+    "content": "Again."
+   }
+  ],
+  "max_tokens": 600,
+  "reasoning": {
+   "effort": "low"
+  },
+  "provider": {
+   "only": [
+    "OpenInference"
+   ],
+   "allow_fallbacks": false
+  }
+ },
+ "events": [],
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "id": "gen-1790672687-0op7kw0f03RTy4GL4oiw",
+  "object": "chat.completion",
+  "created": 1790672687,
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "OpenInference",
+  "system_fingerprint": "vllm-dev-f9716369",
+  "service_tier": null,
+  "choices": [
+   {
+    "index": 0,
+    "logprobs": null,
+    "finish_reason": "stop",
+    "native_finish_reason": "stop",
+    "message": {
+     "role": "assistant",
+     "content": "Ok.\n\nIs there anything else you'd like to talk about?",
+     "refusal": null,
+     "reasoning": "User wants \"ok\" again, or I could vary it. Keep simple.",
+     "reasoning_details": [
+      {
+       "type": "reasoning.text",
+       "text": "User wants \"ok\" again, or I could vary it. Keep simple.",
+       "format": "unknown",
+       "index": 0
+      }
+     ]
+    }
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 22,
+   "completion_tokens": 31,
+   "total_tokens": 53,
+   "cost": 9.53e-06,
+   "is_byok": false,
+   "prompt_tokens_details": {
+    "cached_tokens": 21,
+    "cache_write_tokens": 0,
+    "audio_tokens": 0,
+    "video_tokens": 0
+   },
+   "cost_details": {
+    "upstream_inference_cost": 9.53e-06,
+    "upstream_inference_prompt_cost": 2.3e-07,
+    "upstream_inference_completions_cost": 9.3e-06
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 16,
+    "image_tokens": 0,
+    "audio_tokens": 0
+   }
+  }
+ }
+}

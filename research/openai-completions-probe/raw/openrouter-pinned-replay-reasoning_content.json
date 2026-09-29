@@ -1,0 +1,89 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   },
+   {
+    "role": "assistant",
+    "content": "ok",
+    "reasoning_content": "The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. "
+   },
+   {
+    "role": "user",
+    "content": "Again."
+   }
+  ],
+  "max_tokens": 600,
+  "reasoning": {
+   "effort": "low"
+  },
+  "provider": {
+   "only": [
+    "OpenInference"
+   ],
+   "allow_fallbacks": false
+  }
+ },
+ "events": [],
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "id": "gen-1790672692-KHOOIHQEtbYWcOd8ExMN",
+  "object": "chat.completion",
+  "created": 1790672692,
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "OpenInference",
+  "system_fingerprint": "vllm-dev-16e2b1ba",
+  "service_tier": null,
+  "choices": [
+   {
+    "index": 0,
+    "logprobs": null,
+    "finish_reason": "stop",
+    "native_finish_reason": "stop",
+    "message": {
+     "role": "assistant",
+     "content": "ok",
+     "refusal": null,
+     "reasoning": "Simple \u2014 just repeat \"ok\".",
+     "reasoning_details": [
+      {
+       "type": "reasoning.text",
+       "text": "Simple \u2014 just repeat \"ok\".",
+       "format": "unknown",
+       "index": 0
+      }
+     ]
+    }
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 383,
+   "completion_tokens": 10,
+   "total_tokens": 393,
+   "cost": 7.02e-06,
+   "is_byok": false,
+   "prompt_tokens_details": {
+    "cached_tokens": 364,
+    "cache_write_tokens": 0,
+    "audio_tokens": 0,
+    "video_tokens": 0
+   },
+   "cost_details": {
+    "upstream_inference_cost": 7.02e-06,
+    "upstream_inference_prompt_cost": 4.02e-06,
+    "upstream_inference_completions_cost": 3e-06
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 7,
+    "image_tokens": 0,
+    "audio_tokens": 0
+   }
+  }
+ }
+}

@@ -1,0 +1,109 @@
+{
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_completion_tokens": 50,
+  "stream_options": {
+   "include_usage": true
+  },
+  "reasoning_effort": "none",
+  "stream": true
+ },
+ "events": [
+  {
+   "id": "chatcmpl-ETNsOFD0kAJw8GXdsQq00u8gmOHhl",
+   "object": "chat.completion.chunk",
+   "created": 1790672000,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "role": "assistant",
+      "content": "",
+      "refusal": null
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": ""
+  },
+  {
+   "id": "chatcmpl-ETNsOFD0kAJw8GXdsQq00u8gmOHhl",
+   "object": "chat.completion.chunk",
+   "created": 1790672000,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "ok"
+     },
+     "finish_reason": null
+    }
+   ],
+   "usage": null,
+   "obfuscation": ""
+  },
+  {
+   "id": "chatcmpl-ETNsOFD0kAJw8GXdsQq00u8gmOHhl",
+   "object": "chat.completion.chunk",
+   "created": 1790672000,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {},
+     "finish_reason": "stop"
+    }
+   ],
+   "usage": null,
+   "obfuscation": "bzJPGDthiR8q"
+  },
+  {
+   "id": "chatcmpl-ETNsOFD0kAJw8GXdsQq00u8gmOHhl",
+   "object": "chat.completion.chunk",
+   "created": 1790672000,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [],
+   "usage": {
+    "prompt_tokens": 9,
+    "completion_tokens": 4,
+    "total_tokens": 13,
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 0,
+     "audio_tokens": 0
+    },
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "audio_tokens": 0,
+     "accepted_prediction_tokens": 0,
+     "rejected_prediction_tokens": 0
+    }
+   },
+   "obfuscation": "pKXYwrwyysUd"
+  },
+  "[DONE]"
+ ],
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream; charset=utf-8",
+  "openai-processing-ms": "362",
+  "x-request-id": "req_ae3dc89c8c2c451b98242558712ca4d5"
+ }
+}

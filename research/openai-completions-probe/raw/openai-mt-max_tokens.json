@@ -1,0 +1,16 @@
+{
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_tokens": 50,
+  "reasoning_effort": "none"
+ },
+ "events": [],
+ "status": 400,
+ "body": "{\n  \"error\": {\n    \"message\": \"Unsupported parameter: 'max_tokens' is not supported with this model. Use 'max_completion_tokens' instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"max_tokens\",\n    \"code\": \"unsupported_parameter\"\n  }\n}"
+}
