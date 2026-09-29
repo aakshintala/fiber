@@ -1,0 +1,105 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "claude-sonnet-5-5",
+  "max_tokens": 300,
+  "system": "<filler 110 lines>",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Read text.pdf with the read tool, then answer: Quote the sentence in the PDF that contains the launch code, and give the code."
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_01probe",
+      "name": "read",
+      "input": {
+       "path": "text.pdf"
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_01probe",
+      "content": "The file follows as a document."
+     },
+     {
+      "type": "document",
+      "source": {
+       "type": "base64",
+       "media_type": "application/pdf",
+       "data": "JVBERi0xLjQKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0tpZHNbNCAwIFIgNiAwIFJdL0NvdW50IDI+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBSL01lZGlhQm94WzAgMCA2MTIgNzkyXS9SZXNvdXJjZXM8PC9Gb250PDwvRjEgMyAwIFI+Pj4+L0NvbnRlbnRzIDUgMCBSPj4KZW5kb2JqCjUgMCBvYmoKPDwvTGVuZ3RoIDg1Pj5zdHJlYW0KQlQgL0YxIDE0IFRmIDcyIDcwMCBUZCAoRmliZXIgcHJvYmUgcGFnZSBvbmUuIFRoZSBsYXVuY2ggY29kZSBpcyBQRUxJQ0FOLTQ0NzEuKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjYgMCBvYmoKPDwvVHlwZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgNjEyIDc5Ml0vUmVzb3VyY2VzPDwvRm9udDw8L0YxIDMgMCBSPj4+Pi9Db250ZW50cyA3IDAgUj4+CmVuZG9iago3IDAgb2JqCjw8L0xlbmd0aCA2Nz4+c3RyZWFtCkJUIC9GMSAxNCBUZiA3MiA3MDAgVGQgKFBhZ2UgdHdvLiBUaGUgYmFja3VwIGNvbG91ciBpcyB0ZWFsLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgOAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1NCAwMDAwMCBuIAowMDAwMDAwMTExIDAwMDAwIG4gCjAwMDAwMDAxNzQgMDAwMDAgbiAKMDAwMDAwMDI4NiAwMDAwMCBuIAowMDAwMDAwNDE4IDAwMDAwIG4gCjAwMDAwMDA1MzAgMDAwMDAgbiAKdHJhaWxlcjw8L1NpemUgOC9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjY0NAolJUVPRgo="
+      },
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "The sentence containing the launch code, from page 1, is:\n\n\"Fiber probe page one. The launch code is PELICAN-4471.\"\n\nThe launch code is **PELICAN-4471**."
+   },
+   {
+    "role": "user",
+    "content": "In one short sentence, say again what the file was about."
+   }
+  ],
+  "tools": [
+   {
+    "name": "read",
+    "description": "Read a file",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "model": "claude-sonnet-5-5",
+  "id": "msg_011CfXT7a2HmivzcDHfcRUPp",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "text",
+    "text": "The file was a two-page PDF: page one gives the launch code PELICAN-4471, and page two says the backup colour is teal."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 83,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 8093,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 43,
+   "output_tokens_details": {
+    "thinking_tokens": 0
+   },
+   "service_tier": "standard",
+   "inference_geo": "global"
+  },
+  "diagnostics": null
+ }
+}

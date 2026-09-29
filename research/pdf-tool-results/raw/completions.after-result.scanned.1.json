@@ -1,0 +1,104 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "system",
+    "content": "<filler 260 lines>"
+   },
+   {
+    "role": "user",
+    "content": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_probe",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\": \"scanned.pdf\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_probe",
+    "content": "The file follows as a user file."
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "file",
+      "file": {
+       "filename": "scanned.pdf",
+       "file_data": "<21524 chars sha256 1e933e9c9ab8>"
+      }
+     }
+    ]
+   }
+  ],
+  "max_completion_tokens": 600,
+  "reasoning_effort": "none",
+  "prompt_cache_key": "probe121c-after-resultscanned",
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "id": "chatcmpl-ETNwojUDQim4oGRL3CTiKkz5IwmLA",
+  "object": "chat.completion",
+  "created": 1790672274,
+  "model": "gpt-6-luna",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "The page shows a large orange circle with the white number **23** inside.",
+     "refusal": null,
+     "annotations": []
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 7297,
+   "completion_tokens": 19,
+   "total_tokens": 7316,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  },
+  "service_tier": "default",
+  "system_fingerprint": null
+ }
+}

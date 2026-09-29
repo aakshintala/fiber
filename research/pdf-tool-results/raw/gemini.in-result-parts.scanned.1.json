@@ -1,0 +1,127 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json; charset=UTF-8"
+ },
+ "request": {
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "<filler 260 lines>"
+    }
+   ]
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "read",
+       "args": {
+        "path": "scanned.pdf"
+       }
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "read",
+       "response": {
+        "output": "file attached"
+       },
+       "parts": [
+        {
+         "inlineData": {
+          "mimeType": "application/pdf",
+          "data": "<21496 chars sha256 977feec3b5df>"
+         }
+        }
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 400
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "The figure on the page is a circle. It is orange in colour, and the number 73 is drawn inside it.",
+       "thoughtSignature": "EnMKcQFpFH0ThsPC71TeUY4GD6QGv87T2qA1im0smhoJxGIa19NyJ4Vl8XDWOtpyVQGiHtISDUd4fA/dL4Td6BMUxBqCYVXNCA3kp2RXjhcW6TYzDnGYUHwGDlDnhqlx05T6OxtOhB5f81JDvq62WkCCXSX9"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 8831,
+   "candidatesTokenCount": 26,
+   "totalTokenCount": 8857,
+   "cachedContentTokenCount": 4046,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 8302
+    },
+    {
+     "modality": "IMAGE",
+     "tokenCount": 529
+    }
+   ],
+   "cacheTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 3804
+    },
+    {
+     "modality": "IMAGE",
+     "tokenCount": 242
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "qH27avWrJ6DV-8YP4uOo2AM"
+ }
+}

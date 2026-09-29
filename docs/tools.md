@@ -185,9 +185,13 @@ path's directory, ending in `/`.
   provider module sends the PDF natively where its protocol accepts a PDF in a
   tool result, and otherwise sends the pages rendered as images. Rendering uses
   poppler's `pdftoppm`; when it is not installed, the call fails with
-  `tool_error` and a message naming the package. Which protocols accept a PDF
-  is
-  [Probe: which protocols accept a PDF in a tool result](https://github.com/aakshintala/fiber/issues/121).
+  `tool_error` and a message naming the package.
+  `anthropic-messages` takes a `document` block inside `tool_result`,
+  `openai-responses` an `input_file` in the `function_call_output` array, and
+  `google-generative-ai` an `inlineData` part in `functionResponse.parts`.
+  `openai-completions` rejects a file part in a tool message, so it gets the
+  pages rendered as images in a user message after the tool message; an image
+  inside its tool message is not seen by the model.
 - A path that does not exist fails with `not_found`.
 - Any other file that is not UTF-8 text, and any directory or device, fails
   with `unsupported_file`, giving its size and detected type.

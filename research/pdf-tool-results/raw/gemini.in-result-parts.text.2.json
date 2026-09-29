@@ -1,0 +1,143 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json; charset=UTF-8"
+ },
+ "request": {
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "<filler 260 lines>"
+    }
+   ]
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Read text.pdf with the read tool, then answer: Quote the sentence in the PDF that contains the launch code, and give the code."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "read",
+       "args": {
+        "path": "text.pdf"
+       }
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "read",
+       "response": {
+        "output": "file attached"
+       },
+       "parts": [
+        {
+         "inlineData": {
+          "mimeType": "application/pdf",
+          "data": "JVBERi0xLjQKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0tpZHNbNCAwIFIgNiAwIFJdL0NvdW50IDI+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBSL01lZGlhQm94WzAgMCA2MTIgNzkyXS9SZXNvdXJjZXM8PC9Gb250PDwvRjEgMyAwIFI+Pj4+L0NvbnRlbnRzIDUgMCBSPj4KZW5kb2JqCjUgMCBvYmoKPDwvTGVuZ3RoIDg1Pj5zdHJlYW0KQlQgL0YxIDE0IFRmIDcyIDcwMCBUZCAoRmliZXIgcHJvYmUgcGFnZSBvbmUuIFRoZSBsYXVuY2ggY29kZSBpcyBQRUxJQ0FOLTQ0NzEuKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjYgMCBvYmoKPDwvVHlwZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgNjEyIDc5Ml0vUmVzb3VyY2VzPDwvRm9udDw8L0YxIDMgMCBSPj4+Pi9Db250ZW50cyA3IDAgUj4+CmVuZG9iago3IDAgb2JqCjw8L0xlbmd0aCA2Nz4+c3RyZWFtCkJUIC9GMSAxNCBUZiA3MiA3MDAgVGQgKFBhZ2UgdHdvLiBUaGUgYmFja3VwIGNvbG91ciBpcyB0ZWFsLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgOAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1NCAwMDAwMCBuIAowMDAwMDAwMTExIDAwMDAwIG4gCjAwMDAwMDAxNzQgMDAwMDAgbiAKMDAwMDAwMDI4NiAwMDAwMCBuIAowMDAwMDAwNDE4IDAwMDAwIG4gCjAwMDAwMDA1MzAgMDAwMDAgbiAKdHJhaWxlcjw8L1NpemUgOC9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjY0NAolJUVPRgo="
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "text": "The sentence containing the launch code is: \"The launch code is PELICAN-4471.\"\n\nThe launch code is: **PELICAN-4471**"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "In one short sentence, say again what the file was about."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 400
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "The file provided information about a fiber probe, including a launch code and a backup colour.",
+       "thoughtSignature": "EnMKcQFpFH0Tz/xtjiSZ58kwbAVkB7B2XhqPZ/GvST/E6C/Irf60NP+ABCdPk7VQKwPjxbGTpOieG2979rhfS3i12CnXugq174pqjGitN5/jI9H7pgnvun1jXAY4ciRGLS3LsS09HSYidIMGkvBjz51h2SGg"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 9389,
+   "candidatesTokenCount": 18,
+   "totalTokenCount": 9407,
+   "cachedContentTokenCount": 4015,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 8349
+    },
+    {
+     "modality": "IMAGE",
+     "tokenCount": 1040
+    }
+   ],
+   "cacheTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 3571
+    },
+    {
+     "modality": "IMAGE",
+     "tokenCount": 444
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "p327avO7Jb-u1MkPn8bL-Qc"
+ }
+}

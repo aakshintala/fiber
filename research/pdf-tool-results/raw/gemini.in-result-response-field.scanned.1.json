@@ -1,0 +1,123 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json; charset=UTF-8"
+ },
+ "request": {
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "<filler 260 lines>"
+    }
+   ]
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "read",
+       "args": {
+        "path": "scanned.pdf"
+       }
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "read",
+       "response": {
+        "file": {
+         "inlineData": {
+          "mimeType": "application/pdf",
+          "data": "<21496 chars sha256 977feec3b5df>"
+         }
+        }
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 400
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "functionCall": {
+        "name": "read",
+        "args": {
+         "path": "scanned.pdf"
+        },
+        "id": "call_413703"
+       },
+       "thoughtSignature": "EnMKcQFpFH0TJMC/hNz3ReHY3NQkzVy6eC4UpY3+VZGItVpvzsRYvX0DOV0WfusJX3BAPbbQOzqcwtxv4YWjY2lt+udBEgSPGMZjh01awAWxDzh/8glJXgSiUlNJH55mq2WpftI6BsiXjcALecVUMfsPpqOg"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0,
+    "finishMessage": "Model generated function call(s)."
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 23322,
+   "candidatesTokenCount": 17,
+   "totalTokenCount": 23339,
+   "cachedContentTokenCount": 8176,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 23322
+    }
+   ],
+   "cacheTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 8176
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "sn27atqoOtKh1MkPwfjL-QY"
+ }
+}

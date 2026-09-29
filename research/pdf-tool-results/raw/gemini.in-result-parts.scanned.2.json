@@ -1,0 +1,143 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json; charset=UTF-8"
+ },
+ "request": {
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "<filler 260 lines>"
+    }
+   ]
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "read",
+       "args": {
+        "path": "scanned.pdf"
+       }
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "read",
+       "response": {
+        "output": "file attached"
+       },
+       "parts": [
+        {
+         "inlineData": {
+          "mimeType": "application/pdf",
+          "data": "<21496 chars sha256 977feec3b5df>"
+         }
+        }
+       ]
+      }
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "text": "The figure on the page is a circle. It is orange in colour, and the number 73 is drawn inside it."
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "In one short sentence, say again what the file was about."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 400
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "The file contains an image of an orange circle with the number 73 inside it.",
+       "thoughtSignature": "EnMKcQFpFH0TeFx5DEhGZn0SEG38JAjuAbOBEeJtZBt54+6w3bM8Lj3kHOk4IIxD3/iQa6Pl5JYV/tZ3pHfdjBr3FpVlXnjIIavZpmxp48UBIi2h5F8wTqQqZ+TRc4fVqn3HgJglMxOLWpdvwdxos4f+WvjB"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 8872,
+   "candidatesTokenCount": 18,
+   "totalTokenCount": 8890,
+   "cachedContentTokenCount": 4043,
+   "promptTokensDetails": [
+    {
+     "modality": "IMAGE",
+     "tokenCount": 529
+    },
+    {
+     "modality": "TEXT",
+     "tokenCount": 8343
+    }
+   ],
+   "cacheTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 3802
+    },
+    {
+     "modality": "IMAGE",
+     "tokenCount": 241
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "rH27aoXCMMXp-8YP_6GJkAc"
+ }
+}

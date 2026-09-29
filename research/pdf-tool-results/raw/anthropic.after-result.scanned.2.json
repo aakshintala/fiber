@@ -1,0 +1,110 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "claude-sonnet-5-5",
+  "max_tokens": 300,
+  "system": "<filler 260 lines>",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_01probe",
+      "name": "read",
+      "input": {
+       "path": "scanned.pdf"
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_01probe",
+      "content": "The file follows as a document."
+     },
+     {
+      "type": "document",
+      "source": {
+       "type": "base64",
+       "media_type": "application/pdf",
+       "data": "<21496 chars sha256 977feec3b5df>"
+      },
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "The page shows an orange circle on a white background. Inside it, in white pixel-style digits, is the number **73**. The digits sit in the upper-middle part of the circle."
+   },
+   {
+    "role": "user",
+    "content": "In one short sentence, say again what the file was about."
+   }
+  ],
+  "tools": [
+   {
+    "name": "read",
+    "description": "Read a file",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "model": "claude-sonnet-5-5",
+  "id": "msg_011CfXTBMQt8MisqzNWsFLSJ",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQShQYKEAgSGAI4AUIIdGhpbmtpbmcSDPJSgsT0O2ZIC2nqdxoMkrdxjASppzGsTSqFIjAQnAWVApg2jq7xOwIjMucn+lMp57UK/Aosi+cmYIrlJFfHvLA5Yx57/iGbRx6u1kcqogU5C4l+bt6/vAKKw2/QM766rB9g8rutDmG8wGLZYzu/UyM8GPkmJ3OptDtPfIdJFfKmBpBjPw/SYm6cZz8cxsd+3r/SiTM6Tz1dNIIOHYAD5XmSnIJVEzIg+gZ3blKhkOKMlUvRmsCFTMEMkGiFXjyBpg0Ctx48rDB5fuXQEa7lUSlnCnHnvGIKiNBmqD1SirsnXCQ9vWUHs1Wjg+jFd68xSMpN0wiNGGxXhEwGkXMYWqyrZks/vbgEOS0oIUX5/UO83JMJfPgmynZi6/Y5qxpizVTQIWL2EKctoDvmh1i0Yo+4jP+C8zTzqHECp2ALavtj4PhwLHdYoiNrMC895BF3QvB7OfC6ETM3MIAPkyfkJ9vT2rxyIJ/fZWBxn5IfT3aAlJCcC7va/kGHp88BkwXZZD87gkJ9s7q1tNNPFlSU2zcLVbsCyJGJcc5CLbSLuE26+TMttR9a34UlBXlEoL8lhYNkyDiTX1D0S1sqmlUZl3s5pKhqhMjWO2/qDFq1lzyUy8MaqFrdLCK/dc7RPhqMzI5HLahVGpEen4JKCdFzOOELKi7E07sXEND3Mwtvu8rlUEY0sBYXIUnYTkYOjWXqDaDBgM0dxhsuM+Qz3l0rzJgjq/rv0tpbSBVsw6a20IkKgzFsxKGsfGyFH86338dNVz7qZZNtgWqym1XFSHCbxpRHI4xYMUCyPT8b6LBl+Pr3Iwame0rk2gEpBcsfRztpCd7MfzWzgvoeTy0evY7Q2Us1lSMrz+2OlrM9ExENkIav5x/xAwdUdmqBJn5eAWyphLuRa/xhMTC41a/sspHOrTkhZ09GvWf7tRhn5ZfYWhQZt7DQT2rdl19AfRB2HwzK51dh2ilA9IuOC/g5mvwzcbQ3RPoWg4dYR96r5s6dWo25EhgB"
+   },
+   {
+    "type": "text",
+    "text": "The file was a single page showing an orange circle with the number 73 in white pixelated digits."
+   }
+  ],
+  "container": null,
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "stop_details": null,
+  "usage": {
+   "input_tokens": 77,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 11257,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 95,
+   "output_tokens_details": {
+    "thinking_tokens": 65
+   },
+   "service_tier": "standard",
+   "inference_geo": "global"
+  },
+  "diagnostics": null
+ }
+}
