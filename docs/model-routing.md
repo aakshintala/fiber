@@ -28,11 +28,10 @@ ChatGPT/codex speaks `openai-responses` with compatibility flags its extension
 declares: the request fields it requires or rejects, such as `store: false`,
 the headers its login supplies, and its usage-limit error body. Its streamed
 events, tool calls and reasoning items are parsed as plain Responses. A stream
-ends with `response.completed`; the endpoint never sends `response.done` over
-SSE. The `OpenAI-Beta` header is not required. The endpoint accepts
-`parallel_tool_calls`, `tool_choice` and `text.verbosity`. It rejects
-`temperature` with status 400, and rejects a `service_tier` of `flex` or
-`auto`.
+ends with `response.completed`. None of the 45 SSE streams sent to
+`gpt-6-luna` that returned 200 contained `response.done`. The `OpenAI-Beta` header is not required. With `gpt-6-luna` the endpoint accepted
+`parallel_tool_calls`, `tool_choice` and `text.verbosity`. It rejected
+`temperature` with status 400, and a `service_tier` of `flex` or `auto`.
 
 On OpenAI's own endpoint, with `gpt-6-luna`, `instructions` and a system
 message in `input` gave the same answer and the same prompt cache for one
