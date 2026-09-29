@@ -384,8 +384,8 @@ Fiber retries these failures:
 - a stream that ends before its protocol's terminal event
 
 A response header `x-should-retry` overrides the status: `true` retries the
-failure, `false` does not. Fiber never retries quota or billing errors, whatever
-the header says.
+failure, `false` does not. Fiber never retries quota or billing errors, or an
+`unknown_stop_reason`, whatever the header says.
 
 Among the responses probed, only Anthropic sent `x-should-retry`: `false` on its
 400 and 404 responses, `true` on a 429. Anthropic's 429 also carried
@@ -414,6 +414,11 @@ the whole run.
 When a stream dies midway, the partial text is not kept, because deltas are
 ephemeral. A tool call the model finished emitting inside a failed message
 never runs. The retry asks the model again.
+
+An `openai-responses` stream that ends in `response.failed` is one such
+failure. Everything it already streamed is dropped, finished tool calls
+included, and the call is retried. Its code comes from the error body, and is
+`stream_incomplete` when no other code matches (`docs/errors.md`).
 
 When the retries run out, the step fails with the provider's error. Fiber never
 switches to another model or provider on its own.

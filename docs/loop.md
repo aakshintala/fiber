@@ -144,7 +144,9 @@ signatures, is logged exactly as the provider returned it, and sent back
 unchanged to the model that produced it. The provider checks only the opaque
 part, the signature or encrypted content, and refuses a request in which it
 was changed. Leaving it out is accepted but loses the prompt cache from that
-point on.
+point on. Reasoning is never sent back as plain assistant text, on any
+protocol or after a model switch. What a provider cannot take in its own form
+is left out.
 
 Each item goes only to the model that produced it, by its whole model
 reference, `provider/model` (`docs/model-routing.md`). After `/model` or the
