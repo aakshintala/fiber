@@ -62,8 +62,9 @@ Beside the manifest it may hold:
 - a prompt file, whose text goes in the system prompt (`docs/system-prompt.md`,
   "Extension texts")
 
-What a skill, a prompt template and a theme are to Fiber is not yet specified.
-This page covers only how they arrive.
+A theme sets the terminal's colours and nothing else (`docs/tui.md`,
+"Themes"). What a skill and a prompt template are to Fiber is not yet
+specified. This page covers only how they arrive.
 
 A script loads another script with `require`. `require` finds files inside the
 extension's own directory and nowhere else, so one extension cannot load
@@ -526,8 +527,9 @@ reach the session only as a client does. It reads the event stream,
 including what its session half sends with `host.emit`, and sends driver
 commands, including its own extension's commands. A crash in a TUI extension
 cannot stop the session (`docs/invocation.md`, "Processes"). What a TUI
-extension may draw, and through which seam, is the TUI's to settle, after
-[TUI: scrollback or full screen?](https://github.com/aakshintala/fiber/issues/15).
+extension may draw, and through which seam, is the TUI's to settle, in
+[TUI extension seams](https://github.com/aakshintala/fiber/issues/163). The
+terminal itself is `docs/tui.md`.
 A future GUI's extensions take the same shape.
 
 ## Loading, and cost when nothing is loaded

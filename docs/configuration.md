@@ -111,9 +111,20 @@ set the key.
 | `extensions."<name>".version` | none | yes, with approval | Declares an extension for the repository, to be fetched (`docs/extensions.md`, "Extensions a repository brings"). |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
 | `extensions."<name>".commands."<command>"` | none | yes | A new name for one of the extension's commands, when two extensions clash. |
+| `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |
 | `extensions."<name>".hook_timeout_ms` | the hook's own | no | Overrides the timeout of every hook the extension registers. |
 | `hooks.order."<hook point>"` | none | no | Extension names in the order their hooks run at that point (`docs/extensions.md`, "When several hooks share a point"). |
 | `providers."<name>".credential` | the provider's own | no | Where the provider's credential comes from ("Secrets"). |
+| `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as a card too (`docs/tui.md`, "The panel"). The status line of the narrow layout follows the same order. |
+| `tui.theme` | none | no | The theme's name: `dark`, `light` or a theme file in Fiber home. With none, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
+| `tui.reduced_motion` | false | no | Whether every animation takes its still form. On whenever a screen reader is detected (`docs/tui.md`, "Reduced motion"). |
+| `tui.screen_reader` | detected | no | Forces the flat screen-reader mode on or off; `--screen-reader` sets it true (`docs/tui.md`, "Screen readers"). |
+| `tui.attention.notification` | true | no | Whether the terminal sends an OSC 9 desktop notification when a session starts waiting on the person (`docs/tui.md`, "Getting the person's attention"). |
+| `tui.attention.bell` | true | no | Whether it rings the bell where OSC 9 is not supported. |
+| `tui.attention.title` | true | no | Whether the terminal title shows the session's state. |
+| `tui.hover` | true | no | Whether hover highlights the click target under the pointer; false drops mouse mode 1003 (`docs/tui.md`, "Mouse and hover"). |
+| `tui.inline_images` | true | no | Whether images show inline where the terminal speaks kitty's graphics protocol (`docs/tui.md`, "Images"). |
+| `tui.logo_glyph` | `"⌇"` | no | The glyph before the name in the logo, `"⌇"` or `"≈"`, for a font without ⌇ (`docs/tui.md`, "The logo"). |
 
 Hook order and hook timeouts are person-only because a redaction hook depends
 on both. A repository that could move another hook in front of it, or cut its
@@ -353,6 +364,6 @@ merge rules between the two.
 
 ## Not settled here
 
-- What a skill, a prompt template and a theme are to Fiber
+- What a skill and a prompt template are to Fiber
   (`docs/extensions.md`, "What a package holds")
 - Where an MCP server's OAuth token is stored (`docs/mcp.md`)
