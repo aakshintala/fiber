@@ -25,9 +25,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-selection=$(python3 scripts/ci.py select --base "$base")
-mode=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["mode"])' <<<"$selection")
-packages=$(python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["packages"]))' <<<"$selection")
+selection=$(cargo xtask select --base "$base")
+value() { sed -n "s/^$1=//p" <<<"$selection"; }
+mode=$(value mode)
+packages=$(value packages)
+libraries=$(value libraries)
 echo "== selection: $mode; crates: ${packages:-none}"
 
 package_args=()
@@ -46,12 +48,9 @@ if [ "$scope" != platform ]; then
       cargo fmt --check "${package_args[@]}"
     fi
     echo "== file size, unsafe table and dependency list"
-    python3 scripts/rules.py line-cap
-    python3 scripts/rules.py unsafe-table
-    python3 scripts/rules.py dependency-list
-    echo "== script tests"
-    python3 -m unittest discover -s scripts/tests 2>&1 | tee "$log"
-    echo "tests run: $(count 'Ran [0-9]+ tests?') script tests"
+    cargo xtask line-cap
+    cargo xtask unsafe-table
+    cargo xtask dependency-list
   fi
 fi
 
@@ -61,8 +60,14 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   echo "== cargo nextest run"
   cargo nextest run "${package_args[@]}" 2>&1 | tee "$log"
   nextest=$(count '[0-9]+ tests? run')
-  echo "== cargo test --doc"
-  cargo test --doc "${package_args[@]}" 2>&1 | tee "$log"
-  doctests=$(count '[0-9]+ passed')
+  # A crate with no library has no doc-tests, and cargo refuses to look.
+  doctests=0
+  if [ -n "$libraries" ]; then
+    library_args=()
+    for p in $libraries; do library_args+=(-p "$p"); done
+    echo "== cargo test --doc"
+    cargo test --doc "${library_args[@]}" 2>&1 | tee "$log"
+    doctests=$(count '[0-9]+ passed')
+  fi
   echo "tests run: $nextest under nextest, $doctests doc-tests"
 fi

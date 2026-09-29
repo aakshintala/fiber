@@ -1,7 +1,9 @@
 #!/usr/bin/env bash
 # Runs a pull request's new and changed tests against its base commit, and
-# passes only if at least one fails there (docs/testing.md, "Proving a test
-# bites"). A test counts as changed when its test file changed.
+# passes only if at least one of them fails there (docs/testing.md, "Proving
+# a test bites"). A test counts as changed when its test file changed. A test
+# file the base commit lacks is declared in its parent module there, the way
+# docs/code-quality.md, "Size", includes it.
 #
 # Usage: scripts/bug-base BASE
 set -euo pipefail
@@ -9,34 +11,53 @@ cd "$(git rev-parse --show-toplevel)"
 
 base=$(git merge-base "$1" HEAD)
 # shellcheck disable=SC2046
-plan=$(python3 scripts/ci.py bug-filter $(git diff --name-only --diff-filter=AM "$base" HEAD))
-field() { python3 -c "import json, sys; v = json.load(sys.stdin)[sys.argv[1]]; print(v if isinstance(v, str) else ' '.join(v))" "$1" <<<"$plan"; }
-filter=$(field filter)
+plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$base" HEAD))
+filter=$(sed -n 's/^filter\t//p' <<<"$plan")
 if [ -z "$filter" ]; then
   echo "bug-base: the pull request changes no test file, so no test shows the bug"
   exit 1
 fi
 
 tree=$(mktemp -d)
-git worktree add --detach "$tree" "$base"
+git worktree add --quiet --detach "$tree" "$base"
 trap 'git worktree remove --force "$tree"' EXIT
-for f in $(field files); do
-  mkdir -p "$tree/$(dirname "$f")"
-  git show "HEAD:$f" >"$tree/$f"
-done
 
 package_args=()
-for p in $(field packages); do package_args+=(-p "$p"); done
+while IFS=$'\t' read -r kind path parent declaration; do
+  case $kind in
+    package) package_args+=(-p "$path") ;;
+    file)
+      mkdir -p "$tree/$(dirname "$path")"
+      git show "HEAD:$path" >"$tree/$path"
+      if [ -n "$parent" ] && ! git cat-file -e "$base:$path" 2>/dev/null; then
+        # A crate root may be main.rs, and a module dir.rs may be dir/mod.rs.
+        if [ ! -f "$tree/$parent" ]; then
+          case $parent in
+            */lib.rs) parent=${parent%lib.rs}main.rs ;;
+            *) parent=${parent%.rs}/mod.rs ;;
+          esac
+        fi
+        if [ ! -f "$tree/$parent" ]; then
+          echo "bug-base: $path has no parent module at the base commit"
+        elif ! grep -qE '(^|[^[:alnum:]_])mod[[:space:]]+tests([^[:alnum:]_]|$)' "$tree/$parent"; then
+          printf '\n%s\n' "$declaration" >>"$tree/$parent"
+          echo "bug-base: declared $path in $parent"
+        fi
+      fi
+      ;;
+  esac
+done <<<"$plan"
+
 echo "bug-base: running $filter at $base"
 status=0
 (cd "$tree" && cargo nextest run --no-fail-fast "${package_args[@]}" -E "$filter") || status=$?
 
-# nextest exits 100 when a test failed and 101 when the build failed.
-# ponytail: a new test file that the base commit's modules never declare
-# matches no test there (exit 4) and fails this check; put such a test in an
-# existing test file until that case matters.
+# nextest-metadata's exit codes: 100 when a test failed, 101 when the build
+# failed and 4 when no test matched. Only a failed test shows the bug.
 case $status in
-  100 | 101) echo "bug-base: ok, a new or changed test fails on the base commit" ;;
+  100) echo "bug-base: ok, a new or changed test fails on the base commit" ;;
   0) echo "bug-base: every new and changed test passes on the base commit, so none shows the bug"; exit 1 ;;
+  101) echo "bug-base: the tests do not build on the base commit, so none ran there"; exit 1 ;;
+  4) echo "bug-base: no new or changed test runs on the base commit"; exit 1 ;;
   *) echo "bug-base: nextest exited $status on the base commit"; exit 1 ;;
 esac

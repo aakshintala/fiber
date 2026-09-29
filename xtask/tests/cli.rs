@@ -1,0 +1,339 @@
+//! `cargo xtask` run as a program, against a small git repository holding a
+//! Cargo workspace.
+
+#![allow(
+    clippy::unwrap_used,
+    reason = "test code may unwrap (docs/code-quality.md, \"Lints\"); clippy exempts only #[test] functions here"
+)]
+
+#[path = "../src/test_dir.rs"]
+mod test_dir;
+
+use std::io::Write;
+use std::process::{Command, Output, Stdio};
+
+use test_dir::TestDir;
+
+const DEPENDENCIES: &str = "# Dependencies
+
+## Runtime dependencies
+
+| Crate | Used for |
+|---|---|
+| serde_json | JSON |
+
+## Tests and development tools
+
+| Crate or tool | Kind | Used for |
+|---|---|---|
+| cargo-nextest | tool | tests |
+";
+
+const CODE_QUALITY: &str = "# Code quality
+
+## `unsafe`
+
+| Crate | File | Why |
+|---|---|---|
+| none yet | | |
+";
+
+fn xtask(dir: &TestDir, args: &[&str], env: &[(&str, &str)], stdin: &str) -> (i32, String) {
+    let mut child = Command::new(env!("CARGO_BIN_EXE_xtask"))
+        .args(args)
+        .envs(env.iter().copied())
+        .current_dir(dir.path())
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(stdin.as_bytes())
+        .unwrap();
+    let Output {
+        status,
+        stdout,
+        stderr,
+    } = child.wait_with_output().unwrap();
+    let text = String::from_utf8(stdout).unwrap() + &String::from_utf8(stderr).unwrap();
+    (status.code().unwrap(), text)
+}
+
+fn git(dir: &TestDir, args: &[&str]) {
+    let status = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .current_dir(dir.path())
+        .output()
+        .unwrap()
+        .status;
+    assert!(status.success(), "git {args:?}");
+}
+
+/// A committed workspace: `a`, `b` depending on `a`, binary-only `c`
+/// depending on `a`, and `outside`, a path crate that is not a member.
+fn workspace() -> TestDir {
+    let dir = TestDir::new("cli");
+    dir.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/a\", \"crates/b\", \"crates/c\"]\nexclude = [\"outside\"]\nresolver = \"3\"\n",
+    );
+    dir.write(".gitignore", "target/\nCargo.lock\n");
+    let package = |name: &str, deps: &str| {
+        format!(
+            "[package]\nname = \"{name}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\n{deps}"
+        )
+    };
+    dir.write("crates/a/Cargo.toml", &package("a", ""));
+    dir.write("crates/a/src/lib.rs", "//! a\n");
+    dir.write(
+        "crates/b/Cargo.toml",
+        &package("b", "a = { path = \"../a\" }\n"),
+    );
+    dir.write("crates/b/src/lib.rs", "//! b\n");
+    dir.write(
+        "crates/c/Cargo.toml",
+        &package("c", "a = { path = \"../a\" }\n"),
+    );
+    dir.write("crates/c/src/main.rs", "fn main() {}\n");
+    dir.write("outside/Cargo.toml", &package("outside", ""));
+    dir.write("outside/src/lib.rs", "");
+    dir.write("docs/dependencies.md", DEPENDENCIES);
+    dir.write("docs/code-quality.md", CODE_QUALITY);
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "base"]);
+    dir
+}
+
+#[test]
+fn select_runs_a_changed_crate_and_its_dependents() {
+    let dir = workspace();
+    dir.write("crates/a/src/lib.rs", "//! a, changed\n");
+    let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(
+        (code, out.as_str()),
+        (0, "mode=crates\npackages=a b c\nlibraries=a b\n")
+    );
+}
+
+#[test]
+fn select_counts_untracked_and_committed_changes() {
+    let dir = workspace();
+    dir.write("crates/b/src/new.rs", "");
+    let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(out, "mode=crates\npackages=b\nlibraries=b\n");
+
+    git(&dir, &["checkout", "-qb", "topic"]);
+    dir.write("docs/notes.md", "notes\n");
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "docs"]);
+    let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(out, "mode=crates\npackages=b\nlibraries=b\n");
+    std::fs::remove_file(dir.path().join("crates/b/src/new.rs")).unwrap();
+    let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(out, "mode=docs\npackages=\nlibraries=\n");
+}
+
+#[test]
+fn select_fails_without_a_base() {
+    let dir = workspace();
+    assert_eq!(xtask(&dir, &["select"], &[], "").0, 2);
+    let (code, out) = xtask(&dir, &["select", "--base", "nonexistent"], &[], "");
+    assert_eq!(code, 2);
+    assert!(out.starts_with("xtask: git merge-base"), "{out}");
+}
+
+#[test]
+fn plan_prints_the_jobs_and_shards() {
+    let dir = TestDir::new("plan");
+    let args = [
+        "plan",
+        "--mode",
+        "crates",
+        "--packages",
+        "a b",
+        "--event",
+        "pull_request",
+        "--bug",
+        "true",
+        "--mutants",
+        "30",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "jobs={\"bug_base\":true,\"docs\":true,\"lint\":true,\"mutants\":true,\"test\":true}\nshards=[0,1]\nshard_total=2\n"
+    );
+    let bad = [
+        "plan",
+        "--mode",
+        "crates",
+        "--packages",
+        "",
+        "--event",
+        "push",
+        "--bug",
+        "false",
+        "--mutants",
+        "x",
+    ];
+    assert_eq!(xtask(&dir, &bad, &[], "").0, 2);
+}
+
+#[test]
+fn verdict_passes_and_fails_by_exit_code() {
+    let dir = TestDir::new("verdict");
+    let needs = r#"{"select":{"result":"success","outputs":{}},"docs":{"result":"success"},"test":{"result":"skipped"}}"#;
+    let pass = [("NEEDS", needs), ("JOBS", r#"{"docs":true,"test":false}"#)];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &pass, ""),
+        (
+            0,
+            "verdict: every selected job passed and every other job was skipped\n".to_owned()
+        )
+    );
+    let fail = [("NEEDS", needs), ("JOBS", r#"{"docs":true,"test":true}"#)];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &fail, ""),
+        (1, "verdict: test: selected, but skipped\n".to_owned())
+    );
+    let failed_selection = [
+        ("NEEDS", r#"{"select":{"result":"failure"}}"#),
+        ("JOBS", ""),
+    ];
+    assert_eq!(
+        xtask(&dir, &["verdict"], &failed_selection, ""),
+        (
+            1,
+            "verdict: select: failure, so the selection failed\n".to_owned()
+        )
+    );
+    assert_eq!(xtask(&dir, &["verdict"], &[("NEEDS", "[]")], "").0, 2);
+    assert_eq!(xtask(&dir, &["verdict"], &[("NEEDS", "{")], "").0, 2);
+}
+
+#[test]
+fn ticket_reads_the_body_on_stdin() {
+    let dir = TestDir::new("ticket");
+    assert_eq!(
+        xtask(&dir, &["ticket"], &[], "Body.\n\nResolves #42\n"),
+        (0, "42\n".to_owned())
+    );
+    assert_eq!(
+        xtask(&dir, &["ticket"], &[], "No ticket.\n"),
+        (0, String::new())
+    );
+}
+
+#[test]
+fn bug_filter_prints_the_filter_packages_and_declarations() {
+    let dir = workspace();
+    let args = [
+        "bug-filter",
+        "crates/b/src/lib.rs",
+        "crates/b/src/fold_tests.rs",
+        "crates/a/tests/t.rs",
+    ];
+    let (code, out) = xtask(&dir, &args, &[], "");
+    assert_eq!(code, 0);
+    assert_eq!(
+        out,
+        "filter\t(package(b) & test(/^fold::tests::/)) | binary_id(a::t)\n\
+         package\ta\npackage\tb\n\
+         file\tcrates/b/src/fold_tests.rs\tcrates/b/src/fold.rs\t#[cfg(test)] #[path = \"fold_tests.rs\"] mod tests;\n\
+         file\tcrates/a/tests/t.rs\t\t\n"
+    );
+}
+
+#[test]
+fn the_checks_pass_on_a_clean_workspace() {
+    let dir = workspace();
+    for check in ["line-cap", "unsafe-table", "check-docs"] {
+        assert_eq!(
+            xtask(&dir, &[check], &[], ""),
+            (0, format!("{check}: ok\n"))
+        );
+    }
+}
+
+#[test]
+fn the_line_cap_fails_a_long_file() {
+    let dir = workspace();
+    dir.write("crates/b/src/long.rs", &"x\n".repeat(801));
+    dir.write("crates/b/src/long_tests.rs", &"x\n".repeat(900));
+    dir.write("crates/b/tests/long.rs", &"x\n".repeat(900));
+    dir.write("crates/b/notes.txt", &"x\n".repeat(900));
+    assert_eq!(
+        xtask(&dir, &["line-cap"], &[], ""),
+        (
+            1,
+            "line-cap: crates/b/src/long.rs: 801 lines, over the 800-line cap\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn the_unsafe_table_fails_unlisted_unsafe() {
+    let dir = workspace();
+    dir.write("crates/c/src/main.rs", "fn main() { unsafe {} }\n");
+    let (code, out) = xtask(&dir, &["unsafe-table"], &[], "");
+    assert_eq!(code, 1);
+    assert_eq!(
+        out,
+        "unsafe-table: crates/c/src/main.rs: uses unsafe, but the table in docs/code-quality.md does not list it\n"
+    );
+}
+
+#[test]
+fn the_dependency_list_fails_an_unlisted_crate() {
+    let dir = workspace();
+    assert_eq!(
+        xtask(&dir, &["dependency-list"], &[], ""),
+        (0, "dependency-list: ok\n".to_owned())
+    );
+    dir.write("crates/a/Cargo.toml", "[package]\nname = \"a\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\noutside = { path = \"../../outside\" }\n");
+    assert_eq!(
+        xtask(&dir, &["dependency-list"], &[], ""),
+        (
+            1,
+            "dependency-list: a depends on outside, which docs/dependencies.md does not list\n"
+                .to_owned()
+        )
+    );
+}
+
+#[test]
+fn the_docs_check_fails_a_broken_link() {
+    let dir = workspace();
+    dir.write("README.md", "[x][y]\n\n[y]: docs/missing.md\n");
+    assert_eq!(
+        xtask(&dir, &["check-docs"], &[], ""),
+        (
+            1,
+            "check-docs: README.md:3: link to docs/missing.md: no such file\n".to_owned()
+        )
+    );
+}
+
+#[test]
+fn a_check_without_its_doc_is_an_error() {
+    let dir = workspace();
+    std::fs::remove_file(dir.path().join("docs/code-quality.md")).unwrap();
+    assert_eq!(xtask(&dir, &["unsafe-table"], &[], "").0, 2);
+}
+
+#[test]
+fn an_unknown_or_missing_command_is_an_error() {
+    let dir = TestDir::new("unknown");
+    assert_eq!(
+        xtask(&dir, &["nope"], &[], ""),
+        (2, "xtask: unknown command nope\n".to_owned())
+    );
+    assert_eq!(xtask(&dir, &[], &[], "").0, 2);
+}

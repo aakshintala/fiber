@@ -17,7 +17,6 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
-  PYTHONDONTWRITEBYTECODE: "1"
 
 defaults:
   run:
@@ -33,8 +32,8 @@ jobs:
       actions: read
     outputs:
       base: ${{ steps.base.outputs.base }}
-      mode: ${{ steps.plan.outputs.mode }}
-      packages: ${{ steps.plan.outputs.packages }}
+      mode: ${{ steps.select.outputs.mode }}
+      packages: ${{ steps.select.outputs.packages }}
       jobs: ${{ steps.plan.outputs.jobs }}
       shards: ${{ steps.plan.outputs.shards }}
       shard_total: ${{ steps.plan.outputs.shard_total }}
@@ -68,10 +67,16 @@ jobs:
       - name: Install the toolchain
         run: rustup toolchain install
 
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
+
       - name: Select
+        id: select
         env:
           BASE: ${{ steps.base.outputs.base }}
-        run: python3 scripts/ci.py select --base "$BASE" | tee "$RUNNER_TEMP/selection.json"
+        run: cargo xtask select --base "$BASE" | tee -a "$GITHUB_OUTPUT"
 
       - name: Read the ticket's labels
         id: ticket
@@ -81,7 +86,7 @@ jobs:
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
           bug=false
-          number=$(python3 scripts/ci.py ticket <<<"$PR_BODY")
+          number=$(cargo xtask ticket <<<"$PR_BODY")
           if [ -n "$number" ]; then
             # A failed lookup fails the selection rather than skipping the
             # bug-fix check.
@@ -114,12 +119,13 @@ jobs:
       - name: Plan
         id: plan
         env:
+          MODE: ${{ steps.select.outputs.mode }}
+          PACKAGES: ${{ steps.select.outputs.packages }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
           MUTANTS: ${{ steps.mutants.outputs.count || 0 }}
         run: |
-          python3 scripts/ci.py plan "$RUNNER_TEMP/selection.json" --event "$GITHUB_EVENT_NAME" \
-            --bug "$BUG" --mutants "$MUTANTS" \
-            | tee -a "$GITHUB_OUTPUT"
+          cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
+            --bug "$BUG" --mutants "$MUTANTS" | tee -a "$GITHUB_OUTPUT"
 
   docs:
     name: Docs check
@@ -130,6 +136,12 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
       - run: scripts/check-docs
 
   lint:
@@ -146,6 +158,10 @@ jobs:
           fetch-depth: 0
       - name: Install the toolchain
         run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
       - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
         with:
           tool: cargo-deny
@@ -281,9 +297,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-          sparse-checkout: scripts
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
       - name: Every selected job passed and every other job was skipped
         env:
           NEEDS: ${{ toJSON(needs) }}
           JOBS: ${{ needs.select.outputs.jobs }}
-        run: python3 scripts/ci.py verdict
+        run: cargo xtask verdict
