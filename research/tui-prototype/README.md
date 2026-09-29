@@ -235,9 +235,6 @@ What needs the kitty protocol, and the fallback without it:
 - "esc to interrupt" is wrong while a panel or the search bar is open, so the prototype hides it then.
 - Ratatui's cells have no hyperlink attribute. The prototype rewrites each link's cells wrapped in OSC 8 after a frame that moves the conversation. A cell ratatui leaves unchanged later keeps its link in the terminal even if its text is no longer a link.
 
-#### Data the stream does not carry
-
-
 ### Not built in stage 2
 
 - Clicking a link: the prototype leaves links to the terminal, through OSC 8.
