@@ -1,0 +1,73 @@
+{
+ "status": 400,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "system",
+    "content": "<filler 260 lines>"
+   },
+   {
+    "role": "user",
+    "content": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_probe",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\": \"scanned.pdf\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_probe",
+    "content": [
+     {
+      "type": "file",
+      "file": {
+       "filename": "scanned.pdf",
+       "file_data": "<21524 chars sha256 1e933e9c9ab8>"
+      }
+     }
+    ]
+   }
+  ],
+  "max_completion_tokens": 600,
+  "reasoning_effort": "none",
+  "prompt_cache_key": "probe121c-in-resultscanned",
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "error": {
+   "message": "Invalid value: 'file'. Supported values are: 'text', 'refusal', 'image_url', and 'input_audio'.",
+   "type": "invalid_request_error",
+   "param": "messages[3].content[0]",
+   "code": "invalid_value"
+  }
+ }
+}

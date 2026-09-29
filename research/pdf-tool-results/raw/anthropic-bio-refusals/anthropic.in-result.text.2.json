@@ -1,0 +1,116 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "claude-sonnet-5-5",
+  "max_tokens": 300,
+  "system": "<filler 110 lines>",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Read text.pdf with the read tool, then answer: Quote the sentence in the PDF that contains the launch code, and give the code."
+   },
+   {
+    "role": "assistant",
+    "content": [
+     {
+      "type": "tool_use",
+      "id": "toolu_01probe",
+      "name": "read",
+      "input": {
+       "path": "text.pdf"
+      }
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "tool_result",
+      "tool_use_id": "toolu_01probe",
+      "content": [
+       {
+        "type": "document",
+        "source": {
+         "type": "base64",
+         "media_type": "application/pdf",
+         "data": "JVBERi0xLjQKMSAwIG9iago8PC9UeXBlL0NhdGFsb2cvUGFnZXMgMiAwIFI+PgplbmRvYmoKMiAwIG9iago8PC9UeXBlL1BhZ2VzL0tpZHNbNCAwIFIgNiAwIFJdL0NvdW50IDI+PgplbmRvYmoKMyAwIG9iago8PC9UeXBlL0ZvbnQvU3VidHlwZS9UeXBlMS9CYXNlRm9udC9IZWx2ZXRpY2E+PgplbmRvYmoKNCAwIG9iago8PC9UeXBlL1BhZ2UvUGFyZW50IDIgMCBSL01lZGlhQm94WzAgMCA2MTIgNzkyXS9SZXNvdXJjZXM8PC9Gb250PDwvRjEgMyAwIFI+Pj4+L0NvbnRlbnRzIDUgMCBSPj4KZW5kb2JqCjUgMCBvYmoKPDwvTGVuZ3RoIDg1Pj5zdHJlYW0KQlQgL0YxIDE0IFRmIDcyIDcwMCBUZCAoRmliZXIgcHJvYmUgcGFnZSBvbmUuIFRoZSBsYXVuY2ggY29kZSBpcyBQRUxJQ0FOLTQ0NzEuKSBUaiBFVAplbmRzdHJlYW0KZW5kb2JqCjYgMCBvYmoKPDwvVHlwZS9QYWdlL1BhcmVudCAyIDAgUi9NZWRpYUJveFswIDAgNjEyIDc5Ml0vUmVzb3VyY2VzPDwvRm9udDw8L0YxIDMgMCBSPj4+Pi9Db250ZW50cyA3IDAgUj4+CmVuZG9iago3IDAgb2JqCjw8L0xlbmd0aCA2Nz4+c3RyZWFtCkJUIC9GMSAxNCBUZiA3MiA3MDAgVGQgKFBhZ2UgdHdvLiBUaGUgYmFja3VwIGNvbG91ciBpcyB0ZWFsLikgVGogRVQKZW5kc3RyZWFtCmVuZG9iagp4cmVmCjAgOAowMDAwMDAwMDAwIDY1NTM1IGYgCjAwMDAwMDAwMDkgMDAwMDAgbiAKMDAwMDAwMDA1NCAwMDAwMCBuIAowMDAwMDAwMTExIDAwMDAwIG4gCjAwMDAwMDAxNzQgMDAwMDAgbiAKMDAwMDAwMDI4NiAwMDAwMCBuIAowMDAwMDAwNDE4IDAwMDAwIG4gCjAwMDAwMDA1MzAgMDAwMDAgbiAKdHJhaWxlcjw8L1NpemUgOC9Sb290IDEgMCBSPj4Kc3RhcnR4cmVmCjY0NAolJUVPRgo="
+        }
+       }
+      ],
+      "cache_control": {
+       "type": "ephemeral"
+      }
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": ""
+   },
+   {
+    "role": "user",
+    "content": "In one short sentence, say again what the file was about."
+   }
+  ],
+  "tools": [
+   {
+    "name": "read",
+    "description": "Read a file",
+    "input_schema": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "model": "claude-sonnet-5-5",
+  "id": "msg_011CfXT6X1C23NsvmpST6Wa6",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQS2wcKEAgSGAI4AUIIdGhpbmtpbmcSDGvqmwYTOrOZ+4xoYhoMoZcldkIAYkvtNwxvIjATyAUW0aC2gpLIDzeXbDN/fgei7FlPV6DN/IkxiuqOcnT84Mgyfsf7mk1338V78nAq+Abbz0GVkb81ijGyuo6ta5oIwws6P+75Y+5boim1av3stJ4+2sbgNd2ZRDhT+/1pqvQBNyGJRI/zg2yWyWF+p2Bmr1u7s1Nbg17fJlkZ9xP74JoImAfICuotGaz9VQgjamoP5oWl5IxCrQfMsdlvMuEj/IyEK7X3qmd5NPrK+kDC/zbXeyFKaYe5Q40MLUr7SrosK37lg1+SXoOB82iVnC0gO2ghqv9Kv6MCbiDkdHbCXeuXNUpCblle6x1RiToBDi6BmVMRh9CLUSNy7MU3PsUWYWp+zN43pxTwvhTBNwaDT0YDBo/B+1Y6mLqB4WH72RGQqORSUGCXTtw71yzPHDq271HVDJXnXpECZMm4M/Z1lqan5GfbBAusUNUYRCyZlJIOzmcMs7XK2m460XjQGviicQrV+F0QmlP6aoCV4XUud4Vb+tIhvHLwtiCFHfo+a/SHQNjSbkNRzQRVmMQjc7KC7LJ0Desvu7eEnEEHHDoXgpovJ3VI0ZLnalN5YpM/4QLy+28rdMjOvctmRFuDjkoQU1KPdW1CDWglPTGPYC2Cu/TA7RrxCHOhHpb0E7w0gwk6rlkC7Mcq58lvTK1Mu09caAYMdLZXnAyib0qfdDU/RWnbMT4uvcvi7/EiDvSJbgo+H8tpMs3I8S18EjoJb82lBnQZjognbDaKHK+c0p7WqTSRrnzYsGzDZpsmZh7o0yh6AvVszYa03vid9wwR3qSfUt1dG48g9DeWlqa78oE6lZ0kqUNC38D2ZrzoBoVo8HdMo4urOgq194Mhe+RI8dTu4bDeRuo9oUkb+GA9bO2KvxjKZum9IzsVSi70ibxHKkyvEWRIKG5RRyyzk9VcuEAYYnS6PW44DCOJTkk5OEH4RQJH0tz2ZZTq8IxWInQPf8xOevybexjgvf8mv00b3EfdgJ3431qESQwfcOTXh1iGf8QYWPOOn1OZhjMJlHqE11COXohiJ0md3RMw7pqWaRE2zSMjzMbJJv05fsK3GPGvhuFR9pHsRiIhTg/xHEosRwSFyopiXBeFWi9sFerv4X22WtThv2DTjvV4GYAXvca+MM3/j7BQ8H4h939eTwRQrXOv665OZKzzG3FrutYYVIb261/2q6w21oKM9mU4nzn9YZSkLUl0hu6M07/+al1BK//F8RDindQ/CVtcXZfTgdVF07/OfomTLcwYAQ=="
+   },
+   {
+    "type": "thinking",
+    "thinking": "",
+    "signature": "CAQShQUKEQgSGAI4AUIJbmFycmF0aW9uEgyZ/xxMWmfejDlBxeEaDO26tgzw0v2Bg5eRKyIwZYHrkyQwGHGx3/7XYzmAaomIuTMz6jzysbeEjP4rTTh/OhrjpiKpec1yhfR7RFqmKqEEG49fz0VNoVBZmxGHw0bsMhHn/B+EoZNdum3sDWxX0xsnta3KkcnZaSKGKC664H7P+huIO4PxrfFqDzfjD9xyeXtHkmZN6irB1hz2NK02MCH3dGlNQcTZrkBWavHpdekRsBh5N1RdqJsyQNhdEQwG8SwEKfVNESxnQHw8vLHBRQRg0YZNv8bUq52y44eMFQvrUfBMqaVIA683V3trzVb+iRbqBUvBx7SQwmprz0aI/SeAofw3FxV9xnNFwo/DJfaguZoX1AWFNBEF8omyueygNHkAxI3U0Dveh+93xjyKXbpZGxt26Kk/F55ZAg5m7gIYkPg8ZVDBZSFljDhTqOYnAQzke2lpI2m3RIE4foEnM96NjrIm5n6hh3kbGn6PWrG85y5DsP4KZRxiKs8SZFCJEhiDI+tUbQ9zBxBf8PoNxu+NMFjaV+3maY/iwbe2wNFkwM28qT28z0IP3b6YMHRGKvh+B5y2a3ddtkBKWX+0GoO/Ow1yOK1/70w55+R8QATLWNtW/OjkMU/zwhEeN9QxUiwQMzly9hjdCM6H8gNdXcnwlx1U7VznT5+l/15WSBh/KVUbNnQT7BvOk2+XXZ9v+aA1OD1fQEneqM6Q3PvT1sankrfjhzvihwlP98KlnQamEjG2ycKpICfaFAaRhwCVjd/NCEvjAlMBJhqPTpGVVEGm4NWp7majWl9YffA7aCwx4JVJDMMHiotSE26ngXgaDPIYAQ=="
+   }
+  ],
+  "container": null,
+  "stop_reason": "refusal",
+  "stop_sequence": null,
+  "stop_details": {
+   "type": "refusal",
+   "category": "bio",
+   "explanation": "API integrators: you can reduce refusals for your users by configuring a fallback model \u2014 see https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback"
+  },
+  "usage": {
+   "input_tokens": 21,
+   "cache_creation_input_tokens": 0,
+   "cache_read_input_tokens": 8085,
+   "cache_creation": {
+    "ephemeral_5m_input_tokens": 0,
+    "ephemeral_1h_input_tokens": 0
+   },
+   "output_tokens": 131,
+   "output_tokens_details": {
+    "thinking_tokens": 131
+   },
+   "service_tier": "standard",
+   "inference_geo": "global"
+  },
+  "diagnostics": null
+ }
+}

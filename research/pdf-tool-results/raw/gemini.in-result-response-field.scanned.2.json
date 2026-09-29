@@ -1,0 +1,132 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json; charset=UTF-8"
+ },
+ "request": {
+  "systemInstruction": {
+   "parts": [
+    {
+     "text": "<filler 260 lines>"
+    }
+   ]
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "functionCall": {
+       "name": "read",
+       "args": {
+        "path": "scanned.pdf"
+       }
+      },
+      "thoughtSignature": "skip_thought_signature_validator"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "functionResponse": {
+       "name": "read",
+       "response": {
+        "file": {
+         "inlineData": {
+          "mimeType": "application/pdf",
+          "data": "<21496 chars sha256 977feec3b5df>"
+         }
+        }
+       }
+      }
+     }
+    ]
+   },
+   {
+    "role": "model",
+    "parts": [
+     {
+      "text": ""
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "In one short sentence, say again what the file was about."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 400
+  },
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "read",
+      "description": "Read a file",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "path": {
+         "type": "string"
+        }
+       }
+      }
+     }
+    ]
+   }
+  ]
+ },
+ "response": {
+  "candidates": [
+   {
+    "content": {
+     "parts": [
+      {
+       "text": "The file contains an image of a red circle with the number \"1\" inside it.",
+       "thoughtSignature": "EnMKcQFpFH0TdQmoKZfD/PagUnAnRhDbykU+XF1f6gtO8WPvRE8dj+QH8dS53HbSQhuc1U0efpab4MC5wbbQkDM5lS5+OqsAU7D4RBGpTz21Vo2yps+mkFnii1H8Hcl2Kx5Wi1Fvv/7nO+aU7KTl/13+vzDv"
+      }
+     ],
+     "role": "model"
+    },
+    "finishReason": "STOP",
+    "index": 0
+   }
+  ],
+  "usageMetadata": {
+   "promptTokenCount": 23337,
+   "candidatesTokenCount": 18,
+   "totalTokenCount": 23355,
+   "cachedContentTokenCount": 20433,
+   "promptTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 23337
+    }
+   ],
+   "cacheTokensDetails": [
+    {
+     "modality": "TEXT",
+     "tokenCount": 20433
+    }
+   ],
+   "serviceTier": "standard"
+  },
+  "modelVersion": "gemini-3.1-flash-lite",
+  "responseId": "tn27atmXOeeg1MkPhtbwyAg"
+ }
+}

@@ -1,0 +1,64 @@
+{
+ "status": 400,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "system",
+    "content": "<filler 260 lines>"
+   },
+   {
+    "role": "user",
+    "content": "Read text.pdf with the read tool."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_probe",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\": \"text.pdf\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_probe",
+    "content": "ok"
+   }
+  ],
+  "max_completion_tokens": 100,
+  "reasoning_effort": "low",
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "error": {
+   "message": "Function tools with reasoning_effort are not supported for gpt-6-luna in /v1/chat/completions. To use function tools, use /v1/responses or set reasoning_effort to 'none'.",
+   "type": "invalid_request_error",
+   "param": "reasoning_effort",
+   "code": null
+  }
+ }
+}

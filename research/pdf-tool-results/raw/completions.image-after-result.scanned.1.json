@@ -1,0 +1,102 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "system",
+    "content": "<filler 260 lines>"
+   },
+   {
+    "role": "user",
+    "content": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_probe",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\": \"scanned.pdf\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_probe",
+    "content": "The page image follows."
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "image_url",
+      "image_url": {
+       "url": "<51118 chars sha256 00620679e6d8>"
+      }
+     }
+    ]
+   }
+  ],
+  "max_completion_tokens": 600,
+  "reasoning_effort": "none",
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "id": "chatcmpl-ETQwTvi8S2XCBDOGcYhsvv7VF3eD0",
+  "object": "chat.completion",
+  "created": 1790683785,
+  "model": "gpt-6-luna",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "The figure is an orange circle with the white number 73 inside.",
+     "refusal": null,
+     "annotations": []
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 6931,
+   "completion_tokens": 17,
+   "total_tokens": 6948,
+   "prompt_tokens_details": {
+    "cached_tokens": 5760,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  },
+  "service_tier": "default",
+  "system_fingerprint": null
+ }
+}

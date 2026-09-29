@@ -1,0 +1,183 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "input": [
+   {
+    "role": "developer",
+    "content": "<filler 260 lines>"
+   },
+   {
+    "role": "user",
+    "content": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+   },
+   {
+    "type": "function_call",
+    "call_id": "call_probe",
+    "name": "read",
+    "arguments": "{\"path\": \"scanned.pdf\"}"
+   },
+   {
+    "type": "function_call_output",
+    "call_id": "call_probe",
+    "output": "The file follows as a user file."
+   },
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "input_file",
+      "filename": "scanned.pdf",
+      "file_data": "<21524 chars sha256 1e933e9c9ab8>"
+     }
+    ]
+   },
+   {
+    "role": "assistant",
+    "content": "The figure is an orange circle with the number **73** drawn in white."
+   },
+   {
+    "role": "user",
+    "content": "In one short sentence, say again what the file was about."
+   }
+  ],
+  "store": false,
+  "max_output_tokens": 600,
+  "prompt_cache_key": "probe121-after-resultscanned",
+  "reasoning": {
+   "effort": "low"
+  },
+  "tools": [
+   {
+    "type": "function",
+    "name": "read",
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "id": "resp_0b05a6e3b016db66016abb7d63684487d0a16cad389aa32061",
+  "object": "response",
+  "created_at": 1790672227,
+  "status": "completed",
+  "access_programs": null,
+  "background": false,
+  "billing": {
+   "payer": "developer"
+  },
+  "completed_at": 1790672228,
+  "error": null,
+  "frequency_penalty": 0.0,
+  "incomplete_details": null,
+  "instructions": null,
+  "max_output_tokens": 600,
+  "max_tool_calls": null,
+  "model": "gpt-6-luna",
+  "moderation": null,
+  "output": [
+   {
+    "id": "msg_0b05a6e3b016db66016abb7d63f90887d0821b226ddcf1fe58",
+    "type": "message",
+    "status": "completed",
+    "content": [
+     {
+      "type": "output_text",
+      "annotations": [],
+      "logprobs": [],
+      "text": "It showed an orange circle with the white number 73."
+     }
+    ],
+    "phase": "final_answer",
+    "role": "assistant"
+   }
+  ],
+  "parallel_tool_calls": true,
+  "presence_penalty": 0.0,
+  "previous_response_id": null,
+  "prompt_cache_key": "probe121-after-resultscanned",
+  "prompt_cache_retention": "24h",
+  "reasoning": {
+   "context": "all_turns",
+   "effort": "low",
+   "mode": "standard",
+   "summary": null
+  },
+  "safety_identifier": null,
+  "service_tier": "default",
+  "store": false,
+  "temperature": 1.0,
+  "text": {
+   "format": {
+    "type": "text"
+   },
+   "verbosity": "medium"
+  },
+  "tool_choice": "auto",
+  "tool_usage": {
+   "image_gen": {
+    "input_tokens": 0,
+    "input_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "output_tokens": 0,
+    "output_tokens_details": {
+     "image_tokens": 0,
+     "text_tokens": 0
+    },
+    "total_tokens": 0
+   },
+   "web_search": {
+    "num_requests": 0
+   }
+  },
+  "tools": [
+   {
+    "type": "function",
+    "description": null,
+    "name": "read",
+    "output_schema": null,
+    "parameters": {
+     "type": "object",
+     "properties": {
+      "path": {
+       "type": "string"
+      }
+     },
+     "additionalProperties": false,
+     "required": [
+      "path"
+     ]
+    },
+    "strict": true
+   }
+  ],
+  "top_logprobs": 0,
+  "top_p": 0.98,
+  "truncation": "disabled",
+  "usage": {
+   "input_tokens": 7442,
+   "input_tokens_details": {
+    "cache_write_tokens": 39,
+    "cached_tokens": 7400
+   },
+   "output_tokens": 16,
+   "output_tokens_details": {
+    "reasoning_tokens": 0
+   },
+   "total_tokens": 7458
+  },
+  "user": null,
+  "metadata": {}
+ }
+}

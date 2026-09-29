@@ -1,0 +1,99 @@
+{
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "system",
+    "content": "<filler 260 lines>"
+   },
+   {
+    "role": "user",
+    "content": "Read scanned.pdf with the read tool, then answer: Describe the figure on the page: the shape, its colour, and the number drawn in it."
+   },
+   {
+    "role": "assistant",
+    "content": null,
+    "tool_calls": [
+     {
+      "id": "call_probe",
+      "type": "function",
+      "function": {
+       "name": "read",
+       "arguments": "{\"path\": \"scanned.pdf\"}"
+      }
+     }
+    ]
+   },
+   {
+    "role": "tool",
+    "tool_call_id": "call_probe",
+    "content": [
+     {
+      "type": "image_url",
+      "image_url": {
+       "url": "<51118 chars sha256 00620679e6d8>"
+      }
+     }
+    ]
+   }
+  ],
+  "max_completion_tokens": 600,
+  "reasoning_effort": "none",
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "read",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "path": {
+        "type": "string"
+       }
+      }
+     }
+    }
+   }
+  ]
+ },
+ "response": {
+  "id": "chatcmpl-ETQwQODfNgjDnHbFAGCluWW9dCnPD",
+  "object": "chat.completion",
+  "created": 1790683782,
+  "model": "gpt-6-luna",
+  "choices": [
+   {
+    "index": 0,
+    "message": {
+     "role": "assistant",
+     "content": "I can\u2019t access the PDF\u2019s contents here, so I can\u2019t identify the figure. Could you upload the page as an image or try attaching the PDF again?",
+     "refusal": null,
+     "annotations": []
+    },
+    "finish_reason": "stop"
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 6802,
+   "completion_tokens": 36,
+   "total_tokens": 6838,
+   "prompt_tokens_details": {
+    "cached_tokens": 0,
+    "cache_write_tokens": 6771,
+    "audio_tokens": 0
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 0,
+    "audio_tokens": 0,
+    "accepted_prediction_tokens": 0,
+    "rejected_prediction_tokens": 0
+   }
+  },
+  "service_tier": "default",
+  "system_fingerprint": null
+ }
+}
