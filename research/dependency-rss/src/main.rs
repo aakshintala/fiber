@@ -56,6 +56,100 @@ fn main() {
         terminal::disable_raw_mode().unwrap();
         black_box((w, h));
     }
+    #[cfg(feature = "image")]
+    {
+        // Fiber's read tool on a photo and a screenshot: decode, fit inside
+        // 2000x2000 keeping the aspect ratio (never enlarging), re-encode.
+        // Fixtures come from research/image-limits/gen. Each file is resized
+        // twice and the bytes compared.
+        use image::{DynamicImage, ImageEncoder, codecs::{jpeg::JpegEncoder, png::PngEncoder}, imageops::FilterType};
+        let dir = std::env::var("IMAGE_FIXTURES").unwrap_or_else(|_| "../image-limits/fixtures".into());
+        let fit = |bytes: &[u8]| -> Vec<u8> {
+            let img = image::load_from_memory(bytes).unwrap();
+            let img = if img.width() > 2000 || img.height() > 2000 { img.resize(2000, 2000, FilterType::Lanczos3) } else { img };
+            let mut out = Vec::new();
+            match image::guess_format(bytes).unwrap() {
+                image::ImageFormat::Jpeg => JpegEncoder::new_with_quality(&mut out, 80).encode_image(&DynamicImage::ImageRgb8(img.to_rgb8())).unwrap(),
+                _ => img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png).unwrap(),
+            }
+            out
+        };
+        let only = std::env::var("IMAGE_ONLY").unwrap_or_default();
+        for name in ["photo-4000x3000.jpg", "shot-4000x3000.png", "small.gif", "small.webp", "flat-9000x9000.png"].into_iter().filter(|n| n.contains(&only) && (only.contains("flat") || !n.contains("flat"))) {
+            let bytes = std::fs::read(format!("{dir}/{name}")).unwrap();
+            let (a, b) = (fit(&bytes), fit(&bytes));
+            assert!(a == b, "resize of {name} is not deterministic");
+            eprintln!("{name}: {} -> {} bytes, deterministic", bytes.len(), a.len());
+            black_box(a);
+        }
+    }
+    #[cfg(feature = "image-parts")]
+    {
+        // The same workload without the image crate: one decoder per format,
+        // fast_image_resize, and the JPEG and PNG encoders.
+        use fast_image_resize::{PixelType, ResizeAlg, ResizeOptions, Resizer, FilterType, images::Image};
+        let dir = std::env::var("IMAGE_FIXTURES").unwrap_or_else(|_| "../image-limits/fixtures".into());
+        // Decode to (width, height, RGB8).
+        let decode = |b: &[u8]| -> (u32, u32, Vec<u8>) {
+            if b.starts_with(&[0xFF, 0xD8]) {
+                let mut d = zune_jpeg::JpegDecoder::new(zune_jpeg::zune_core::bytestream::ZCursor::new(b));
+                let px = d.decode().unwrap();
+                let i = d.info().unwrap();
+                (i.width as u32, i.height as u32, px)
+            } else if b.starts_with(b"\x89PNG") {
+                let mut dec = png::Decoder::new(std::io::Cursor::new(b));
+                dec.set_transformations(png::Transformations::EXPAND);
+                let mut r = dec.read_info().unwrap();
+                let mut buf = vec![0; r.output_buffer_size().unwrap()];
+                let info = r.next_frame(&mut buf).unwrap();
+                assert_eq!(info.color_type, png::ColorType::Rgb);
+                (info.width, info.height, buf)
+            } else if b.starts_with(b"GIF8") {
+                let mut o = gif::DecodeOptions::new();
+                o.set_color_output(gif::ColorOutput::RGBA);
+                let mut r = o.read_info(std::io::Cursor::new(b)).unwrap();
+                let f = r.read_next_frame().unwrap().unwrap();
+                let rgb = f.buffer.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect();
+                (f.width as u32, f.height as u32, rgb)
+            } else {
+                let mut r = image_webp::WebPDecoder::new(std::io::Cursor::new(b)).unwrap();
+                let (w, h) = r.dimensions();
+                let mut buf = vec![0; r.output_buffer_size().unwrap()];
+                r.read_image(&mut buf).unwrap();
+                let rgb = if r.has_alpha() { buf.chunks(4).flat_map(|p| [p[0], p[1], p[2]]).collect() } else { buf };
+                (w, h, rgb)
+            }
+        };
+        let fit = |b: &[u8]| -> Vec<u8> {
+            let (w, h, px) = decode(b);
+            let (nw, nh) = if w > 2000 || h > 2000 {
+                let s = (2000.0 / w as f64).min(2000.0 / h as f64);
+                (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1))
+            } else { (w, h) };
+            let src = Image::from_vec_u8(w, h, px, PixelType::U8x3).unwrap();
+            let mut dst = Image::new(nw, nh, PixelType::U8x3);
+            let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+            Resizer::new().resize(&src, &mut dst, &opts).unwrap();
+            let mut out = Vec::new();
+            if b.starts_with(&[0xFF, 0xD8]) {
+                jpeg_encoder::Encoder::new(&mut out, 80).encode(dst.buffer(), nw as u16, nh as u16, jpeg_encoder::ColorType::Rgb).unwrap();
+            } else {
+                let mut e = png::Encoder::new(&mut out, nw, nh);
+                e.set_color(png::ColorType::Rgb);
+                e.set_depth(png::BitDepth::Eight);
+                e.write_header().unwrap().write_image_data(dst.buffer()).unwrap();
+            }
+            out
+        };
+        let only = std::env::var("IMAGE_ONLY").unwrap_or_default();
+        for name in ["photo-4000x3000.jpg", "shot-4000x3000.png", "small.gif", "small.webp", "flat-9000x9000.png"].into_iter().filter(|n| n.contains(&only) && (only.contains("flat") || !n.contains("flat"))) {
+            let bytes = std::fs::read(format!("{dir}/{name}")).unwrap();
+            let (a, b) = (fit(&bytes), fit(&bytes));
+            assert!(a == b, "resize of {name} is not deterministic");
+            eprintln!("{name}: {} -> {} bytes, deterministic", bytes.len(), a.len());
+            black_box(a);
+        }
+    }
     #[cfg(feature = "jsonschema")]
     {
         // A tool input schema of the shape Fiber's built-ins declare.

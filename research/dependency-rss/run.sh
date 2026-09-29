@@ -8,7 +8,7 @@
 # ~4.5 MiB of RSS before it runs a line of code.
 set -eu
 cd "$(dirname "$0")"
-FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect"
+FEATURES="serde_json ureq ratatui crossterm rusqlite mlua clap thiserror signal-hook getrandom base64 ring rustix regex ignore search similar pulldown-cmark jsonschema syntect image image-parts"
 # Every crate in the runtime table of docs/dependencies.md, built together.
 RUNTIME="serde_json ureq ratatui crossterm mlua clap thiserror signal-hook getrandom base64 ring rustix search similar"
 
@@ -32,6 +32,9 @@ build() {
   cargo build --release -q --target-dir "target/$1" ${2:+--features "$2"}
   echo "target/$1/release/dependency-rss"
 }
+
+# The image features read fixtures written by research/image-limits/gen.
+[ -d ../image-limits/fixtures ] || { mkdir -p ../image-limits/fixtures; (cd ../image-limits/gen && cargo run -q --release -- ../fixtures); }
 
 echo "$(uname -sm), $(rustc --version)"
 base=$(median "$(build base "")")
