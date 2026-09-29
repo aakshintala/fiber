@@ -79,14 +79,64 @@ The closed set a driver may send. Every command is answered with exactly one
 ephemeral `command_accepted` or `command_rejected` echoing the command's id;
 acknowledgements carry no `seq`, so they never reach the log.
 
+### The command line
+
+One JSON object per line. Its keys follow the rules of `docs/events.md`,
+"Payload types": snake_case, and an optional key is absent, never `null`.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `id` | string | yes | minted by the client from random bytes, as Fiber mints its own ids (`docs/events.md`, "Identity and ordering"). Acknowledgements and events name the command by it, as `command_id` |
+| `command` | string | yes | the command's name, from the table below |
+| `session_id` | string | no | on `steer` and `reply`, the delegate the command is for; absent means the session this client drives |
+| `args` | object | no | the command's own keys, below; absent when it takes none |
+
+```json
+{"id":"c_7f3a","command":"steer","args":{"content":[{"type":"text","text":"use the other test file"}]}}
+```
+
+A line that is not a JSON object, or has no string `id` or `command`, is
+rejected `malformed`. `args` with a missing key, a key of the wrong type or a
+key the command does not take is rejected `invalid_arguments`, so an older
+Fiber says no to a newer client's key instead of ignoring it.
+
+`content` is content parts (`docs/events.md`, "Content parts"). A client sends
+an image part with `data`, the image's bytes in base64, and its `mime_type`,
+never a `path`: a remote client cannot write into the session directory. Fiber
+writes the image to `artifacts/` and logs the part with its `path`, `width`
+and `height`.
+
+| Command | `args` |
+|---|---|
+| `prompt` | `content` |
+| `steer` | `content` |
+| `steer_amend` | `command_id` (string), the `steer` command's id; `content`, the new message |
+| `steer_drop` | `command_id` (string), as `steer_amend` |
+| `cancel` | none |
+| `reply` | `request_id` (string) and the answer ("Replying") |
+| `job_stop` | `job_id` (string) |
+| `background` | none |
+| `reload` | none |
+| `tools` | none |
+| `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `effort` (string, optional); `thinking` (string, optional) |
+| `mode` | `mode` (string) |
+| `name` | `text` (string); empty clears the name |
+| `handoff` | `instructions` (string, optional) |
+| `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false), `adopt` (array of strings, default empty) |
+| `shell` | `command` (string); `send` (boolean, default false) |
+| `command` | `name` (string); `text` (string, optional), what the person typed after the name |
+| `close` | none |
+
+### What each command does
+
 | Command | What it does |
 |---|---|
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. A steering message also moves any running shell call to the background, so it reaches the model at the next step boundary. Takes an optional `session_id` naming a delegate. |
 | `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
-| `cancel` | Ends the running turn. |
-| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form. Takes an optional `session_id` naming a delegate. |
+| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"). Rejected `stale_request` if no turn is running. |
+| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). Takes an optional `session_id` naming a delegate. |
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
@@ -95,13 +145,14 @@ acknowledgements carry no `seq`, so they never reach the log.
 | `mode` | Switches the permission mode at the next turn boundary (`docs/permissions.md`, "Modes"). Takes a mode. Rejected `invalid_arguments` for an unknown mode. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
-| `rewind` | Starts a new session that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |
+| `rewind` | Starts a new session that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. |
 
-Rejection codes: `malformed`, `unknown_command`, `busy`, `stale_request`,
-`not_step_boundary`, `session_held`, `delegate_session`.
+Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
+`busy`, `stale_request`, `not_step_boundary`, `session_held`,
+`delegate_session`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
@@ -168,6 +219,34 @@ A driver that needs a command Fiber does not define has found a hole in the
 contract, not a reason for a private channel. Premise 5 gives the TUI "no
 privilege a second GUI client would not have", so a command the terminal needs
 is a command every driver gets.
+
+### Replying
+
+`reply`'s answer keys are the keys of the line it causes, so a client builds a
+reply from the table it already reads.
+
+An interaction (`interaction_requested`) is answered with `declined: true`, or
+with the answer keys for its kind: `confirmed`, `labels`, `text`, or `answers`
+with an optional `note` (`docs/events.md`, `interaction_resolved`).
+
+An approval (`permission_requested`) is answered with these keys, which
+`permission_resolved` records:
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `decision` | string | yes | `allow` or `deny` |
+| `feedback` | string | no | with `deny`, what the person typed; the model receives it |
+| `remember` | object | no | with `allow`, on a request that offers a `rule`: `scope`, which is `session` for a session grant or `project` for a standing rule in the project's rules file, and `prefix`, which is the request's `rule.subject` or `rule.prefix` |
+
+```json
+{"id":"c_91be","command":"reply","args":{"request_id":"r_2c01","decision":"allow","remember":{"scope":"project","prefix":"npm test"}}}
+```
+
+A reply is rejected `stale_request` when its request is no longer pending, and
+`invalid_arguments` when its keys do not fit the request: another kind's
+answer keys, `feedback` with `allow`, or `remember` on a request with no `rule`
+or with a prefix the request did not offer. A global standing rule is added by
+editing the global rules file, never from an approval.
 
 ## Lifecycle
 
@@ -361,7 +440,10 @@ knows and exits.
 **What is written.** The turn in flight ends as the cancel key ends it
 (`docs/architecture.md`, "Cancellation"): each tool call completes
 `cancelled` once its group is empty, each job `cancelled`, a handoff in
-flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`.
+flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`. Two
+things differ from a cancel: a pending approval or question stays pending, so
+resuming raises it again (below), and queued steering messages start no turn. They
+were never logged, so they are gone.
 Nothing is written for a call before it has stopped. Then `fiber_exited`
 with the exit code and no final message, the socket is unlinked, the lock is
 released, and the process exits.

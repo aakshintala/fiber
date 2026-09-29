@@ -519,6 +519,9 @@ Durable. The envelope's `action_id` is the tool call.
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
 | `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3), `readonly` (4) or `review` (9); a closed set |
+| `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
+| `escalation` | object | no | on `review` in `auto`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed`. Absent in `ask`, where every review is a person's |
+| `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
 
 #### `permission_resolved`
 
@@ -528,10 +531,11 @@ Durable. The envelope's `action_id` is the tool call.
 |---|---|---|---|
 | `request_id` | string | no | the request it answers; absent when the decision raised none |
 | `decision` | string | yes | `allow` or `deny`; a closed set. On a `readonly` request, `allow` means leave `readonly`, and the call is then judged from step 5 |
-| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer` or `mode`; a closed set |
+| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer`, `mode` or `cancel`, the turn cancelled while the request was pending (`docs/architecture.md`, "Cancellation"); a closed set |
 | `reason` | string | no | why, in words, such as the reviewer's reason |
 | `feedback` | string | no | what the person typed with a denial, which the model receives |
-| `grant` | object | no | on an `allow` that is a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
+| `grant` | object | no | on a person's `allow` that added a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
+| `rule` | object | no | on a person's `allow` that added a standing rule to the project's rules file: `tool` and `prefix` (strings) |
 | `reviewer` | object | no | when `decided_by` is `reviewer`: `model` (string, a model reference) and `stage` (integer, `1` or `2`) |
 
 Both are durable so that a driver reconnecting to an unattended session learns
@@ -590,7 +594,7 @@ for its kind, and no others.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | yes | the request it answers |
-| `by` | string | yes | `person`, a client's `reply`, or `fiber`, which declines when no answer is possible; a closed set |
+| `by` | string | yes | `person`, a client's `reply`, or `fiber`, which declines when no answer is possible or the turn was cancelled; a closed set |
 | `declined` | boolean | no | `true` when declined |
 | `confirmed` | boolean | no | the answer to `confirm` |
 | `labels` | array of strings | no | the chosen options' labels, on `select` (one) and `multi_select` |

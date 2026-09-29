@@ -17,7 +17,10 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   permission is decided; it returns the call's effects, whether it is
   reversible, and the paths it touches, in the vocabulary of
   `docs/permissions.md`. Classification is per call, not per tool
-  (`docs/permissions.md`).
+  (`docs/permissions.md`). It also returns the call's subject and the prefix
+  a rule would offer (`docs/permissions.md`, "What a rule matches"). A tool
+  whose section says nothing of a subject returns an empty one, and its rules
+  match it by name.
 - Optionally: guideline lines for the system prompt, for guidance that spans
   calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
   "Tool guidelines").
@@ -155,6 +158,9 @@ Search runs through the shell ("Search").
 A relative path is resolved against the workspace. A symbolic link is resolved
 to its target, and the target is the path the call declares, so permission and
 the credential deny (`docs/permissions.md`) judge where the bytes really go.
+
+A file tool's subject is that resolved path, and the prefix it offers is the
+path's directory, ending in `/`.
 
 ### read
 
@@ -512,6 +518,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   shell tool.
 - A call declared `reads` takes the permission fast path and runs in
   `readonly` mode.
+- A command of one part, with nothing the classifier cannot read plainly,
+  has the command as its subject. The prefix offered is its first word, and
+  the second word too when it is a plain word, starting with no `-` and
+  holding no `/`, `.` or `=`: `npm test -- --watch` offers `npm test`, and
+  `rm -rf build` offers `rm`. Any other command has no subject, so no allow
+  rule or session grant matches it, and an approval of it cannot be
+  remembered.
 - The credential deny (`docs/permissions.md`, "Credentials") sees paths
   only for commands the recogniser understands. A command it does not
   understand, such as `python -c` opening a file, declares no paths, so
@@ -815,6 +828,8 @@ backend.
   agent's tool calls, never a fetched page (`docs/permissions.md`, "What it is
   shown").
 - A standing deny still applies first, so the person can deny a host.
+- A fetch's subject is its URL, and the prefix it offers is the URL's scheme
+  and host, ending in `/`. A search's subject is empty.
 
 ## Naming the session
 

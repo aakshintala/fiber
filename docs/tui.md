@@ -306,7 +306,9 @@ queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter send
 
 Esc interrupts the turn when nothing is open ("Keys"). The interrupt shows only
 on the ▣ line that closes the card; there is no separate "Interrupted" line. A
-call it stopped reads `cancelled` in its ledger row.
+call it stopped reads `cancelled` in its ledger row. With steering messages queued, they start
+the next turn at once (`docs/architecture.md`, "Cancellation"), so Esc means
+"stop, and read these". ⌥X drops them first for a plain stop.
 
 ### Handoff
 
@@ -404,9 +406,13 @@ the order they arrived, each labelled with the session asking.
 An approval request is a panel at the bottom that replaces the input box
 (`docs/permissions.md`).
 
-- The choices are: allow once; allow and add a rule, with the prefix shown, as
-  a separate choice; and deny, with optional feedback. Typing while the panel is
-  open goes to the feedback.
+- The choices are: allow once; allow for this session; always allow in this
+  project; and deny, with optional feedback. Typing while the panel is open
+  goes to the feedback. The two remembering choices show the prefix the rule
+  allows, the one the request offers (`docs/permissions.md`, "What a rule
+  matches"). A request that offers no rule shows neither.
+- The panel says why it asked: the standing rule that asked, the reviewer's
+  reason when the reviewer escalated, or that the reviewer failed.
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
   badge reopens it. Denying is always explicit.

@@ -52,7 +52,7 @@ A reply with no tool call ends the step without a next one ("Ending a turn").
 
 While the loop waits for a person's `reply` to an approval, it reads its inbox
 for that reply. Other commands and job notices that arrive meanwhile wait for
-the next step boundary. An `interrupt` ends the turn ("Interrupt").
+the next step boundary. A `cancel` ends the turn ("Interrupt").
 
 ## Tool calls that do not run
 
@@ -67,7 +67,7 @@ why, in words it can act on:
 | The reply was cut off ("A reply cut off by the output limit") | `failed` | `output_truncated` |
 
 A denied call does not stop the calls beside it: they run, and the turn
-continues. A person who wants the turn to stop sends `interrupt`; `reply` has
+continues. A person who wants the turn to stop sends `cancel`; `reply` has
 no option that does both.
 
 ## A reply cut off by the output limit
@@ -107,16 +107,19 @@ A reply with no text and no tool call is a reply with no tool call: the turn
 completes normally.
 
 There is no limit on steps per turn. Spending too much is the concern of a
-budget, not a step count, and a caller can always send `interrupt`.
+budget, not a step count, and a caller can always send `cancel`.
 
 ## Interrupt
 
-An `interrupt` stops the model request or the running tool calls
+A `cancel` stops the model request or the running tool calls
 (`docs/tools.md`, "Cancellation"). Before `turn_completed` is written with
 outcome `interrupted`, every tool call in the step that has no
 `tool_call_completed` gets one with status `cancelled`: calls waiting for
-approval, calls not yet started, and calls stopped mid-run. The log therefore
-never ends a turn with a call left open.
+approval, calls not yet started, and calls stopped mid-run. A call waiting for
+approval, or on a question, first gets its request's resolved line
+(`docs/architecture.md`, "Cancellation"). The log therefore never ends a turn
+with a call or a request left open. Queued steering messages then start the
+next turn.
 
 ## What the model is sent
 
@@ -155,4 +158,4 @@ Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.
   Repairing malformed model output before the loop sees it is the map's
   "canonical turn" item.
 - Guard against a `turn_end` hook that always continues. Such an extension
-  runs the turn until a person or caller sends `interrupt`.
+  runs the turn until a person or caller sends `cancel`.

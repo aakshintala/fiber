@@ -264,9 +264,17 @@ One press of the cancel key ends the **turn**:
 - the model stream stops,
 - any in-flight tool call is stopped and then completes as `cancelled` (how
   Fiber stops each kind of tool is `docs/tools.md`),
+- a pending approval or question in the turn ends with its resolved line
+  before its call completes: `permission_resolved` with `decision: deny` and
+  `decided_by: cancel`, or `interaction_resolved` with `by: fiber` and
+  `declined: true`, so a client clears its panel as it does on any answer,
 - the turn ends with `turn_completed { outcome: interrupted }`,
 - background jobs keep running, because a job outlives the turn that started
-  it.
+  it,
+- queued steering messages are kept. Once `turn_completed` is written they
+  start the next turn at once, as its input in queue order, so cancelling with
+  messages queued means "stop, and read these". To stop with nothing sent, a
+  person drops them first.
 
 What the log shows afterwards follows from `docs/events.md` and adds nothing
 new: the cancelled calls carry `status: cancelled`, there is no
