@@ -122,12 +122,10 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 ## Events
 
 The `job_*` kinds are unchanged. A delegate adds two kinds keyed by `job_id`, as
-`job_line` is for monitors:
-
-| Kind | Durable | Payload |
-|---|---|---|
-| `delegate_started` | yes | `job_id`, the delegate's `session_id`, harness, model reference (role resolved), workspace, worktree path and branch when isolated, `forked_from` for a fork |
-| `delegate_finished` | yes | `job_id`, the final message (bounded, with `artifact` when cut), `questions` when the delegate's turn ended on `ask_user`, usage totals, worktree state (path, branch, dirty) |
+`job_line` is for monitors: `delegate_started`, naming the delegate's session,
+harness, model, workspace and worktree, and `delegate_finished`, carrying its
+final message, any questions, usage totals and worktree state. Their keys are
+`docs/events.md`, "Jobs".
 
 - `delegate_started` is written after `job_started`, for each run.
   `delegate_finished` is written just before `job_completed`.

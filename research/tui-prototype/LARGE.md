@@ -62,9 +62,9 @@ its own fit, capped at the measured max.
 
 | Session | Built as | Prompts | Tool calls | Lines | Bytes |
 |---|---|---:|---:|---:|---:|
-| Median | 5 prompts (Claude Code median), tool-call count per prompt fitted to median 5 / p90 28 | 5 | 47 | 316 | 242,387 (0.23 MiB) |
-| p90 | 17 prompts (Claude Code p90), same per-prompt fit | 17 | 277 | 1,741 | 1,305,902 (1.25 MiB) |
-| Heavy | prompts drawn centred on p99 (101), until the total reaches 984, the longest real session found | 10 | 1,047 | 6,135 | 4,578,247 (4.37 MiB) |
+| Median | 5 prompts (Claude Code median), tool-call count per prompt fitted to median 5 / p90 28 | 5 | 47 | 316 | 243,348 (0.23 MiB) |
+| p90 | 17 prompts (Claude Code p90), same per-prompt fit | 17 | 277 | 1,741 | 1,307,727 (1.25 MiB) |
+| Heavy | prompts drawn centred on p99 (101), until the total reaches 984, the longest real session found | 10 | 1,047 | 6,135 | 4,579,568 (4.37 MiB) |
 
 None is over 5 MiB, so all three are committed; `measure_large.sh`
 regenerates them from the same seed if they are ever deleted.

@@ -106,8 +106,9 @@ impl G {
 
     fn turn(&mut self, text: &str) {
         let t = self.id("t");
+        let cid = format!("c_{}", &t[2..]);
         self.turn.insert(MAIN.into(), t);
-        self.m("turn_started", 1500, None, json!({ "input": [{ "type": "text", "text": text }] }));
+        self.m("turn_started", 1500, None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": text }], "source": "driver", "command_id": cid }] }));
     }
     fn end_turn(&mut self, outcome: &str) {
         self.m("turn_completed", 400, None, json!({ "outcome": outcome }));
@@ -162,9 +163,8 @@ impl G {
             "model": "anthropic/claude-opus-5-5",
             "tokens": { "input": 1400, "cache_read": self.ctx, "cache_write": { "1h": 2600 }, "output": out },
             "cost": ((0.02 + self.ctx as f64 * 3e-7) * 1e4).round() / 1e4,
-            "action_id": aid,
         });
-        self.m("usage_recorded", 50, None, p);
+        self.m("usage_recorded", 50, aid, p);
     }
     /// One model round trip: optional reasoning, the calls it requested, its
     /// usage, then the calls running one after another.
@@ -201,9 +201,12 @@ impl G {
                 R::Running => continue,
                 R::Ask { answer, result } => {
                     let rid = self.id("ir");
-                    self.m("interaction_requested", 60, Some(a), json!({ "request_id": rid, "action_id": a, "kind": "form", "fields": c.args["questions"] }));
+                    self.m("interaction_requested", 60, None, json!({ "request_id": rid, "action_ids": [a], "kind": "form", "fields": c.args["questions"] }));
                     let Some(ans) = answer else { continue };
-                    self.m("interaction_resolved", 38_000, Some(a), json!({ "request_id": rid, "answer": ans, "by": "person" }));
+                    let mut res = ans.clone();
+                    res["request_id"] = json!(rid);
+                    res["by"] = json!("person");
+                    self.m("interaction_resolved", 38_000, None, res);
                     (20, json!({ "status": "completed", "content": [{ "type": "text", "text": result }] }))
                 }
                 R::Ok { lines: n, head } => (250, json!({ "status": "completed", "content": lines(*n, head) })),
@@ -230,7 +233,7 @@ impl G {
         ids
     }
     fn queue(&mut self, msgs: &[(&str, &str)]) {
-        let m: Vec<Value> = msgs.iter().map(|(id, t)| json!({ "id": id, "text": t, "source": "person" })).collect();
+        let m: Vec<Value> = msgs.iter().map(|(id, t)| json!({ "command_id": id, "content": [{ "type": "text", "text": t }], "source": "driver" })).collect();
         self.m("steering_queue", 300, None, json!({ "messages": m }));
     }
     /// A few of the delegate's own lines, relayed onto the parent's stream.
@@ -300,24 +303,24 @@ fn main() {
         ctx: 21_000,
         gen_n: 0,
     };
-    g.m("fiber_started", 0, None, json!({ "version": "0.0.1", "schema_version": 1, "resumed": false }));
-    g.m("session_started", 5, None, json!({ "created_at": g.ts, "workspace": "~/work/fiber" }));
+    g.m("fiber_started", 0, None, json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }));
+    g.m("session_started", 5, None, json!({ "workspace": "~/work/fiber" }));
     g.m("opening_message", 5, None, json!({
-        "environment": { "date": "2026-09-28", "platform": "macos", "shell": "zsh", "workspace": "~/work/fiber",
-            "git": { "branch": "fix/wait-for-path", "dirty": true }, "session_log": "~/.fiber/projects/fiber/sessions/s_9c41e2/events.jsonl" },
+        "environment": { "date": "2026-09-28", "os": "macos", "arch": "aarch64", "shell": "zsh", "workspace": "~/work/fiber",
+            "git": { "branch": "fix/wait-for-path" }, "session_log": "~/.fiber/projects/fiber/sessions/s_9c41e2/events.jsonl" },
         "instruction_files": [{ "path": "AGENTS.md", "content": "…" }],
         "skills": [],
     }));
     let tools: Vec<Value> = ["read", "write", "edit", "shell", "jobs", "delegate_spawn", "delegate_fork", "ask_user", "web_fetch"]
         .iter()
-        .map(|n| json!({ "name": n, "deferred": false }))
-        .chain((0..32).map(|k| json!({ "name": format!("linear_{k}"), "deferred": true })))
+        .map(|n| json!({ "name": n, "deferred": false, "definition": { "name": n, "input_schema": { "type": "object" } } }))
+        .chain((0..32).map(|k| json!({ "name": format!("linear_{k}"), "deferred": true, "definition": { "name": format!("linear_{k}"), "input_schema": { "type": "object" } } })))
         .collect();
     g.m("preamble_built", 5, None, json!({
-        "reason": "start", "model": "anthropic/claude-opus-5-5", "effort": "high", "thinking": "adaptive",
+        "reason": "start", "model": "anthropic/claude-opus-5-5", "context_window": 1_000_000, "trigger_at": 400_000, "effort": "high", "thinking": "adaptive",
         "tool_choice": "auto", "cache_lifetime": "1h", "system_prompt": "…", "tools": tools,
     }));
-    g.m("mode_changed", 3000, None, json!({ "before": "ask", "after": "auto", "by": "mode" }));
+    g.m("mode_changed", 3000, None, json!({ "before": "ask", "after": "auto", "by": "command" }));
 
     // ---- turn 1: find the flake, answered in markdown
     g.turn("The lock test in crates/log is flaky on Linux CI. Find out why before changing anything.");
@@ -349,7 +352,7 @@ fn main() {
             "answers": [
                 { "labels": ["crates/testutil (Recommended)"] },
                 { "labels": ["5 s (Recommended)"], "text": "10 s for the doors tests" },
-                "skipped",
+                { "skipped": true },
             ],
             "note": "Keep the diff small; no refactors on the way.",
         })),
@@ -390,7 +393,7 @@ fn main() {
             g.m("notice", 800, None, json!({ "code": "config_key_ignored", "message": "~/.fiber/config.json sets tools.enabeld, which is not a configuration key. It was ignored." }));
         }
         if i == 2 {
-            g.m("steering_applied", 200, None, json!({ "text": "Leave the timing tests in crates/loop alone; their sleeps are what they measure.", "source": "person", "steer_id": "c_71a2" }));
+            g.m("steering_applied", 200, None, json!({ "content": [{ "type": "text", "text": "Leave the timing tests in crates/loop alone; their sleeps are what they measure." }], "source": "driver", "command_id": "c_71a2" }));
             g.queue(&[]);
         }
         if i == 3 {
@@ -398,7 +401,7 @@ fn main() {
             g.step(None, vec![read("crates/loop/tests/cancel.rs", 160), edit("crates/loop/tests/cancel.rs", 2, 2), cargo("cargo test -p loop", 0, 18, 24000)]);
         }
         if i == 4 {
-            g.m("mcp_server_failed", 300, None, json!({ "server": "linear", "reason": "died", "restart": true,
+            g.m("mcp_server_failed", 300, None, json!({ "server": "linear", "reason": "died", "will_restart": true,
                 "error": { "code": "mcp_server_unavailable", "message": "The MCP server linear died. Fiber restarts it on the next call to one of its tools." } }));
         }
     }
@@ -407,11 +410,11 @@ fn main() {
         C { name: "shell", args: json!({ "command": "cargo nextest run -p log --stress-count 200", "background": true }), r: R::Ok { lines: 1, head: "started job j_5e10".into() } },
         C { name: "delegate_spawn", args: json!({ "description": "review: the wait_for_path sweep", "role": "reviewer" }), r: R::Ok { lines: 1, head: "started delegate j_77c3".into() } },
     ]);
-    g.m("job_started", 20, None, json!({ "job_id": "j_5e10", "action_id": ids[0], "tool_name": "shell", "description": "stress: log lock ×200", "output_path": "artifacts/j_5e10.log" }));
-    g.m("job_started", 20, None, json!({ "job_id": "j_77c3", "action_id": ids[1], "tool_name": "delegate_spawn", "description": "review: the wait_for_path sweep", "output_path": "artifacts/j_77c3.log" }));
-    g.m("delegate_started", 20, None, json!({ "job_id": "j_77c3", "session_id": DELEGATE, "harness": "fiber", "model": "openai/gpt-6-sol", "workspace": "~/work/fiber" }));
+    g.m("job_started", 20, Some(&ids[0]), json!({ "job_id": "j_5e10", "tool": "shell", "description": "stress: log lock ×200", "output_path": "artifacts/j_5e10.log" }));
+    g.m("job_started", 20, Some(&ids[1]), json!({ "job_id": "j_77c3", "tool": "delegate_spawn", "description": "review: the wait_for_path sweep", "output_path": "artifacts/j_77c3.log" }));
+    g.m("delegate_started", 20, None, json!({ "job_id": "j_77c3", "delegate_session_id": DELEGATE, "harness": "fiber", "model": "openai/gpt-6-sol", "workspace": "~/work/fiber" }));
     g.turn.insert(DELEGATE.into(), "t_dele".into());
-    g.emit(DELEGATE, "turn_started", 100, None, json!({ "input": [{ "type": "text", "text": "Review the diff on fix/wait-for-path." }] }));
+    g.emit(DELEGATE, "turn_started", 100, None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "Review the diff on fix/wait-for-path." }], "source": "driver", "command_id": "c_dele" }] }));
     g.delegate_calls(&["crates/testutil/src/child.rs", "crates/log/tests/lock.rs"]);
     g.step(None, vec![cargo("cargo test --workspace", 0, 40, 38000)]);
     g.say(None, REPLY2);
@@ -432,7 +435,7 @@ fn main() {
     let da = g.id("a");
     g.emit(DELEGATE, "tool_call_requested", 600, Some(&da), json!({ "name": "shell", "arguments": { "command": "cargo mutants -p testutil --in-place --timeout 60" }, "provider_id": format!("toolu_{da}") }));
     let dr = g.id("pr");
-    g.emit(DELEGATE, "permission_requested", 40, Some(&da), json!({ "request_id": dr, "action_id": da, "effects": ["executes", "writes"], "reversible": false, "paths": [], "step": "standing_ask" }));
+    g.emit(DELEGATE, "permission_requested", 40, Some(&da), json!({ "request_id": dr, "effects": ["executes", "writes"], "reversible": false, "paths": [], "step": "standing_ask" }));
     g.step(None, vec![
         C { name: "shell", args: json!({ "command": "cargo nextest run -p log --stress-count 400 -j 16" }), r: R::Running },
         ask(json!([

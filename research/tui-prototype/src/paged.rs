@@ -584,7 +584,7 @@ mod tests {
         let usage = |n: u64| serde_json::json!({ "tokens": { "input": n, "cache_read": 0, "output": 0 } });
         let text = |t: &str| serde_json::json!({ "text": t });
         let mut out = String::new();
-        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "text", "text": "go" }] }));
+        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] }));
         for (i, t) in ["one", "two", "three"].iter().enumerate() {
             out += &e("assistant_message_started", &format!("b{i}"), serde_json::json!({}));
             out += &e("assistant_message_completed", &format!("b{i}"), text(&format!("before {t}")));
@@ -603,11 +603,11 @@ mod tests {
             }
         }
         out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
-        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "text", "text": "/handoff" }] }));
+        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "/handoff" }], "source": "driver", "command_id": "c" }] }));
         out += &e("handoff_started", "", serde_json::json!({ "trigger": "person" }));
         out += &e("handoff_completed", "", serde_json::json!({ "outcome": "completed", "tokens_before": 40_000, "note": [] }));
         out += &e("turn_completed", "", serde_json::json!({ "outcome": "completed" }));
-        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "text", "text": "next" }] }));
+        out += &e("turn_started", "", serde_json::json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "next" }], "source": "driver", "command_id": "c" }] }));
         out += &e("assistant_message_started", "d0", serde_json::json!({}));
         out += &e("assistant_message_completed", "d0", text("fresh"));
         out += &e("usage_recorded", "", usage(12_000));

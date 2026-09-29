@@ -86,7 +86,7 @@ acknowledgements carry no `seq`, so they never reach the log.
 | `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
 | `cancel` | Ends the running turn. |
-| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input, form or status. Takes an optional `session_id` naming a delegate. |
+| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form. Takes an optional `session_id` naming a delegate. |
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
@@ -103,10 +103,10 @@ acknowledgements carry no `seq`, so they never reach the log.
 Rejection codes: `malformed`, `unknown_command`, `busy`, `stale_request`,
 `not_step_boundary`, `session_held`, `delegate_session`.
 
-**`reply` answers all seven interactions, not just approvals.**
+**`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
-of interactions — approval, confirm, select, multi-select, text input, form
-and status — carried on the same request events the loop uses to ask a human
+of interactions — approval, confirm, select, multi-select, text input and
+form — carried on the same request events the loop uses to ask a human
 anything, and answerable by any connected client including a headless one." The interaction kinds are
 versioned and may grow; one command that carries a `request_id` does not have
 to grow with them. What happens to a stale one is already `docs/events.md`'s:
