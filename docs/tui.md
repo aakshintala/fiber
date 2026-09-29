@@ -708,8 +708,8 @@ person scrolls, with range reads by `seq` over an offset table
 - **Opening is one streaming pass** over the log. It builds the offset table,
   builds the panel's cards, and counts every row. No event is kept: each is
   applied to the panel's folds and dropped.
-- **Pages are cut inside turns,** at `assistant_message_started`, about 64
-  lines each, and never inside a tool group, so each page renders on its own.
+- **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
+  never inside a tool group, so each page renders on its own.
 - **The window** is the pages on screen plus one screen of rows above and
   below. Every other page is dropped.
 - **Row counts are exact,** measured in the opening pass and again when the

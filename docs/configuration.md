@@ -362,6 +362,6 @@ merge rules between the two.
 
 ## Not settled here
 
-- What a skill, a prompt template and a theme are to Fiber
+- What a skill and a prompt template are to Fiber
   (`docs/extensions.md`, "What a package holds")
 - Where an MCP server's OAuth token is stored (`docs/mcp.md`)

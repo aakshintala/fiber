@@ -62,8 +62,9 @@ Beside the manifest it may hold:
 - a prompt file, whose text goes in the system prompt (`docs/system-prompt.md`,
   "Extension texts")
 
-What a skill, a prompt template and a theme are to Fiber is not yet specified.
-This page covers only how they arrive.
+A theme sets the terminal's colours and nothing else (`docs/tui.md`,
+"Themes"). What a skill and a prompt template are to Fiber is not yet
+specified. This page covers only how they arrive.
 
 A script loads another script with `require`. `require` finds files inside the
 extension's own directory and nowhere else, so one extension cannot load
