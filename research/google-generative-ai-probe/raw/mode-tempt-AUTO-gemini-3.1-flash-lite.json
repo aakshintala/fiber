@@ -1,0 +1,79 @@
+{
+ "name": "mode-tempt-AUTO-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:54:03 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=534",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"plot\",\n              \"args\": {\n                \"p\": {\n                  \"x\": 3,\n                  \"y\": 4\n                }\n              },\n              \"id\": \"call_467747\"\n            },\n            \"thoughtSignature\": \"EnMKcQFpFH0TmuVlX7AUA4nUkHHtUr9/AzDxe/7BDLiN0E7iw30yFVy+GpIIqU/0tpI8Xs3jQh3Md82LJQT3GzdM4nUISAo3Q3p87yDd97AL4sUNRG10vQuSh5pexCjkjSbfuZihcI9RydptNdE0LkbbC/6t\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 83,\n    \"candidatesTokenCount\": 18,\n    \"totalTokenCount\": 101,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 83\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"q3y7au3nGPafjMcP8IigyAY\"\n}\n",
+ "request": {
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "plot",
+      "description": "Plot a point",
+      "parameters": {
+       "type": "object",
+       "properties": {
+        "p": {
+         "type": "object",
+         "properties": {
+          "x": {
+           "type": "integer"
+          },
+          "y": {
+           "type": "integer"
+          }
+         },
+         "required": [
+          "x",
+          "y"
+         ]
+        },
+        "v": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "p"
+       ]
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "AUTO"
+   }
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Plot x=3 y=4."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 100
+  }
+ }
+}

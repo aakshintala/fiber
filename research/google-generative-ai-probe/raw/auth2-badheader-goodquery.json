@@ -1,0 +1,6 @@
+{
+ "name": "auth2-badheader-goodquery",
+ "model": "gemini-3.1-flash-lite",
+ "status": 200,
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"Hello! How can I help you today?\",\n            \"thoughtSignature\": \"EnMKcQFpFH0Tv/4sW/6lmeGQsYIOdRyPrBKO/E7THH22mzuyB1hAkBALHGy/dsDDJ/Xa8Tu43czpus438CCb4sLBVGF4ODJT4anITxa4VF8jd7TzQQrVIrSvOiG1VIwtgvrECa+DJ+R6U5QLrici74aFvMEZ\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 2,\n    \"candidatesTokenCount\": 9,\n    \"totalTokenCount\": 11,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 2\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"zXy7aqu4N6mT1MkPo6WOiQc\"\n}\n"
+}

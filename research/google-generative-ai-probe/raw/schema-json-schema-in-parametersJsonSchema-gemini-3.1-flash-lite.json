@@ -1,0 +1,92 @@
+{
+ "name": "schema-json-schema-in-parametersJsonSchema-gemini-3.1-flash-lite",
+ "model": "gemini-3.1-flash-lite",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 08:53:51 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=526",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"functionCall\": {\n              \"name\": \"plot\",\n              \"args\": {\n                \"v\": \"a\",\n                \"p\": {\n                  \"x\": 3,\n                  \"y\": 4\n                }\n              },\n              \"id\": \"call_67023\"\n            },\n            \"thoughtSignature\": \"EnMKcQFpFH0TOzrFANL0OsI7e4nDkOCgQeJKsFyfYwtGh618UAzp8dxQtZ4/u5B6jwfACA8az8US/Ju5yh1YRW3E12ZFG3Vu9bVdm99ieNNcALT8wSu70EngQoEcppBoDfsS1M0vvjfqWwIWFFs17lE7vaum\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0,\n      \"finishMessage\": \"Model generated function call(s).\"\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 99,\n    \"candidatesTokenCount\": 24,\n    \"totalTokenCount\": 123,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 99\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"nny7aqOAM6CvjMcPmoOfuAQ\"\n}\n",
+ "request": {
+  "tools": [
+   {
+    "functionDeclarations": [
+     {
+      "name": "plot",
+      "description": "Plot a point",
+      "parametersJsonSchema": {
+       "type": "object",
+       "properties": {
+        "p": {
+         "$ref": "#/$defs/Pt"
+        },
+        "v": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "integer"
+          }
+         ]
+        }
+       },
+       "required": [
+        "p"
+       ],
+       "additionalProperties": false,
+       "$defs": {
+        "Pt": {
+         "type": "object",
+         "properties": {
+          "x": {
+           "type": "integer"
+          },
+          "y": {
+           "type": "integer"
+          }
+         },
+         "required": [
+          "x",
+          "y"
+         ]
+        }
+       }
+      }
+     }
+    ]
+   }
+  ],
+  "toolConfig": {
+   "functionCallingConfig": {
+    "mode": "ANY"
+   }
+  },
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "Plot point x=3 y=4 with v \"a\"."
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "maxOutputTokens": 100
+  }
+ }
+}

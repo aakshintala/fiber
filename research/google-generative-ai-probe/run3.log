@@ -1,0 +1,25 @@
+val2-AUTO-0                              gemini-3.1-flash-lite    200 
+val2-AUTO-1                              gemini-3.1-flash-lite    200 
+val2-AUTO-2                              gemini-3.1-flash-lite    200 
+val2-AUTO-3                              gemini-3.1-flash-lite    200 
+val2-AUTO-4                              gemini-3.1-flash-lite    200 
+val2-AUTO-5                              gemini-3.1-flash-lite    200 
+AUTO [[{"functionCall": {"name": "conv", "args": {"n": 3.7, "unit": "kelvin"}, "id": "call_480045"}}], [{"functionCall": {"name": "conv", "args": {"unit": "kelvin", "n": 3.7}, "id": "call_311"}}], [{"functionCall": {"name": "conv", "args": {"unit": "kelvin", "n": 3.7}, "id": "call_395546"}}], [{"functionCall": {"name": "conv", "args": {"unit": "kelvin", "n": 3.7}, "id": "call_442868"}}], [{"functionCall": {"name": "conv", "args": {"n": 3.7, "unit": "kelvin"}, "id": "call_445457"}}], [{"functionCall": {"name": "conv", "args": {"n": 3.7, "unit": "kelvin"}, "id": "call_528417"}}]]
+val2-VALIDATED-0                         gemini-3.1-flash-lite    200 
+val2-VALIDATED-1                         gemini-3.1-flash-lite    200 
+val2-VALIDATED-2                         gemini-3.1-flash-lite    200 
+val2-VALIDATED-3                         gemini-3.1-flash-lite    200 
+val2-VALIDATED-4                         gemini-3.1-flash-lite    200 
+val2-VALIDATED-5                         gemini-3.1-flash-lite    200 
+VALIDATED [[{"functionCall": {"name": "conv", "args": {"unit": "c", "n": 3}, "id": "call_2049"}}], [{"functionCall": {"name": "conv", "args": {"unit": "c", "n": 3}, "id": "call_371657"}}], [{"functionCall": {"name": "conv", "args": {"n": 3, "unit": "c"}, "id": "call_651745"}}], [{"functionCall": {"name": "conv", "args": {"n": 3, "unit": "f"}, "id": "call_444310"}}], [{"functionCall": {"name": "conv", "args": {"unit": "c", "n": 3}, "id": "call_597785"}}], [{"functionCall": {"name": "conv", "args": {"unit": "c", "n": 3}, "id": "call_12052"}}]]
+sysrole2-user-gemini-2.5-flash-image     gemini-2.5-flash-image   200 
+  -> Hello.
+sysrole2-model-gemini-2.5-flash-image    gemini-2.5-flash-image   200 
+  -> Hello.
+sysrole2-None-gemini-2.5-flash-image     gemini-2.5-flash-image   200 
+  -> Hello.
+auth3-header-gemini-2.5-flash-image      gemini-2.5-flash-image   200 
+  -> Hello! How can I help you today?
+auth3-query-gemini-2.5-flash-image       gemini-2.5-flash-image   200 
+  -> Hello! How can I help you today?
+requests 17 est spend $0.00136

@@ -1,0 +1,36 @@
+{
+ "name": "sse-bad-mime",
+ "model": "gemini-2.5-flash",
+ "auth": "header",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:streamGenerateContent?alt=sse",
+ "status": 400,
+ "headers": {
+  "Vary": "Origin",
+  "Content-Type": "text/event-stream",
+  "Date": "Tue, 29 Sep 2026 08:53:58 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "Content-Length": "267",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "gfet4t7; dur=91",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Connection": "close"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.generation_config.response_mime_type: allowed mimetypes are `text/plain`, `application/json`, `application/xml`, `application/yaml` and `text/x.enum`.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n",
+ "request": {
+  "contents": [
+   {
+    "role": "user",
+    "parts": [
+     {
+      "text": "hi"
+     }
+    ]
+   }
+  ],
+  "generationConfig": {
+   "responseMimeType": "text/bogus"
+  }
+ }
+}

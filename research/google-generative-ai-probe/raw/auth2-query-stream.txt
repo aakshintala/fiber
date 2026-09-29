@@ -1,0 +1,7 @@
+status 200
+data: {"candidates": [{"content": {"parts": [{"text": "Hello"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 2,"candidatesTokenCount": 1,"totalTokenCount": 3,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 2}],"serviceTier": "standard"},"modelVersion": "gemini-3.1-flash-lite","responseId": "zny7asrYHbuysOIP_sCe2QY"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "! How can I help you today?"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 2,"candidatesTokenCount": 9,"totalTokenCount": 11,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 2}],"serviceTier": "standard"},"modelVersion": "gemini-3.1-flash-lite","responseId": "zny7asrYHbuysOIP_sCe2QY"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "","thoughtSignature": "EnMKcQFpFH0TIvW1dAfBfGnwIjHBAxu0sB3HPTrRgSj9Odi/XfmiP3Le9XQHBT4E+gg7Ezctb/RlTOTCr671zjqX4dfJEpOQPSxKNCmiIf9GAhozJWleqfvqJn2hKe/YiAJRTQ03zwvPi5QbaBmv58EB8M75"}],"role": "model"},"finishReason": "STOP","index": 0}],"usageMetadata": {"promptTokenCount": 2,"candidatesTokenCount": 9,"totalTokenCount": 11,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 2}],"serviceTier": "standard"},"modelVersion": "gemini-3.1-flash-lite","responseId": "zny7asrYHbuysOIP_sCe2QY"}
+
