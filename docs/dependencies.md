@@ -85,8 +85,8 @@ x86_64, Linux arm64 and macOS arm64. A crate is measured again when its major
 version or its enabled features change. What a running session holds, broken down by Fiber's own
 crates, belongs to the memory budget (`docs/performance.md`).
 
-Dev-dependencies are compiled only into tests. They never reach the shipped
-binary, so they have no memory row.
+Dev-dependencies are compiled only into tests and rigs (`docs/testing.md`,
+"Rigs"). They never reach the shipped binary, so they have no memory row.
 
 ## Runtime dependencies
 

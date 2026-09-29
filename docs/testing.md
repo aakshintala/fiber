@@ -161,9 +161,10 @@ program or waiting on a test.
   subcommand through its area's ticket, with the tests a feature carries.
 - **It is gated.** The tests and clippy compile every example, so a rig
   that stops building fails `scripts/check`.
-- **It reads and writes only formats tests replay:** a recorded stream (the
-  response bytes), an events file (JSON lines, the session log's format), or
-  a session directory. A bug a rig reproduces ships its test
+- **It adds no fixture format.** It reads the files its layer already reads,
+  and what it saves for a test is a format tests already replay: a recorded
+  stream (the response bytes), an events file (JSON lines, the session log's
+  format), or a session directory. A bug a rig reproduces ships its test
   ("What a change ships with"), built from the file the rig used or saved.
 
 A crate's first implementation ticket ships the rigs listed for it:
@@ -171,7 +172,7 @@ A crate's first implementation ticket ships the rigs listed for it:
 | Crate | Rig | What it does |
 |---|---|---|
 | `log` | `dump` | Prints a session directory's events, one per line. |
-| `log` | `check` | Checks a session directory against the log's invariants: `seq` has no gaps, durable output equals the log. |
+| `log` | `check` | Checks a session directory against the invariants the directory alone shows: every line parses as an event, and `seq` has no gaps. |
 | `config` | `resolve` | Prints the merged configuration for a Fiber home and project. |
 | `provider` | `decode` | Runs a recorded stream through one protocol's decoder and prints what it produced. |
 | `provider` | `record` | Captures a live response as a recorded stream, with live keys, response bytes only. |
