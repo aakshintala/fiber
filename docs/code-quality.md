@@ -10,6 +10,9 @@ program is its author's. How tests are written is `docs/testing.md`, which
 crates may be used is `docs/dependencies.md`, and who implements and reviews
 a change is `docs/workflow.md`.
 
+Code under `research/` is throwaway. It is not a member of the Cargo
+workspace, and neither the gate nor the `CI` check builds, lints or tests it.
+
 ## Tools enforce the rules
 
 A rule a tool can check fails CI. It is not a sentence a reviewer is trusted
@@ -25,6 +28,10 @@ When more than one mechanism can enforce a rule, the strongest wins: a type
 that cannot hold the bad value, then a lint or check that fails CI, then one
 shared function every caller goes through, then a check at run time. Agents
 copy the guard the surrounding code already uses, so a weak one spreads.
+
+A doc table that mirrors the code has a check that fails when the two
+differ. The `unsafe` table below and the crate list in `docs/dependencies.md`
+are two. A new table of that kind comes with its check.
 
 What no tool can check is in "What a reviewer checks", and nowhere else.
 

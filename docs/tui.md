@@ -19,7 +19,7 @@ commands".
   as the `tui` crate (`docs/architecture.md`). It prefers existing crates to
   writing its own. Their memory is recorded but is not a veto; idle CPU, the
   first-frame budget and supply-chain checks stay strict
-  (`docs/dependencies.md`, "Performance" below).
+  (`docs/dependencies.md`, "Measuring memory", and "Performance" below).
 - **It reads the event stream and nothing else.** It is its own process and a
   client of its session (`docs/invocation.md`, "Processes"). When a screen
   needs data the stream does not carry, the stream changes; the terminal has no
