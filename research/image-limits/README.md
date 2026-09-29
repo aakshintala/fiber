@@ -15,15 +15,17 @@ All runs are dated 2026-09-29. Rust is 1.98.1.
     0.14.2, image-webp 0.2.4, fast_image_resize 6.1.0, jpeg-encoder 0.7.1. The
     other resizers on crates.io (`resize` 0.8.9, `pic-scale` 0.7.12) were not
     measured. `image` itself uses the same zune-jpeg, png, gif and image-webp
-    crates, so a separate set can only differ in the resizer and the glue.
+    crates, so a separate set differs in the resizer, the encoders and the glue.
   - Workload: decode a 4000x3000 JPEG (quality 90, 3.6 MiB) and a 4000x3000 PNG
     (screenshot-like, 237 KiB); fit inside 2000x2000 keeping the aspect ratio
     (Lanczos3, never enlarging); re-encode the JPEG at quality 80 and the PNG as
     PNG; do each file twice and assert the two outputs are byte-identical. It
     also decodes a GIF and a WebP. Fixtures come from `gen/` (deterministic, not
     committed: `cd gen && cargo run --release -- ../fixtures`).
-  - Figures are the median of 5 runs. Linux is peak RSS and macOS is peak memory
-    footprint, both over an empty program. Linux ran on GitHub's
+  - Figures are peak memory over an empty program: Linux peak RSS, macOS peak
+    memory footprint. `raw/linux/*/rss.txt` holds one figure per case (the median
+    of 5 runs, computed by `linux-probe/probe.sh`; the five samples were not
+    saved). `raw/macos/rss.txt` holds all five samples per case. Linux ran on GitHub's
     `ubuntu-24.04` (AMD EPYC 7763) and `ubuntu-24.04-arm` runners through
     `linux-probe/probe.yml`, on a throwaway branch `probe/130-image` that is
     deleted. Run 36545862616. macOS is Apple M3 Pro.
@@ -31,8 +33,9 @@ All runs are dated 2026-09-29. Rust is 1.98.1.
   vendor with `live.py` (base64 in the request body, prompt "state the width and
   height"). Cases: `flat-8000x6000` (a 950 KB PNG, flat colour, cheap),
   `flat-9000x9000` (1.2 MB PNG), `small-gif` (a 400x300 GIF), `noise-2400`
-  (2400x2400 random-byte PNG, 17.3 MB, 23.0 MB as base64, cheap because
-  vendors resize before billing).
+  (2400x2400 random-byte PNG, 17.3 MB, 23.0 MB as base64). Each request holds
+  one image. The raw files hold only `usage` counts, so they show the tokens each
+  vendor billed and not the size it processed.
 
 Prices and spend (input / output per million tokens, from each vendor's pricing
 page, looked up 2026-09-29):
@@ -45,21 +48,20 @@ page, looked up 2026-09-29):
 
 The Gemini probe used `gemini-3.1-flash-lite`, not the `gemini-2.5-flash-lite`
 the brief named: this key gets HTTP 404 "no longer available to new users" for
-the 2.5 models. Spend is the sum of each run's `usage` at those prices.
+the 2.5 models (`raw/google-2.5-flash-lite-404.json`, one text-only request). Spend is the sum of each run's `usage` at those prices.
 
 ## The crate
 
 Measured (raw: `raw/linux/out-*/rss.txt`, `determinism_*.txt`, `tree_*.txt`;
-macOS figures were run locally with the same commands and are in the table
-below).
+macOS: `raw/macos/`, run locally on macOS 26.6.2, Apple M3 Pro).
 
 Peak over an empty program, all four files in sequence (peak is the largest
 decode), KiB:
 
 | Set | Linux x86_64 RSS | Linux arm64 RSS | macOS arm64 footprint | Crates | Stripped binary (x86_64 / arm64 / macOS) |
 |---|---:|---:|---:|---:|---:|
-| `image`, four codecs | 148,448 | 148,160 | 157,120 | 23 | 1,410 / 1,285 / 1,266 KiB |
-| separate crates | 67,884 | 67,464 | 67,888 | 28 | 4,994 / 3,077 / 3,099 KiB |
+| `image`, four codecs | 148,448 | 148,160 | 157,136 | 23 | 1,410 / 1,285 / 1,266 KiB |
+| separate crates | 67,884 | 67,464 | 67,840 | 28 | 4,994 / 3,077 / 3,099 KiB |
 
 The empty program is 323 KiB on Linux x86_64 and 331 KiB on macOS.
 `image` is 1,087 KiB over baseline on Linux x86_64 (1,410 - 323), the separate
@@ -69,23 +71,26 @@ By file (peak KiB, not over baseline; Linux x86_64 RSS): 4000x3000 JPEG
 144,944 (`image`) and 69,876 (separate); 4000x3000 PNG 141,632 and 66,220;
 GIF 4,128 and 4,876; WebP 4,872 and 5,324. An 81-megapixel PNG (9000x9000, a
 1.2 MB file) peaks at 534,700 KiB in `image` and 307,988 KiB in the separate
-set, on Linux x86_64 (macOS footprint: 533,460 and 305,660 KiB). Peak memory
+set, on Linux x86_64 (macOS footprint: 533,456 and 305,680 KiB). Peak memory
 follows pixel count, not file size, and a small file can be a decompression
 bomb.
 
-- Crates: `image` is 23 crates. The separate set is 28: the extra five are
-  `fast_image_resize`'s `document-features` chain (`litrs`, `proc-macro2`,
-  `quote`, `syn`, `unicode-ident`) and `thiserror`. Setting
-  `default-features = false` with `no_std` on `fast_image_resize` did not reduce
-  the count (29).
+- Crates: `image` is 23 crates and the separate set is 28 (`raw/linux/*/tree_*.txt`).
+  Five crates are only in `image`: `image`, `moxcms`, `pxfm`, `bytemuck` and
+  `color_quant`. Ten are only in the separate set: `fast_image_resize`,
+  `jpeg-encoder`, `document-features`, `litrs`, `proc-macro2`, `quote`, `syn`,
+  `thiserror`, `thiserror-impl` and `unicode-ident`. The `document-features` chain
+  is a build-time proc-macro dependency.
 - C: none. `cargo tree` shows no `-sys` crate and no `cc` build dependency. The
   only build scripts are `crc32fast` and `num-traits`, which probe the
   compiler. All codecs are pure Rust. zune-jpeg uses `unsafe` for SIMD.
-- Licences: every crate is MIT or Apache-2.0 or dual with one of them
-  (`adler2` is `0BSD OR MIT OR Apache-2.0`; `moxcms` and `pxfm` are
-  `BSD-3-Clause OR Apache-2.0`), so all pass the allowed list. `cargo deny
-  check advisories` on the probe crate reports only bincode and yaml-rust,
-  both from syntect; nothing for the image crates.
+- Licences and advisories (`raw/cargo-deny.txt`, `deny.toml` is the allowed list
+  from `docs/dependencies.md`): the `image` set passes; the only licence error
+  is the probe crate itself, which has no licence field. The separate set also
+  fails on `jpeg-encoder` 0.7.1, whose licence is `(MIT OR Apache-2.0) AND IJG`;
+  IJG is not on the allowed list. `advisories ok` for both sets. (The earlier
+  all-features check, which flagged bincode and yaml-rust from syntect, is not
+  saved and is not relevant to these sets.)
 - Deterministic: each output is byte-identical to a second run in the same
   process (assert in the workload, all four files, both sets, all three
   platforms). Output sizes are also identical across macOS arm64, Linux x86_64
@@ -141,14 +146,15 @@ Source: https://platform.claude.com/docs/en/build-with-claude/vision.
   `tool_result` image over the limit is rejected, not downscaled, for the
   computer-use and browser-use toolsets. Formats: JPEG, PNG, GIF, WebP;
   animation not supported, first frame used.
-- Live (`claude-sonnet-5-5`):
-  - 8000x6000 PNG: 200, billed `input_tokens` 4,788, which is the 4,784
-    visual-token cap plus the prompt. The vendor downscaled it.
+- Live (`claude-sonnet-5-5`; one request per case, one image each):
+  - 8000x6000 PNG: 200, billed `input_tokens` 4,788. The 4,784-token
+    cap plus the prompt is 4,788; at 28 px patches the full image would be
+    286 x 215 = 61,490 tokens. So the count is at the cap, not the full size.
     (`raw/anthropic-flat-8000x6000.json`)
-  - 9000x9000 PNG: 400 `invalid_request_error`, "At least one of the image
+  - One 9000x9000 PNG: 400 `invalid_request_error`, "At least one of the image
     dimensions exceed max allowed size: 8000 pixels".
     (`raw/anthropic-flat-9000x9000.json`)
-  - 23 MB base64 PNG: 400, "image exceeds 10 MB maximum: 23045044 bytes >
+  - One 23 MB base64 PNG: 400, "image exceeds 10 MB maximum: 23045044 bytes >
     10485760 bytes". (`raw/anthropic-noise-2400.json`)
   - GIF: 200. (`raw/anthropic-small-gif.json`)
 - Not reached: the 20-image 2000 px rule, the 100 and 600 image counts, the
@@ -164,7 +170,7 @@ Source: https://developers.openai.com/api/docs/guides/images-vision.
   patches per image, 1,500 images per request and 512 MB per request, and PNG,
   JPEG, WebP and non-animated GIF.
 - Live (`gpt-6-luna`, `detail` not set):
-  - 8000x6000 and 9000x9000 PNG, both protocols: 400, "requires 47000 patches
+  - One 8000x6000 and one 9000x9000 PNG, on each protocol: 400, "requires 47000 patches
     after processing, exceeding the limit of 30000" (9000x9000: 79,524 patches).
     A patch is a 32 px square: 250x188 = 47,000. The vendor does not downscale
     at the default detail; it rejects.
@@ -184,21 +190,22 @@ Source: https://ai.google.dev/gemini-api/docs/image-understanding.
   both sides is tiled into 768x768 tiles of 258 tokens each. No maximum
   dimension and no per-image byte limit is stated.
 - Live (`gemini-3.1-flash-lite`):
-  - 8000x6000 and 9000x9000 PNG: 200, 1,091 and 1,116 prompt tokens. The vendor
-    resized them; the model answered 1024x768 and 500x500 (guesses).
-    (`raw/google-flat-*.json`)
+  - 8000x6000 and 9000x9000 PNG: 200, 1,091 and 1,116 prompt tokens, and the
+    model answered 1024x768 and 500x500. The raw shows the token counts and
+    the answers, not the size Google processed. (`raw/google-flat-*.json`)
   - 23 MB base64 in one request: 200, 1,116 prompt tokens. This is over the
     documented 20 MB and was accepted. (`raw/google-noise-2400.json`)
   - GIF: 200, and the model gave the right size. GIF is not in the documented
     list. (`raw/google-small-gif.json`)
-- `gemini-3.1-flash-lite` bills about 1,100 tokens whatever the input size, so
-  its token count says nothing about the tile rule above.
+- The four accepted Gemini requests were counted at 1,091 to 1,116 prompt tokens
+  whatever the input size (a 400x300 GIF included), so those counts do not show
+  the 768 px tile rule above.
 
 ### What this means for a common cap
 
-pi's 2000x2000 and codex's 2048 fall under every dimension limit found (Anthropic
-8000 and 2000 per image in a many-image request, OpenAI 30,000 patches and the
-2,500-patch `high` cap). A 2000x2000 image is 3,969 patches of 32 px, which is
+pi's 2000x2000 falls within every dimension limit found (Anthropic 8000, and
+2000 per image in a request of more than 20 images; OpenAI 30,000 patches). Codex's
+2048 px is over the 2000 px many-image rule. A 2000x2000 image is 3,969 patches of 32 px, which is
 over OpenAI's 2,500-patch `high` cap; per the documentation OpenAI
 would downscale it at `high` detail; the live request at the default detail
 rejected larger images and did not downscale. pi's 4.5 MB base64 cap is under Anthropic's
@@ -236,8 +243,9 @@ rejected larger images and did not downscale. pi's 4.5 MB base64 cap is under An
    decisions".
 2. Crate. `image` (23 crates, 1.4 MiB binary, no C, about 25 lines of glue) or
    separate crates (28 crates, 5 MiB binary on x86_64, half the memory, about
-   80 lines of glue and a hand-written format switch). The memory difference
-   comes from the resizer. This probe did not check whether `image` can be made
+   80 lines of glue and a hand-written format switch). The two paths differ in
+   decode buffers, resizer and encoder, and the probe did not separate them, so
+   it does not show which part costs the memory or whether `image` can be made
    to use less.
 3. Passthrough. Evidence: every vendor took a within-limit image (the small GIF,
    the 2400x2400 PNG on OpenAI and Google) without help, and passthrough keeps
