@@ -114,7 +114,6 @@ needs is declared, or it is not set.
   `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.
 
-
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
 `reasoning_effort`. So the extension declares each Claude model with
