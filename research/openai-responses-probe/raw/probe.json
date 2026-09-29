@@ -1,0 +1,1459 @@
+[
+ {
+  "label": "instructions #1",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ],
+   "instructions": "[658c891b] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+  },
+  "response": {
+   "id": "resp_0e9b018aa444d85e006abb7c6b1d1c87d08e309a0bcb3989b2",
+   "object": "response",
+   "created_at": 1790671979,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790671982,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": "[658c891b] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason.",
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0e9b018aa444d85e006abb7c6e36ec87d0b3b6d6fe1139f7d7",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2347,
+    "input_tokens_details": {
+     "cache_write_tokens": 2344,
+     "cached_tokens": 0
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2352
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "instructions #2",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ],
+   "instructions": "[658c891b] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+  },
+  "response": {
+   "id": "resp_01143f2cf8a2e5ed006abb7c71c8c487d0984d828de4a5425d",
+   "object": "response",
+   "created_at": 1790671985,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790671987,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": "[658c891b] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason.",
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_01143f2cf8a2e5ed006abb7c72f61087d095e9f81a922392dc",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2347,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 2344
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2352
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "input-system #1",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "system",
+     "content": "[1acccab5] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+    },
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ]
+  },
+  "response": {
+   "id": "resp_0f39dec61d2d7a89006abb7c7683c087d0aacbf3f355af7f4a",
+   "object": "response",
+   "created_at": 1790671990,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790671991,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0f39dec61d2d7a89006abb7c77780487d08e060c1d7d8fc909",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2348,
+    "input_tokens_details": {
+     "cache_write_tokens": 2345,
+     "cached_tokens": 0
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2353
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "input-system #2",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "system",
+     "content": "[1acccab5] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+    },
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ]
+  },
+  "response": {
+   "id": "resp_0e5109c623c60fd5006abb7c7ae1e487d08d5bc23f7ff7c818",
+   "object": "response",
+   "created_at": 1790671994,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790671995,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0e5109c623c60fd5006abb7c7bd8cc87d09756be51658d1614",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2348,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 2345
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2353
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "switch instructions",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ],
+   "instructions": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+  },
+  "response": {
+   "id": "resp_0fdedb224e121ced006abb7c7f542087d086104f84a51babae",
+   "object": "response",
+   "created_at": 1790671999,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790671999,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason.",
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0fdedb224e121ced006abb7c7fd82487d0a4b6475f46e0ffd2",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2346,
+    "input_tokens_details": {
+     "cache_write_tokens": 2343,
+     "cached_tokens": 0
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2351
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "switch instructions",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ],
+   "instructions": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+  },
+  "response": {
+   "id": "resp_0a202023f11fc88d006abb7c834c5487d092322935a346168c",
+   "object": "response",
+   "created_at": 1790672003,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672003,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason.",
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0a202023f11fc88d006abb7c83cd1087d08c008f0b240291fb",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2346,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 2343
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2351
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "switch input-system",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "system",
+     "content": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+    },
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ]
+  },
+  "response": {
+   "id": "resp_094b672d8bbf947c006abb7c87534087d0b36f03b1ba5565c3",
+   "object": "response",
+   "created_at": 1790672007,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672007,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_094b672d8bbf947c006abb7c87db5087d0b45b6e3018ef4401",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2346,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 2343
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2351
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "switch input-system",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "system",
+     "content": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+    },
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ]
+  },
+  "response": {
+   "id": "resp_0b963a99d5ff6911006abb7c8b553487d0a46c6f8964d1678c",
+   "object": "response",
+   "created_at": 1790672011,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672011,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0b963a99d5ff6911006abb7c8bd56887d0bd528c608a520e64",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2346,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 2343
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2351
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "switch instructions",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "input": [
+    {
+     "role": "user",
+     "content": "What is the number in Rule 7? Answer with the digit only."
+    }
+   ],
+   "instructions": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason."
+  },
+  "response": {
+   "id": "resp_0acb9641c4c2b060006abb7c8f4ed887d0bd8489c68cfca8ee",
+   "object": "response",
+   "created_at": 1790672015,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672015,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": "[e987efa7] You are a test harness. Rule 0: keep the workspace tidy and report each file you change, with its path and reason. Rule 1: keep the workspace tidy and report each file you change, with its path and reason. Rule 2: keep the workspace tidy and report each file you change, with its path and reason. Rule 3: keep the workspace tidy and report each file you change, with its path and reason. Rule 4: keep the workspace tidy and report each file you change, with its path and reason. Rule 5: keep the workspace tidy and report each file you change, with its path and reason. Rule 6: keep the workspace tidy and report each file you change, with its path and reason. Rule 7: keep the workspace tidy and report each file you change, with its path and reason. Rule 8: keep the workspace tidy and report each file you change, with its path and reason. Rule 9: keep the workspace tidy and report each file you change, with its path and reason. Rule 10: keep the workspace tidy and report each file you change, with its path and reason. Rule 11: keep the workspace tidy and report each file you change, with its path and reason. Rule 12: keep the workspace tidy and report each file you change, with its path and reason. Rule 13: keep the workspace tidy and report each file you change, with its path and reason. Rule 14: keep the workspace tidy and report each file you change, with its path and reason. Rule 15: keep the workspace tidy and report each file you change, with its path and reason. Rule 16: keep the workspace tidy and report each file you change, with its path and reason. Rule 17: keep the workspace tidy and report each file you change, with its path and reason. Rule 18: keep the workspace tidy and report each file you change, with its path and reason. Rule 19: keep the workspace tidy and report each file you change, with its path and reason. Rule 20: keep the workspace tidy and report each file you change, with its path and reason. Rule 21: keep the workspace tidy and report each file you change, with its path and reason. Rule 22: keep the workspace tidy and report each file you change, with its path and reason. Rule 23: keep the workspace tidy and report each file you change, with its path and reason. Rule 24: keep the workspace tidy and report each file you change, with its path and reason. Rule 25: keep the workspace tidy and report each file you change, with its path and reason. Rule 26: keep the workspace tidy and report each file you change, with its path and reason. Rule 27: keep the workspace tidy and report each file you change, with its path and reason. Rule 28: keep the workspace tidy and report each file you change, with its path and reason. Rule 29: keep the workspace tidy and report each file you change, with its path and reason. Rule 30: keep the workspace tidy and report each file you change, with its path and reason. Rule 31: keep the workspace tidy and report each file you change, with its path and reason. Rule 32: keep the workspace tidy and report each file you change, with its path and reason. Rule 33: keep the workspace tidy and report each file you change, with its path and reason. Rule 34: keep the workspace tidy and report each file you change, with its path and reason. Rule 35: keep the workspace tidy and report each file you change, with its path and reason. Rule 36: keep the workspace tidy and report each file you change, with its path and reason. Rule 37: keep the workspace tidy and report each file you change, with its path and reason. Rule 38: keep the workspace tidy and report each file you change, with its path and reason. Rule 39: keep the workspace tidy and report each file you change, with its path and reason. Rule 40: keep the workspace tidy and report each file you change, with its path and reason. Rule 41: keep the workspace tidy and report each file you change, with its path and reason. Rule 42: keep the workspace tidy and report each file you change, with its path and reason. Rule 43: keep the workspace tidy and report each file you change, with its path and reason. Rule 44: keep the workspace tidy and report each file you change, with its path and reason. Rule 45: keep the workspace tidy and report each file you change, with its path and reason. Rule 46: keep the workspace tidy and report each file you change, with its path and reason. Rule 47: keep the workspace tidy and report each file you change, with its path and reason. Rule 48: keep the workspace tidy and report each file you change, with its path and reason. Rule 49: keep the workspace tidy and report each file you change, with its path and reason. Rule 50: keep the workspace tidy and report each file you change, with its path and reason. Rule 51: keep the workspace tidy and report each file you change, with its path and reason. Rule 52: keep the workspace tidy and report each file you change, with its path and reason. Rule 53: keep the workspace tidy and report each file you change, with its path and reason. Rule 54: keep the workspace tidy and report each file you change, with its path and reason. Rule 55: keep the workspace tidy and report each file you change, with its path and reason. Rule 56: keep the workspace tidy and report each file you change, with its path and reason. Rule 57: keep the workspace tidy and report each file you change, with its path and reason. Rule 58: keep the workspace tidy and report each file you change, with its path and reason. Rule 59: keep the workspace tidy and report each file you change, with its path and reason. Rule 60: keep the workspace tidy and report each file you change, with its path and reason. Rule 61: keep the workspace tidy and report each file you change, with its path and reason. Rule 62: keep the workspace tidy and report each file you change, with its path and reason. Rule 63: keep the workspace tidy and report each file you change, with its path and reason. Rule 64: keep the workspace tidy and report each file you change, with its path and reason. Rule 65: keep the workspace tidy and report each file you change, with its path and reason. Rule 66: keep the workspace tidy and report each file you change, with its path and reason. Rule 67: keep the workspace tidy and report each file you change, with its path and reason. Rule 68: keep the workspace tidy and report each file you change, with its path and reason. Rule 69: keep the workspace tidy and report each file you change, with its path and reason. Rule 70: keep the workspace tidy and report each file you change, with its path and reason. Rule 71: keep the workspace tidy and report each file you change, with its path and reason. Rule 72: keep the workspace tidy and report each file you change, with its path and reason. Rule 73: keep the workspace tidy and report each file you change, with its path and reason. Rule 74: keep the workspace tidy and report each file you change, with its path and reason. Rule 75: keep the workspace tidy and report each file you change, with its path and reason. Rule 76: keep the workspace tidy and report each file you change, with its path and reason. Rule 77: keep the workspace tidy and report each file you change, with its path and reason. Rule 78: keep the workspace tidy and report each file you change, with its path and reason. Rule 79: keep the workspace tidy and report each file you change, with its path and reason. Rule 80: keep the workspace tidy and report each file you change, with its path and reason. Rule 81: keep the workspace tidy and report each file you change, with its path and reason. Rule 82: keep the workspace tidy and report each file you change, with its path and reason. Rule 83: keep the workspace tidy and report each file you change, with its path and reason. Rule 84: keep the workspace tidy and report each file you change, with its path and reason. Rule 85: keep the workspace tidy and report each file you change, with its path and reason. Rule 86: keep the workspace tidy and report each file you change, with its path and reason. Rule 87: keep the workspace tidy and report each file you change, with its path and reason. Rule 88: keep the workspace tidy and report each file you change, with its path and reason. Rule 89: keep the workspace tidy and report each file you change, with its path and reason. Rule 90: keep the workspace tidy and report each file you change, with its path and reason. Rule 91: keep the workspace tidy and report each file you change, with its path and reason. Rule 92: keep the workspace tidy and report each file you change, with its path and reason. Rule 93: keep the workspace tidy and report each file you change, with its path and reason. Rule 94: keep the workspace tidy and report each file you change, with its path and reason. Rule 95: keep the workspace tidy and report each file you change, with its path and reason. Rule 96: keep the workspace tidy and report each file you change, with its path and reason. Rule 97: keep the workspace tidy and report each file you change, with its path and reason. Rule 98: keep the workspace tidy and report each file you change, with its path and reason. Rule 99: keep the workspace tidy and report each file you change, with its path and reason. Rule 100: keep the workspace tidy and report each file you change, with its path and reason. Rule 101: keep the workspace tidy and report each file you change, with its path and reason. Rule 102: keep the workspace tidy and report each file you change, with its path and reason. Rule 103: keep the workspace tidy and report each file you change, with its path and reason. Rule 104: keep the workspace tidy and report each file you change, with its path and reason. Rule 105: keep the workspace tidy and report each file you change, with its path and reason. Rule 106: keep the workspace tidy and report each file you change, with its path and reason. Rule 107: keep the workspace tidy and report each file you change, with its path and reason. Rule 108: keep the workspace tidy and report each file you change, with its path and reason. Rule 109: keep the workspace tidy and report each file you change, with its path and reason.",
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_0acb9641c4c2b060006abb7c8fd07887d0a64717fa49376660",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "7"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 2346,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 2343
+    },
+    "output_tokens": 5,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 2351
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "tool no strict",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "tools": [
+    {
+     "type": "function",
+     "name": "f",
+     "description": "Takes a and optional b.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "a"
+      ]
+     }
+    }
+   ],
+   "input": "Call f with a=\"x\"."
+  },
+  "response": {
+   "id": "resp_09092af662b58f50006abb7c9362ec87d0acbdbe588c8c5fbb",
+   "object": "response",
+   "created_at": 1790672019,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672020,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "fc_09092af662b58f50006abb7c94068087d0a5555755646f84ec",
+     "type": "function_call",
+     "status": "completed",
+     "arguments": "{\"a\":\"x\",\"b\":\"\"}",
+     "call_id": "call_3DzNy8yQLzASSM7v6cG52BDb",
+     "name": "f"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [
+    {
+     "type": "function",
+     "description": "Takes a and optional b.",
+     "name": "f",
+     "output_schema": null,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "a",
+       "b"
+      ],
+      "additionalProperties": false
+     },
+     "strict": true
+    }
+   ],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 52,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0
+    },
+    "output_tokens": 21,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 73
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "tool strict true",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "tools": [
+    {
+     "type": "function",
+     "name": "f",
+     "description": "Takes a and optional b.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "a"
+      ]
+     },
+     "strict": true
+    }
+   ],
+   "input": "Call f with a=\"x\"."
+  },
+  "response": {
+   "http_error": 400,
+   "body": {
+    "error": {
+     "message": "Invalid schema for function 'f': In context=(), 'additionalProperties' is required to be supplied and to be false.",
+     "type": "invalid_request_error",
+     "param": "tools[0].parameters",
+     "code": "invalid_function_parameters"
+    }
+   }
+  }
+ },
+ {
+  "label": "tool strict false",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 64,
+   "tools": [
+    {
+     "type": "function",
+     "name": "f",
+     "description": "Takes a and optional b.",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "a"
+      ]
+     },
+     "strict": false
+    }
+   ],
+   "input": "Call f with a=\"x\"."
+  },
+  "response": {
+   "id": "resp_01abd4127afae632006abb7c95245887d0bef7ce449be9df07",
+   "object": "response",
+   "created_at": 1790672021,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672022,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 64,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "fc_01abd4127afae632006abb7c95b9a087d0aea623c31652ed19",
+     "type": "function_call",
+     "status": "completed",
+     "arguments": "{\"a\":\"x\"}",
+     "call_id": "call_3wShiKSrzSCRVJu0iFkrw4im",
+     "name": "f"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [
+    {
+     "type": "function",
+     "description": "Takes a and optional b.",
+     "name": "f",
+     "output_schema": null,
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "a": {
+        "type": "string"
+       },
+       "b": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "a"
+      ]
+     },
+     "strict": false
+    }
+   ],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 52,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0
+    },
+    "output_tokens": 17,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 69
+   },
+   "user": null,
+   "metadata": {}
+  }
+ },
+ {
+  "label": "store default",
+  "request": {
+   "model": "gpt-6-luna",
+   "reasoning": {
+    "effort": "none"
+   },
+   "max_output_tokens": 16,
+   "input": "hi"
+  },
+  "response": {
+   "id": "resp_01046b55c21aa82a006abb7c9675b487d0bd1da2c0e9032250",
+   "object": "response",
+   "created_at": 1790672022,
+   "status": "completed",
+   "access_programs": null,
+   "background": false,
+   "billing": {
+    "payer": "developer"
+   },
+   "completed_at": 1790672023,
+   "error": null,
+   "frequency_penalty": 0.0,
+   "incomplete_details": null,
+   "instructions": null,
+   "max_output_tokens": 16,
+   "max_tool_calls": null,
+   "model": "gpt-6-luna",
+   "moderation": null,
+   "output": [
+    {
+     "id": "msg_01046b55c21aa82a006abb7c971d2487d0b24793f438abff89",
+     "type": "message",
+     "status": "completed",
+     "content": [
+      {
+       "type": "output_text",
+       "annotations": [],
+       "logprobs": [],
+       "text": "Hi! How can I help you today?"
+      }
+     ],
+     "phase": "final_answer",
+     "role": "assistant"
+    }
+   ],
+   "parallel_tool_calls": true,
+   "presence_penalty": 0.0,
+   "previous_response_id": null,
+   "prompt_cache_key": null,
+   "prompt_cache_retention": "24h",
+   "reasoning": {
+    "context": "all_turns",
+    "effort": "none",
+    "mode": "standard",
+    "summary": null
+   },
+   "safety_identifier": null,
+   "service_tier": "default",
+   "store": true,
+   "temperature": 1.0,
+   "text": {
+    "format": {
+     "type": "text"
+    },
+    "verbosity": "medium"
+   },
+   "tool_choice": "auto",
+   "tool_usage": {
+    "image_gen": {
+     "input_tokens": 0,
+     "input_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "output_tokens": 0,
+     "output_tokens_details": {
+      "image_tokens": 0,
+      "text_tokens": 0
+     },
+     "total_tokens": 0
+    },
+    "web_search": {
+     "num_requests": 0
+    }
+   },
+   "tools": [],
+   "top_logprobs": 0,
+   "top_p": 0.98,
+   "truncation": "disabled",
+   "usage": {
+    "input_tokens": 7,
+    "input_tokens_details": {
+     "cache_write_tokens": 0,
+     "cached_tokens": 0
+    },
+    "output_tokens": 13,
+    "output_tokens_details": {
+     "reasoning_tokens": 0
+    },
+    "total_tokens": 20
+   },
+   "user": null,
+   "metadata": {}
+  }
+ }
+]

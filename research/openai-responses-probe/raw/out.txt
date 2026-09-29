@@ -1,0 +1,14 @@
+instructions #1              in=2347 cached=0 ans='7' 
+instructions #2              in=2347 cached=2344 ans='7' 
+input-system #1              in=2348 cached=0 ans='7' 
+input-system #2              in=2348 cached=2345 ans='7' 
+switch instructions          in=2346 cached=0 ans='7' 
+switch instructions          in=2346 cached=2343 ans='7' 
+switch input-system          in=2346 cached=2343 ans='7' 
+switch input-system          in=2346 cached=2343 ans='7' 
+switch instructions          in=2346 cached=2343 ans='7' 
+no strict: [{"type": "function", "description": "Takes a and optional b.", "name": "f", "output_schema": null, "parameters": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}}, "required": ["a", "b"], "additionalProperties": false}, "strict": true}] ['function_call']
+strict true: (400, {'error': {'message': "Invalid schema for function 'f': In context=(), 'additionalProperties' is required to be supplied and to be false.", 'type': 'invalid_request_error', 'param': 'tools[0].parameters', 'code': 'invalid_function_parameters'}})
+strict false: [{"type": "function", "description": "Takes a and optional b.", "name": "f", "output_schema": null, "parameters": {"type": "object", "properties": {"a": {"type": "string"}, "b": {"type": "string"}}, "required": ["a"]}, "strict": false}]
+store echo: True
+spend est $0.0009 in 13 requests
