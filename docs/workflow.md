@@ -5,9 +5,10 @@ plan. It is settled by
 [Implementation workflow: how a ticket becomes a merged PR](https://github.com/aakshintala/fiber/issues/66);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-It starts from an agent-ready ticket: one that states its outcome and cites
-the `docs/<area>.md` pages it implements. Turning a design into tickets is
-not part of it. What must pass to merge is set in `docs/ci.md`,
+It starts from an agent-ready ticket: one that states its outcome, cites
+the `docs/<area>.md` pages it implements, names its blockers as GitHub
+blocking links, and carries the `ready-for-agent` label. Turning a design
+into tickets is not part of it. What must pass to merge is set in `docs/ci.md`,
 `docs/testing.md`, `docs/code-quality.md` and `docs/dependencies.md`.
 
 No harness is assumed. Any agent harness can fill any role below.
