@@ -1,0 +1,284 @@
+name: CI
+
+# docs/ci.md. Pull requests run what their diff selects. Every push to main
+# runs the backstop, which is the only run that saves the build cache.
+on:
+  pull_request: {}
+  push:
+    branches: [main]
+
+# A newer push to a pull request cancels its older run.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  PYTHONDONTWRITEBYTECODE: "1"
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  select:
+    name: Selection
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: read
+      actions: read
+    outputs:
+      base: $BASE
+      mode: ${{ steps.plan.outputs.mode }}
+      packages: ${{ steps.plan.outputs.packages }}
+      jobs: ${{ steps.plan.outputs.jobs }}
+      shards: ${{ steps.plan.outputs.shards }}
+      shard_total: ${{ steps.plan.outputs.shard_total }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Find the base commit
+        id: base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = pull_request ]; then
+            base=$PR_BASE
+          else
+            # The backstop compares against the last main commit whose
+            # backstop passed. This is the only Actions API call CI makes.
+            base=$(gh api "repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?branch=main&event=push&status=success&per_page=1" \
+              -q '.workflow_runs[0].head_sha // empty')
+            if [ -z "$base" ] || ! git merge-base --is-ancestor "$base" HEAD; then
+              # No passing backstop yet: compare against the first commit,
+              # which selects everything.
+              base=$(git rev-list --max-parents=0 HEAD | tail -1)
+            fi
+          fi
+          echo "base=$base" | tee -a "$GITHUB_OUTPUT"
+
+      - name: Install the toolchain
+        run: rustup toolchain install
+
+      - name: Select
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: python3 scripts/ci.py select --base "$BASE" | tee "$RUNNER_TEMP/selection.json"
+
+      - name: Read the ticket's labels
+        id: ticket
+        if: github.event_name == 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: |
+          bug=false
+          number=$(python3 scripts/ci.py ticket <<<"$PR_BODY")
+          if [ -n "$number" ] && gh issue view "$number" --json labels -q '.labels[].name' | grep -qx bug; then
+            bug=true
+          fi
+          echo "ticket: ${number:-none}; bug: $bug"
+          echo "bug=$bug" >>"$GITHUB_OUTPUT"
+
+      - name: Install cargo-mutants
+        if: github.event_name == 'pull_request'
+        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-mutants
+
+      - name: Count mutants
+        id: mutants
+        if: github.event_name == 'pull_request'
+        env:
+          BASE: ${{ steps.base.outputs.base }}
+        run: |
+          git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
+          cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list >"$RUNNER_TEMP/mutants.txt"
+          count=$(grep -c . "$RUNNER_TEMP/mutants.txt" || true)
+          echo "mutants: $count"
+          echo "count=$count" >>"$GITHUB_OUTPUT"
+
+      - name: Plan
+        id: plan
+        env:
+          BUG: ${{ steps.ticket.outputs.bug || 'false' }}
+          MUTANTS: ${{ steps.mutants.outputs.count || 0 }}
+        run: |
+          python3 scripts/ci.py plan "$RUNNER_TEMP/selection.json" --event "$GITHUB_EVENT_NAME" \
+            --bug "$BUG" --mutants "$MUTANTS" \
+            | tee -a "$GITHUB_OUTPUT"
+
+  docs:
+    name: Docs check
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).docs
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: scripts/check-docs
+
+  lint:
+    name: Linux x86_64 checks
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).lint
+    runs-on: ubuntu-24.04
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-deny
+      - name: scripts/check, the platform-independent checks
+        run: scripts/check --base "$BASE" --shared-only
+      - name: cargo-deny licences, sources and bans
+        run: cargo deny check licenses sources bans
+      - name: cargo-deny advisories, when Cargo.lock changed
+        run: |
+          if git diff --name-only "$BASE...HEAD" | grep -qx Cargo.lock; then
+            cargo deny check advisories
+          else
+            echo "Cargo.lock is unchanged"
+          fi
+
+  test:
+    name: Tests (${{ matrix.runner }})
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).test
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm, macos-26]
+    runs-on: ${{ matrix.runner }}
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: ${{ github.event_name == 'push' }}
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - name: Build the whole workspace
+        if: github.event_name == 'push'
+        run: cargo build --workspace --all-targets
+      - name: scripts/check, the per-platform checks
+        run: scripts/check --base "$BASE" --platform-only
+
+  mutants:
+    name: Mutants (shard ${{ matrix.shard }})
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).mutants
+    strategy:
+      fail-fast: false
+      matrix:
+        # A skipped job still needs a non-empty matrix.
+        shard: ${{ fromJSON(needs.select.outputs.shard_total) > 0 && fromJSON(needs.select.outputs.shards) || fromJSON('[0]') }}
+    runs-on: ubuntu-24.04
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+      SHARD: ${{ matrix.shard }}
+      SHARD_TOTAL: ${{ needs.select.outputs.shard_total }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-mutants,cargo-nextest
+      - name: cargo mutants --in-diff
+        run: |
+          git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
+          cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --test-tool nextest \
+            --shard "$SHARD/$SHARD_TOTAL"
+
+  bug_base:
+    name: Bug fix fails on base
+    needs: select
+    if: fromJSON(needs.select.outputs.jobs).bug_base
+    runs-on: ubuntu-24.04
+    env:
+      BASE: ${{ needs.select.outputs.base }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Install the toolchain
+        run: rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          shared-key: ci
+          save-if: false
+      - uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
+        with:
+          tool: cargo-nextest
+      - run: scripts/bug-base "$BASE"
+
+  backstop_report:
+    name: Report a failed backstop
+    needs: [select, test]
+    if: failure() && github.event_name == 'push'
+    runs-on: ubuntu-24.04
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      TITLE: Backstop failed on main
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - run: |
+          body="The backstop failed at $GITHUB_SHA: $RUN_URL"
+          number=$(gh issue list --state open --search "in:title \"$TITLE\"" --json number,title \
+            -q "map(select(.title == \"$TITLE\")) | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body "$body"
+          else
+            gh issue create --title "$TITLE" --body "$body"
+          fi
+
+  ci:
+    name: CI
+    needs: [select, docs, lint, test, mutants, bug_base]
+    if: always()
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts
+      - name: Every selected job passed and every other job was skipped
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+          JOBS: ${{ needs.select.outputs.jobs }}
+        run: python3 scripts/ci.py verdict

@@ -1,3 +1,4 @@
 target/
 .claude/worktrees/
 __pycache__/
+mutants.out*/
