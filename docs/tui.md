@@ -274,7 +274,9 @@ offers resume.
   included. Collapsed, it is one line: what was done by kind ("Read 34 files,
   searched 84 patterns, edited 24 files +175 −83, ran 9 commands"), how many
   times the model thought, and how long it took. While it runs, the line shows
-  the calls in flight. The counts of changed lines come from
+  the calls in flight. A call the model is still emitting shows its raw
+  argument text, because arguments are parsed only once the call finishes
+  streaming (`docs/loop.md`, "One step"). The counts of changed lines come from
   `tool_call_completed`'s `changes`.
 - **Clicking the line, or Ctrl+O, opens the ledger:** one row per call, split
   by step, with each step's number in the gutter and its thinking line first.

@@ -110,6 +110,11 @@ The second marker keeps a long stretch of appended messages within the
 lookback. Probed: 12 appended exchanges with only an end marker lost the cache
 for every message.
 
+Anthropic refuses a request with more than 4 markers across `tools`, `system`
+and `messages` (`research/anthropic-messages-probe`). The provider module counts
+the markers and never sends more than 4. Past 4, it keeps them in the order
+listed above.
+
 Providers that route by key are given the root session's id:
 
 | Provider | Field |
@@ -131,6 +136,10 @@ pairs. Pairs 4 to 5 seconds apart missed even with every id stable.
 
 An extension that sets OpenRouter's `provider.order` loses sticky routing, and
 with it the cache.
+
+Gemini uses implicit caching only. Fiber does not create explicit caches
+through `cachedContents`, for the same reason it sends `store: false`: the
+vendor holds no session state (`docs/model-routing.md`).
 
 ## Cache lifetime
 

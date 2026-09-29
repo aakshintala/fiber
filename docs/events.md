@@ -443,7 +443,7 @@ Durable. The model finished emitting the call.
 |---|---|---|---|
 | `name` | string | yes | the tool's name as the model called it |
 | `arguments` | any JSON | yes | the arguments as the model sent them: an object, or a string holding the raw text when it was not JSON |
-| `provider_id` | string | yes | the provider's own id for the call ("Identity and ordering") |
+| `provider_id` | string | no | the provider's own id for the call ("Identity and ordering"); absent when the reply carried none |
 
 #### `tool_call_started`
 

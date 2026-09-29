@@ -32,7 +32,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   `docs/architecture.md` ("Tool calls in a step").
 - Adapting a schema to each wire protocol, and carrying images to a protocol
   that cannot take them in a tool result, is the provider module's job, not the
-  tool's.
+  tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
+  true` only when its schema fits the vendor's strict subset, as every
+  built-in tool's does (`docs/model-routing.md`, "Protocols and providers").
 
 ## Before a call runs
 

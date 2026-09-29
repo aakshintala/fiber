@@ -35,9 +35,10 @@ A step is one round-trip to the model. Each step does this, in order:
    (`docs/handoff.md`, "Triggers").
 3. Build the request: the preamble (`docs/prompt-cache.md`) followed by the
    conversation ("What the model is sent").
-4. Send it and stream the reply, emitting its actions as they arrive. A failed
-   call is retried as `docs/model-routing.md`, "When a model call fails",
-   says.
+4. Send it and stream the reply, emitting its actions as they arrive. A tool
+   call's arguments are parsed once, when the model finishes emitting the
+   call. A failed call is retried as `docs/model-routing.md`, "When a model
+   call fails", says.
 5. For each tool call in the reply, in the order the model emitted them: check
    the tool exists and the arguments match its schema, run its effects
    function, run `before_tool`, then decide permission (`docs/permissions.md`).
