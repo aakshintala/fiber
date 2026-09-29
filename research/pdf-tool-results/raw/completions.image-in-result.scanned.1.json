@@ -23,7 +23,7 @@
       "type": "function",
       "function": {
        "name": "read",
-       "arguments": "{\"path\": \"text.pdf\"}"
+       "arguments": "{\"path\": \"scanned.pdf\"}"
       }
      }
     ]
@@ -61,39 +61,29 @@
   ]
  },
  "response": {
-  "id": "chatcmpl-ETO8pW1qDsYxmOWMr69sNr6sZTyHU",
+  "id": "chatcmpl-ETQwQODfNgjDnHbFAGCluWW9dCnPD",
   "object": "chat.completion",
-  "created": 1790673019,
+  "created": 1790683782,
   "model": "gpt-6-luna",
   "choices": [
    {
     "index": 0,
     "message": {
      "role": "assistant",
-     "content": null,
-     "tool_calls": [
-      {
-       "id": "call_uET27bdCVDBxOYLyHZVnY3pH",
-       "type": "function",
-       "function": {
-        "name": "read",
-        "arguments": "{\"path\":\"scanned.pdf\"}"
-       }
-      }
-     ],
+     "content": "I can\u2019t access the PDF\u2019s contents here, so I can\u2019t identify the figure. Could you upload the page as an image or try attaching the PDF again?",
      "refusal": null,
      "annotations": []
     },
-    "finish_reason": "tool_calls"
+    "finish_reason": "stop"
    }
   ],
   "usage": {
-   "prompt_tokens": 6801,
-   "completion_tokens": 18,
-   "total_tokens": 6819,
+   "prompt_tokens": 6802,
+   "completion_tokens": 36,
+   "total_tokens": 6838,
    "prompt_tokens_details": {
-    "cached_tokens": 6771,
-    "cache_write_tokens": 0,
+    "cached_tokens": 0,
+    "cache_write_tokens": 6771,
     "audio_tokens": 0
    },
    "completion_tokens_details": {

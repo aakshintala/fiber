@@ -183,7 +183,8 @@ def run_extras():
     # image cases need a PNG of the scan: sips -s format png scanned.pdf --out /tmp/p121.png
     png = base64.b64encode(open("/tmp/p121.png", "rb").read()).decode()
     img = {"type": "image_url", "image_url": {"url": "data:image/png;base64," + png}}
-    base = hist[:1] + [{"role": "user", "content": "Read scanned.pdf with the read tool, then answer: " + Q["scanned"]}] + hist[2:]
+    sc_call = {"role": "assistant", "content": None, "tool_calls": [{"id": "call_probe", "type": "function", "function": {"name": "read", "arguments": json.dumps({"path": "scanned.pdf"})}}]}
+    base = hist[:1] + [{"role": "user", "content": "Read scanned.pdf with the read tool, then answer: " + Q["scanned"]}, sc_call]
     b = lambda m: {"model": "gpt-6-luna", "messages": m, "max_completion_tokens": 600, "reasoning_effort": "none", "tools": T}
     oai("completions.image-in-result.scanned.1", "/v1/chat/completions", b(base + [{"role": "tool", "tool_call_id": "call_probe", "content": [img]}]))
     oai("completions.image-in-result.scanned.2", "/v1/chat/completions", b(base + [{"role": "tool", "tool_call_id": "call_probe", "content": [img]}]))

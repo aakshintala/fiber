@@ -100,8 +100,8 @@
     "content": {
      "parts": [
       {
-       "text": "The file provides information about a fiber probe and a backup color.",
-       "thoughtSignature": "EnMKcQFpFH0TV88qESDQAQ2Um8pJPrSqWUuXxfTIVotDIkf5SnCMA43LwG2HWorQtXUlsMAcQnh7P6Ona7E2no7op7+7l7XsiNwft5tEio7++ZKB3Dt3K8iIbbD2ncqhT7qfkOKMMy1gKqu0KqmzGvGVYn9/"
+       "text": "The file provides a launch code and a backup color.",
+       "thoughtSignature": "EnMKcQFpFH0TDRu6xEWtR33j7hKYO7C3NvyqXr8NJxealZpcFrsHWxoQMSXfzOQ/PLfOcRBptK/LQh0QysFN23q3o90DldUzlZdNBzhqdyuMUluz7aVzQrteycgOQy2+G5mY2JytVsQKHb/VTdnpE0pz61Zs"
       }
      ],
      "role": "model"
@@ -112,17 +112,17 @@
   ],
   "usageMetadata": {
    "promptTokenCount": 9365,
-   "candidatesTokenCount": 13,
-   "totalTokenCount": 9378,
+   "candidatesTokenCount": 11,
+   "totalTokenCount": 9376,
    "cachedContentTokenCount": 4016,
    "promptTokensDetails": [
     {
-     "modality": "TEXT",
-     "tokenCount": 8325
-    },
-    {
      "modality": "IMAGE",
      "tokenCount": 1040
+    },
+    {
+     "modality": "TEXT",
+     "tokenCount": 8325
     }
    ],
    "cacheTokensDetails": [
@@ -138,6 +138,6 @@
    "serviceTier": "standard"
   },
   "modelVersion": "gemini-3.1-flash-lite",
-  "responseId": "ZIC7ar2YF6rTjMcP2K3S8AM"
+  "responseId": "cKq7at35EqDW-8YPp6WAyAY"
  }
 }

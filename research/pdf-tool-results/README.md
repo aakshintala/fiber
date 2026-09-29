@@ -90,12 +90,13 @@ raw kept. OpenAI about $0.01 across both protocols, Google about $0.03.
 - Cache: the follow-up read 7,056 of 7,112 (text) and 6,784 of 7,336 (scanned). The user-message
   PDF sits inside the cached prefix.
 - Rendered pages: a PNG of the scanned page as an `image_url` part inside the tool message returned
-  200. In the two committed requests the model answered with a second `read` call and no text
-  (`raw/completions.image-in-result.scanned.1.json` and `.2.json`). An earlier run of the same request,
-  whose raw files were overwritten, answered in words that it could not access the page image. The same PNG in a
-  user message after the tool message was answered "73" in the committed run
-  (`raw/completions.image-after-result.scanned.1.json`; an earlier run read "3"). Two requests with one PNG:
-  this shows the model did not use the image in the tool message, not that no such image is ever used.
+  200 in both committed requests (tool call and question both name `scanned.pdf`). The first answered
+  that it could not access the PDF's contents and could not identify the figure
+  (`raw/completions.image-in-result.scanned.1.json`); the second called `read` again with no text
+  (`.scanned.2.json`). The same PNG in a user message after the tool message was answered correctly:
+  an orange circle with a white 73 (`raw/completions.image-after-result.scanned.1.json`). Two requests
+  with one PNG: they show the model did not use the image in the tool message in those requests, not that no
+  such image is ever used.
 - Limits: same page as Responses (50 MB per file, 50 MB combined). `file_data` and `file_id` only;
   no URL.
 
@@ -143,7 +144,7 @@ raw kept. OpenAI about $0.01 across both protocols, Google about $0.03.
   three protocols take the PDF natively in the tool result (Anthropic, OpenAI Responses, Gemini). On
   `openai-completions` the PDF is not accepted there, but a native `file` part in a user message after the tool
   result works and keeps the cache; rendered pages would also have to go in a user message, because
-  an image in the tool message was accepted (200) but the model did not answer about it in two requests.
+  an image in the tool message was accepted (200) but the model did not use it in two requests.
 - Anthropic's user-part-after-result and OpenAI's are both accepted too, so "in the result" is
   chosen, not forced, on those two.
 - Scope: one small text PDF and one one-page scan per shape; one model per vendor; sizes and page
