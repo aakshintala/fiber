@@ -1,7 +1,8 @@
 """Record retry-relevant headers and statuses for cheap provider failures.
 
 Usage: python3 probe.py errors [vendor ...] | burst <name> ...
-Reuses send() and redact() from ../provider-errors/probe.py. Keys and the
+Reuses redact() and the secret-header list from ../provider-errors/probe.py;
+defines its own send(). Keys and the
 codex token are read from files at call time and never saved. Results land in
 raw/<vendor>.<case>.json.
 """
