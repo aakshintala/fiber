@@ -76,6 +76,9 @@ scratch checkout of the base commit and compare. A script later work will
 use is committed under `scripts/`. A one-off script goes in the pull request
 body.
 
+A question about what one layer does with a given input is answered with that
+layer's rig, not a throwaway program (`docs/testing.md`, "Rigs").
+
 ## When fixes keep failing
 
 When two fixes that rest on one assumption have failed the same check, the

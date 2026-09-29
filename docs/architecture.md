@@ -77,6 +77,11 @@ or `main`. `tui` and `doors` depend on `contract` and on `log`'s reading side,
 and never on `loop`, `provider`, `tools` or `extensions`. `main` depends on
 everything, and nothing depends on `main`.
 
+`fakes` holds the shared fakes that tests and rigs run against
+(`docs/testing.md`, "Fakes" and "Rigs"). It is not a module. It depends only
+on `contract`. Any crate may take it as a test-only dependency, none takes it
+as a normal one, and no release binary contains it.
+
 1. Calls point one way. If A may call B, B may never call A. B answers, or it
    emits an event and A picks it up.
 2. `loop` is the only module that decides what happens next.

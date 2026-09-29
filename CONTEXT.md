@@ -327,6 +327,13 @@ started it.
 _Avoid_: abort, stop, kill, interrupt (the outcome is named interrupted; the
 act is cancellation)
 
+**Rig**:
+A development command that runs one layer of Fiber on its own, so an agent can
+see what that layer makes of a given input: a recorded stream decoded, an events
+file drawn, one tool call run. A rig never ships to people, and what it finds
+ends as a test.
+_Avoid_: driver (a driver sends commands to a session), harness
+
 ## Deliberately unnamed
 
 **One Fiber process, from launch to exit.** The archived Zig tree called this a
