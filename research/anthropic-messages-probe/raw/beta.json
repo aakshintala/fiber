@@ -1,0 +1,660 @@
+[
+ {
+  "label": "beta plain 1/messages",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:46 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:46Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:46Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:46Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:46Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSy4jggBew6pPu6kx6s",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi in three words."
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSy5AjTbausoHP4eBJv",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello there, friend!"
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 16,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 10,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "beta plain ?beta=true",
+  "url": "https://api.anthropic.com/v1/messages?beta=true",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:48 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:48Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:48Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:47Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:48Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSy8dLtu5dxCgD9Vs4t",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi in three words."
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSy96P8hRoTRP5NGes6",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello, kind friend!"
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 16,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 11,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "beta tool 1/messages",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:50 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:49Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:50Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:49Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:49Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSyH46xG2HfZYrTv1aY",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSyHb7ETytWe6YQWJKC",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01MdAi4MVFxX1CA5AabM1bt5",
+     "name": "get_weather",
+     "input": {
+      "city": "Paris"
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ],
+   "container": null,
+   "stop_reason": "tool_use",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 381,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 50,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "beta tool ?beta=true",
+  "url": "https://api.anthropic.com/v1/messages?beta=true",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:51 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:50Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:51Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:50Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:50Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSyPKPLVE1vVEV7DMkU",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSyPsNWx9Utau1kqPCp",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_01VcGwykyhFwgwEkCC65DrWX",
+     "name": "get_weather",
+     "input": {
+      "city": "Paris"
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ],
+   "container": null,
+   "stop_reason": "tool_use",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 381,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 50,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "beta stream 1/messages",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:52 GMT",
+   "Content-Type": "text/event-stream; charset=utf-8",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "Cache-Control": "no-cache",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:51Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:51Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:51Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:51Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSyVaAvmhqrp47iPUKC",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "X-Robots-Tag": "none",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ],
+   "stream": true
+  },
+  "events": [
+   {
+    "event": "message_start",
+    "type": "message_start"
+   },
+   {
+    "event": "content_block_start",
+    "type": "content_block_start",
+    "block": {
+     "type": "tool_use",
+     "id": "toolu_01XPxPBBRPKd6xTMLgvwxLiH",
+     "name": "get_weather",
+     "input": {},
+     "caller": {
+      "type": "direct"
+     }
+    }
+   },
+   {
+    "event": "ping",
+    "type": "ping"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_stop",
+    "type": "content_block_stop"
+   },
+   {
+    "event": "message_delta",
+    "type": "message_delta",
+    "stop_reason": "tool_use",
+    "stop_sequence": null
+   },
+   {
+    "event": "message_stop",
+    "type": "message_stop"
+   }
+  ],
+  "order": [
+   "message_start",
+   "content_block_start",
+   "ping",
+   "content_block_delta",
+   "content_block_delta",
+   "content_block_delta",
+   "content_block_delta",
+   "content_block_stop",
+   "message_delta",
+   "message_stop"
+  ],
+  "raw_sse": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"id\":\"msg_011CfXSyW4wsgScBbmeQJjXb\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":381,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":16,\"service_tier\":\"standard\",\"inference_geo\":\"global\"},\"diagnostics\":null}       }\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01XPxPBBRPKd6xTMLgvwxLiH\",\"name\":\"get_weather\",\"input\":{},\"caller\":{\"type\":\"direct\"}}             }\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}       }\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\"\"}      }\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\": \\\"Pari\"}      }\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"s\\\"}\"}  }\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"stop_details\":null,\"container\":null},\"usage\":{\"input_tokens\":381,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":50,\"output_tokens_details\":{\"thinking_tokens\":0}}   }\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"        }\n\n"
+ },
+ {
+  "label": "beta stream ?beta=true",
+  "url": "https://api.anthropic.com/v1/messages?beta=true",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:54 GMT",
+   "Content-Type": "text/event-stream; charset=utf-8",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "Cache-Control": "no-cache",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:53Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:53Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:53Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:53Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSybqTQ6tenmH6EBTmr",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "vary": "Accept-Encoding",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ],
+   "stream": true
+  },
+  "events": [
+   {
+    "event": "message_start",
+    "type": "message_start"
+   },
+   {
+    "event": "content_block_start",
+    "type": "content_block_start",
+    "block": {
+     "type": "tool_use",
+     "id": "toolu_01BqjKUECyyPa88gJsfA35cF",
+     "name": "get_weather",
+     "input": {},
+     "caller": {
+      "type": "direct"
+     }
+    }
+   },
+   {
+    "event": "ping",
+    "type": "ping"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_delta",
+    "type": "content_block_delta"
+   },
+   {
+    "event": "content_block_stop",
+    "type": "content_block_stop"
+   },
+   {
+    "event": "message_delta",
+    "type": "message_delta",
+    "stop_reason": "tool_use",
+    "stop_sequence": null
+   },
+   {
+    "event": "message_stop",
+    "type": "message_stop"
+   }
+  ],
+  "order": [
+   "message_start",
+   "content_block_start",
+   "ping",
+   "content_block_delta",
+   "content_block_delta",
+   "content_block_delta",
+   "content_block_delta",
+   "content_block_stop",
+   "message_delta",
+   "message_stop"
+  ],
+  "raw_sse": "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"model\":\"claude-sonnet-5-5\",\"id\":\"msg_011CfXSycNCt5Nx6ym8WXC5Z\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[],\"container\":null,\"stop_reason\":null,\"stop_sequence\":null,\"stop_details\":null,\"usage\":{\"input_tokens\":381,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"cache_creation\":{\"ephemeral_5m_input_tokens\":0,\"ephemeral_1h_input_tokens\":0},\"output_tokens\":16,\"service_tier\":\"standard\",\"inference_geo\":\"global\"},\"diagnostics\":null}              }\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"tool_use\",\"id\":\"toolu_01BqjKUECyyPa88gJsfA35cF\",\"name\":\"get_weather\",\"input\":{},\"caller\":{\"type\":\"direct\"}}        }\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"\"}           }\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"city\\\"\"}   }\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\": \\\"Pari\"}           }\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"s\\\"}\"}             }\n\nevent: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0       }\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"tool_use\",\"stop_sequence\":null,\"stop_details\":null,\"container\":null},\"usage\":{\"input_tokens\":381,\"cache_creation_input_tokens\":0,\"cache_read_input_tokens\":0,\"output_tokens\":50,\"output_tokens_details\":{\"thinking_tokens\":0}}     }\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"    }\n\n"
+ },
+ {
+  "label": "beta bad value",
+  "url": "https://api.anthropic.com/v1/messages?beta=false",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:53:55 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:53:55Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:53:55Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:53:55Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:53:55Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSyijSLKpZ6fM7824he",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 64,
+   "messages": [
+    {
+     "role": "user",
+     "content": "Say hi in three words."
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSyjEi755nKAgK8nqPB",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hello, lovely human!"
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 16,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 11,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ }
+]

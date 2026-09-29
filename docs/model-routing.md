@@ -47,6 +47,23 @@ are fetched and installed, not built into the binary. Installing Fiber
 installs these five. How extensions arrive and stay current is
 `docs/extensions.md`.
 
+### Anthropic messages wire facts
+
+- A stream ends with `message_delta`, which carries the `stop_reason`, and then
+  `message_stop`. `message_stop` is the last event. The parser treats
+  `message_stop` as the end of the stream.
+- `/v1/messages?beta=true` behaves the same as `/v1/messages`: same status,
+  headers, body and events. Fiber posts to `/v1/messages`.
+- `tool_choice` with no `tools` is a 400 for `any` and for `tool`, and accepted
+  for `auto` and `none`. Fiber sends no `tool_choice` when there are no tools.
+- A `tool_use` block carries `caller`. It is `{"type": "direct"}` for a client
+  tool call. When server-side code execution calls the tool, it is
+  `{"type": "code_execution_20250825", "tool_id": "srvtoolu_..."}`. Fiber does
+  not send `caller` when it replays a block: the API accepts the block without
+  it.
+- A request with more than 4 `cache_control` blocks, counted across `tools`,
+  `system` and `messages`, is a 400.
+
 ## What a provider extension declares
 
 Most of a provider is data. For the provider:

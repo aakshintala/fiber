@@ -1,0 +1,617 @@
+[
+ {
+  "label": "caller t1",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:04 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:03Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:04Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:03Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:03Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSzJtGJGBsANJRN7TqW",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSzKTFXxe3apHsErdL2",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "tool_use",
+     "id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+     "name": "get_weather",
+     "input": {
+      "city": "Paris"
+     },
+     "caller": {
+      "type": "direct"
+     }
+    }
+   ],
+   "container": null,
+   "stop_reason": "tool_use",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 381,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 50,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "replay with caller as received",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:04 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:04Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:04Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:04Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:04Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSzREWSZ4Z4UJN6FDst",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "name": "get_weather",
+       "input": {
+        "city": "Paris"
+       },
+       "caller": {
+        "type": "direct"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "content": "sunny"
+      }
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSzRkWySpzf2DvDww1Z",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "The weather in Paris is sunny."
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 439,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 14,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "replay without caller",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:05 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:05Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:05Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:05Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:05Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSzUjqxUway3rdKjvbn",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "name": "get_weather",
+       "input": {
+        "city": "Paris"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "content": "sunny"
+      }
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSzVHLydAhRBRaj5zrJ",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "It's sunny in Paris right now."
+    }
+   ],
+   "container": null,
+   "stop_reason": "end_turn",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 439,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 14,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "replay caller type bogus",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:06 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXSzYbmfRqD4o3bvy1Mx",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "name": "get_weather",
+       "input": {
+        "city": "Paris"
+       },
+       "caller": {
+        "type": "bogus"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "content": "sunny"
+      }
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "messages.1.content.0.tool_use.caller: Input tag 'bogus' found using 'type' does not match any of the expected tags: 'code_execution_20250825', 'code_execution_20260120', 'direct'"
+   },
+   "request_id": "req_011CfXSzYbmfRqD4o3bvy1Mx"
+  }
+ },
+ {
+  "label": "replay caller code_execution",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:06 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXSza5pDEh9a48tz3URp",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "X-Robots-Tag": "none",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 200,
+   "messages": [
+    {
+     "role": "user",
+     "content": "What is the weather in Paris? Use the tool."
+    },
+    {
+     "role": "assistant",
+     "content": [
+      {
+       "type": "tool_use",
+       "id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "name": "get_weather",
+       "input": {
+        "city": "Paris"
+       },
+       "caller": {
+        "type": "code_execution_20250825",
+        "tool_id": "srvtoolu_x"
+       }
+      }
+     ]
+    },
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "tool_result",
+       "tool_use_id": "toolu_016w4nFTVEfQWGx6mzNEqyix",
+       "content": "sunny"
+      }
+     ]
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   ]
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "source tool `srvtoolu_x` not found for tool use block `toolu_016w4nFTVEfQWGx6mzNEqyix`"
+   },
+   "request_id": "req_011CfXSza5pDEh9a48tz3URp"
+  }
+ },
+ {
+  "label": "programmatic tool calling attempt",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:11 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "498000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:07Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:11Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:07Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "578000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:07Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSzbiHxL6cjJrwBsdrn",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 1500,
+   "tools": [
+    {
+     "type": "code_execution_20250825",
+     "name": "code_execution"
+    },
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     },
+     "allowed_callers": [
+      "code_execution_20250825"
+     ]
+    }
+   ],
+   "messages": [
+    {
+     "role": "user",
+     "content": "Use code execution to call get_weather for Paris and Rome and print both."
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSzcbd8dMqvw26wuo5Y",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "server_tool_use",
+     "id": "srvtoolu_01Hqkx4yfJMRg9FSAPdTuzdb",
+     "name": "code_execution",
+     "input": {
+      "code": "import asyncio\n\nasync def main():\n    paris, rome = await asyncio.gather(\n        get_weather({\"city\": \"Paris\"}),\n        get_weather({\"city\": \"Rome\"}),\n    )\n    print(\"Paris:\", paris)\n    print(\"Rome:\", rome)\n\nasyncio.run(main())"
+     }
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01Rrd8dj8bUq3FRwxnADVv2a",
+     "name": "get_weather",
+     "input": {
+      "city": "Rome"
+     },
+     "caller": {
+      "type": "code_execution_20250825",
+      "tool_id": "srvtoolu_01Hqkx4yfJMRg9FSAPdTuzdb"
+     }
+    },
+    {
+     "type": "tool_use",
+     "id": "toolu_01KT3BWR7LfZYC5LmjUdMNoK",
+     "name": "get_weather",
+     "input": {
+      "city": "Paris"
+     },
+     "caller": {
+      "type": "code_execution_20250825",
+      "tool_id": "srvtoolu_01Hqkx4yfJMRg9FSAPdTuzdb"
+     }
+    }
+   ],
+   "container": {
+    "id": "container_01G4rBc5npbg9zpLrY7tBYLN",
+    "expires_at": "2026-09-29T08:59:11.112739Z"
+   },
+   "stop_reason": "tool_use",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 4383,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 145,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global",
+    "server_tool_use": {
+     "web_search_requests": 0,
+     "web_fetch_requests": 0
+    }
+   },
+   "diagnostics": null
+  }
+ }
+]
