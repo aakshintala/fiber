@@ -1,0 +1,20 @@
+Darwin arm64
+26.6.2
+Apple M3 Pro
+rustc 1.98.1 (48a229cea 2026-09-01)
+base samples KiB: 992 992 992 992 992 
+## image binary_bytes=1296496
+only= samples KiB: 158128 158112 158128 158128 158128 
+only=photo samples KiB: 155968 155968 155968 155968 155968 
+only=shot samples KiB: 141008 141008 141008 141008 141008 
+only=small.gif samples KiB: 2432 2432 2432 2432 2432 
+only=small.webp samples KiB: 2896 2896 2896 2896 2896 
+only=flat-9000 samples KiB: 533456 533456 533456 533456 533456 
+## image-parts binary_bytes=3173408
+only= samples KiB: 69056 68832 68832 69056 68832 
+only=photo samples KiB: 67584 67584 67584 67568 67568 
+only=shot samples KiB: 63968 63968 63984 63968 63952 
+only=small.gif samples KiB: 2768 2768 2768 2768 2768 
+only=small.webp samples KiB: 3136 3152 3136 3152 3152 
+only=flat-9000 samples KiB: 305680 305680 305680 305648 305648 
+base binary_bytes=338928

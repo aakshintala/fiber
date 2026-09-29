@@ -1,0 +1,4 @@
+photo-4000x3000.jpg: 3794590 -> 320299 bytes, deterministic
+shot-4000x3000.png: 242788 -> 566972 bytes, deterministic
+small.gif: 56801 -> 223899 bytes, deterministic
+small.webp: 180494 -> 278304 bytes, deterministic

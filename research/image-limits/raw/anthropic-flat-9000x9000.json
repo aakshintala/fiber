@@ -1,0 +1,14 @@
+{
+ "vendor": "anthropic",
+ "case": "flat-9000x9000",
+ "file_bytes": 1199371,
+ "base64_bytes": 1599164,
+ "status": 400,
+ "usage": {},
+ "error": {
+  "type": "invalid_request_error",
+  "message": "messages.0.content.0.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels"
+ },
+ "text": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.0.content.0.image.source.base64.data: At least one of the image dimensions exceed max allowed size: 8000 pixels\"},\"request_id\":\"req_011CfXTFzsk1tsdBi53otCnf\"}",
+ "answer": null
+}

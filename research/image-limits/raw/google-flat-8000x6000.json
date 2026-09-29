@@ -1,0 +1,40 @@
+{
+ "vendor": "google",
+ "case": "flat-8000x6000",
+ "file_bytes": 949804,
+ "base64_bytes": 1266408,
+ "status": 200,
+ "usage": {
+  "promptTokenCount": 1091,
+  "candidatesTokenCount": 18,
+  "totalTokenCount": 1109,
+  "promptTokensDetails": [
+   {
+    "modality": "IMAGE",
+    "tokenCount": 1064
+   },
+   {
+    "modality": "TEXT",
+    "tokenCount": 27
+   }
+  ],
+  "serviceTier": "standard"
+ },
+ "error": null,
+ "text": null,
+ "answer": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "The image is 1024 pixels wide and 768 pixels high.",
+      "thoughtSignature": "EnMKcQFpFH0T5wu1a+EcYOmoa4qAFqiMTaFHk6PVth7YxIqf4VdDE5TyJhM5WtcsPpDGa3qY36JO8NP3AOkXnbDFGnHf5QHj/slR6kX4iwhPXjPbSQSZRmLesD1XSk7QdkEnKUavQ+42Bza5SOQ5AAALMX28"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "index": 0
+  }
+ ]
+}

@@ -1,0 +1,45 @@
+{
+ "vendor": "openai",
+ "case": "small-gif",
+ "file_bytes": 56801,
+ "base64_bytes": 75736,
+ "status": 200,
+ "usage": {
+  "input_tokens": 189,
+  "input_tokens_details": {
+   "cache_write_tokens": 0,
+   "cached_tokens": 0
+  },
+  "output_tokens": 33,
+  "output_tokens_details": {
+   "reasoning_tokens": 21
+  },
+  "total_tokens": 222
+ },
+ "error": null,
+ "text": null,
+ "answer": [
+  {
+   "id": "rs_0eed1beefe23b3b6006abb7d85273487d0b5ccee8a2a2a7125",
+   "type": "reasoning",
+   "content": [],
+   "encrypted_content": "gAAAAABqu32FVuJCmYHH0lnEAImOvEyL1HcmbWB6k3kFkyQLUHUlLa2O5d-bOezBD1C-yxTxb9tGM0t7UZPHKxr7nfbpTIAFrI_tFW5W7SBEQZKMAhoXZx-3D5UPS8njK2gGASzQ7wytpimUxLfSwItto-msvmM4e56QH7q1K0xKyx4sy5LmTFydJuOhSw7YizcJzbnogG35ghlsQ8tNS8xAyusDzidYj9q8OkdrN_Xea58OVoM1dmtqZUhBLBhTQtWVDB8q0d9ROcJ6tbY0eX3hAfek9Cs2Ad36LKPh8eAn80S2pTf9OhraBsh7OM7oUCfOz3IKWW-I3qggB6Yr82dr1sGCFNgWjrodc9ihnxITntuyt6JV-Jokb05WoUSFXsxzfQr98OgG_o4GtvCLEp3vSjHC-KmXKuzxrUQzTP35d13DE-aii5LY_e3Khjc68LnWvczXxR5trP4P5C4d2cFSmSIC1ZvO__2JKVXFZqXLWhE5hjEcqu2-a_d0kBoTTwG43YsM2pFjoRdMzxKaOVisL4mlPgQsDKXmukV5tVHElQ8zOrq-xXzfj6Dpj7Yzvj9gGnVgu-haa992BIV4P3QNfGarLxVgIvyEFDKVkw5WqlzA7pWBvmlUgQiGqmB2xRck3m22Hm8-yRWe827NZ-Wj_f3HgKpSTMfr9ugUiUcm1vjzFp8gvCyVNLKfYjxBO_8zI1_MSkUMFU76oF043lWK3FCgwCojh0NEE10N50uJjfW3hmWFTW7s3MgX0obMyNOeylKg0-4BMB3KtfDO6XxwRRc9148XHt5WSFrJk6wRG-puLgMluntJJtL5RWpaGYe4pC6Vr9F9s762cxkK9S4bjtTD6QrCgzK50JdKSwphgMuKjPhABbcIl2sUpnWU00Z-eVMwXnfFQ361dgQuhxv1nToyFNYLcdG02o0HGYHSP_GyDi_ROQTh1YO7w_lDyOTAJMXv0-Bnqu0bSirQFs5lUXsXkIfiqujcd0GwUox4M2xKnK9Xtxiek3eXeNhSmeiog5XfA-3se-sMoCsPDTmSEZdWBxUIbFWuzYo7DrUYLYgr8WdkD86IEtqq-lgOI_a4fH2oMik6nMxpfb-6F7HoU7c51r-XVuBJ8bsk2Fl5OE093jTHkJA_xSJA9CzTzq_kSUy4FEf72KOwQncG0To09yTqy4nn-Vlq5FAdhBTu7Moan5c7FbxDS5hLt_VJJDWkbRmIHGSQVBMn28QneUuN-zjn8p4E6sGf8eplaMiZGZCXhN_IWqp1gsU-OocTZgpCJsTaLrIU",
+   "summary": []
+  },
+  {
+   "id": "msg_0eed1beefe23b3b6006abb7d8565c087d0b96d0ee3427afcdb",
+   "type": "message",
+   "status": "completed",
+   "content": [
+    {
+     "type": "output_text",
+     "annotations": [],
+     "logprobs": [],
+     "text": "400 \u00d7 300 pixels."
+    }
+   ],
+   "phase": "final_answer",
+   "role": "assistant"
+  }
+ ]
+}

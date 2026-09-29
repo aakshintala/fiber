@@ -182,6 +182,36 @@ shape stays in the provider's package rather than in the protocol. When it
 runs, and what the model and the person see, is `docs/tools.md`, "Provider
 quota".
 
+## Image limits
+
+`read` returns an image part (`docs/tools.md`, "read") and the provider module
+keeps it inside the limits below. The table is what each vendor documents. The
+sources are `platform.claude.com/docs/en/build-with-claude/vision`,
+`developers.openai.com/api/docs/guides/images-vision` and
+`ai.google.dev/gemini-api/docs/image-understanding`.
+
+| Protocol | Largest dimension | Largest encoded image | Images per request | Resizing the vendor documents |
+|---|---|---|---|---|
+| `anthropic-messages` | 8000 px; 2000 px per image once a request holds more than 20 | 10 MB as base64 (5 MB on Bedrock and Google Cloud); 32 MB per request | 600, or 100 for a model with a 200k-token context | to 2576 px and 4784 tokens on Claude 4.7 and later, 1568 px and 1568 tokens on other models; a computer-use or browser-use `tool_result` image over the limit is rejected |
+| `openai-responses`, `openai-completions` | none; 30,000 patches of 32 px per image (the gpt-5.6 family: `high` detail fits 2048 px and 2,500 patches) | 512 MB per request | 1,500 | at `detail: high`; `original` keeps the size and rejects over 30,000 patches |
+| `google-generative-ai` | none stated | 20 MB per request, inline | 3,600 | none stated; the page describes 768 px tiles for counting tokens |
+
+Requests to check the table, on September 29, 2026, one image each:
+
+- `claude-sonnet-5-5`: an 8000 by 6000 px PNG was accepted and counted 4,788
+  input tokens. A 9000 by 9000 px PNG failed with a 400 naming the 8000 px
+  limit, and a 23 MB base64 PNG with a 400 naming the 10 MB limit. A GIF was
+  accepted.
+- `gpt-6-luna`, default detail: on each protocol, an 8000 by 6000 px PNG (47,000
+  patches) and a 9000 by 9000 px PNG were rejected with a 400 naming the 30,000
+  patch limit. A 23 MB base64 PNG was accepted on both, and a GIF on
+  `openai-responses`.
+- `gemini-3.1-flash-lite`: the 8000 by 6000 px and 9000 by 9000 px PNGs, a 23 MB
+  base64 PNG (over the 20 MB the page states) and a GIF (which the page does not
+  list) were all accepted, at 1,091 to 1,116 prompt tokens.
+
+The measurements are in `research/image-limits/README.md`.
+
 ## Naming a model
 
 A session's stored model reference is always `provider/model`, for example

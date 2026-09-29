@@ -1,0 +1,6 @@
+../fixtures/cmyk.jpg: ok 400x300 Rgb8
+../fixtures/corrupt.jpg: error: The image format could not be determined
+../fixtures/trunc.jpg: error: Format error decoding Jpeg: "Found a marker with invalid length:0\n"
+../fixtures/deep16.png: ok 300x200 Rgb16
+../fixtures/small.gif: ok 400x300 Rgba8
+../fixtures/small.webp: ok 400x300 Rgb8

@@ -1,0 +1,15 @@
+base 1980 KiB, binary 330976
+## image binary=1444120
+only= peak_rss_kib=150428
+only=photo peak_rss_kib=144944
+only=shot peak_rss_kib=141632
+only=small.gif peak_rss_kib=4128
+only=small.webp peak_rss_kib=4872
+only=flat-9000 peak_rss_kib=534700
+## image-parts binary=5114104
+only= peak_rss_kib=69864
+only=photo peak_rss_kib=69876
+only=shot peak_rss_kib=66220
+only=small.gif peak_rss_kib=4876
+only=small.webp peak_rss_kib=5324
+only=flat-9000 peak_rss_kib=307988
