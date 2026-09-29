@@ -1,0 +1,77 @@
+{
+ "request": {
+  "model": "gpt-6-luna",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_completion_tokens": 50,
+  "reasoning_effort": "none",
+  "stream": true
+ },
+ "events": [
+  {
+   "id": "chatcmpl-ETNsQOkGsHnPyfaQppJ0X5ymVrpLd",
+   "object": "chat.completion.chunk",
+   "created": 1790672002,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "role": "assistant",
+      "content": "",
+      "refusal": null
+     },
+     "finish_reason": null
+    }
+   ],
+   "obfuscation": "VCyURamuzoQ6M"
+  },
+  {
+   "id": "chatcmpl-ETNsQOkGsHnPyfaQppJ0X5ymVrpLd",
+   "object": "chat.completion.chunk",
+   "created": 1790672002,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "ok"
+     },
+     "finish_reason": null
+    }
+   ],
+   "obfuscation": "AxKluYsXTSgTE"
+  },
+  {
+   "id": "chatcmpl-ETNsQOkGsHnPyfaQppJ0X5ymVrpLd",
+   "object": "chat.completion.chunk",
+   "created": 1790672002,
+   "model": "gpt-6-luna",
+   "service_tier": "default",
+   "system_fingerprint": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {},
+     "finish_reason": "stop"
+    }
+   ],
+   "obfuscation": "8jRgjMg2S"
+  },
+  "[DONE]"
+ ],
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream; charset=utf-8",
+  "openai-processing-ms": "383",
+  "x-request-id": "req_f112fadf4cb544ba8050bc07f240eaae"
+ }
+}

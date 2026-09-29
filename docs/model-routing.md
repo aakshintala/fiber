@@ -93,6 +93,24 @@ For each model:
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
 
+### openai-completions facts
+
+- OpenAI's `gpt-6-luna` rejects `max_tokens` with a 400 and takes
+  `max_completion_tokens`. OpenRouter accepts both.
+- OpenAI sends a usage chunk (`choices: []`) only when the request sets
+  `stream_options.include_usage`. OpenRouter sends a usage chunk either way,
+  and repeats `finish_reason` on it.
+- OpenRouter streams reasoning as `reasoning` plus `reasoning_details` entries
+  of type `reasoning.text`. The models probed there never sent
+  `reasoning_content` or `reasoning_text`.
+- OpenRouter reads `reasoning`, `reasoning_content` and `reasoning_details`
+  on a replayed assistant message.
+- OpenRouter accepts `cache_control` on a system part, the last message and
+  a tool, with or without `ttl`, on a model that does not cache by it. It
+  does not validate the value.
+- Tool-call deltas from OpenAI and OpenRouter carry `index`. OpenRouter adds
+  `: OPENROUTER PROCESSING` comment lines to the stream.
+
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
 `reasoning_effort`. So the extension declares each Claude model with

@@ -1,0 +1,204 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_tokens": 300,
+  "reasoning": {
+   "effort": "low"
+  },
+  "stream": true
+ },
+ "events": [
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant",
+      "reasoning": "Instructions",
+      "reasoning_details": [
+       {
+        "type": "reasoning.text",
+        "text": "Instructions",
+        "format": "unknown",
+        "index": 0
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant",
+      "reasoning": " requiring echoing \"ok\" are fine to follow harm",
+      "reasoning_details": [
+       {
+        "type": "reasoning.text",
+        "text": " requiring echoing \"ok\" are fine to follow harm",
+        "format": "unknown",
+        "index": 0
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant",
+      "reasoning": "lessly.",
+      "reasoning_details": [
+       {
+        "type": "reasoning.text",
+        "text": "lessly.",
+        "format": "unknown",
+        "index": 0
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  "RAW:: OPENROUTER PROCESSING",
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "Ok.\n\nIs there anything I can help you with",
+      "role": "assistant"
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "?",
+      "role": "assistant"
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "system_fingerprint": "vllm-dev-f9716369",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant",
+      "reasoning": null
+     },
+     "finish_reason": "stop",
+     "native_finish_reason": "stop"
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672023-DYKcGGokeewAuiFU1UWF",
+   "object": "chat.completion.chunk",
+   "created": 1790672023,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "OpenInference",
+   "system_fingerprint": "vllm-dev-f9716369",
+   "service_tier": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant"
+     },
+     "finish_reason": "stop",
+     "native_finish_reason": "stop"
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 15,
+    "completion_tokens": 26,
+    "total_tokens": 41,
+    "cost": 7.96e-06,
+    "is_byok": false,
+    "prompt_tokens_details": {
+     "cached_tokens": 14,
+     "cache_write_tokens": 0,
+     "audio_tokens": 0,
+     "video_tokens": 0
+    },
+    "cost_details": {
+     "upstream_inference_cost": 7.96e-06,
+     "upstream_inference_prompt_cost": 1.6e-07,
+     "upstream_inference_completions_cost": 7.8e-06
+    },
+    "completion_tokens_details": {
+     "reasoning_tokens": 13,
+     "image_tokens": 0,
+     "audio_tokens": 0
+    }
+   }
+  },
+  "[DONE]"
+ ],
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream"
+ }
+}

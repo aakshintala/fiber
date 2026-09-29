@@ -1,0 +1,270 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "What is the weather in Paris? Use the tool."
+   }
+  ],
+  "tools": [
+   {
+    "type": "function",
+    "function": {
+     "name": "get_weather",
+     "description": "Get weather",
+     "parameters": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     }
+    }
+   }
+  ],
+  "max_tokens": 1500,
+  "reasoning": {
+   "effort": "low"
+  },
+  "stream": true
+ },
+ "events": [
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  "RAW:: OPENROUTER PROCESSING",
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "index": 0,
+        "id": "call_95a0915c86aa4193adf9522e",
+        "type": "function",
+        "function": {
+         "name": "get_weather",
+         "arguments": ""
+        }
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "{\""
+        }
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "city"
+        }
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "\":\""
+        }
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "Paris\""
+        }
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": null,
+      "role": "assistant",
+      "tool_calls": [
+       {
+        "index": 0,
+        "function": {
+         "arguments": "}"
+        }
+       }
+      ]
+     },
+     "finish_reason": null,
+     "native_finish_reason": null
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant"
+     },
+     "finish_reason": "tool_calls",
+     "native_finish_reason": "tool_calls"
+    }
+   ]
+  },
+  {
+   "id": "gen-1790672029-DPPzSztjjEeBvounlJca",
+   "object": "chat.completion.chunk",
+   "created": 1790672029,
+   "model": "z-ai/glm-5.3-flash",
+   "provider": "AtlasCloud",
+   "service_tier": null,
+   "choices": [
+    {
+     "index": 0,
+     "delta": {
+      "content": "",
+      "role": "assistant"
+     },
+     "finish_reason": "tool_calls",
+     "native_finish_reason": "tool_calls"
+    }
+   ],
+   "usage": {
+    "prompt_tokens": 161,
+    "completion_tokens": 12,
+    "total_tokens": 173,
+    "cost": 2.32155e-05,
+    "is_byok": false,
+    "prompt_tokens_details": {
+     "cached_tokens": 0,
+     "cache_write_tokens": 0,
+     "audio_tokens": 0,
+     "video_tokens": 0
+    },
+    "cost_details": {
+     "upstream_inference_cost": 2.32155e-05,
+     "upstream_inference_prompt_cost": 1.85955e-05,
+     "upstream_inference_completions_cost": 4.62e-06
+    },
+    "completion_tokens_details": {
+     "reasoning_tokens": 0,
+     "image_tokens": 0,
+     "audio_tokens": 0
+    }
+   }
+  },
+  "[DONE]"
+ ],
+ "status": 200,
+ "headers": {
+  "Content-Type": "text/event-stream"
+ }
+}
