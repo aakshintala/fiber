@@ -4,7 +4,6 @@ KEY=open('/tmp/anthropic-key').read().strip()
 BASE='https://api.anthropic.com/v1/messages'
 M='claude-sonnet-5-5'; PIN,POUT=2/1e6,10/1e6; CAP=1.00
 spend=0.0; RAW=[]
-SECRET={'organization-id','set-cookie','cf-ray','x-api-key','request-id'}  # request-id kept out; not needed
 def hdrs(h): return {k:v for k,v in h.items() if k.lower() not in ('anthropic-organization-id','anthropic-workspace-id','set-cookie','x-api-key','authorization','cf-ray','traceresponse')}
 def track(u):
     global spend
