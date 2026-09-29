@@ -869,7 +869,7 @@ model"), and Fiber never switches it on the model's behalf.
 
 A provider supplies quota through an optional Lua `quota()` function
 (`docs/model-routing.md`, "Quota"). A provider without one reports no quota. Of
-the five Fiber ships:
+the first-party providers:
 
 | Provider | Source | Reports |
 |---|---|---|
@@ -877,7 +877,7 @@ the five Fiber ships:
 | OpenCode Go | `GET /zen/go/v1/usage` | percent used of rolling, weekly and monthly windows, with reset times |
 | OpenRouter | `GET /api/v1/key` | credit remaining, and the key's limit if it has one |
 | OpenCode Zen | none | no quota reported |
-| Databricks, muse | none | no quota reported |
+| Anthropic, OpenAI, Gemini API, Databricks, muse, AWS Bedrock, Google Vertex, Azure | none | no quota reported |
 
 muse's `x-ratelimit-remaining-*` headers are a per-minute rate limit, not
 quota. No provider's quota is read from response headers.

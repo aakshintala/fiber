@@ -185,7 +185,7 @@ extension sends the same calls as messages.
 
 ```
 fiber.tool(name, { description, input_schema, effects, run })
-fiber.provider(name, { models, quota })
+fiber.provider(name, { models, quota, credential, sign })
 fiber.harness(name, { modes, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { on_failure, timeout, run })
@@ -216,6 +216,11 @@ host.ask(kind, spec)               -- raise an interaction; returns the answer, 
 host.status(text) / host.widget(id, lines)
 host.emit(data)                    -- data for this extension's own TUI extension
 host.log(msg)                      -- write a debug line
+host.oauth.open(url)               -- open the browser at url, and show the URL to copy
+host.oauth.callback(opts)          -- serve one request on localhost; returns its query parameters
+host.oauth.pkce()                  -- returns { verifier, challenge }
+host.oauth.poll(opts)              -- poll a device-code token endpoint; returns the token reply
+host.oauth.refresh(fn)             -- lock this provider's credential file, re-read it, refresh once
 json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none built in)
 ```
 
@@ -254,6 +259,12 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
 - **`host.ask`** raises one of the closed interactions ("Commands and
   screens"). With nobody to answer, as in a session started by `fiber ask`,
   it returns declined.
+- **`host.oauth`** is what a provider's `credential()` builds an OAuth login
+  from (`docs/model-routing.md`, "Credentials"). The extension adds its
+  vendor's own steps. `host.oauth.refresh` takes the lock on the stored
+  credential and re-reads it. It calls `fn` only if the token still needs
+  refreshing, then stores what `fn` returns, so two sessions never refresh
+  one token twice.
 
 ## State
 
@@ -316,8 +327,18 @@ protocols are native Rust, so a provider never parses a stream. What a provider
 declares, and why, is `docs/model-routing.md`. The file is
 `providers/<name>.json` (`docs/configuration.md`, "A provider's data").
 
-A provider may have two pieces of Lua: a function that discovers its models,
-and a function that reports its quota (`docs/model-routing.md`, "Quota"). Here is one for a gateway that lists its models at `/models`:
+A provider may have four pieces of Lua:
+
+- `models()`, which discovers its models
+- `quota()`, which reports its quota (`docs/model-routing.md`, "Quota")
+- `credential()`, which returns a token and its expiry, for a cloud sign-in or
+  an OAuth login (`docs/model-routing.md`, "Credentials")
+- `sign()`, which adds headers to each request, for a scheme such as AWS SigV4
+  (`docs/model-routing.md`, "Signing a request")
+
+Only `sign()` runs while a request is being sent. It sees the body's SHA-256,
+never the body. Here is a provider for a gateway that lists its models at
+`/models`:
 
 ```lua
 fiber.provider("acme", {
@@ -346,6 +367,9 @@ fetches the API key, asks the gateway for its models, and returns one entry per
 model, choosing each model's protocol from its name. Fiber caches the list on
 disk and refreshes it in the background at startup. The function never runs
 while a request is being sent.
+
+The first-party provider extensions are the fuller examples, including
+`credential()` and `sign()`.
 
 Writing a tool or a hook has the same shape: register a name, receive a call, do
 pure work plus host calls, return. The hook points are [Hooks](#hooks).
@@ -618,8 +642,10 @@ An extension's name is where it lives, as with Go modules:
 works, there is no registry, and two authors cannot claim the same name. A
 local path also works, for an extension under development.
 
-The five first-party provider extensions also have short names, so
-`fiber install openrouter` means the first-party extension's full name.
+Each first-party provider extension also has a short name, so
+`fiber install openrouter` means the first-party extension's full name. The
+short names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`,
+`opencode`, `databricks`, `muse`, `bedrock`, `vertex` and `azure`.
 
 Fiber fetches with the system `git`, so your SSH keys and credential helpers
 apply. If `git` is missing, the command fails with a stable error.
@@ -674,12 +700,10 @@ tool set is fixed before the first request (`docs/prompt-cache.md`, "Tools").
 
 ### A fresh install
 
-Installing Fiber also installs the five first-party provider extensions, so
-the first run fetches nothing.
-
-A Fiber binary that arrived some other way has no extensions. In the terminal,
-the model picker offers the five first-party providers, and choosing one
-installs it. A headless run fails with `extension_missing`.
+A fresh install has no extensions, providers included. In the terminal, the
+model picker offers the first-party providers, and choosing one installs it.
+On a headless machine, `fiber install <name>` installs one. A headless run
+whose provider is not installed fails with `extension_missing`.
 
 ### Staying current
 

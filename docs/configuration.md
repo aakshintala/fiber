@@ -21,8 +21,9 @@ survive anyway.
 
 Reading configuration never runs code. A repository's configuration is read
 before anyone has approved anything, so Lua is not a configuration format. The
-only Lua a provider runs is its optional `models()` and `quota()` functions
-(`docs/model-routing.md`, "Model discovery" and "Quota").
+only Lua a provider runs is its optional `models()`, `quota()`,
+`credential()` and `sign()` functions (`docs/model-routing.md`, "Model
+discovery").
 
 Configuration never holds a secret. Secrets live in `credentials/`
 ("Secrets").
@@ -344,9 +345,9 @@ provider extension declares") lists:
 ```
 
 - `credential` says how the key is found: `env`, `file` or `command` as in
-  "Secrets", or `oauth` with the flow's name and parameters. A stored
-  credential in `credentials/<name>` always comes first
-  (`docs/model-routing.md`, "Credentials").
+  "Secrets". A stored credential in `credentials/<name>` always comes first
+  (`docs/model-routing.md`, "Credentials"). A provider whose token expires,
+  such as an OAuth login, declares a Lua `credential()` function instead.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
   guesses a flag.
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the

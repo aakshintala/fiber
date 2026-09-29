@@ -24,10 +24,11 @@ Fiber speaks two transports:
 It has no legacy HTTP with server-sent events (HTTP+SSE). codex has none
 either.
 
-A remote server that needs OAuth uses a native flow. `docs/model-routing.md`
-says of providers: "OAuth flows are native, like protocols." A person logs in to
-a server with `fiber mcp login <server>`. Token refresh follows the provider
-rule in `docs/model-routing.md`. A headless start with no valid token counts as
+A remote server that needs OAuth uses MCP's OAuth flow, which the client
+carries ([ADR 0008](adr/0008-the-mcp-client-is-built-in.md)). A person logs in
+to a server with `fiber mcp login <server>`. Token refresh follows the provider
+rule in `docs/model-routing.md`, "Credentials": lock the credential file,
+re-read it, refresh once. A headless start with no valid token counts as
 the server failing to start (see [Starting servers](#starting-servers)).
 
 ## Tools and their names

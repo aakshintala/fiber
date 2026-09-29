@@ -15,14 +15,19 @@ A protocol is a wire format: how a request is shaped, and how a streamed reply
 is parsed into actions. A provider is an endpoint that speaks one or more
 protocols: a name, a credential, base URLs and a list of models.
 
-Protocols are native Rust in the `provider` module. There are four:
+Protocols are native Rust in the `provider` module. There are five:
 
 | Protocol | Used by |
 |---|---|
-| `anthropic-messages` | OpenCode, OpenRouter, Databricks, muse |
-| `openai-completions` | OpenCode, OpenRouter, Databricks, muse |
-| `openai-responses` | OpenCode, Databricks, muse, ChatGPT/codex |
-| `google-generative-ai` | OpenCode Zen's Gemini models |
+| `anthropic-messages` | Anthropic, OpenCode, OpenRouter, Databricks, muse, AWS Bedrock (Claude), Google Vertex (Claude), Azure (Foundry Claude) |
+| `openai-completions` | OpenCode, OpenRouter, Databricks, muse, Azure |
+| `openai-responses` | OpenAI, ChatGPT/codex, OpenCode, Databricks, muse, Azure |
+| `google-generative-ai` | the Gemini API, Google Vertex (Gemini), OpenCode Zen's Gemini models |
+| `bedrock-converse` | AWS Bedrock (models other than Claude) |
+
+AWS event-stream framing is a per-model flag, not a protocol. `anthropic-messages`
+reads it for Claude on Bedrock, which Bedrock serves through its Invoke API, and
+`bedrock-converse` reads it too.
 
 ChatGPT/codex speaks `openai-responses` with compatibility flags its extension
 declares: the request fields it requires or rejects, such as `store: false`,
@@ -47,11 +52,35 @@ an explicit `strict: true` was rejected with a 400. Details:
 An extension cannot add a protocol. A vendor with a new wire format needs a
 Fiber release.
 
-Every provider is an extension, the five Fiber ships included: OpenCode,
-ChatGPT/codex, muse (the Meta Model API), OpenRouter and Databricks. Extensions
-are fetched and installed, not built into the binary. Installing Fiber
-installs these five. How extensions arrive and stay current is
+Every provider is an extension, the first-party ones included. Extensions are
+fetched and installed, not built into the binary. Installing Fiber installs no
+provider: a person installs one by choosing it in the model picker, or with
+`fiber install <name>`. How extensions arrive and stay current is
 `docs/extensions.md`.
+
+A first-party provider is one Fiber can probe and re-record. There are eleven:
+
+| Provider | Protocols | Credential |
+|---|---|---|
+| Anthropic | `anthropic-messages` | key |
+| OpenAI | `openai-responses` | key |
+| Gemini API | `google-generative-ai` | key |
+| ChatGPT/codex | `openai-responses`, with its flags | subscription login |
+| OpenRouter | `anthropic-messages`, `openai-completions` | key |
+| OpenCode | `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai` | key |
+| Databricks | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
+| muse (the Meta Model API) | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
+| AWS Bedrock | `anthropic-messages` for Claude and `bedrock-converse` for other models, both with AWS framing | Bedrock API key, or SigV4 through `sign()` |
+| Google Vertex | `anthropic-messages` for Claude, `google-generative-ai` for Gemini | token from `credential()` |
+| Azure | `openai-completions`, `openai-responses`; `anthropic-messages` for Foundry Claude | `api-key` header, or token from `credential()` |
+
+The OpenAI provider sends `store: false` on every request. Google Vertex's
+flags and URLs are data, like any provider's.
+
+A provider Fiber cannot probe is left to the community: a vendor whose
+subscription Fiber does not hold, or a key vendor such as Groq, Mistral,
+Moonshot or DeepSeek. The first-party extensions and `docs/extensions.md`
+("What writing a provider looks like") are the examples to start from.
 
 ### Anthropic messages wire facts
 
@@ -100,8 +129,10 @@ in September 2026.
 Most of a provider is data. For the provider:
 
 - its name, which is the first half of every model reference
-- how its credential is found (see [Credentials](#credentials))
+- how its credential is found (see [Credentials](#credentials)), or a
+  `credential()` function that returns a token
 - headers sent on every request
+- a `sign()` function, if every request must carry a signature
 
 For each model:
 
@@ -163,9 +194,18 @@ The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A vendor with no listing endpoint ships a
 static list instead.
 
-This and `quota()` are the only Lua a provider runs. Neither runs on the
-request path.
-Nothing transforms a request on its way to a provider. A transform such as
+A provider runs Lua in four functions at most: `models()`, `quota()`,
+`credential()` and `sign()`. Only `sign()` runs on the request path.
+
+### Signing a request
+
+A provider may declare a Lua `sign()` function for a scheme that signs each
+request, such as AWS SigV4. It receives the method, the URL, the headers and
+the SHA-256 of the body, and returns headers to add. It cannot change the body.
+It declares a timeout like every callback (`docs/extensions.md`, "How an
+extension runs"), and a retry signs again.
+
+Nothing changes a request's body on its way to a provider. A transform such as
 redacting secrets runs where the text enters the session, in the
 `before_message` and `after_tool` hooks (`docs/extensions.md`, "Hooks"), so
 the secret never reaches the log or any request.
@@ -279,15 +319,31 @@ Fiber looks for the session model's credential at startup, before the session
 starts. A run with none fails there with `credential_missing`
 (`docs/errors.md`, "Before a session exists").
 
-OAuth flows are native, like protocols. An extension chooses a flow and
-supplies its parameters, such as the client id and endpoints. ChatGPT/codex
-uses one. The other four providers Fiber ships use keys.
+Most first-party providers use a key. The table in
+[Protocols and providers](#protocols-and-providers) says which use something
+else.
 
-Fiber refreshes an OAuth token when it is within 5 minutes of expiry. The
-refresh takes a lock on the credential file, re-reads it, and refreshes once,
-so two sessions never refresh the same token twice. If the refresh fails, the
-stored credential stays in place, and the call fails with an auth error. Logging
-in again is the fix.
+A provider whose credential is a token that expires declares a Lua
+`credential()` function. It returns a token and its expiry. Fiber caches the
+token and calls the function again when the token is within 5 minutes of
+expiry. It runs off the request path. A cloud's own sign-in, such as Google
+Vertex's, is this function, written in the extension, not in Fiber.
+
+An OAuth login is extension code too. The extension's `credential()` builds its
+vendor's flow from native host calls: opening the browser, a one-shot localhost
+callback, PKCE, device-code polling and the locked credential file
+(`docs/extensions.md`, "Host calls"). It adds its vendor's own steps, such as
+reading the ChatGPT account id from codex's token.
+
+ChatGPT/codex is the only subscription login Fiber ships. A subscription login
+ships when its vendor permits use from other harnesses and Fiber can probe it.
+The Claude subscription is reachable only by running Claude Code, as a harness
+extension (`docs/delegates.md`).
+
+The refresh lock is native. A refresh takes a lock on the credential file,
+re-reads it, and refreshes once, so two sessions never refresh the same token
+twice. If the refresh fails, the stored credential stays in place, and the call
+fails with an auth error. Logging in again is the fix.
 
 A headless run whose credential has expired and cannot be refreshed fails with
 `authentication_failed`. It never prompts, because nobody is there to answer.
