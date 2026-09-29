@@ -96,6 +96,12 @@ Anthropic sends it, so the override only ever fires for Anthropic (and
 gateways that forward its headers). Anthropic marked a 429 `true` and every
 4xx it sent `false`.
 
+Evidence bearing on how a retrying client treats `retry-after`: muse answered
+an oversized `max_tokens` with a 429 and `retry-after: 60`
+(`raw/muse.max-tokens-huge.json`). That request fails the same way on every
+attempt, so a client that retries on 429 and honours the header would loop on
+it. Anthropic's 429 came from a genuine rate limit and cleared with time.
+
 Evidence bearing on 409 and 425: neither appeared. Both statuses stay
 unobserved, not ruled out.
 
