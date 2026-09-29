@@ -1,0 +1,19 @@
+name: probe-90
+on: push
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v7
+      - run: rustup update stable && rustup default stable
+      - run: |
+          mkdir -p out
+          uname -a > out/uname.txt
+          rustc --version >> out/uname.txt
+          research/extension-runtime/linux-containment/run.sh > out/linux-x86_64.txt 2>&1
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: out
+          path: out
