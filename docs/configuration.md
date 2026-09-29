@@ -272,7 +272,7 @@ list is the terminal's job.
 
 Standing rules are not configuration keys. They are two files in Fiber home:
 `rules` at the top level for global rules, and `projects/<key>/rules` for one
-project (`docs/permissions.md`, "Standing rules"). A repository has no rules
+project (`docs/permissions.md`, "Remembering a decision"). A repository has no rules
 file.
 
 ## The repository's `.fiber/` directory

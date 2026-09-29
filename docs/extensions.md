@@ -264,7 +264,7 @@ An extension keeps what it knows in four places, by what the thing describes.
 | What happened in this session: a goal, what an inbox delivered, a test count | extension state, in the session's log | follows the key's fork rule |
 | What a person set: enabled models, a workspace URL | `host.config`, in Fiber home | leaves it alone |
 | A secret: an API key | `credentials/` (`docs/model-routing.md`) | leaves it alone |
-| What it keeps across sessions: a memory store, an index | its data directories (`docs/state.md`, "Extension data") | leaves it alone |
+| What it keeps across sessions: a memory store, an index | its data directories (`docs/state.md`, "What each part holds") | leaves it alone |
 
 Lua globals are none of these. They are memory, lost when the process exits
 and never moved by a rewind. Use them for scratch and caches only.

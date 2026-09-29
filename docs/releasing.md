@@ -159,7 +159,7 @@ It:
    that holds the binary, checks the SHA-256 and extracts the binary there
 3. stages each installed extension at its newest version whose manifest
    accepts the Fiber version being installed, in a fresh directory
-   (`docs/state.md`, "Extensions")
+   (`docs/state.md`, "What each part holds")
 4. renames the staged extensions into place, then the binary
 
 Every download and check finishes before the first rename, so a failure up to

@@ -19,7 +19,7 @@ commands".
   as the `tui` crate (`docs/architecture.md`). It prefers existing crates to
   writing its own. Their memory is recorded but is not a veto; idle CPU, the
   first-frame budget and supply-chain checks stay strict
-  (`docs/dependencies.md`, "Performance" below).
+  (`docs/dependencies.md`, "Measuring memory", and "Performance" below).
 - **It reads the event stream and nothing else.** It is its own process and a
   client of its session (`docs/invocation.md`, "Processes"). When a screen
   needs data the stream does not carry, the stream changes; the terminal has no
@@ -186,8 +186,8 @@ the conversation. The views are:
 - **`/rules`:** every standing rule by scope, global and then this project.
   Each shows the prefix it allows, when and from which session it was added,
   and a ✕ that revokes it. Revoking deletes the line and applies to the next
-  call judged. Ctrl+G opens the rules file (`docs/permissions.md`, "Standing
-  rules").
+  call judged. Ctrl+G opens the rules file (`docs/permissions.md`,
+  "Remembering a decision").
 - **`/settings`:** the configuration keys, their effective values and the
   layer each comes from. It edits a key through the same path as
   `fiber config set`, and says when a change needs a reload and what that
@@ -583,7 +583,7 @@ closes it.
 
 An extension's commands appear in the same list, tagged with the extension's
 name, and run with the `command` driver command (`docs/extensions.md`,
-"Commands").
+"Commands and screens").
 
 ### Logging in
 

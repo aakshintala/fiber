@@ -40,8 +40,8 @@ A newer push to a pull request cancels that pull request's older run.
 
 A pull request runs only what its diff can affect.
 
-- A diff whose every file is Markdown, under `docs/` or under `research/`
-  runs the docs job alone.
+- A diff in which every file is Markdown, or is under `docs/` or
+  `research/`, runs the docs job alone: the docs check, below.
 - A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`
   or anything under `.github/` runs everything.
 - Any other diff runs the crates it touches and every crate that depends on
@@ -76,6 +76,7 @@ run: CI opens a flake issue naming the test, or comments on the open one
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
+- the docs check, below
 - no non-test source file over 800 lines
 - the `unsafe` table in `docs/code-quality.md` matches the code
 - every crate a `Cargo.toml` names is listed in `docs/dependencies.md`
@@ -98,6 +99,23 @@ measured in the same job on the same runner.
 
 Nothing in CI writes a snapshot, calls a live provider or reaches the public
 network (`docs/testing.md`).
+
+## The docs check
+
+`scripts/check-docs` checks `docs/`, `CONTEXT.md`, `AGENTS.md` and
+`README.md`, offline. It fails when:
+
+- a relative Markdown link, or its `#anchor`, does not resolve
+- a section citation, such as `` (`docs/workflow.md`, "The gate") ``, names a
+  heading the file does not have, including a citation broken across lines
+- a backticked path under `docs/`, `crates/`, `scripts/`, `research/` or
+  `.github/` does not exist. A path with a placeholder in it, such as
+  `docs/<area>.md`, is not checked.
+
+It runs on every pull request, not only docs-only ones, because the change
+that breaks a citation is usually a code change that renames or deletes what
+a doc points at. External URLs are not checked: nothing in CI reaches the
+public network.
 
 ## Advisories
 
