@@ -61,17 +61,19 @@ rather than per call. How the hints map to effects is `docs/mcp.md`
 ## Modes
 
 A session starts in the mode in `permissions.mode` (`docs/configuration.md`),
-which is `auto`, `ask` or `yolo`. `readonly` is never a default: a person
+which is `auto` or `yolo`. `readonly` is never a default: a person
 chooses it for one session with the `mode` command.
 **Only a person changes the mode.** The model, a tool or an extension never
-does. A person changes it in two ways:
+does. The model only chooses the mode a new delegate starts in, never above
+its own ([Delegates](#delegates)). A person changes it in two ways:
 
 - between turns, to any mode, with the `mode` command (`docs/invocation.md`)
 - by answering yes when a `readonly` session asks to leave `readonly`
   ([Leaving readonly](#leaving-readonly))
 
 A change applies to the session and to every delegate of it that is
-running, so a delegate is never in a more permissive mode than its parent.
+running, as [Delegates](#delegates) says, so a delegate is never in a more
+permissive mode than its parent.
 Each change is a `mode_changed` event (`docs/events.md`) in every session it
 applies to. A mode change adds,
 hides or rewrites no tool and changes nothing in the system prompt, so it
@@ -80,14 +82,14 @@ keeps the prompt cache (`docs/prompt-cache.md`).
 | Mode | What answers |
 |---|---|
 | `auto` | the reviewer, escalating to a human on repetition or failure |
-| `ask` | a human, every time |
 | `readonly` | a person, asked whether to leave `readonly`, for any effect but `reads` |
 | `yolo` | nothing is asked; the credential deny and standing denies still apply |
 
-`ask` is not a separate mechanism. It is `auto` with the reviewer replaced by
-a person: the same effects, the same fast paths, the same events. It exists so
-that a gated session is possible with no reviewer at all — offline, or with
-the reviewer's provider down.
+There is no mode in which a person answers every call. A session offline, or
+with the reviewer's provider down, is still gated: a reviewer that fails
+hands the call to a person ([What happens on a block](#what-happens-on-a-block)).
+A call a person wants to see every time is a standing ask
+([Remembering a decision](#remembering-a-decision)).
 
 `yolo` honours the credential deny, a standing deny, and nothing else. A
 standing deny is the one thing a person wrote down deliberately, and a mode
@@ -112,7 +114,7 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
 6. **A fast path** — see below: allowed, with no model call.
 7. **A session grant** matching this call: allowed.
 8. **A standing allow** matching this call: allowed.
-9. Otherwise **reviewed**: by the reviewer in `auto`, by a human in `ask`.
+9. Otherwise **reviewed** by the reviewer.
 
 The credential deny and a standing deny are both evaluated before everything
 else, because a rule that can be widened by a later layer is not a deny.
@@ -130,8 +132,7 @@ is a `permission_requested` raised by step 4.
 - **Yes** switches the session to `permissions.mode` and writes
   `mode_changed`. The call then
   continues from step 5 in the new mode. Yes is not an approval of the call:
-  in `auto` the reviewer may still block it, and in `ask` the person is asked
-  about the call itself.
+  in `auto` the reviewer may still block it.
 - **No** refuses the call. Every later call in the same turn with an effect
   other than `reads` is refused without asking, so a model cannot repeat the
   question call after call. The next turn can ask again.
@@ -191,7 +192,7 @@ Like every other decision on this page, it relies on declared paths. The
 shell tool declares paths only for commands it recognises as read-only
 (`docs/tools.md`, "Shell"). A command it does not recognise, such as
 `python -c` opening a token file, declares no paths and the deny does not see
-it: in `auto` and `ask` the call is reviewed, and in `yolo` nothing stops it.
+it: in `auto` the call is reviewed, and in `yolo` nothing stops it.
 An extension tool that misdeclares its paths gets nothing it could not do
 directly, the same boundary the Effects section already states for
 extensions.
@@ -280,7 +281,7 @@ blocks, or 20 in a session**, both configurable. The block that reaches the coun
 is not returned to the model: the call goes to a person instead, as a
 `permission_requested` whose `escalation` gives the cause and the reviewer's
 reason. The person's answer ends the run of consecutive blocks. Escalating every block would
-turn `auto` into `ask` under load, and a person answering a stream of
+send a person every call under load, and a person answering a stream of
 questions stops reading them.
 
 **A reviewer that fails is a block, never an allow.** An unreachable provider,
@@ -401,10 +402,23 @@ pending escalation and raises it again when resumed (`docs/invocation.md`,
 
 ## Delegates
 
-A Fiber delegate (`docs/delegates.md`) starts in its parent's mode, and a
-mode change on the parent applies to it too. Only a person changes a mode, and
-a delegate in `readonly` never asks to leave it ([Leaving readonly](#leaving-readonly)),
-so a delegate is never in a more permissive mode than its parent.
+The modes are ordered `readonly`, then `auto`, then `yolo`, from least to
+most permissive.
+
+- `delegate_spawn` takes a `mode` (`docs/delegates.md`, "The tools"). It
+  defaults to the parent's mode, and a mode more permissive than the
+  parent's fails with `invalid_arguments`. A fork takes the parent's mode.
+- A delegate runs in the less permissive of the mode it was started in and
+  its parent's current mode. When the parent's mode changes, each running
+  delegate's mode is recomputed, and a change is a `mode_changed` with `by`
+  `parent` in that delegate. Loosening the parent never takes a delegate
+  above the mode it was started in.
+- A delegate in `readonly` never asks to leave it
+  ([Leaving readonly](#leaving-readonly)).
+- Starting any delegate declares `executes`, so the parent's mode judges the
+  start, and a `readonly` parent asks to leave `readonly` first.
+
+A Fiber delegate is judged by these rules like any session:
 
 - In `auto`, each delegate has its own reviewer, which judges that delegate's
   calls.
@@ -416,9 +430,13 @@ so a delegate is never in a more permissive mode than its parent.
   The parent's model shapes the delegate's reviewer only through the prompt it
   wrote and through `delegate_message`, which the reviewer reads as the human's
   messages.
-- Starting any delegate declares `executes`, so the parent's mode judges the
-  start, and a `readonly` parent asks to leave `readonly` first. A delegate running another harness runs in
-  the mode its harness extension sets.
+
+A delegate on another harness is judged by that harness, in the harness's
+own mode that its extension maps each Fiber mode to (`docs/delegates.md`,
+"Harness extensions"). The credential deny and standing rules do not reach
+inside it: the harness's own rules, as the person configured them, apply
+there. A harness supports only the modes its extension maps, and
+`delegate_models` lists them.
 
 ## Not settled here
 

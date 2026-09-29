@@ -186,13 +186,16 @@ extension sends the same calls as messages.
 ```
 fiber.tool(name, { description, input_schema, effects, run })
 fiber.provider(name, { models, quota })
+fiber.harness(name, { modes, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { on_failure, timeout, run })
 fiber.watch(kinds, { timeout, run })
 fiber.command(name, { description, timeout, run })
 ```
 
-A tool, provider, search backend or hook registers before the session's tool
+What a harness declares is `docs/delegates.md`, "Harness extensions".
+
+A tool, provider, harness, search backend or hook registers before the session's tool
 set is fixed (`docs/prompt-cache.md`, "Tools"), so an extension that registers
 one is first used at session start.
 
