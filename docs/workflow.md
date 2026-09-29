@@ -77,7 +77,7 @@ use is committed under `scripts/`. A one-off script goes in the pull request
 body.
 
 A question about what one layer does with a given input is answered with that
-layer's rig, not a throwaway program (`docs/testing.md`, "Rigs").
+layer's jig, not a throwaway program (`docs/testing.md`, "Jigs").
 
 ## When fixes keep failing
 
