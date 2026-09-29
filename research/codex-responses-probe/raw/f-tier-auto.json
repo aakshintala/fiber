@@ -1,0 +1,54 @@
+{
+ "name": "f-tier-auto",
+ "n": 22,
+ "sent_headers": [
+  "originator",
+  "User-Agent",
+  "Accept",
+  "Content-Type",
+  "OpenAI-Beta"
+ ],
+ "request": {
+  "model": "gpt-6-luna",
+  "instructions": "You are a helpful assistant.",
+  "store": false,
+  "stream": true,
+  "input": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "Say hi in three words."
+     }
+    ]
+   }
+  ],
+  "include": [
+   "reasoning.encrypted_content"
+  ],
+  "service_tier": "auto"
+ },
+ "status": 400,
+ "resp_headers": {
+  "Date": "Tue, 29 Sep 2026 08:55:22 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "43",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "x-oai-request-id": "7e00814a-7c67-40f4-86b3-a4f96545f275",
+  "x-openai-proxy-wasm": "v0.1",
+  "X-Content-Type-Options": "nosniff",
+  "cf-cache-status": "DYNAMIC",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "Nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+  "Report-To": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=QsVmvfEXzavYbb1JEg9i2gveIC9UqN0LhUNFcxAkk8ELpLCf8JF5Jx62m1VATcsh%2BXShFrEmXRJfeFpb4ywv8HOlbfKGrZTv5UewVUH06ReNElP8heo4TGAxooJ7\"}]}",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "a429c4bcaa27cce5-SJC"
+ },
+ "events": [],
+ "text": "",
+ "usage": null,
+ "body": "{\"detail\":\"Unsupported service_tier: auto\"}"
+}

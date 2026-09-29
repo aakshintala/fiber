@@ -1,0 +1,54 @@
+{
+ "name": "f-temp",
+ "n": 18,
+ "sent_headers": [
+  "originator",
+  "User-Agent",
+  "Accept",
+  "Content-Type",
+  "OpenAI-Beta"
+ ],
+ "request": {
+  "model": "gpt-6-luna",
+  "instructions": "You are a helpful assistant.",
+  "store": false,
+  "stream": true,
+  "input": [
+   {
+    "role": "user",
+    "content": [
+     {
+      "type": "input_text",
+      "text": "Say hi in three words."
+     }
+    ]
+   }
+  ],
+  "include": [
+   "reasoning.encrypted_content"
+  ],
+  "temperature": 0.5
+ },
+ "status": 400,
+ "resp_headers": {
+  "Date": "Tue, 29 Sep 2026 08:55:08 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "47",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "x-oai-request-id": "b8cb4496-edc7-4e9e-9b6e-52ab9145d627",
+  "x-openai-proxy-wasm": "v0.1",
+  "X-Content-Type-Options": "nosniff",
+  "cf-cache-status": "DYNAMIC",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "Nel": "{\"report_to\":\"cf-nel\",\"success_fraction\":0.01,\"max_age\":604800}",
+  "Report-To": "{\"group\":\"cf-nel\",\"max_age\":604800,\"endpoints\":[{\"url\":\"https://a.nel.cloudflare.com/report/v4?s=ROGKBqF9tJawO%2FfCazJ%2FGJVgLmO4SZzdalChdv%2F7OZsIFBZOjdRkX9MEVmhr6uPOBk8F4VQD8gnmSkc7cPcm5xI1Je6q8y7cst0cvzAYwLBGNvBub5qStk4qPvli\"}]}",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "a429c462d8f4888e-SJC"
+ },
+ "events": [],
+ "text": "",
+ "usage": null,
+ "body": "{\"detail\":\"Unsupported parameter: temperature\"}"
+}
