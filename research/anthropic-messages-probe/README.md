@@ -8,7 +8,7 @@ with the direct Anthropic key.
 
 ## Method
 
-`probe.py <stream|beta|choice|caller|ptc|cache>` sends each request, saves the
+`probe.py <stream|beta|choice|caller|ptc|cache|thinking-enabled>` sends each request, saves the
 status, response headers, body (or the whole SSE text plus a parsed event list)
 and the request to `raw/<case>.json`, and stops before a running cost estimate
 passes $1.00. Request headers are never saved. The organisation and workspace
@@ -19,11 +19,12 @@ ids, cookies and `cf-ray` are dropped from the response headers.
   writes 1.25x, cache reads 0.1x
   (https://platform.claude.com/docs/en/about-claude/pricing, fetched
   2026-09-29).
-- Spend: about $0.08 on Anthropic, summed from the per-run estimates (each run
-  starts its own counter).
+- Spend: $0.0645 on Anthropic, recomputed from the `usage` in the saved raw
+  files at the rates above. Two earlier runs of `stream` and `beta`, whose raw
+  files were overwritten, cost a few tenths of a cent more.
 - `thinking: {type: enabled, budget_tokens}` is rejected on this model with
-  400 ("Use thinking.type.adaptive and output_config.effort"). The thinking
-  cases use `adaptive`.
+  400 ("Use thinking.type.adaptive and output_config.effort"; `raw/thinking-enabled.json`).
+  The thinking cases use `adaptive`.
 
 ## Which event ends a stream
 
@@ -109,7 +110,7 @@ maximum of 4 blocks with cache_control may be provided. Found 5." 6 (one tool,
 
 ## Malformed replies
 
-None. Every 200 parsed as documented. Two things to know about
+None seen. The probe only JSON-decoded each 200 body and SSE data line; it did not check them against a schema. Two things to know about
 `claude-sonnet-5-5`: `thinking.type=enabled` is rejected, and adaptive thinking
 on an easy question produced no thinking block.
 
@@ -119,4 +120,7 @@ on an easy question produced no thinking block.
   the count, so pi's never counting fails too, one round trip later. Counting in
   Fiber makes it an encode-time error. Fiber's own design
   (`docs/prompt-cache.md`) uses up to three markers.
+- If Fiber follows Anthropic here: end a stream at `message_stop`; omit `tool_choice`
+  when there are no tools (or only send `auto`/`none`); do not replay `caller`.
+  None of these is ruled.
 - Unknown `stop_reason` and strict tool schemas: not probed; no cheap trigger.
