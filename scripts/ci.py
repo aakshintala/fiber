@@ -123,8 +123,8 @@ def is_test_file(rel):
 
 def test_filter(files, members):
     """The nextest filter selecting every test in the test files among
-    `files`, and the packages that own them."""
-    terms, packages = [], set()
+    `files`, the packages that own them, and those test files."""
+    terms, packages, tests = [], set(), []
     for path in files:
         name = owner(path, members)
         if name is None or not path.endswith(".rs"):
@@ -146,7 +146,8 @@ def test_filter(files, members):
         else:
             continue
         packages.add(name)
-    return " | ".join(terms), sorted(packages)
+        tests.append(path)
+    return " | ".join(terms), sorted(packages), tests
 
 
 def workspace_members():
@@ -223,8 +224,8 @@ def main(argv):
         if number:
             print(number)
     elif args.command == "bug-filter":
-        expression, packages = test_filter(args.files, workspace_members())
-        print(json.dumps({"filter": expression, "packages": packages}))
+        expression, packages, tests = test_filter(args.files, workspace_members())
+        print(json.dumps({"filter": expression, "packages": packages, "files": tests}))
     return 0
 
 

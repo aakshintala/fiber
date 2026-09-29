@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Runs a pull request's new and changed tests against its base commit, and
+# passes only if at least one fails there (docs/testing.md, "Proving a test
+# bites"). A test counts as changed when its test file changed.
+#
+# Usage: scripts/bug-base BASE
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+base=$(git merge-base "$1" HEAD)
+# shellcheck disable=SC2046
+plan=$(python3 scripts/ci.py bug-filter $(git diff --name-only --diff-filter=AM "$base" HEAD))
+field() { python3 -c "import json, sys; v = json.load(sys.stdin)[sys.argv[1]]; print(v if isinstance(v, str) else ' '.join(v))" "$1" <<<"$plan"; }
+filter=$(field filter)
+if [ -z "$filter" ]; then
+  echo "bug-base: the pull request changes no test file, so no test shows the bug"
+  exit 1
+fi
+
+tree=$(mktemp -d)
+git worktree add --detach "$tree" "$base"
+trap 'git worktree remove --force "$tree"' EXIT
+for f in $(field files); do
+  mkdir -p "$tree/$(dirname "$f")"
+  git show "HEAD:$f" >"$tree/$f"
+done
+
+package_args=()
+for p in $(field packages); do package_args+=(-p "$p"); done
+echo "bug-base: running $filter at $base"
+status=0
+(cd "$tree" && cargo nextest run --no-fail-fast "${package_args[@]}" -E "$filter") || status=$?
+
+# nextest exits 100 when a test failed and 101 when the build failed.
+# ponytail: a new test file that the base commit's modules never declare
+# matches no test there (exit 4) and fails this check; put such a test in an
+# existing test file until that case matters.
+case $status in
+  100 | 101) echo "bug-base: ok, a new or changed test fails on the base commit" ;;
+  0) echo "bug-base: every new and changed test passes on the base commit, so none shows the bug"; exit 1 ;;
+  *) echo "bug-base: nextest exited $status on the base commit"; exit 1 ;;
+esac

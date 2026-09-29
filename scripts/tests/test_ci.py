@@ -133,7 +133,7 @@ class TestFilter(unittest.TestCase):
             "crates/log/src/writer.rs",
             "docs/events.md",
         ]
-        expression, packages = ci.test_filter(files, MEMBERS)
+        expression, packages, tests = ci.test_filter(files, MEMBERS)
         self.assertEqual(
             expression.split(" | "),
             [
@@ -145,9 +145,10 @@ class TestFilter(unittest.TestCase):
             ],
         )
         self.assertEqual(packages, ["log", "loop"])
+        self.assertEqual(tests, files[:5])
 
     def test_no_test_files_gives_an_empty_filter(self):
-        self.assertEqual(ci.test_filter(["crates/log/src/writer.rs"], MEMBERS), ("", []))
+        self.assertEqual(ci.test_filter(["crates/log/src/writer.rs"], MEMBERS), ("", [], []))
 
     def test_test_files_are_named_or_under_tests(self):
         self.assertTrue(ci.is_test_file("src/tests.rs"))
