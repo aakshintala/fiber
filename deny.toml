@@ -1,0 +1,37 @@
+# docs/dependencies.md, "Supply chain".
+
+[licenses]
+unused-allowed-license = "allow"
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "BSL-1.0",
+    "Unicode-3.0",
+    "CDLA-Permissive-2.0",
+    "Unlicense",
+    "CC0-1.0",
+    "MIT-0",
+    "MPL-2.0",
+]
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+
+# An advisory that marks a crate unmaintained fails like any other. An
+# exception names the advisory, the path that pulls the crate in and the
+# condition for removing it.
+[advisories]
+unmaintained = "all"
+yanked = "deny"
+ignore = []

@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# The gate (docs/workflow.md, "The gate"). Runs the checks for the crates a
+# diff touches and every crate that depends on them, as docs/ci.md,
+# "Selection", chooses them.
+#
+# Usage: scripts/check [--base REV] [--platform-only | --shared-only]
+#
+#   --base REV       compare against the merge base with REV (default origin/main);
+#                    uncommitted and untracked files count as changed
+#   --platform-only  only clippy, nextest and doc-tests: what CI runs on
+#                    every platform
+#   --shared-only    only the platform-independent checks: what CI runs on
+#                    Linux x86_64 alone
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+base=origin/main
+scope=all
+while [ $# -gt 0 ]; do
+  case $1 in
+    --base) base=$2; shift 2 ;;
+    --platform-only) scope=platform; shift ;;
+    --shared-only) scope=shared; shift ;;
+    *) sed -n '5,14p' "$0" >&2; exit 2 ;;
+  esac
+done
+
+selection=$(python3 scripts/ci.py select --base "$base")
+mode=$(python3 -c 'import json, sys; print(json.load(sys.stdin)["mode"])' <<<"$selection")
+packages=$(python3 -c 'import json, sys; print(" ".join(json.load(sys.stdin)["packages"]))' <<<"$selection")
+echo "== selection: $mode; crates: ${packages:-none}"
+
+package_args=()
+for p in $packages; do package_args+=(-p "$p"); done
+
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+count() { grep -oE "$1" "$log" | grep -oE '[0-9]+' | awk '{ s += $1 } END { print s + 0 }'; }
+
+if [ "$scope" != platform ]; then
+  echo "== docs check"
+  scripts/check-docs
+  if [ "$mode" != docs ]; then
+    if [ ${#package_args[@]} -gt 0 ]; then
+      echo "== cargo fmt --check"
+      cargo fmt --check "${package_args[@]}"
+    fi
+    echo "== file size, unsafe table and dependency list"
+    python3 scripts/rules.py line-cap
+    python3 scripts/rules.py unsafe-table
+    python3 scripts/rules.py dependency-list
+    echo "== script tests"
+    python3 -m unittest discover -s scripts/tests 2>&1 | tee "$log"
+    echo "tests run: $(count 'Ran [0-9]+ tests?') script tests"
+  fi
+fi
+
+if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
+  echo "== cargo clippy --all-targets"
+  cargo clippy --all-targets "${package_args[@]}"
+  echo "== cargo nextest run"
+  cargo nextest run "${package_args[@]}" 2>&1 | tee "$log"
+  nextest=$(count '[0-9]+ tests? run')
+  echo "== cargo test --doc"
+  cargo test --doc "${package_args[@]}" 2>&1 | tee "$log"
+  doctests=$(count '[0-9]+ passed')
+  echo "tests run: $nextest under nextest, $doctests doc-tests"
+fi
