@@ -14,7 +14,8 @@ driver command, session and event mean what it says there and nothing else.
 
 Fiber is an MCP client. The client is built into the binary, as the wire
 protocols in `docs/model-routing.md` are. Fiber serves no MCP
-([ADR 0005](adr/0005-no-mcp-server-the-supervisor-is-external.md)).
+for delegating to Fiber
+([ADR 0005](adr/0005-the-delegation-supervisor-is-external.md)).
 
 Fiber speaks two transports:
 

@@ -37,7 +37,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   switched on, inside its process and under its own limits, and so does any
   delegation tool the person configured for it. Fiber's depth cap and
   concurrency limit do not reach inside another harness. Fiber serves no MCP
-  ([ADR 0005](adr/0005-no-mcp-server-the-supervisor-is-external.md)). Any
+  for delegating to Fiber
+  ([ADR 0005](adr/0005-the-delegation-supervisor-is-external.md)). Any
   harness can run `fiber ask` from its shell.
 
 ## The tools
@@ -335,20 +336,38 @@ As Lua, none of which runs on a model request:
 A delegate on another harness has no socket of its own, so its parent stands
 in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):
 
-- **The parent binds its socket.** It listens at `~/.fiber/run/<session_id>`
-  for the delegate while the delegate runs, and `session_list` lists it like
-  any delegate. The socket accepts only `message`.
+- **The parent binds its socket.** It binds `~/.fiber/run/<session_id>` when
+  each of the delegate's runs starts and unlinks it when the run ends. It
+  removes a stale socket first, as a lock holder does (`docs/state.md`,
+  "Sockets"). `session_list` lists the delegate like any other. The socket
+  accepts two commands: `message` from other sessions, and `session_message`
+  from the delegate's own `fiber mcp serve` (`docs/invocation.md`). After the
+  parent is sent `close`, `message` is rejected `closing`.
 - **A message in is delivered as `delegate_message` delivers one.** A harness
   that takes messages while running gets it as a line on its input. For any
   other harness it waits and is delivered as a resume ("Talking to a
-  delegate"). The parent keeps the largest `hops` it has delivered to the
-  delegate since the delegate's run began.
+  delegate"). The parent frames it with the sender's id and name.
+- **The parent keeps the delegate's hop count.** It is the largest `hops`
+  among the session messages delivered into the current run, the one that
+  started it included. A `delegate_message` from the parent carries the hop
+  count of the parent's turn. A run the parent starts with no session message
+  begins at 0.
 - **The delegate sends through `fiber mcp serve`.** It is a stdio MCP server
-  that the harness extension's `command` adds to the harness's MCP
-  configuration. It offers `session_list` and `session_message`. A send goes
-  into the delegate's own socket, and the parent stamps its `hops` as the
-  largest delivered, plus 1, then forwards it to the target. The hop rule
-  lives in one place.
+  offering `session_list` and `session_message`. `session_list` reads
+  `~/.fiber/run/` itself. `session_message` sends `session_message` into the
+  delegate's socket, and the parent stamps it with the delegate's hop count
+  plus 1 and sends `message` to the target. The server lists no tools unless
+  its environment names a Fiber delegate, so it is inert anywhere else.
+- **The harness judges the send.** Calling `session_message` is a tool call
+  inside the harness, judged in the harness's own mode, as its other calls
+  are ("Permissions"). Fiber's reviewer and `before_message` do not reach
+  inside another harness. The target session applies both on its side.
+- **How each harness loads the server** is in its table below.
+
+Each tool's description says what it reaches. The harness's own tools stay
+switched on: Claude Code's `SendMessage` and `ListAgents` reach its own
+subagents and other Claude Code sessions, and `session_message` reaches Fiber
+sessions only, by a Fiber session id.
 
 The parent stays on the path because it holds the one input the harness
 documents. Probed on Claude Code 2.1.285, headless:
@@ -377,6 +396,7 @@ session messages directly and the parent would drop out of the path.
 | Modes | `readonly` is `plan`, `auto` is `auto`, `yolo` is `bypassPermissions` |
 | Mode change while running | a `set_permission_mode` control request on its input |
 | Messages while running | yes, as a `user` line on its input; it joins the turn at the next step boundary |
+| Session messages out | `--mcp-config` naming `fiber mcp serve`, which adds it for the run and keeps the person's own servers |
 | Final answer, usage, cost | the `result` line: `result`, `usage` and `total_cost_usd` |
 | Quota | `rate_limit_event` lines while running, and `quota()` from `/api/oauth/usage` with Claude Code's own stored login |
 | SIGTERM | stops cleanly, so it gets the shutdown wait |
@@ -406,6 +426,7 @@ Probed on Claude Code 2.1.284:
 | Modes | `readonly` is `--mode plan`, `auto` is `--auto-review`, `yolo` is `--force` |
 | Mode change while running | none: stopped and resumed |
 | Messages while running | none: delivered as a resume |
+| Session messages out | an entry for `fiber mcp serve` in `~/.cursor/mcp.json`, which has no per-run flag. Fiber asks the person once, the first time a cursor-agent delegate starts, and remembers the answer. With no entry, a cursor-agent delegate receives session messages but cannot send them |
 | Final answer, usage | the `result` line: `result` and `usage`, which has tokens and no cost |
 | Cost | computed from the declared prices |
 | SIGTERM | not probed, so it gets SIGKILL at 800 ms like any command |

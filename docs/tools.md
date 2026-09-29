@@ -884,8 +884,10 @@ The text is plain text; a session message carries no images.
 **A session message reaches only a running session.** The sender connects to
 the target's socket, sends the driver command `message`, reads the answer and
 closes the connection at once, so it never keeps the target alive
-(`docs/invocation.md`, "Lifecycle"). The call answers `delivered`, or fails
-with one of:
+(`docs/invocation.md`, "Lifecycle"). The call answers `delivered`, meaning
+the target accepted the message; the target's `before_message` may still
+refuse it, and a refused message is neither logged nor applied. Otherwise it
+fails with one of:
 
 - `not_running`: nothing accepts on the target's socket
 - `unknown_session`: no session with that id exists in Fiber home
@@ -913,30 +915,34 @@ reviewer"). It is a request from another session, and the target acts on it
 under its own mode.
 
 **Sending declares `writes`, not reversible.** It changes what another session
-does. So a `readonly` session asks to leave `readonly` first, and in `auto` the
-reviewer judges the send. Without it, a `readonly` session could ask a `yolo`
+does. So a `readonly` root session asks to leave `readonly` first, a
+`readonly` delegate's send is refused (`docs/permissions.md`, "Leaving readonly"), and
+in `auto` the reviewer judges the send. Without it, a `readonly` session could ask a `yolo`
 peer to make the change for it.
 
 **A hop count stops runaway exchanges.** Every session message carries
 `hops`:
 
-- A message sent from a turn a person or a driver started carries 1.
-- A message sent from a turn that a session message started, or joined as
-  steering, carries the largest `hops` among those messages, plus 1.
+- A turn's hop count is the largest `hops` among the session messages it
+  takes in, as input or as steering. It is raised to the hop count of the
+  turn that started any job whose news it takes in, so a job cannot reset it.
+  A turn an extension's `host.drive` starts, or a handoff turn, takes the
+  count of the turn it came from.
+- A person's or a driver's message in the turn sets its count to 0.
+- A message sent from a turn carries the turn's count plus 1.
 - The target rejects a message whose `hops` exceeds its
   `session_message.hop_limit`, default 10 (`docs/configuration.md`), and the call
   fails with `hop_limit`.
 
 Each hop can wake a turn, so the limit bounds how many turns two or more
-sessions spend on each other with no person in the loop. Any turn a person
-starts begins again at 0.
+sessions spend on each other with no person in the loop.
 
 **Delegates on another harness take part through their parent.** The parent
 binds the delegate's socket and relays both ways ("Delegates on another
 harness", `docs/delegates.md`).
 
-Both tools are declared in every session, so the tool set never differs
-between sessions. Their definitions count toward the built-in budget ("Size
+Both tools are declared in every session, so they never differ between
+sessions. Their definitions count toward the built-in budget ("Size
 budget in CI").
 
 ## Provider quota
