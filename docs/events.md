@@ -101,7 +101,7 @@ answers with `reply`.
 
 | Kind | Durable | Payload |
 |---|---|---|
-| `fiber_started` | yes | Fiber version, `schema_version`, new session or resumed |
+| `fiber_started` | yes | Fiber version, `schema_version`, new session or resumed, and `mode`, the permission mode this process opened the session in (`docs/permissions.md`, "Modes") |
 | `fiber_exited` | yes | exit code, the final message's `action_id` and its text, `error` if it failed (`docs/errors.md`, "What a caller gets"), `suspended_on` naming the `request_id` when the process exited on a pending approval or question (`docs/invocation.md`, "Lifecycle"), `questions` copied from the last `turn_completed` when its turn ended on questions |
 
 A process is not a named unit in the glossary; these two lines record its
@@ -136,6 +136,7 @@ as soon as a delegate relays its own messages onto the same stdout.
 | `session_started` | yes | creation time, workspace root; optional `parent { session_id, delegate_id }` for a delegate and `forked_from { session_id, seq }` for a fork or a rewind (`docs/delegates.md`, "Forks"; "Rewind" below); for a rewind, `rewind { summary?, note, jobs }` |
 | `rewound` | yes | the new session's `session_id`, the `seq` of the point, and the `job_id`s handed to the new session (`jobs`); the last line of a session that was rewound ("Rewind" below) |
 | `turn_started` | yes | the input that started it, including each `shell_command` since the last turn; for a turn started by jobs, a source naming those `job_id`s |
+| `step_started` | yes | nothing beyond the envelope's `turn_id`; opens a step (below) |
 | `turn_completed` | yes | `outcome` (`completed`, `interrupted`, `failed`), `error` on failure (`docs/errors.md`, "What ends a turn"), `questions` when an `ask_user` call ended the turn for a driver that is a program (`docs/tools.md`, "Asking the person") |
 | `steering_applied` | yes | the text a running turn received at a step boundary, and where it came from |
 | `steering_queue` | no | every steering message still queued, in order: the id of the `steer` command that sent it, its text, and where it came from; written whenever the queue changes |
@@ -164,9 +165,14 @@ the latest, as with `extension_ui`.
 `turn_completed` means settled. Retries and handoffs happen inside the turn
 and appear as actions, so there is never a second "really finished" event.
 
-A **step** gets no event. It is one round-trip to the model, and its boundary is
-derivable from the action sequence, so naming it on the wire would add a line
-that carries nothing a consumer cannot compute.
+A **step** is one round-trip to the model, and `step_started` opens it. It is
+written before anything else in the step: the `steering_applied` and
+`job_line` lines the step takes in, and any handoff it runs before calling the
+model. A step ends where the next `step_started` or the `turn_completed` is,
+so there is no closing line. A step's number is the count of `step_started`
+lines in its turn. The boundary is not derived from the actions, because a
+retry and a handoff's note request are each a model call inside one step:
+counting `assistant_message_started` gives attempts, never steps.
 
 ### Actions
 
@@ -291,7 +297,7 @@ Behaviour is `docs/prompt-cache.md`.
 
 | Kind | Durable | Payload |
 |---|---|---|
-| `preamble_built` | yes | `reason` (`start`, `resume`, `reload`, `switch`), model, effort, thinking, `tool_choice`, cache lifetime, the system prompt text, and the tool definitions as sent, each marked whether it is deferred |
+| `preamble_built` | yes | `reason` (`start`, `resume`, `reload`, `switch`), model, the model's `context_window` in tokens, `trigger_at`, the context size at which an automatic handoff runs (`docs/handoff.md`, "Automatic"), effort, thinking, `tool_choice`, cache lifetime, the system prompt text, and the tool definitions as sent, each marked whether it is deferred |
 | `model_changed` | yes | the model, effort, thinking and cache lifetime before and after the switch, and who asked for it |
 
 `preamble_built` follows `session_started` or `fiber_started`, `reloaded`, or
@@ -343,6 +349,7 @@ Behaviour is `docs/mcp.md`.
 | Kind | Durable | Payload |
 |---|---|---|
 | `mcp_server_failed` | yes | the server's name, why it failed (did not start, missed its startup deadline, not logged in, died), whether Fiber will restart it, and `error { code, message }` with code `mcp_server_unavailable` (`docs/errors.md`, "The shape") |
+| `mcp_server_ready` | yes | the server's name; written when a server that died is running again after its restart, so a client clears the failure it showed |
 | `reloaded` | yes | the servers kept, restarted, started and stopped, the extensions reloaded, and any server that failed, with why |
 
 `reloaded` is written once the new tool set is declared, and `preamble_built`
@@ -522,7 +529,8 @@ writes. How a handoff works is `docs/handoff.md`.
 next one.** Two exceptions, both because the effect costs money or touches the
 world: `tool_call_started` is fsynced *before* the tool runs, and
 `assistant_message_started` *before* the model request is sent. Two fsyncs
-bracket each effect, so a quiet text turn costs two.
+bracket each effect, so a quiet text turn costs two. `step_started` records no
+effect and is flushed with the step's first fsync.
 
 **No line restates the content of an earlier line in the same turn.** This is
 part of the durability rule, not an optimisation. A per-step line that carries

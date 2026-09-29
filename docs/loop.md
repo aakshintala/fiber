@@ -27,7 +27,8 @@ request (`docs/extensions.md`, "Hooks").
 
 A step is one round-trip to the model. Each step does this, in order:
 
-1. Drain the inbox. Every steering message and every job notice waiting joins
+1. Write `step_started` (`docs/events.md`, "Session and turn"). Drain the
+   inbox. Every steering message and every job notice waiting joins
    the conversation, in arrival order; each steering message is logged as its
    own `steering_applied`. Nothing is held back for a later step.
 2. Check how full the context is, and hand off if it is past the threshold
