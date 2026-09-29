@@ -321,16 +321,18 @@ A tool and a prefix of its primary argument. The tool reads its own
 arguments, so its effects function returns both halves with the effects: the
 call's **subject**, its primary argument, and the **prefix** it offers as the
 widening (`docs/tools.md`, "What a tool declares"). The loop never parses a
-command. A prefix matches a subject that equals it, or that
-starts with it where the prefix ends in `/` or the subject goes on with a
-space: `npm test` matches `npm test --watch` and not `npm testing`. A tool
+command. A prefix ending in `/` matches every subject that
+starts with it. Any other prefix matches a subject equal to it, and for the
+shell also one that goes on with a space: `npm test` matches
+`npm test --watch` and not `npm testing`. A tool
 with no primary argument, such as an MCP tool, returns an empty subject, and
 its rule matches the tool by name. A call a rule cannot safely match, such as
-a shell command with more than one part, returns no subject, and no allow rule
-or session grant matches it.
+a shell command with more than one part, returns no subject, and no rule or
+session grant matches it, a deny or an ask included
+([#188](https://github.com/aakshintala/fiber/issues/188)).
 
-Approving `npm test -- --watch` offers to remember the subject, or the
-prefix `npm test`. The widening is an explicit, separate choice at the moment
+Approving `npm test -- --watch` can remember the subject, or the prefix
+`npm test`; the terminal offers the prefix, and shows it. The widening is an explicit, separate choice at the moment
 of approval, so a rule never grants more than what was read when it was
 written.
 

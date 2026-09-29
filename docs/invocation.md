@@ -95,16 +95,18 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 {"id":"c_7f3a","command":"steer","args":{"content":[{"type":"text","text":"use the other test file"}]}}
 ```
 
-A line that is not a JSON object, or has no string `id` or `command`, is
-rejected `malformed`. `args` with a missing key, a key of the wrong type or a
+A line that is not a JSON object, has no string `id` or `command`, has a
+`session_id` or `args` of the wrong type, or has a key not in this table, is
+rejected `malformed`. A `session_id` on a command other than `steer` and
+`reply` is rejected `invalid_arguments`. `args` with a missing key, a key of the wrong type or a
 key the command does not take is rejected `invalid_arguments`, so an older
 Fiber says no to a newer client's key instead of ignoring it.
 
 `content` is content parts (`docs/events.md`, "Content parts"). A client sends
-an image part with `data`, the image's bytes in base64, and its `mime_type`,
-never a `path`: a remote client cannot write into the session directory. Fiber
-writes the image to `artifacts/` and logs the part with its `path`, `width`
-and `height`.
+an image part as `type`, `data`, the image's bytes in base64, and `mime_type`,
+and nothing else: a remote client cannot write into the session directory, and
+Fiber reads the size from the image. Fiber writes the image to `artifacts/`
+and logs the part with its `path`, `mime_type`, `width` and `height`.
 
 | Command | `args` |
 |---|---|

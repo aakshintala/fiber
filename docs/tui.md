@@ -411,6 +411,9 @@ An approval request is a panel at the bottom that replaces the input box
   goes to the feedback. The two remembering choices show the prefix the rule
   allows, the one the request offers (`docs/permissions.md`, "What a rule
   matches"). A request that offers no rule shows neither.
+- A request to leave `readonly` offers "leave readonly" and "stay in
+  readonly" instead, since a yes approves no call (`docs/permissions.md`,
+  "Leaving readonly").
 - The panel says why it asked: the standing rule that asked, the reviewer's
   reason when the reviewer escalated, or that the reviewer failed.
 - The asking call's tool group expands so the full call can be read.

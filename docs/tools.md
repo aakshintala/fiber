@@ -828,8 +828,9 @@ backend.
   agent's tool calls, never a fetched page (`docs/permissions.md`, "What it is
   shown").
 - A standing deny still applies first, so the person can deny a host.
-- A fetch's subject is its URL, and the prefix it offers is the URL's scheme
-  and host, ending in `/`. A search's subject is empty.
+- A fetch's subject is its URL as parsed, whose path is at least `/`, so
+  `https://example.com` is `https://example.com/`. The prefix it offers is
+  the URL's scheme and host, ending in `/`. A search's subject is empty.
 
 ## Naming the session
 
