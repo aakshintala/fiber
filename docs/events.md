@@ -283,6 +283,7 @@ added one. A declined form carries `declined` and no `answers`.
 | Kind | Durable | Payload |
 |---|---|---|
 | `usage_recorded` | yes | generation id, model, tokens (uncached input, input read from the cache, input written to the cache by lifetime, output), hosted web searches where the provider reports them, cost or `null` when unknown, `action_id` where it belongs to one |
+| `quota_noticed` | yes | provider, window, percent used, reset time, and `notice_at`, the threshold it crossed |
 | `retry_scheduled` | no | cause, attempt, delay |
 | `notice` | no | open-set `code` and message, for a failure outside any action |
 

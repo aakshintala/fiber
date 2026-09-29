@@ -835,6 +835,79 @@ first prompt.
   CI").
 - Each name is written as `session_named` (`docs/events.md`).
 
+## Provider quota
+
+Settled by
+[Provider quota the model can see](https://github.com/aakshintala/fiber/issues/58);
+that ticket's resolution holds the rationale and the rejected alternatives.
+
+The model sees how much quota each provider has left, so it can choose a
+delegate's model with that in mind. It only reads quota. The session's own
+model is the person's to choose (`docs/model-routing.md`, "Choosing the
+model"), and Fiber never switches it on the model's behalf.
+
+### Where it comes from
+
+A provider supplies quota through an optional Lua `quota()` function
+(`docs/model-routing.md`, "Quota"). A provider without one reports no quota. Of
+the five Fiber ships:
+
+| Provider | Source | Reports |
+|---|---|---|
+| ChatGPT/codex | `/wham/usage` | percent used of a primary and a secondary window, with reset times |
+| OpenCode Go | `GET /zen/go/v1/usage` | percent used of rolling, weekly and monthly windows, with reset times |
+| OpenRouter | `GET /api/v1/key` | credit remaining, and the key's limit if it has one |
+| OpenCode Zen | none | no quota reported |
+| Databricks, muse | none | no quota reported |
+
+muse's `x-ratelimit-remaining-*` headers are a per-minute rate limit, not
+quota. No provider's quota is read from response headers.
+
+### What the model sees
+
+`delegate_models` returns one quota entry per provider beside the models it
+lists (`docs/delegates.md`, "The tools"). There is no separate quota tool.
+Each entry is one of:
+
+- windows, each with its name, percent used and reset time where the provider
+  reports one
+- credit remaining, and the limit where there is one
+- `no quota reported`, for a provider without `quota()`
+- `unreachable`, when the fetch failed or timed out, with the last value and
+  its age if there is one
+
+A window whose reset time has passed shows as reset. Quota never appears in a
+tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
+Delegates on another harness show quota only if their harness extension
+declares it.
+
+### The notice
+
+When a window crosses `quota.notice_at` percent used (default 80), one line
+naming the provider, the window and its reset time goes into the model's next
+turn input. It fires once per crossing, and again for that window only after
+it resets. The notice is the durable event `quota_noticed`
+(`docs/events.md`, "Usage and notices"). OpenRouter credit has a percentage
+only when the key has a limit, so a key without one never gives a notice.
+
+### Fetching
+
+Each provider has one cache holding its last value, when it was fetched, and
+any fetch in flight. Concurrent readers share one fetch. What the person is
+shown reads the same cache, and shows no age.
+
+A fetch runs off the request path when the cache is older than 5 minutes and
+one of these happens:
+
+- a model call to that provider
+- a `delegate_models` call
+- a keypress, or the terminal regaining focus
+
+`/quota` always fetches. Nothing refetches on a timer, so an idle Fiber does
+no work, and a person returning to the terminal gets a fresh figure on focus.
+A fetch times out after 8 seconds. A failure is reported as `unreachable`,
+never as an error.
+
 ## Built in or extension
 
 A first-party tool is compiled in unless its behaviour depends on a vendor or
@@ -855,9 +928,8 @@ like any built-in. How MCP tools are named, declare effects and fail is
 Four kinds ship as extensions:
 
 - Provider quota: each provider reports it differently, and providers are
-  already extensions, so the quota lookup lives in each provider's package.
-  Detail belongs to
-  [Provider quota the model can see](https://github.com/aakshintala/fiber/issues/58).
+  already extensions, so the quota lookup lives in each provider's package
+  ("Provider quota").
 - Web search backends: each search service has its own API, key and response
   shape. The `web_search` tool itself is compiled in ("Web fetch and web
   search").

@@ -184,7 +184,7 @@ extension sends the same calls as messages.
 
 ```
 fiber.tool(name, { description, input_schema, effects, run })
-fiber.provider(name, { models })
+fiber.provider(name, { models, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { on_failure, timeout, run })
 fiber.watch(kinds, { timeout, run })
@@ -312,8 +312,8 @@ protocols are native Rust, so a provider never parses a stream. What a provider
 declares, and why, is `docs/model-routing.md`. The file is
 `providers/<name>.json` (`docs/configuration.md`, "A provider's data").
 
-The one piece of Lua a provider may have is a function that discovers its
-models. Here is one for a gateway that lists its models at `/models`:
+A provider may have two pieces of Lua: a function that discovers its models,
+and a function that reports its quota (`docs/model-routing.md`, "Quota"). Here is one for a gateway that lists its models at `/models`:
 
 ```lua
 fiber.provider("acme", {

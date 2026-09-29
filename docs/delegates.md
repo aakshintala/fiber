@@ -43,7 +43,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 | `delegate_spawn` | `description`, `prompt`, `model`, `isolation`, `workspace`, `timeout_ms` | Starts a delegate. Returns a receipt with the delegate id and the output path. |
 | `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model or effort: see "Forks". |
 | `delegate_message` | `id`, `message` | Steers a running delegate, or resumes a finished one. |
-| `delegate_models` | none | Returns the configured roles, what each maps to now, and the full references available. |
+| `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, and each provider's quota (`docs/tools.md`, "Provider quota"). |
 | `jobs` | as `docs/tools.md` | Lists, waits for and stops delegates. |
 
 - `description` is a short label for people.
