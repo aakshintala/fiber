@@ -96,20 +96,24 @@ needs is declared, or it is not set.
 ### openai-completions facts
 
 - OpenAI's `gpt-6-luna` rejects `max_tokens` with a 400 and takes
-  `max_completion_tokens`. OpenRouter accepts both.
-- OpenAI sends a usage chunk (`choices: []`) only when the request sets
-  `stream_options.include_usage`. OpenRouter sends a usage chunk either way,
-  and repeats `finish_reason` on it.
-- OpenRouter streams reasoning as `reasoning` plus `reasoning_details` entries
-  of type `reasoning.text`. The models probed there never sent
-  `reasoning_content` or `reasoning_text`.
-- OpenRouter reads `reasoning`, `reasoning_content` and `reasoning_details`
-  on a replayed assistant message.
-- OpenRouter accepts `cache_control` on a system part, the last message and
-  a tool, with or without `ttl`, on a model that does not cache by it. It
-  does not validate the value.
-- Tool-call deltas from OpenAI and OpenRouter carry `index`. OpenRouter adds
+  `max_completion_tokens`. OpenRouter, with `z-ai/glm-5.3-flash`, accepts both.
+- OpenAI, with `gpt-6-luna`, sends a usage chunk (`choices: []`) only when the
+  request sets `stream_options.include_usage`. OpenRouter, with
+  `z-ai/glm-5.3-flash`, sends a usage chunk either way, and repeats
+  `finish_reason` on it.
+- OpenRouter, with `z-ai/glm-5.3-flash`, streams reasoning as `reasoning` plus
+  `reasoning_details` entries of type `reasoning.text`. Across the streams run
+  on that model, it sent no `reasoning_content` or `reasoning_text`.
+- OpenRouter, with `z-ai/glm-5.3-flash` on one upstream, reads `reasoning`,
+  `reasoning_content` and `reasoning_details` on a replayed assistant message.
+- OpenRouter, with `z-ai/glm-5.3-flash`, accepts `cache_control` on a system
+  part, the last message and a tool, with or without `ttl`, and does not
+  validate the value. This shows acceptance only. Whether OpenRouter passes
+  any placement or `ttl` upstream is not settled.
+- Tool-call deltas from `gpt-6-luna` and from OpenRouter with
+  `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.
+
 
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
