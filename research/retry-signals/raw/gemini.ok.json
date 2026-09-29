@@ -1,0 +1,24 @@
+{
+ "case": "gemini.ok",
+ "method": "POST",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "request_bytes": 128,
+ "status": 200,
+ "headers": {
+  "X-Gemini-Service-Tier": "standard",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Vary": "X-Origin",
+  "Date": "Tue, 29 Sep 2026 09:05:37 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "[redacted]",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"Hello! How can\",\n            \"thoughtSignature\": \"EnMKcQFpFH0T6a/1WT7AWZTKpAYAVgZF+kRevGYRAnAFD5Xsjbi8TcUruXbCAmjLCzAFh7LEIEn0ipZFLcUEjAqgmkRfOfgaFkV3gzixWHIXMBGPH4xqWqRd20sN6/aFrPI77R518nf1GPztKyX4QrkWEmXo\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"MAX_TOKENS\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 1,\n    \"candidatesTokenCount\": 4,\n    \"totalTokenCount\": 5,\n    \"promptTokensDetails\": [\n      {\n        \"modality\": \"TEXT\",\n        \"tokenCount\": 1\n      }\n    ],\n    \"serviceTier\": \"standard\"\n  },\n  \"modelVersion\": \"gemini-3.1-flash-lite\",\n  \"responseId\": \"YX-7asipFrzSjMcP1pK_gAQ\"\n}\n",
+ "seconds": 0.668
+}

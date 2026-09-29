@@ -1,0 +1,17 @@
+{
+ "case": "muse.wrong-path",
+ "method": "POST",
+ "url": "https://api.meta.ai/v1/nope",
+ "request_bytes": 105,
+ "status": 404,
+ "headers": {
+  "Access-Control-Allow-Origin": "*",
+  "Date": "Tue, 29 Sep 2026 09:05:45 GMT",
+  "x-route": "model-api-rust",
+  "Proxy-Status": "[redacted]",
+  "Connection": "close",
+  "Content-Length": "0"
+ },
+ "body": "",
+ "seconds": 0.335
+}

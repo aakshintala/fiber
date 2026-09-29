@@ -1,0 +1,29 @@
+{
+ "case": "openai.unknown-model",
+ "method": "POST",
+ "url": "https://api.openai.com/v1/responses",
+ "request_bytes": 99,
+ "status": 404,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:35 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "198",
+  "Connection": "close",
+  "CF-Ray": "[redacted]",
+  "CF-Cache-Status": "[redacted]",
+  "Server": "cloudflare",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Content-Type-Options": "nosniff",
+  "access-control-expose-headers": "X-Request-ID",
+  "Access-Control-Expose-Headers": "X-Request-ID",
+  "openai-organization": "[redacted]",
+  "openai-processing-ms": "114",
+  "openai-project": "[redacted]",
+  "openai-version": "2020-10-01",
+  "x-request-id": "[redacted]",
+  "set-cookie": "[redacted]",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "body": "{\n  \"error\": {\n    \"message\": \"The model `no-such-model` does not exist or you do not have access to it.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": null,\n    \"code\": \"model_not_found\"\n  }\n}",
+ "seconds": 0.285
+}

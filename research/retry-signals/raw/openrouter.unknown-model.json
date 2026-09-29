@@ -1,0 +1,25 @@
+{
+ "case": "openrouter.unknown-model",
+ "method": "POST",
+ "url": "https://openrouter.ai/api/v1/chat/completions",
+ "request_bytes": 97,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:06:04 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "Server-Timing": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Expose-Headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+  "X-Generation-Id": "[redacted]",
+  "set-cookie": "[redacted]",
+  "Permissions-Policy": "payment=(self \"https://checkout.stripe.com\" \"https://connect-js.stripe.com\" \"https://js.stripe.com\" \"https://*.js.stripe.com\" \"https://hooks.stripe.com\")",
+  "Referrer-Policy": "no-referrer, strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "Server": "cloudflare",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"error\":{\"message\":\"z-ai/no-such-model is not a valid model ID\",\"code\":400},\"user_id\":\"[redacted]\"}",
+ "seconds": 0.112
+}

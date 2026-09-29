@@ -1,0 +1,29 @@
+{
+ "case": "codex.wrong-method-get",
+ "method": "GET",
+ "url": "https://chatgpt.com/backend-api/codex/responses",
+ "request_bytes": 0,
+ "status": 405,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:56 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "31",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "allow": "POST",
+  "x-oai-request-id": "[redacted]",
+  "x-openai-proxy-wasm": "[redacted]",
+  "X-Content-Type-Options": "nosniff",
+  "cf-cache-status": "[redacted]",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "Nel": "[redacted]",
+  "Report-To": "[redacted]",
+  "Set-Cookie": "[redacted]",
+  "set-cookie": "[redacted]",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"detail\":\"Method Not Allowed\"}",
+ "seconds": 0.159
+}

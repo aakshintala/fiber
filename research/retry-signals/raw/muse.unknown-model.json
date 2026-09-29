@@ -1,0 +1,19 @@
+{
+ "case": "muse.unknown-model",
+ "method": "POST",
+ "url": "https://api.meta.ai/v1/chat/completions",
+ "request_bytes": 92,
+ "status": 404,
+ "headers": {
+  "Content-Type": "application/json",
+  "x-request-id": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Date": "Tue, 29 Sep 2026 09:05:42 GMT",
+  "x-route": "model-api-rust",
+  "Proxy-Status": "[redacted]",
+  "Connection": "close",
+  "Content-Length": "127"
+ },
+ "body": "{\"error\":{\"code\":\"model_not_found\",\"message\":\"The requested model was not found.\",\"param\":null,\"type\":\"invalid_request_error\"}}",
+ "seconds": 0.312
+}

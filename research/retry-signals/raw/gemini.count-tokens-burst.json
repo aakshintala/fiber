@@ -1,0 +1,9 @@
+{
+ "case": "gemini.count-tokens-burst",
+ "requests_sent": 300,
+ "status_counts": {
+  "200": 300
+ },
+ "first_429": null,
+ "first_of_each_non_200": {}
+}

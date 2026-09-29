@@ -1,0 +1,27 @@
+{
+ "case": "anthropic.malformed-not-json",
+ "method": "POST",
+ "url": "https://api.anthropic.com/v1/messages",
+ "request_bytes": 9,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:25 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "x-should-retry": "false",
+  "request-id": "[redacted]",
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "anthropic-organization-id": "[redacted]",
+  "anthropic-workspace-id": "[redacted]",
+  "traceresponse": "00-dc9a3139854865a61896c442dc768e78-ad4a6b659108c739-01",
+  "Server": "cloudflare",
+  "vary": "Accept-Encoding",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "cf-cache-status": "[redacted]",
+  "X-Robots-Tag": "none",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"The request body is not valid JSON: unexpected character: line 1 column 2 (char 1)\"},\"request_id\":\"req_011CfXTrerCeQEJfYLyV9p3Q\"}",
+ "seconds": 0.304
+}

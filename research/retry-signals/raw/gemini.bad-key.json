@@ -1,0 +1,23 @@
+{
+ "case": "gemini.bad-key",
+ "method": "POST",
+ "url": "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent",
+ "request_bytes": 128,
+ "status": 400,
+ "headers": {
+  "Vary": "X-Origin",
+  "Content-Type": "application/json; charset=UTF-8",
+  "Date": "Tue, 29 Sep 2026 09:05:37 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "[redacted]",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Accept-Ranges": "none",
+  "Connection": "close",
+  "Transfer-Encoding": "chunked"
+ },
+ "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"API key not valid. Please pass a valid API key.\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.ErrorInfo\",\n        \"reason\": \"API_KEY_INVALID\",\n        \"domain\": \"googleapis.com\",\n        \"metadata\": {\n          \"service\": \"generativelanguage.googleapis.com\"\n        }\n      },\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.LocalizedMessage\",\n        \"locale\": \"en-US\",\n        \"message\": \"API key not valid. Please pass a valid API key.\"\n      }\n    ]\n  }\n}\n",
+ "seconds": 0.164
+}

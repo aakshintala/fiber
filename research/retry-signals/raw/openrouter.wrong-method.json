@@ -1,0 +1,25 @@
+{
+ "case": "openrouter.wrong-method",
+ "method": "GET",
+ "url": "https://openrouter.ai/api/v1/chat/completions",
+ "request_bytes": 0,
+ "status": 404,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:06:05 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "Server-Timing": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Cache-Control": "private, no-store",
+  "Access-Control-Expose-Headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+  "set-cookie": "[redacted]",
+  "Permissions-Policy": "payment=(self \"https://checkout.stripe.com\" \"https://connect-js.stripe.com\" \"https://js.stripe.com\" \"https://*.js.stripe.com\" \"https://hooks.stripe.com\")",
+  "Referrer-Policy": "no-referrer, strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "Server": "cloudflare",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"error\":{\"message\":\"Not Found\",\"code\":404}}",
+ "seconds": 0.11
+}

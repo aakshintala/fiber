@@ -1,0 +1,22 @@
+{
+ "case": "muse.ok",
+ "method": "POST",
+ "url": "https://api.meta.ai/v1/chat/completions",
+ "request_bytes": 105,
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json",
+  "x-ratelimit-limit-requests": "150",
+  "x-ratelimit-remaining-requests": "150",
+  "x-ratelimit-limit-tokens": "3000000",
+  "x-ratelimit-remaining-tokens": "3000000",
+  "x-request-id": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Date": "Tue, 29 Sep 2026 09:05:42 GMT",
+  "x-route": "model-api-rust",
+  "Connection": "close",
+  "Content-Length": "428"
+ },
+ "body": "{\"id\":\"chatcmpl-01a0ec69-a703-7011-8ce1-33a4279f5375\",\"choices\":[{\"finish_reason\":\"length\",\"index\":0,\"message\":{\"content\":null,\"refusal\":null,\"role\":\"assistant\"},\"logprobs\":null}],\"created\":1790672742,\"model\":\"muse-spark-1.3-contributor\",\"object\":\"chat.completion\",\"usage\":{\"completion_tokens\":8,\"prompt_tokens\":8,\"total_tokens\":16,\"completion_tokens_details\":{\"reasoning_tokens\":5},\"prompt_tokens_details\":{\"cached_tokens\":0}}}",
+ "seconds": 1.515
+}

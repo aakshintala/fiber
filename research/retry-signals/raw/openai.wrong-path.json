@@ -1,0 +1,22 @@
+{
+ "case": "openai.wrong-path",
+ "method": "POST",
+ "url": "https://api.openai.com/v1/nope",
+ "request_bytes": 96,
+ "status": 404,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:37 GMT",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "cf-cache-status": "[redacted]",
+  "Access-Control-Expose-Headers": "CF-Ray",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Content-Type-Options": "nosniff",
+  "set-cookie": "[redacted]",
+  "Server": "cloudflare",
+  "CF-RAY": "[redacted]",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "body": "",
+ "seconds": 0.156
+}

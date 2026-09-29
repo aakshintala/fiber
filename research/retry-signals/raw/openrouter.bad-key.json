@@ -1,0 +1,24 @@
+{
+ "case": "openrouter.bad-key",
+ "method": "POST",
+ "url": "https://openrouter.ai/api/v1/chat/completions",
+ "request_bytes": 97,
+ "status": 401,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:06:04 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "Server-Timing": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Expose-Headers": "X-Generation-Id,X-Provider-Name,request-id,cf-ray",
+  "set-cookie": "[redacted]",
+  "Permissions-Policy": "payment=(self \"https://checkout.stripe.com\" \"https://connect-js.stripe.com\" \"https://js.stripe.com\" \"https://*.js.stripe.com\" \"https://hooks.stripe.com\")",
+  "Referrer-Policy": "no-referrer, strict-origin-when-cross-origin",
+  "X-Content-Type-Options": "nosniff",
+  "Server": "cloudflare",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"error\":{\"message\":\"Missing Authentication header\",\"code\":401}}",
+ "seconds": 0.109
+}

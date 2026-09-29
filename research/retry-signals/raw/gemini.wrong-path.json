@@ -1,0 +1,21 @@
+{
+ "case": "gemini.wrong-path",
+ "method": "POST",
+ "url": "https://generativelanguage.googleapis.com/v1beta/nope",
+ "request_bytes": 128,
+ "status": 404,
+ "headers": {
+  "Content-Type": "text/html",
+  "Date": "Tue, 29 Sep 2026 09:05:39 GMT",
+  "Server": "scaffolding on HTTPServer2",
+  "Content-Length": "0",
+  "X-XSS-Protection": "0",
+  "X-Frame-Options": "SAMEORIGIN",
+  "X-Content-Type-Options": "nosniff",
+  "Server-Timing": "[redacted]",
+  "Alt-Svc": "h3=\":443\"; ma=2592000,h3-29=\":443\"; ma=2592000",
+  "Connection": "close"
+ },
+ "body": "",
+ "seconds": 0.166
+}

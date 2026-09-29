@@ -1,0 +1,27 @@
+{
+ "case": "openai.wrong-method",
+ "method": "DELETE",
+ "url": "https://api.openai.com/v1/responses",
+ "request_bytes": 0,
+ "status": 405,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:36 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "157",
+  "Connection": "close",
+  "CF-Ray": "[redacted]",
+  "CF-Cache-Status": "[redacted]",
+  "Server": "cloudflare",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Content-Type-Options": "nosniff",
+  "access-control-expose-headers": "X-Request-ID",
+  "Access-Control-Expose-Headers": "X-Request-ID",
+  "openai-processing-ms": "1",
+  "openai-version": "2020-10-01",
+  "x-request-id": "[redacted]",
+  "set-cookie": "[redacted]",
+  "alt-svc": "h3=\":443\"; ma=86400"
+ },
+ "body": "{\n  \"error\": {\n    \"message\": \"Invalid method for URL (DELETE /v1/responses)\",\n    \"type\": \"invalid_request_error\",\n    \"param\": null,\n    \"code\": null\n  }\n}",
+ "seconds": 0.181
+}

@@ -1,0 +1,27 @@
+{
+ "case": "codex.bad-token",
+ "method": "POST",
+ "url": "https://chatgpt.com/backend-api/codex/responses",
+ "request_bytes": 164,
+ "status": 401,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:54 GMT",
+  "Content-Type": "application/json",
+  "Content-Length": "84",
+  "Connection": "close",
+  "Server": "cloudflare",
+  "x-oai-request-id": "[redacted]",
+  "x-openai-proxy-wasm": "[redacted]",
+  "cf-cache-status": "[redacted]",
+  "Cross-Origin-Opener-Policy": "same-origin-allow-popups",
+  "Strict-Transport-Security": "max-age=31536000; includeSubDomains; preload",
+  "X-Content-Type-Options": "nosniff",
+  "Nel": "[redacted]",
+  "Report-To": "[redacted]",
+  "set-cookie": "[redacted]",
+  "Referrer-Policy": "strict-origin-when-cross-origin",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"detail\":\"Could not parse your authentication token. Please try signing in again.\"}",
+ "seconds": 0.172
+}

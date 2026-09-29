@@ -1,0 +1,27 @@
+{
+ "case": "anthropic.max-tokens-huge",
+ "method": "POST",
+ "url": "https://api.anthropic.com/v1/messages",
+ "request_bytes": 102,
+ "status": 400,
+ "headers": {
+  "Date": "Tue, 29 Sep 2026 09:05:26 GMT",
+  "Content-Type": "application/json",
+  "Transfer-Encoding": "chunked",
+  "Connection": "close",
+  "x-should-retry": "false",
+  "request-id": "[redacted]",
+  "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+  "anthropic-organization-id": "[redacted]",
+  "anthropic-workspace-id": "[redacted]",
+  "traceresponse": "00-a0e7d4ad867252f6d402d774ece15fb0-9d2282d0647e85fd-01",
+  "Server": "cloudflare",
+  "vary": "Accept-Encoding",
+  "X-Robots-Tag": "none",
+  "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+  "cf-cache-status": "[redacted]",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"max_tokens: 50000000 > 64000, which is the maximum allowed number of output tokens for claude-haiku-4-5-20251001\"},\"request_id\":\"req_011CfXTrgEJJLvrnXnun8439\"}",
+ "seconds": 0.389
+}

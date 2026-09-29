@@ -1,0 +1,17 @@
+{
+ "case": "codex.unsupported-verb-trace",
+ "method": "TRACE",
+ "url": "https://chatgpt.com/backend-api/codex/responses",
+ "request_bytes": 0,
+ "status": 405,
+ "headers": {
+  "Server": "cloudflare",
+  "Date": "Tue, 29 Sep 2026 09:05:56 GMT",
+  "Content-Type": "text/html",
+  "Content-Length": "155",
+  "Connection": "close",
+  "CF-RAY": "[redacted]"
+ },
+ "body": "<html>\r\n<head><title>405 Not Allowed</title></head>\r\n<body>\r\n<center><h1>405 Not Allowed</h1></center>\r\n<hr><center>cloudflare</center>\r\n</body>\r\n</html>\r\n",
+ "seconds": 0.1
+}

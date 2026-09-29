@@ -1,0 +1,19 @@
+{
+ "case": "muse.malformed-missing-messages",
+ "method": "POST",
+ "url": "https://api.meta.ai/v1/chat/completions",
+ "request_bytes": 39,
+ "status": 400,
+ "headers": {
+  "Content-Type": "application/json",
+  "x-request-id": "[redacted]",
+  "Access-Control-Allow-Origin": "*",
+  "Date": "Tue, 29 Sep 2026 09:05:42 GMT",
+  "x-route": "model-api-rust",
+  "Proxy-Status": "[redacted]",
+  "Connection": "close",
+  "Content-Length": "125"
+ },
+ "body": "{\"error\":{\"code\":null,\"message\":\"Missing required parameter: `messages`.\",\"param\":\"messages\",\"type\":\"invalid_request_error\"}}",
+ "seconds": 0.162
+}
