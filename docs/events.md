@@ -664,11 +664,11 @@ late is a second `usage_recorded` with the same `generation_id`, replacing the
 first. Consumers sum; resume rebuilds the ledger by folding. No pending queue,
 no watermarks, no reconciliation file.
 
-OpenRouter returns `cost` inline on every completed call, streaming or not, and it
-never differs from its generation lookup, so a completed call never needs the
-second record. A stream that ends before its final chunk carries no `cost`; the
-lookup returns one within about 30 seconds, and until then the record has
-`cost` null.
+On 20 completed calls to `z-ai/glm-5.3-flash` through OpenRouter, streaming and not,
+`cost` came inline and equalled the generation lookup, watched through 120
+seconds. A completed call carried its final cost inline, so it did not need the
+second record. One stream closed early carried no `cost`; the lookup returned
+one by 30 seconds, and until then the record has `cost` null.
 
 ### Preamble
 
