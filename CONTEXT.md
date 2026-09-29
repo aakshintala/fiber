@@ -327,12 +327,13 @@ started it.
 _Avoid_: abort, stop, kill, interrupt (the outcome is named interrupted; the
 act is cancellation)
 
-**Rig**:
+**Jig**:
 A development command that runs one layer of Fiber on its own, so an agent can
 see what that layer makes of a given input: a recorded stream decoded, an events
-file drawn, one tool call run. A rig never ships to people, and what it finds
+file drawn, one tool call run. A jig never ships to people, and what it finds
 ends as a test.
-_Avoid_: driver (a driver sends commands to a session), harness
+_Avoid_: driver (a driver sends commands to a session), harness, rig (rig is a
+reference library, and pi-rig the owner's pi extension)
 
 ## Deliberately unnamed
 
