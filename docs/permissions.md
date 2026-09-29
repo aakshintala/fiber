@@ -276,7 +276,10 @@ the tool call's result, with the reason and an instruction to respect the
 boundary and find another way. The turn continues.
 
 A human is interrupted when the agent keeps hitting the wall: **3 consecutive
-blocks, or 20 in a session**, both configurable. Escalating every block would
+blocks, or 20 in a session**, both configurable. The block that reaches the count
+is not returned to the model: the call goes to a person instead, as a
+`permission_requested` whose `escalation` gives the cause and the reviewer's
+reason. The person's answer ends the run of consecutive blocks. Escalating every block would
 turn `auto` into `ask` under load, and a person answering a stream of
 questions stops reading them.
 
@@ -314,10 +317,30 @@ repository, the launch directory is the project.
 
 ### What a rule matches
 
-A tool and a prefix of its primary argument. Approving `npm test` offers to
-remember `npm test` exactly, or anything beginning `npm test`. The widening is
-an explicit, separate choice at the moment of approval, so a rule never grants
-more than what was read when it was written.
+A tool and a prefix of its primary argument. The tool reads its own
+arguments, so its effects function returns both halves with the effects: the
+call's **subject**, its primary argument, and the **prefix** it offers as the
+widening (`docs/tools.md`, "What a tool declares"). The loop never parses a
+command. A prefix ending in `/` matches every subject that
+starts with it. Any other prefix matches a subject equal to it, and for the
+shell also one that goes on with a space: `npm test` matches
+`npm test --watch` and not `npm testing`. A tool
+with no primary argument, such as an MCP tool, returns an empty subject, and
+its rule matches the tool by name. A call a rule cannot safely match, such as
+a shell command with more than one part, returns no subject, and no rule or
+session grant matches it, a deny or an ask included
+([#188](https://github.com/aakshintala/fiber/issues/188)).
+
+Approving `npm test -- --watch` can remember the subject, or the prefix
+`npm test`; the terminal offers the prefix, and shows it. The widening is an explicit, separate choice at the moment
+of approval, so a rule never grants more than what was read when it was
+written.
+
+An approval remembers in one of two scopes, the person's choice: a session
+grant, or a standing rule appended to the project's rules file. A global rule
+is added by editing the global rules file. Only a request raised at step 9
+offers to remember: a standing ask comes before every allow, so an allow rule
+could never answer it, and a yes to leaving `readonly` approves no call.
 
 A deny rule and an ask rule are matched the same way and are evaluated first.
 
@@ -327,7 +350,10 @@ Both events are defined in `docs/events.md` and are durable. This page fixes
 their contents.
 
 `permission_requested` carries the tool call's `action_id`, the call's declared
-effects, its paths, and which step of the order above sent it here.
+effects, its paths, and which step of the order above sent it here. It also
+says why a person is asked: on a standing ask, the rule that asked; on a
+review in `auto`, the escalation's cause; and on a review, the rule an allow
+can remember.
 
 `permission_resolved` carries the decision, the reason, and **what decided it**:
 the credential deny, a human, a standing rule, a session grant, the reviewer,
@@ -344,7 +370,13 @@ page at all.
 
 A session grant is recorded the same way, as a `permission_resolved` whose
 decision says it applies to later matching calls. Nothing else is written down:
-the grant is a fold of the log, like every other derived fact.
+the grant is a fold of the log, like every other derived fact. A standing rule
+added from an approval is written to the project's rules file, and its
+`permission_resolved` names it too, so the log shows where the rule came from.
+
+An escalation where no answer is possible writes no `permission_requested`.
+It is the reviewer's block, recorded as a `permission_resolved` with
+`decided_by: reviewer`.
 
 ## Headless
 

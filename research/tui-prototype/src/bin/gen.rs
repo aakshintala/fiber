@@ -27,6 +27,8 @@ struct G {
     n: u32,
     ctx: u64,
     gen_n: u32,
+    /// the next step's first non-read call is asked about at step `review`; the value is its `escalation`
+    review: Option<Value>,
 }
 
 enum R {
@@ -72,6 +74,28 @@ fn cargo(cmd: &str, exit: i32, lines: usize, dur: i64) -> C {
         R::Fail { code: "nonzero_exit", msg: format!("exit {exit}"), exit: Some(exit) }
     };
     C { name: "shell", args: json!({ "command": cmd }), r }
+}
+
+/// The `rule` a `review` request offers (`docs/permissions.md`, "What a rule matches"):
+/// a shell call of one part offers its command and a prefix of one or two words, a file
+/// tool its path and the directory.
+fn rule_of(c: &C) -> Option<Value> {
+    if c.name == "shell" {
+        let cmd = c.args["command"].as_str()?;
+        if cmd.contains(['|', ';', '&', '\n']) {
+            return None;
+        }
+        let mut w = cmd.split_whitespace();
+        let first = w.next()?;
+        let prefix = match w.next() {
+            Some(x) if !x.starts_with('-') && !x.contains(['/', '.', '=']) => format!("{first} {x}"),
+            _ => first.to_string(),
+        };
+        return Some(json!({ "subject": cmd, "prefix": prefix }));
+    }
+    let path = c.args["path"].as_str()?;
+    let dir = &path[..=path.rfind('/')?];
+    Some(json!({ "subject": path, "prefix": dir }))
 }
 
 impl G {
@@ -189,6 +213,17 @@ impl G {
                 _ => json!(["executes"]),
             };
             let paths = c.args.get("path").map(|p| json!([p])).unwrap_or(json!([]));
+            if c.name != "read"
+                && let Some(esc) = self.review.take()
+            {
+                let rid = self.id("pr");
+                let mut req = json!({ "request_id": rid, "effects": effects, "reversible": false, "paths": paths, "step": "review", "escalation": esc });
+                if let Some(rule) = rule_of(c) {
+                    req["rule"] = rule;
+                }
+                self.m("permission_requested", 40, Some(a), req);
+                self.m("permission_resolved", 6000, Some(a), json!({ "request_id": rid, "decision": "allow", "decided_by": "person" }));
+            }
             self.m("tool_call_started", 40, Some(a), json!({ "effects": effects, "reversible": c.name == "read", "paths": paths }));
             let lines = |n: usize, head: &str| {
                 let mut s = String::from(head);
@@ -302,6 +337,7 @@ fn main() {
         n: 0,
         ctx: 21_000,
         gen_n: 0,
+        review: None,
     };
     g.m("fiber_started", 0, None, json!({ "version": "0.0.1", "resumed": false, "mode": "ask" }));
     g.m("session_started", 5, None, json!({ "workspace": "~/work/fiber" }));
@@ -329,6 +365,7 @@ fn main() {
         vec![read("crates/log/tests/lock.rs", 142), read("crates/log/src/lock.rs", 214)],
     );
     g.step(None, vec![grep("thread::sleep", "crates", 31), read("crates/testutil/src/child.rs", 88)]);
+    g.review = Some(json!({ "cause": "session_blocks", "reason": "the reviewer blocked 3 calls this session and hands the next to you" }));
     g.step(None, vec![cargo("cargo test -p log --test lock", 0, 14, 21000)]);
     g.say(None, REPLY1);
     g.end_turn("completed");
@@ -358,6 +395,7 @@ fn main() {
         })),
         "Helper: crates/testutil (Recommended)\nDeadline: 5 s (Recommended) \"10 s for the doors tests\"\nLoop timing: skipped\nnote: Keep the diff small; no refactors on the way.",
     )]);
+    g.review = Some(json!({ "cause": "consecutive_blocks", "reason": "edits outside the crate the task names" }));
     g.step(None, vec![read("crates/testutil/src/lib.rs", 64), edit("crates/testutil/src/child.rs", 14, 0)]);
     g.step(None, vec![edit("crates/log/tests/lock.rs", 3, 1), cargo("cargo test -p log --test lock", 0, 12, 19000)]);
     let tests = [
@@ -435,7 +473,7 @@ fn main() {
     let da = g.id("a");
     g.emit(DELEGATE, "tool_call_requested", 600, Some(&da), json!({ "name": "shell", "arguments": { "command": "cargo mutants -p testutil --in-place --timeout 60" }, "provider_id": format!("toolu_{da}") }));
     let dr = g.id("pr");
-    g.emit(DELEGATE, "permission_requested", 40, Some(&da), json!({ "request_id": dr, "effects": ["executes", "writes"], "reversible": false, "paths": [], "step": "standing_ask" }));
+    g.emit(DELEGATE, "permission_requested", 40, Some(&da), json!({ "request_id": dr, "effects": ["executes", "writes"], "reversible": false, "paths": [], "step": "standing_ask", "standing_rule": { "scope": "project", "prefix": "cargo mutants" } }));
     g.step(None, vec![
         C { name: "shell", args: json!({ "command": "cargo nextest run -p log --stress-count 400 -j 16" }), r: R::Running },
         ask(json!([

@@ -224,7 +224,7 @@ Notices, for a failure outside any action:
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
-Driver command rejections (`busy`, `stale_request`, `not_step_boundary`,
+Driver command rejections (`malformed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`)
 are `docs/invocation.md`, "Driver commands".
 

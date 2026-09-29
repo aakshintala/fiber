@@ -471,7 +471,7 @@ struct Pending {
     what: Asking,
 }
 enum Asking {
-    Approval { tool: String, args: Value, effects: Vec<String>, reversible: bool, paths: Vec<String>, step: String },
+    Approval { tool: String, args: Value, effects: Vec<String>, reversible: bool, paths: Vec<String>, step: String, req: Box<Value> },
     Form(Vec<Value>),
 }
 #[derive(Default)]
@@ -662,7 +662,7 @@ impl Fold {
                 let what = if kind == "permission_requested" {
                     let (tool, args) = self.call_of(sid, &caid);
                     let strs = |k: &str| p[k].as_array().into_iter().flatten().filter_map(Value::as_str).map(str::to_string).collect();
-                    Asking::Approval { tool, args, effects: strs("effects"), reversible: p["reversible"].as_bool().unwrap_or(false), paths: strs("paths"), step: p["step"].as_str().unwrap_or("").into() }
+                    Asking::Approval { tool, args, effects: strs("effects"), reversible: p["reversible"].as_bool().unwrap_or(false), paths: strs("paths"), step: p["step"].as_str().unwrap_or("").into(), req: Box::new(p.clone()) }
                 } else {
                     let fields = p["fields"].as_array().cloned().unwrap_or_default();
                     self.forms.insert(rid.clone(), (caid.clone(), fields.clone()));
@@ -717,8 +717,8 @@ impl Fold {
             }
             "mode_changed" => self.mode = p["after"].as_str().unwrap_or("").into(),
             "turn_started" => {
-                let text = p["input"].as_array().and_then(|a| a.iter().find(|i| i["type"] == "message")).and_then(|i| i["content"][0]["text"].as_str()).unwrap_or("");
-                self.turns.push(Turn { prompt: text.into(), ts, ..Default::default() });
+                let text = p["input"].as_array().into_iter().flatten().filter(|i| i["type"] == "message").filter_map(|i| i["content"][0]["text"].as_str()).collect::<Vec<_>>().join("\n\n");
+                self.turns.push(Turn { prompt: text, ts, ..Default::default() });
                 self.running = true;
                 self.turn_start = ts;
             }
@@ -1590,10 +1590,6 @@ impl Ui {
 fn primary(args: &Value) -> String {
     ["command", "path", "url"].iter().find_map(|k| args[k].as_str()).map_or_else(|| args.to_string(), str::to_string)
 }
-/// The prefix a rule would remember. Not in the stream: see README, findings.
-fn rule_prefix(tool: &str, arg: &str) -> String {
-    if tool == "shell" { arg.split_whitespace().take(2).collect::<Vec<_>>().join(" ") } else { arg.to_string() }
-}
 
 fn input_box(ui: &Ui, w: usize) -> Vec<Row> {
     let editing = ui.qsel.is_some();
@@ -1726,14 +1722,34 @@ fn context_view(f: &Fold, w: usize) -> Vec<Row> {
     out
 }
 
+const CH_ONCE: usize = 0;
+const CH_SESSION: usize = 1;
+const CH_PROJECT: usize = 2;
+const CH_DENY: usize = 3;
+/// The choices an approval panel shows: the two that remember need a `rule` on the request.
+fn choices(has_rule: bool) -> Vec<usize> {
+    if has_rule { vec![CH_ONCE, CH_SESSION, CH_PROJECT, CH_DENY] } else { vec![CH_ONCE, CH_DENY] }
+}
 fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row> {
-    let Asking::Approval { tool, args, effects, reversible, paths, step } = &p.what else { return vec![] };
+    let Asking::Approval { tool, args, effects, reversible, paths, step, req } = &p.what else { return vec![] };
     let arg = primary(args);
-    let why = match step.as_str() {
-        "standing_ask" => "a standing ask rule matches it",
-        "readonly" => "it would leave readonly",
-        "reviewed" => "ask mode: every call is reviewed by you",
-        s => s,
+    let (rule, standing_rule, escalation) = (req.get("rule"), req.get("standing_rule"), req.get("escalation"));
+    let why = if let Some(r) = standing_rule {
+        format!("asked by the {} rule {}", r["scope"].as_str().unwrap_or(""), r["prefix"].as_str().unwrap_or(""))
+    } else if let Some(e) = escalation {
+        let reason = e["reason"].as_str().map_or(String::new(), |r| format!(": {r}"));
+        match e["cause"].as_str().unwrap_or("") {
+            "reviewer_failed" => "the reviewer failed".to_string(),
+            "session_blocks" => format!("the reviewer has blocked too many calls{reason}"),
+            _ => format!("the reviewer blocked the last calls{reason}"),
+        }
+    } else {
+        match step.as_str() {
+            "standing_ask" => "a standing ask rule matches it",
+            "readonly" => "it would leave readonly",
+            _ => "",
+        }
+        .to_string()
     };
     let mut rows = vec![hot_row(vec![
         (sp(format!("Approval {} of {}", k + 1, f.pending.len()), fg(ORANGE).add_modifier(Modifier::BOLD)), Some(Act::NextPending)),
@@ -1754,16 +1770,25 @@ fn approval_panel(f: &Fold, ui: &Ui, k: usize, p: &Pending, w: usize) -> Vec<Row
     }
     rows.push(row(vec![sp(facts, dim())]));
     rows.push(Row::default());
-    let choice = |i: usize, parts: Vec<Span<'static>>| {
+    let choice = |i: usize, n: usize, parts: Vec<Span<'static>>| {
         let on = ui.choice == i;
-        let mut v = vec![(sp(if on { "▸ " } else { "  " }, fg(ORANGE)), Some(Act::Choice(i))), (sp(format!("{} ", i + 1), dim()), Some(Act::Choice(i)))];
+        let mut v = vec![(sp(if on { "▸ " } else { "  " }, fg(ORANGE)), Some(Act::Choice(i))), (sp(format!("{} ", n + 1), dim()), Some(Act::Choice(i)))];
         v.extend(parts.into_iter().map(|s| (if on { Span::styled(s.content, s.style.add_modifier(Modifier::BOLD)) } else { s }, Some(Act::Choice(i)))));
         hot_row(v)
     };
-    rows.push(choice(0, vec![sp("Allow once", Style::new())]));
-    rows.push(choice(1, vec![sp("Allow and add rule ", Style::new()), sp(format!("{} *", rule_prefix(tool, &arg)), fg(CYAN))]));
-    let fb = if ui.feedback.is_empty() && ui.choice != 2 { sp("  type to add feedback", dim()) } else { sp(format!("  {}█", ui.feedback), Style::new()) };
-    rows.push(choice(2, vec![sp("Deny", Style::new()), fb]));
+    let prefix = rule.and_then(|r| r["prefix"].as_str()).unwrap_or("");
+    for (n, i) in choices(rule.is_some()).into_iter().enumerate() {
+        let parts = match i {
+            CH_ONCE => vec![sp("Allow once", Style::new())],
+            CH_SESSION => vec![sp("Allow for this session ", Style::new()), sp(format!("{prefix} *"), fg(CYAN))],
+            CH_PROJECT => vec![sp("Always allow in this project ", Style::new()), sp(format!("{prefix} *"), fg(CYAN))],
+            _ => {
+                let fb = if ui.feedback.is_empty() && ui.choice != CH_DENY { sp("  type to add feedback", dim()) } else { sp(format!("  {}█", ui.feedback), Style::new()) };
+                vec![sp("Deny", Style::new()), fb]
+            }
+        };
+        rows.push(choice(i, n, parts));
+    }
     rows.push(Row::default());
     rows.push(row(vec![sp("↑↓ choose · enter confirms · typing goes to the feedback · click a choice", dim())]));
     let rows = rows.into_iter().map(|r| prefixed(r, vec![sp("▌", fg(ORANGE)), sp(" ", Style::new())])).collect();
@@ -2101,11 +2126,23 @@ fn hostname() -> String {
 // ============================================================ what the TUI would send, and Fiber's side of it
 /// The prototype has no Fiber to talk to: it shows each command it would send,
 /// appends it to `--commands FILE`, and plays the lines Fiber would write back.
-fn send(ui: &mut Ui, cmds: &mut Option<std::fs::File>, mut c: Value) -> String {
+/// A command line as `docs/invocation.md` shapes it: `id`, `command` and `session_id`
+/// (`steer` and `reply` naming a delegate) at the top, the command's own keys under
+/// `args`, and no `args` when there are none.
+fn command_line(id: &str, command: &str, session_id: Option<&str>, args: Value) -> Value {
+    let mut c = json!({ "id": id, "command": command });
+    if let Some(s) = session_id {
+        c["session_id"] = json!(s);
+    }
+    if args.as_object().is_some_and(|a| !a.is_empty()) {
+        c["args"] = args;
+    }
+    c
+}
+fn send(ui: &mut Ui, cmds: &mut Option<std::fs::File>, command: &str, session_id: Option<&str>, args: Value) -> String {
     ui.cmd_n += 1;
     let id = format!("c_{:04x}", 0xc000 + ui.cmd_n);
-    c["id"] = json!(id);
-    let line = c.to_string();
+    let line = command_line(&id, command, session_id, args).to_string();
     if let Some(fh) = cmds {
         let _ = writeln!(fh, "{line}");
     }
@@ -2128,30 +2165,55 @@ fn synth(f: &mut Fold, kind: &str, sid: &str, aid: Option<&str>, ts: i64, payloa
     f.apply(&e);
 }
 fn interrupt(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
-    send(ui, cmds, json!({ "command": "cancel" }));
+    send(ui, cmds, "cancel", None, json!({}));
     let me = f.session_id.clone();
+    // a pending request of the turn ends with its resolved line before its call completes
+    let pending: Vec<(String, String, bool)> = f.pending.iter().filter(|p| p.sid == me).map(|p| (p.rid.clone(), p.aid.clone(), matches!(p.what, Asking::Form(_)))).collect();
+    for (rid, aid, form) in pending {
+        if form {
+            synth(f, "interaction_resolved", &me, None, ts, json!({ "request_id": rid, "by": "fiber", "declined": true }));
+        } else {
+            synth(f, "permission_resolved", &me, Some(&aid), ts, json!({ "request_id": rid, "decision": "deny", "decided_by": "cancel" }));
+        }
+    }
     for a in f.running_calls() {
         synth(f, "tool_call_completed", &me, Some(&a), ts, json!({ "status": "cancelled", "content": [] }));
     }
     synth(f, "turn_completed", &me, None, ts, json!({ "outcome": "interrupted" }));
+    // queued steering messages start the next turn at once, in queue order
+    if !f.queue.is_empty() {
+        let input: Vec<Value> = f.queue.iter().map(|(id, t)| json!({ "type": "message", "content": [{ "type": "text", "text": t }], "source": "driver", "command_id": id })).collect();
+        synth(f, "steering_queue", &me, None, ts, queue_msgs(&[]));
+        let turn_id = format!("t_{:04x}", 0xd000 + ui.cmd_n);
+        let e = json!({ "kind": "turn_started", "session_id": me, "turn_id": turn_id, "ts": ts, "schema_version": 1, "payload": { "input": input } });
+        f.apply(&e);
+    }
 }
 fn approve(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, choice: usize) {
     let Some((_, p)) = ui.top(f) else { return };
-    let Asking::Approval { tool, args, .. } = &p.what else { return };
-    let (rid, sid, aid, prefix) = (p.rid.clone(), p.sid.clone(), p.aid.clone(), rule_prefix(tool, &primary(args)));
-    let mut c = json!({ "command": "reply", "request_id": rid, "decision": if choice == 2 { "deny" } else { "allow" } });
-    if sid != f.session_id {
-        c["session_id"] = json!(sid);
+    let Asking::Approval { tool, req, .. } = &p.what else { return };
+    let remember = matches!(choice, CH_SESSION | CH_PROJECT);
+    // the remembering choices exist only on a request that offers a rule
+    let prefix = match req["rule"]["prefix"].as_str() {
+        Some(x) => x.to_string(),
+        None if remember => return,
+        None => String::new(),
+    };
+    let (rid, sid, aid, tool) = (p.rid.clone(), p.sid.clone(), p.aid.clone(), tool.clone());
+    let deny = choice == CH_DENY;
+    let mut args = json!({ "request_id": rid, "decision": if deny { "deny" } else { "allow" } });
+    let mut resolved = json!({ "request_id": rid, "decision": args["decision"], "decided_by": "person" });
+    if deny && !ui.feedback.is_empty() {
+        args["feedback"] = json!(ui.feedback);
+        resolved["feedback"] = json!(ui.feedback);
     }
-    if choice == 1 {
-        c["rule"] = json!({ "tool": tool, "prefix": prefix });
+    if remember {
+        let (scope, key) = if choice == CH_SESSION { ("session", "grant") } else { ("project", "rule") };
+        args["remember"] = json!({ "scope": scope, "prefix": prefix });
+        resolved[key] = json!({ "tool": tool, "prefix": prefix });
     }
-    if choice == 2 && !ui.feedback.is_empty() {
-        c["feedback"] = json!(ui.feedback);
-    }
-    let decision = c["decision"].clone();
-    send(ui, cmds, c);
-    synth(f, "permission_resolved", &sid, Some(&aid), ts, json!({ "request_id": rid, "decision": decision, "decided_by": "person" }));
+    send(ui, cmds, "reply", (sid != f.session_id).then_some(sid.as_str()), args);
+    synth(f, "permission_resolved", &sid, Some(&aid), ts, resolved);
     ui.feedback.clear();
     ui.choice = 0;
     ui.shown = 0;
@@ -2187,9 +2249,10 @@ fn submit_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: 
         ans["note"] = json!(ui.form.note);
         lines.push(format!("note: {}", ui.form.note));
     }
-    send(ui, cmds, json!({ "command": "reply", "request_id": rid, "answer": ans }));
-    let mut res = ans.clone();
-    res["request_id"] = json!(rid);
+    let mut args = ans.clone();
+    args["request_id"] = json!(rid);
+    send(ui, cmds, "reply", (sid != f.session_id).then_some(sid.as_str()), args.clone());
+    let mut res = args;
     res["by"] = json!("person");
     synth(f, "interaction_resolved", &sid, None, ts, res);
     synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": lines.join("\n") }] }));
@@ -2213,7 +2276,7 @@ fn finish_turn(f: &mut Fold, ts: i64) {
 fn decline_form(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let Some((_, p)) = ui.top(f) else { return };
     let (rid, aid, sid) = (p.rid.clone(), p.aid.clone(), p.sid.clone());
-    send(ui, cmds, json!({ "command": "reply", "request_id": rid, "answer": { "declined": true } }));
+    send(ui, cmds, "reply", (sid != f.session_id).then_some(sid.as_str()), json!({ "request_id": rid, "declined": true }));
     synth(f, "interaction_resolved", &sid, None, ts, json!({ "request_id": rid, "declined": true, "by": "person" }));
     synth(f, "tool_call_completed", &sid, Some(&aid), ts, json!({ "status": "completed", "content": [{ "type": "text", "text": "declined" }] }));
     interrupt(f, ui, cmds, ts);
@@ -2254,7 +2317,7 @@ fn queue_leave(ui: &mut Ui) {
 }
 fn queue_drop(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64, i: usize) {
     let Some((id, _)) = f.queue.get(i).cloned() else { return };
-    send(ui, cmds, json!({ "command": "steer_drop", "steer_id": id }));
+    send(ui, cmds, "steer_drop", None, json!({ "command_id": id }));
     let mut q = f.queue.clone();
     q.remove(i);
     let me = f.session_id.clone();
@@ -2268,7 +2331,7 @@ fn enter(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     let me = f.session_id.clone();
     if let Some(i) = ui.qsel {
         let Some((id, _)) = f.queue.get(i).cloned() else { return queue_leave(ui) };
-        send(ui, cmds, json!({ "command": "steer_amend", "steer_id": id, "text": ui.input }));
+        send(ui, cmds, "steer_amend", None, json!({ "command_id": id, "content": [{ "type": "text", "text": ui.input }] }));
         let mut q = f.queue.clone();
         q[i].1 = ui.input.clone();
         synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
@@ -2279,12 +2342,12 @@ fn enter(f: &mut Fold, ui: &mut Ui, cmds: &mut Option<std::fs::File>, ts: i64) {
     }
     let text = std::mem::take(&mut ui.input);
     if f.running {
-        let id = send(ui, cmds, json!({ "command": "steer", "text": text }));
+        let id = send(ui, cmds, "steer", None, json!({ "content": [{ "type": "text", "text": text }] }));
         let mut q = f.queue.clone();
         q.push((id, text));
         synth(f, "steering_queue", &me, None, ts, queue_msgs(&q));
     } else {
-        send(ui, cmds, json!({ "command": "prompt", "input": [{ "type": "text", "text": text }] }));
+        send(ui, cmds, "prompt", None, json!({ "content": [{ "type": "text", "text": text }] }));
     }
 }
 
@@ -3160,8 +3223,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 ui.aside.insert(rid);
                                 ui.shown = 0;
                             }
-                            Key::Up => ui.choice = (ui.choice + 2) % 3,
-                            Key::Down | Key::Tab => ui.choice = (ui.choice + 1) % 3,
+                            Key::Up | Key::Down | Key::Tab => {
+                                let has_rule = ui.top(f).is_some_and(|(_, p)| matches!(&p.what, Asking::Approval { req, .. } if req.get("rule").is_some()));
+                                let cs = choices(has_rule);
+                                let at = cs.iter().position(|&c| c == ui.choice).unwrap_or(0);
+                                ui.choice = cs[if k == Key::Up { (at + cs.len() - 1) % cs.len() } else { (at + 1) % cs.len() }];
+                            }
                             Key::Enter => {
                                 let c = ui.choice;
                                 approve(f, &mut ui, &mut cmds, ts, c)
@@ -3171,7 +3238,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                             }
                             Key::Char(c) if plain_key => {
                                 ui.feedback.push(c);
-                                ui.choice = 2;
+                                ui.choice = CH_DENY;
                             }
                             _ => {}
                         },
@@ -3811,5 +3878,86 @@ mod tests {
         let f = fold_with("find wait", "wait_for_path, and Wait again");
         let rows = conversation(&f, 60, &View::default());
         assert_eq!(find_all(&rows, "wait").len(), 3);
+    }
+    /// A turn running a shell call that asks for approval, with `rule` on the request when given.
+    fn asking(rule: Option<Value>) -> Fold {
+        let e = |kind: &str, aid: Option<&str>, payload: Value| {
+            let mut e = json!({ "kind": kind, "session_id": "s_main", "ts": 1, "schema_version": 1, "payload": payload });
+            if let Some(a) = aid {
+                e["action_id"] = json!(a);
+            }
+            e
+        };
+        let mut req = json!({ "request_id": "r1", "effects": ["executes"], "reversible": false, "paths": [], "step": "review" });
+        if let Some(r) = rule {
+            req["rule"] = r;
+        }
+        fold_of(&[
+            e("turn_started", None, json!({ "input": [{ "type": "message", "content": [{ "type": "text", "text": "go" }], "source": "driver", "command_id": "c" }] })),
+            e("tool_call_requested", Some("a1"), json!({ "name": "shell", "arguments": { "command": "npm test -- --watch" }, "provider_id": "p" })),
+            e("permission_requested", Some("a1"), req),
+        ])
+    }
+    /// Runs `act` and returns the command lines it wrote, parsed.
+    fn sent(act: impl FnOnce(&mut Ui, &mut Option<std::fs::File>)) -> Vec<Value> {
+        let path = std::env::temp_dir().join(format!("tui-prototype-cmds-{}-{:?}", std::process::id(), std::thread::current().id()));
+        let mut cmds = Some(std::fs::File::create(&path).unwrap());
+        act(&mut Ui::default(), &mut cmds);
+        let out = std::fs::read_to_string(&path).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        let _ = std::fs::remove_file(&path);
+        out
+    }
+    #[test]
+    fn approval_replies_follow_invocation_md() {
+        let rule = json!({ "subject": "npm test -- --watch", "prefix": "npm test" });
+        let mut want = vec![
+            (CH_ONCE, json!({ "request_id": "r1", "decision": "allow" })),
+            (CH_SESSION, json!({ "request_id": "r1", "decision": "allow", "remember": { "scope": "session", "prefix": "npm test" } })),
+            (CH_PROJECT, json!({ "request_id": "r1", "decision": "allow", "remember": { "scope": "project", "prefix": "npm test" } })),
+            (CH_DENY, json!({ "request_id": "r1", "decision": "deny", "feedback": "not that" })),
+        ];
+        for (choice, args) in want.drain(..) {
+            let mut f = asking(Some(rule.clone()));
+            let lines = sent(|ui, cmds| {
+                ui.feedback = if choice == CH_DENY { "not that".into() } else { String::new() };
+                approve(&mut f, ui, cmds, 1, choice);
+            });
+            assert_eq!(lines, vec![json!({ "id": "c_c001", "command": "reply", "args": args })]);
+            assert!(f.pending.is_empty());
+        }
+        // no rule on the request: the remembering choices send nothing
+        let mut f = asking(None);
+        assert!(sent(|ui, cmds| approve(&mut f, ui, cmds, 1, CH_SESSION)).is_empty());
+        assert_eq!(f.pending.len(), 1);
+        assert_eq!(choices(false), vec![CH_ONCE, CH_DENY]);
+    }
+
+    #[test]
+    fn steering_commands_and_cancel_follow_the_docs() {
+        let mut f = asking(None);
+        f.session_id = "s_main".into();
+        let lines = sent(|ui, cmds| {
+            ui.input = "use the other file".into();
+            enter(&mut f, ui, cmds, 1);
+            ui.input = "and then run it".into();
+            enter(&mut f, ui, cmds, 1);
+            queue_pick(&f, ui, 0);
+            ui.input = "use the third file".into();
+            enter(&mut f, ui, cmds, 1);
+            queue_drop(&mut f, ui, cmds, 1, 1);
+            ui.input = "and then run it again".into();
+            enter(&mut f, ui, cmds, 1);
+            interrupt(&mut f, ui, cmds, 2);
+        });
+        let text = |t: &str| json!([{ "type": "text", "text": t }]);
+        assert_eq!(lines[0], json!({ "id": "c_c001", "command": "steer", "args": { "content": text("use the other file") } }));
+        assert_eq!(lines[2], json!({ "id": "c_c003", "command": "steer_amend", "args": { "command_id": "c_c001", "content": text("use the third file") } }));
+        assert_eq!(lines[3], json!({ "id": "c_c004", "command": "steer_drop", "args": { "command_id": "c_c002" } }));
+        assert_eq!(lines[5], json!({ "id": "c_c006", "command": "cancel" }));
+        // the pending approval is denied by cancel, the call is cancelled, the queue starts the next turn
+        assert!(f.pending.is_empty() && f.running && f.queue.is_empty());
+        let t = f.turns.last().unwrap();
+        assert_eq!(t.prompt, "use the third file\n\nand then run it again");
+        assert!(matches!(f.turns[0].blocks.last(), Some(Block::Done(s)) if s.starts_with("interrupted")));
     }
 }
