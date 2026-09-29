@@ -171,8 +171,19 @@ already.
 |---|---|---:|---:|---:|---:|---:|
 | rusqlite, SQLite bundled | Fiber keeps a derived database, such as for cross-session search; today listing sessions reads the logs (`docs/state.md`) | 2,236 | 1,984 | ~0 | 14 | 2,268 |
 | pulldown-cmark | the terminal UI renders markdown ([Epic: TUI](https://github.com/aakshintala/fiber/issues/82)) | 428 | 384 | ~0 | 4 | 724 |
+| image, with only the png, jpeg, gif and webp codecs | `read` resizes an image to a provider's limit (`docs/model-routing.md`, "Image limits"); the busy-session memory budget must allow a decode | 148,448 | 148,160 | 157,120 | 23 | 1,410 |
 
 rusqlite carries SQLite's C source.
+
+The image row is a decode and resize of a 4000 by 3000 JPEG and PNG, measured
+on September 29, 2026. It is pure Rust, and its licences and advisories pass.
+Its memory follows pixel count: an 81-megapixel PNG of 1.2 MB peaks at 534,700
+KiB on Linux x86_64. That is far over the 24 MiB busy-session budget
+(`docs/performance.md`), so the crate is not admitted until that is decided.
+Separate crates (zune-jpeg, png, gif, image-webp, fast_image_resize and
+jpeg-encoder) peak at 67,884 KiB for the same workload, with 28 crates and a
+4,994 KiB binary. The workload is `research/dependency-rss`, and the
+comparison is `research/image-limits/README.md`.
 
 Syntax highlighting is the terminal UI's decision. The obvious crate, syntect,
 costs 8,704 KiB on Linux x86_64 just to load its syntax definitions. It has 44

@@ -1,0 +1,36 @@
+{
+ "vendor": "openai-chat",
+ "case": "noise-2400",
+ "file_bytes": 17283783,
+ "base64_bytes": 23045044,
+ "status": 200,
+ "usage": {
+  "prompt_tokens": 6782,
+  "completion_tokens": 109,
+  "total_tokens": 6891,
+  "prompt_tokens_details": {
+   "cached_tokens": 0,
+   "audio_tokens": 0
+  },
+  "completion_tokens_details": {
+   "reasoning_tokens": 92,
+   "audio_tokens": 0,
+   "accepted_prediction_tokens": 0,
+   "rejected_prediction_tokens": 0
+  }
+ },
+ "error": null,
+ "text": null,
+ "answer": [
+  {
+   "index": 0,
+   "message": {
+    "role": "assistant",
+    "content": "2400 \u00d7 3200 pixels.",
+    "refusal": null,
+    "annotations": []
+   },
+   "finish_reason": "stop"
+  }
+ ]
+}

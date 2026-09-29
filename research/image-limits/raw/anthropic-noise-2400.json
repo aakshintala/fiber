@@ -1,0 +1,14 @@
+{
+ "vendor": "anthropic",
+ "case": "noise-2400",
+ "file_bytes": 17283783,
+ "base64_bytes": 23045044,
+ "status": 400,
+ "usage": {},
+ "error": {
+  "type": "invalid_request_error",
+  "message": "messages.0.content.0.image.source.base64: image exceeds 10 MB maximum: 23045044 bytes > 10485760 bytes"
+ },
+ "text": "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":\"messages.0.content.0.image.source.base64: image exceeds 10 MB maximum: 23045044 bytes > 10485760 bytes\"},\"request_id\":\"req_011CfXTG86KbAv5RPn5Vq6Hz\"}",
+ "answer": null
+}

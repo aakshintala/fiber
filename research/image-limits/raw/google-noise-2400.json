@@ -1,0 +1,40 @@
+{
+ "vendor": "google",
+ "case": "noise-2400",
+ "file_bytes": 17283783,
+ "base64_bytes": 23045044,
+ "status": 200,
+ "usage": {
+  "promptTokenCount": 1116,
+  "candidatesTokenCount": 15,
+  "totalTokenCount": 1131,
+  "promptTokensDetails": [
+   {
+    "modality": "TEXT",
+    "tokenCount": 27
+   },
+   {
+    "modality": "IMAGE",
+    "tokenCount": 1089
+   }
+  ],
+  "serviceTier": "standard"
+ },
+ "error": null,
+ "text": null,
+ "answer": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "The width and height are 10,000 pixels each.",
+      "thoughtSignature": "EnMKcQFpFH0Tl73KYpB+Xzrw6K1p1Fs4hAGbYR+de8MUUP9KX2X2LdumW1Rqd9efruAcJgNvE5/wnnejLj3MjW/lDefVMZexFI2YN8xJr6H8doH5T1IG3p26xVhHM7nkcgMnzo1cnHz4tywHXnUFefPRi1WL"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "index": 0
+  }
+ ]
+}

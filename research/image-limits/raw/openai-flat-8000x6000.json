@@ -1,0 +1,16 @@
+{
+ "vendor": "openai",
+ "case": "flat-8000x6000",
+ "file_bytes": 949804,
+ "base64_bytes": 1266408,
+ "status": 400,
+ "usage": {},
+ "error": {
+  "message": "The image you provided requires 47000 patches after processing, exceeding the limit of 30000. Please resize the image and try again.",
+  "type": "invalid_request_error",
+  "param": "input",
+  "code": "invalid_value"
+ },
+ "text": "{\n  \"error\": {\n    \"message\": \"The image you provided requires 47000 patches after processing, exceeding the limit of 30000. Please resize the image and try again.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"input\",\n    \"code\": \"invalid_value\"\n  }\n}",
+ "answer": null
+}

@@ -1,0 +1,40 @@
+{
+ "vendor": "google",
+ "case": "small-gif",
+ "file_bytes": 56801,
+ "base64_bytes": 75736,
+ "status": 200,
+ "usage": {
+  "promptTokenCount": 1091,
+  "candidatesTokenCount": 17,
+  "totalTokenCount": 1108,
+  "promptTokensDetails": [
+   {
+    "modality": "TEXT",
+    "tokenCount": 27
+   },
+   {
+    "modality": "IMAGE",
+    "tokenCount": 1064
+   }
+  ],
+  "serviceTier": "standard"
+ },
+ "error": null,
+ "text": null,
+ "answer": [
+  {
+   "content": {
+    "parts": [
+     {
+      "text": "The image is 400 pixels wide and 300 pixels high.",
+      "thoughtSignature": "EnMKcQFpFH0TCzN1R7rWr0frmF9HTGewNN5YtaEn9Z6fGjlb5XQwcOQhHlNorR/CbZ2wOAr5wtC7A0iKZ/sZvCD3iX3OGQv/miOeqB2OBv+vCjps9veQ4+MQhfetgnTffsJpdfwq+EnHfw2z4m1mTniBVsKb"
+     }
+    ],
+    "role": "model"
+   },
+   "finishReason": "STOP",
+   "index": 0
+  }
+ ]
+}

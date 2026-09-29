@@ -182,6 +182,28 @@ shape stays in the provider's package rather than in the protocol. When it
 runs, and what the model and the person see, is `docs/tools.md`, "Provider
 quota".
 
+## Image limits
+
+What each protocol does with an image in a request. `read` returns an image
+part (`docs/tools.md`, "read") and the provider module keeps it inside the
+limits below.
+
+| Protocol | Largest dimension | Largest encoded image | Images per request | The vendor downscales |
+|---|---|---|---|---|
+| `anthropic-messages` | 8000 px; 2000 px per image once a request holds more than 20 | 10 MB as base64 (5 MB on Bedrock and Google Cloud); 32 MB per request | 600, or 100 for a model with a 200k-token context | yes, to 2576 px and 4784 tokens on Claude 4.7 and later, 1568 px and 1568 tokens on other models; not for a computer-use or browser-use `tool_result` image |
+| `openai-responses`, `openai-completions` | none; 30,000 patches of 32 px per image | 512 MB per request | 1,500 | at `detail: high` to 2048 px and 2,500 patches; at the default detail it rejects an image over 30,000 patches |
+| `google-generative-ai` | none stated | 20 MB per request stated; a 23 MB inline request was accepted | 3,600 | yes, tiles of 768 px |
+
+Sources: `platform.claude.com/docs/en/build-with-claude/vision`,
+`developers.openai.com/api/docs/guides/images-vision` and
+`ai.google.dev/gemini-api/docs/image-understanding`. A request with an image
+over 8000 px to `claude-sonnet-5-5`, or over 30,000 patches to `gpt-6-luna`
+(8000 by 6000 px is 47,000), fails with a 400 that names the limit;
+`gemini-3.1-flash-lite` took 9000 by 9000 px. Anthropic and Google bill after
+they resize. Anthropic, OpenAI and Google all took a GIF; Google's
+documentation does not list GIF. The measurements are in
+`research/image-limits/README.md`.
+
 ## Naming a model
 
 A session's stored model reference is always `provider/model`, for example
