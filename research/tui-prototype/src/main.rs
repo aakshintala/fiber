@@ -2372,6 +2372,7 @@ struct Args {
     verify_copy: bool,
     bench: bool,
     no_pending: bool,
+    hover: bool,
 }
 fn args() -> Args {
     let mut a = Args {
@@ -2394,6 +2395,7 @@ fn args() -> Args {
         verify_copy: false,
         bench: false,
         no_pending: false,
+        hover: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(x) = it.next() {
@@ -2416,8 +2418,9 @@ fn args() -> Args {
             "--verify-copy" => a.verify_copy = true,
             "--paging-bench" => a.bench = true,
             "--no-pending" => a.no_pending = true,
+            "--hover" => a.hover = true,
             "-h" | "--help" => {
-                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
+                println!("tui-prototype [FIXTURE] [--speed N] [--static] [--no-pending] [--reduced-motion] [--hover] [--commands FILE] [--log-input FILE] [--wheel-lines N] [--lua-renderer FILE.lua [--lua-uncached]] [--paged [--window SCREENS] [--page-lines N] [--verify-copy]] [--paging-bench] [--stats FILE --exit-after S [--warmup S] [--diff-audit]]");
                 std::process::exit(0);
             }
             p => a.path = p.into(),
@@ -2432,6 +2435,17 @@ fn args() -> Args {
 // button presses, drags and releases, in SGR form; not 1003, which reports every motion
 const MOUSE_ON: &str = "\x1b[?1000h\x1b[?1002h\x1b[?1006h";
 const MOUSE_OFF: &str = "\x1b[?1006l\x1b[?1002l\x1b[?1000l";
+// `--hover`: every motion too, so the target under the pointer can be tinted
+const HOVER_ON: &str = "\x1b[?1003h";
+const HOVER_OFF: &str = "\x1b[?1003l";
+
+/// The hover tint: the cell's own background a little lighter.
+fn lift(c: Color) -> Color {
+    match c {
+        Color::Rgb(r, g, b) => Color::Rgb(r.saturating_add(0x14), g.saturating_add(0x14), b.saturating_add(0x14)),
+        _ => rgb(0x1e1e26),
+    }
+}
 
 /// `--no-pending`: drops the requests nobody answered and the calls that asked them, drops the
 /// open turn's calls that never finished, and ends that turn, so the screen opens settled.
@@ -2497,9 +2511,15 @@ fn main() -> io::Result<()> {
     let mut out = Counting(BufWriter::with_capacity(1 << 16, io::stdout()));
     execute!(out, terminal::EnterAlternateScreen)?;
     out.write_all(MOUSE_ON.as_bytes())?;
+    if a.hover {
+        out.write_all(HOVER_ON.as_bytes())?;
+    }
     let mut term = Terminal::new(CrosstermBackend::new(out))?;
     let res = run(&a, &events, &mut f, &mut next, &mut term, t0, pager, open_index);
     let b = term.backend_mut();
+    if a.hover {
+        b.write_all(HOVER_OFF.as_bytes())?;
+    }
     b.write_all(MOUSE_OFF.as_bytes())?;
     execute!(b, terminal::LeaveAlternateScreen, crossterm::cursor::Show)?;
     terminal::disable_raw_mode()?;
@@ -2556,6 +2576,12 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let mut conv_gen: u64 = 0;
     let mut panel_cache: Option<Vec<Row>> = None;
     let mut hits: Vec<(u16, u16, u16, Act)> = vec![];
+    // `--hover`: the pointer's cell, the target tinted in the last frame, the target under the
+    // pointer now, and motion events and target changes in the measurement window
+    let mut ptr: Option<(u16, u16)> = None;
+    let mut hovered: Option<(u16, u16, u16)> = None;
+    let mut under: Option<(u16, u16, u16)> = None;
+    let (mut motions, mut hover_changes) = (0u64, 0u64);
     let mut dirty = true;
     let mut geom = (0u16, 0u16); // conversation column width, screen width
     // where the conversation's rows sit: first row shown, blank rows above it, rows shown,
@@ -2883,6 +2909,14 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                         }
                     }
                 }
+                // the target under the pointer, found as a click finds it
+                hovered = ptr.and_then(|(x, y)| hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1)).map(|h| (h.0, h.1, h.2));
+                if let Some((y, x0, x1)) = hovered.filter(|&(y, _, _)| y < rows) {
+                    for x in x0..x1.min(cols) {
+                        let c = &mut buf[(x, y)];
+                        c.set_bg(lift(c.bg));
+                    }
+                }
             })?;
             let frame_buf = (links_at != (conv_gen, start, ui.ctx_view, ui.search.is_some()) || a.audit).then(|| completed.buffer.clone());
             if a.audit && window.is_some() {
@@ -3003,8 +3037,22 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
         };
         let ts = vnow;
         for ev in evs {
+            if let (true, Ev::Mouse(kind, x, y, _)) = (a.hover, ev) {
+                ptr = Some((x, y));
+                if kind == Mouse::Move {
+                    // a redraw only when the target under the pointer changes
+                    let h = hits.iter().find(|(hy, x0, x1, _)| *hy == y && x >= *x0 && x < *x1).map(|h| (h.0, h.1, h.2));
+                    if window.is_some() {
+                        motions += 1;
+                        hover_changes += (h != under) as u64;
+                    }
+                    under = h;
+                    dirty |= h != hovered;
+                    continue;
+                }
+            }
             // sideways wheel and other buttons change nothing, so they draw no frame
-            if matches!(ev, Ev::Mouse(Mouse::Other, ..)) {
+            if matches!(ev, Ev::Mouse(Mouse::Other | Mouse::Move, ..)) {
                 continue;
             }
             dirty = true;
@@ -3284,7 +3332,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
                                 }
                             }
                         }
-                        Mouse::Other => {}
+                        Mouse::Other | Mouse::Move => {}
                     }
                 }
             }
@@ -3413,6 +3461,7 @@ fn run(a: &Args, events: &[Value], f: &mut Fold, next: &mut usize, term: &mut Te
     let _ = writeln!(s, "cpu_s\t{:.4}\ncpu_pct\t{:.3}", r1.0 - r0.0, 100.0 * (r1.0 - r0.0) / secs);
     let _ = writeln!(s, "vol_csw\t{}\ninvol_csw\t{}", r1.1 - r0.1, r1.2 - r0.2);
     let _ = writeln!(s, "idle_wakeups\t{}\ninterrupt_wakeups\t{}", r1.3 - r0.3, r1.4 - r0.4);
+    let _ = writeln!(s, "motions\t{motions}\nhover_changes\t{hover_changes}\nhover_changes_per_s\t{:.1}", hover_changes as f64 / secs);
     if a.audit {
         let _ = writeln!(s, "audit_frames\t{}\ncells_per_frame\t{:.2}\ncells_max\t{}\nrows_max\t{}\nrows_hist\t{:?}", audit.frames, audit.cells as f64 / audit.frames.max(1) as f64, audit.cells_max, audit.rows_max, audit.rows_hist);
     }

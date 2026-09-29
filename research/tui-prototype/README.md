@@ -18,6 +18,7 @@ cargo run --release -- fixtures/session.jsonl
 | `--speed N` | plays the fixture's `ts` gaps N times faster; the default, 12, plays it in about 30 seconds |
 | `--static` | loads the whole file at once |
 | `--reduced-motion` | keeps the working line's word still; `FIBER_REDUCED_MOTION=1` does the same |
+| `--hover` | also turns on mode 1003, every mouse motion, and tints the click target under the pointer; see "Hover's cost" |
 | `--stats FILE` | writes the measurement below to FILE on exit |
 | `--exit-after S` | exits after S seconds |
 | `--warmup S` | starts the measurement window after S seconds; default 2 |
@@ -39,7 +40,7 @@ The key map is under "Stage 2".
 
 `cargo run --release --bin from_claude -- <session.jsonl> <out.jsonl> [--max-bytes N]` converts a Claude Code session (main thread only) into the same kind of durable-only fixture, stopping after the turn where the output passes N bytes (default 12 MB, so a normal session converts whole) and turning each Claude Code compaction into a handoff, and adding one wherever the context would pass 400k without one. `fixtures/real.jsonl` is that conversion of one of the owner's own sessions. It is kept out of git (`.gitignore`) because it is a private session, so regenerate it locally from a session under `~/.claude/projects/`; `demo/package.sh` adds it to the zip when the file exists.
 
-`./measure.sh [runs] [seconds]` runs the measurement below inside tmux at 160 by 48.
+`./measure.sh [runs] [seconds]` runs the measurement below inside tmux at 160 by 48. `./measure_hover.sh [runs] [seconds] [rate]` runs the hover measurement.
 
 ## What stage 1 covers
 
@@ -84,6 +85,32 @@ Measured on macOS arm64 (Darwin 25.6.0), inside tmux 160 columns by 48 rows, rel
 - Idle has no timer: the loop blocks in `event::poll` with no deadline, so it made no frame, wrote no byte and had no idle wakeup.
 - Each glimmer frame still re-fits every visible row into a fresh buffer and diffs all 7,680 cells, although the conversation's rows are cached between events. How much of the 1.8% that costs was not measured; a frame that repaints only the working line would cost less.
 - The CPU of the terminal emulator drawing these bytes is not counted.
+
+## Hover's cost
+
+`--hover` also turns on mode 1003, so the terminal reports every motion as `CSI < 35 ; x ; y M`. The parser reads it as a motion with no button, finds the click target under the pointer with the same list and lookup a click uses, and tints that target's row or span: each cell's own background, 20 levels lighter. A frame is drawn only when the target under the pointer changes. Reduced motion changes nothing: a tint is not motion. Without `--hover` a motion report is parsed and dropped, drawing nothing.
+
+Measured on macOS arm64 (Darwin 25.6.0), inside tmux 3.6b at 160 by 48, release build, `fixtures/idle.jsonl --static` (a settled session, no timer), median of 5 runs of 20 seconds each, with the counters of "The glimmer's cost". `./measure_hover.sh` sends motion reports through one tmux control-mode client, one `send-keys -H` per report, at 150 a second on a fixed schedule. The sweep moves the pointer one row down and 7 columns right per report, over the conversation and the panel. "One target" moves along the text of one tool group's summary line.
+
+| | Hover, pointer still | Hover, sweep | Hover, one target | No hover, sweep sent anyway |
+|---|---|---|---|---|
+| Motion reports per second | 0 | 150 | 150 | 150 |
+| Target changes per second | 0 | 26.7 | 0 | none |
+| Frames per second | 0 | 25.5 | 0 | 0 |
+| Bytes written per second | 0 | 6,508 | 0 | 0 |
+| Bytes per frame | none | 255 | none | none |
+| CPU | 0.003% of one core | 6.8% | 2.1% | 1.7% |
+| Involuntary context switches in 20 s | 1 | 4,551 | 3,008 | 3,014 |
+| Idle wakeups (IDLEW) in 20 s | 0 | 520 | 0 | 0 |
+| Interrupt wakeups in 20 s | 1 | 1,556 | 1 | 2 |
+
+- Idle is still zero. With the pointer still, mode 1003 sends nothing, so the process made no frame, wrote no byte and had no idle wakeup.
+- Receiving a motion report costs about 115 µs of CPU, whether or not hover is on (1.7% of a core at 150 a second). That is the wakeup, the read and one pass of the loop, not the parse. A real terminal sends none of these without mode 1003, so this is the cost hover adds for every cell the pointer crosses.
+- Motion that stays on one target costs about 0.4 points more than the same reports without hover, about 27 µs a report for the lookup. It is inside the spread of the runs (1.9 to 2.3% against 1.6 to 2.2%) and draws nothing.
+- Each target change costs one frame, about 1.8 ms of CPU and 255 bytes, the same per-frame cost as a glimmer frame: the frame re-fits every visible row and diffs every cell, although only one or two rows change. 26.7 changes a second drew 25.5 frames, since the 16 ms frame gap merges changes that come closer together. The frame gap's timer is also where the sweep's idle wakeups come from.
+- Most of the screen is not a target, so the sweep changed target on 18% of its reports. A pointer moving along a ledger or down the panel, where every row is a target, would change target more often.
+
+Caveats: the 150 reports a second are tmux's delivery of commands written on a schedule; the process counted exactly 3,000 in every 20-second window, but tmux may bunch them. A real terminal's rate depends on how fast the pointer moves, one report per cell crossed. The CPU of tmux, of the injecting script and of the terminal emulator drawing the frames is not counted. Timings do not generalise to Linux; byte, frame and change counts do.
 
 ## Findings
 
