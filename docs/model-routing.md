@@ -202,6 +202,8 @@ A provider runs Lua in four functions at most: `models()`, `quota()`,
 A provider may declare a Lua `sign()` function for a scheme that signs each
 request, such as AWS SigV4. It receives the method, the URL, the headers and
 the SHA-256 of the body, and returns headers to add. It cannot change the body.
+SigV4's chain of HMACs uses the `host.hmac_sha256` host call
+(`docs/extensions.md`, "Host calls").
 It declares a timeout like every callback (`docs/extensions.md`, "How an
 extension runs"), and a retry signs again.
 

@@ -221,6 +221,8 @@ host.oauth.callback(opts)          -- serve one request on localhost; returns it
 host.oauth.pkce()                  -- returns { verifier, challenge }
 host.oauth.poll(opts)              -- poll a device-code token endpoint; returns the token reply
 host.oauth.refresh(fn)             -- lock this provider's credential file, re-read it, refresh once
+host.sha256(bytes)                 -- SHA-256; returns hex
+host.hmac_sha256(key, bytes)       -- HMAC-SHA256; returns raw bytes
 json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none built in)
 ```
 
@@ -265,6 +267,10 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   credential and re-reads it. It calls `fn` only if the token still needs
   refreshing, then stores what `fn` returns, so two sessions never refresh
   one token twice.
+- **`host.sha256`** and **`host.hmac_sha256`** exist so `sign()` never needs
+  crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
+  signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
+  and hex-encodes only the last.
 
 ## State
 

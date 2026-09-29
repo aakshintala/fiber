@@ -125,6 +125,10 @@ back; it never learns whether the answer was Fiber's or an extension's.
 "send this to a model and stream back actions." A provider is an extension
 over a native wire protocol; see `docs/model-routing.md` and
 [ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md).
+A provider extension's Lua functions, `models()`, `quota()`, `credential()`
+and `sign()`, reach the `provider` module through this seam, wired by
+`extensions`, so `provider` never depends on `extensions`. `sign()` is the one
+called on the request path.
 
 ### Hook seam
 
