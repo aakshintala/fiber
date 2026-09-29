@@ -112,3 +112,6 @@ if w=='ptc':
     o=req({**B('What is the weather in Paris? Use the tool.',tools=[TOOL],max_tokens=200)},'stream tool caller',stream=True)
     print([e['block'] for e in o['events'] if e['event']=='content_block_start'])
     save('ptc')
+if w=='thinking-enabled':
+    o=req(B('What is 17*23?',thinking={'type':'enabled','budget_tokens':1024},max_tokens=2000),'thinking enabled'); print(o['status'],json.dumps(o['body']))
+    json.dump(RAW,open('raw/thinking-enabled.json','w'),indent=1)

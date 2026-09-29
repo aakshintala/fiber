@@ -49,20 +49,22 @@ installs these five. How extensions arrive and stay current is
 
 ### Anthropic messages wire facts
 
-- A stream ends with `message_delta`, which carries the `stop_reason`, and then
-  `message_stop`. `message_stop` is the last event. The parser treats
-  `message_stop` as the end of the stream.
-- `/v1/messages?beta=true` behaves the same as `/v1/messages`: same status,
-  headers, body and events. Fiber posts to `/v1/messages`.
-- `tool_choice` with no `tools` is a 400 for `any` and for `tool`, and accepted
-  for `auto` and `none`. Fiber sends no `tool_choice` when there are no tools.
-- A `tool_use` block carries `caller`. It is `{"type": "direct"}` for a client
-  tool call. When server-side code execution calls the tool, it is
-  `{"type": "code_execution_20250825", "tool_id": "srvtoolu_..."}`. Fiber does
-  not send `caller` when it replays a block: the API accepts the block without
-  it.
-- A request with more than 4 `cache_control` blocks, counted across `tools`,
-  `system` and `messages`, is a 400.
+Measured on `claude-sonnet-5-5` against api.anthropic.com
+(`research/anthropic-messages-probe`).
+
+- In 7 successful streams (text, tool use, `max_tokens`, `stop_sequence`,
+  adaptive thinking), `message_delta` carried the `stop_reason` and was followed
+  by `message_stop`, the last event.
+- `/v1/messages?beta=true` returned the same status, header names, body keys and
+  event names as `/v1/messages`.
+- Without `tools`, `tool_choice` of `auto` or `none` returned 200. `any` and
+  `tool` returned 400.
+- A `tool_use` block carries `caller`: `{"type": "direct"}` for a client tool
+  call, and `{"type": "code_execution_20250825", "tool_id": "srvtoolu_..."}`
+  when server-side code execution calls the tool. Replaying the block without
+  `caller` returned 200. An invalid `caller` returned 400.
+- More than 4 `cache_control` blocks across `tools`, `system` and `messages`
+  returned 400.
 
 ## What a provider extension declares
 
