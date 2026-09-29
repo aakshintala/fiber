@@ -664,6 +664,12 @@ late is a second `usage_recorded` with the same `generation_id`, replacing the
 first. Consumers sum; resume rebuilds the ledger by folding. No pending queue,
 no watermarks, no reconciliation file.
 
+OpenRouter returns `cost` inline on every completed call, streaming or not, and it
+never differs from its generation lookup, so a completed call never needs the
+second record. A stream that ends before its final chunk carries no `cost`; the
+lookup returns one within about 30 seconds, and until then the record has
+`cost` null.
+
 ### Preamble
 
 Behaviour is `docs/prompt-cache.md`.
