@@ -873,9 +873,8 @@ project. Messaging a session's own delegates is `delegate_message`
 | `session_message` | `id`, `text` | Sends a session message to one running session. |
 
 **`session_list` shows running sessions only.** Each entry has the session's
-id, its name, its workspace, its parent's id when it is a delegate, and
-whether a turn is running. A session is running when its socket accepts a
-connection (`docs/invocation.md`, "Processes"). The tool declares `reads`.
+id, its name, its workspace, and its parent's id when it is a delegate. A
+session is running when its socket accepts a connection (`docs/invocation.md`, "Processes"). The tool declares `reads`.
 
 **`session_message` addresses a session by its full id.** The model lists
 sessions first, so a name or a prefix would add ambiguity and save nothing.
@@ -889,12 +888,12 @@ the target accepted the message; the target's `before_message` may still
 refuse it, and a refused message is neither logged nor applied. Otherwise it
 fails with one of:
 
-- `not_running`: nothing accepts on the target's socket
-- `unknown_session`: no session with that id exists in Fiber home
-- `own_session`: the id is the sender's own
+- `unreachable`: no running session has this id, whether it exited or never
+  existed
 - `closing`: the target was sent `close` (`docs/invocation.md`)
-- `hop_limit`: the message's hop count exceeds the target's
-  `session_message.hop_limit` (below)
+
+A session may message itself. The message arrives as steering at its own next
+step, which lets a test drive the whole path with one session.
 
 A message for a session that has exited belongs on the ticket or with
 whoever orchestrates the work. Fiber keeps no mailbox. An extension that runs
@@ -916,30 +915,19 @@ under its own mode.
 
 **Sending declares `writes`, not reversible.** It changes what another session
 does. So a `readonly` root session asks to leave `readonly` first, a
-`readonly` delegate's send is refused (`docs/permissions.md`, "Leaving readonly"), and
-in `auto` the reviewer judges the send. Without it, a `readonly` session could ask a `yolo`
-peer to make the change for it.
+`readonly` delegate's send is refused (`docs/permissions.md`, "Leaving
+readonly"), and in `auto` the reviewer judges the send. Without it, a
+`readonly` session could ask a `yolo` peer to make the change for it.
 
-**A hop count stops runaway exchanges.** Every session message carries
-`hops`:
+**Nothing limits how many messages sessions exchange.** Two sessions can
+wake each other indefinitely while no person watches. An extension can refuse
+messages in `before_message`; how much a session may spend is
+[Token and cost display, and spending budgets](https://github.com/aakshintala/fiber/issues/192).
 
-- A turn's hop count is the largest `hops` among the session messages it
-  takes in, as input or as steering. It is raised to the hop count of the
-  turn that started any job whose news it takes in, so a job cannot reset it.
-  A turn an extension's `host.drive` starts, or a handoff turn, takes the
-  count of the turn it came from.
-- A person's or a driver's message in the turn sets its count to 0.
-- A message sent from a turn carries the turn's count plus 1.
-- The target rejects a message whose `hops` exceeds its
-  `session_message.hop_limit`, default 10 (`docs/configuration.md`), and the call
-  fails with `hop_limit`.
-
-Each hop can wake a turn, so the limit bounds how many turns two or more
-sessions spend on each other with no person in the loop.
-
-**Delegates on another harness take part through their parent.** The parent
-binds the delegate's socket and relays both ways ("Delegates on another
-harness", `docs/delegates.md`).
+**Delegates on another harness receive through their parent.** The parent
+binds the delegate's socket and delivers what arrives; the delegate sends
+through `fiber mcp serve` (`docs/delegates.md`, "Delegates on another
+harness").
 
 Both tools are declared in every session, so they never differ between
 sessions. Their definitions count toward the built-in budget ("Size

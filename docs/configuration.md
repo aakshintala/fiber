@@ -95,7 +95,6 @@ set the key.
 | `reviewer.model` | a small, fast model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
-| `session_message.hop_limit` | 10 | no | The largest hop count a session message may carry (`docs/tools.md`, "Messaging other sessions"). |
 | `handoff.enabled` | true | yes | Whether automatic handoff runs (`docs/handoff.md`). |
 | `handoff.tokens` | 400000 | yes | The token trigger. |
 | `handoff.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |

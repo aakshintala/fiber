@@ -173,7 +173,6 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 | `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; or `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
 | `from_session_id` | string | no | the sending session's id, when `source` is `session` |
-| `hops` | integer | no | the message's hop count, when `source` is `session` |
 | `command_id` | string | yes | the id of the `prompt`, `steer` or `message` command that sent it |
 
 ### `changed_by`
@@ -307,7 +306,6 @@ Durable. A steering message a running turn received at a step boundary.
 | `source` | string | yes | as in "Where a message came from" |
 | `extension` | string | no | as in "Where a message came from" |
 | `from_session_id` | string | no | as in "Where a message came from" |
-| `hops` | integer | no | as in "Where a message came from" |
 | `command_id` | string | yes | the id of the `steer` or `message` command that sent it |
 | `changed_by` | `changed_by` | no | when a hook rewrote the message |
 

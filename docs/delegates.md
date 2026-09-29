@@ -340,24 +340,17 @@ in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):
   each of the delegate's runs starts and unlinks it when the run ends. It
   removes a stale socket first, as a lock holder does (`docs/state.md`,
   "Sockets"). `session_list` lists the delegate like any other. The socket
-  accepts two commands: `message` from other sessions, and `session_message`
-  from the delegate's own `fiber mcp serve` (`docs/invocation.md`). After the
-  parent is sent `close`, `message` is rejected `closing`.
+  accepts only `message` (`docs/invocation.md`). After the parent is sent
+  `close`, it is rejected `closing`.
 - **A message in is delivered as `delegate_message` delivers one.** A harness
   that takes messages while running gets it as a line on its input. For any
   other harness it waits and is delivered as a resume ("Talking to a
   delegate"). The parent frames it with the sender's id and name.
-- **The parent keeps the delegate's hop count.** It is the largest `hops`
-  among the session messages delivered into the current run, the one that
-  started it included. A `delegate_message` from the parent carries the hop
-  count of the parent's turn. A run the parent starts with no session message
-  begins at 0.
 - **The delegate sends through `fiber mcp serve`.** It is a stdio MCP server
-  offering `session_list` and `session_message`. `session_list` reads
-  `~/.fiber/run/` itself. `session_message` sends `session_message` into the
-  delegate's socket, and the parent stamps it with the delegate's hop count
-  plus 1 and sends `message` to the target. The server lists no tools unless
-  its environment names a Fiber delegate, so it is inert anywhere else.
+  offering `session_list` and `session_message`, which work as the built-in
+  tools do, with the delegate's id as the sender. The server lists no tools
+  unless its environment names a Fiber delegate, so it is inert anywhere
+  else.
 - **The harness judges the send.** Calling `session_message` is a tool call
   inside the harness, judged in the harness's own mode, as its other calls
   are ("Permissions"). Fiber's reviewer and `before_message` do not reach
@@ -369,7 +362,7 @@ switched on: Claude Code's `SendMessage` and `ListAgents` reach its own
 subagents and other Claude Code sessions, and `session_message` reaches Fiber
 sessions only, by a Fiber session id.
 
-The parent stays on the path because it holds the one input the harness
+The parent stays on the receiving path because it holds the one input the harness
 documents. Probed on Claude Code 2.1.285, headless:
 
 - A message from another Claude Code session, sent with `SendMessage` to a
