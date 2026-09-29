@@ -143,7 +143,7 @@ raw kept. OpenAI about $0.01 across both protocols, Google about $0.03.
   three protocols take the PDF natively in the tool result (Anthropic, OpenAI Responses, Gemini). On
   `openai-completions` the PDF is not accepted there, but a native `file` part in a user message after the tool
   result works and keeps the cache; rendered pages would also have to go in a user message, because
-  an image in the tool message was accepted but reported unseen.
+  an image in the tool message was accepted (200) but the model did not answer about it in two requests.
 - Anthropic's user-part-after-result and OpenAI's are both accepted too, so "in the result" is
   chosen, not forced, on those two.
 - Scope: one small text PDF and one one-page scan per shape; one model per vendor; sizes and page
