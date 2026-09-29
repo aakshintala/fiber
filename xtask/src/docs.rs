@@ -126,17 +126,29 @@ fn normalise_label(label: &str) -> String {
         .to_lowercase()
 }
 
-/// Reference definitions, `[label]: target` at the start of a line:
-/// (offset, normalised label, target).
+/// Reference definitions, `[label]: target` at the start of a line, with
+/// the target on that line or the next: (offset, normalised label, target).
+/// Every inline, full, collapsed and shortcut reference to a label goes
+/// through its definition, so checking the definitions checks them all.
 fn reference_definitions(text: &str) -> Vec<(usize, String, &str)> {
+    let mut lines = Vec::new();
     let mut offset = 0;
-    let mut found = Vec::new();
     for line in text.split('\n') {
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        if let Some(rest) = line.trim_start_matches(' ').strip_prefix('[')
+        lines.push((offset, line));
+        offset += line.len() + 1;
+    }
+    let mut found = Vec::new();
+    for (k, (offset, line)) in lines.iter().enumerate() {
+        let body = line.trim_start_matches(' ');
+        let indent = line.len() - body.len();
+        if let Some(rest) = body.strip_prefix('[')
             && indent <= 3
             && let Some((label, after)) = rest.split_once("]:")
-            && let Some(target) = after.split_whitespace().next()
+            && let Some(target) = after.split_whitespace().next().or_else(|| {
+                lines
+                    .get(k + 1)
+                    .and_then(|(_, next)| next.split_whitespace().next())
+            })
         {
             found.push((
                 offset + indent,
@@ -144,7 +156,6 @@ fn reference_definitions(text: &str) -> Vec<(usize, String, &str)> {
                 target.trim_start_matches('<').trim_end_matches('>'),
             ));
         }
-        offset += line.len() + 1;
     }
     found
 }

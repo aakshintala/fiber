@@ -103,7 +103,7 @@ fn literal_start(c: char, it: &std::str::Chars<'_>) -> Option<Literal> {
             opening: 0,
             quote: '\'',
         }),
-        ('b', '\'') if char_literal(1) => Some(Literal::Quoted {
+        ('b', '\'') => Some(Literal::Quoted {
             opening: 1,
             quote: '\'',
         }),

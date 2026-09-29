@@ -61,6 +61,23 @@ fn a_reference_link_to_a_missing_file_or_anchor_fails() {
 }
 
 #[test]
+fn a_definition_whose_target_is_on_the_next_line_is_checked() {
+    let source = "A [shortcut] and a [collapsed][].\n\n[shortcut]:\n  missing.md\n[collapsed]:\ntarget.md#nope\n[fine]:\n   target.md#the-gate \"title\"\n";
+    assert_eq!(
+        check(source),
+        [
+            "docs/source.md:3: link to missing.md: no such file",
+            "docs/source.md:5: link to target.md#nope: no such anchor",
+        ]
+    );
+}
+
+#[test]
+fn a_definition_with_no_target_is_not_a_link() {
+    assert_eq!(check("[x]:\n\n[x]:"), Vec::<String>::new());
+}
+
+#[test]
 fn a_reference_with_no_definition_fails() {
     assert_eq!(
         check("[a][nowhere] and [Else][]\n"),
