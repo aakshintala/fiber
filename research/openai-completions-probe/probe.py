@@ -80,3 +80,10 @@ else:
     call('cc-last-tool-top', {'messages':U,'tools':tl2,'max_tokens':50,**R})
     call('cc-bogus-type', {'messages':[{'role':'user','content':[{'type':'text','text':'Say ok.','cache_control':{'type':'bogus'}}]}],'max_tokens':50,**R})
 print('spend est', round(spend,4), 'requests', n)
+if V == 'openrouter' and 'pinned' in sys.argv:
+    RS = 'The user greets me. ' * 60
+    P = {'provider':{'only':['OpenInference'],'allow_fallbacks':False}}
+    for nm, ex in [('none',{}),('reasoning',{'reasoning':RS}),('reasoning_content',{'reasoning_content':RS}),('reasoning_details',{'reasoning_details':[{'type':'reasoning.text','text':RS,'index':0,'format':'unknown'}]})]:
+        call('pinned-replay-'+nm, {'messages':U+[{'role':'assistant','content':'ok',**ex},{'role':'user','content':'Again.'}],'max_tokens':600,'reasoning':{'effort':'low'},**P})
+    call('effort-none-400', {'messages':U,'max_tokens':50,'reasoning':{'effort':'none'}})
+    print('spend est', round(spend,4), 'requests', n)

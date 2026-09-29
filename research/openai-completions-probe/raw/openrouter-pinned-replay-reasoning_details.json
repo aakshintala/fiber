@@ -1,0 +1,96 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   },
+   {
+    "role": "assistant",
+    "content": "ok",
+    "reasoning_details": [
+     {
+      "type": "reasoning.text",
+      "text": "The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. The user greets me. ",
+      "index": 0,
+      "format": "unknown"
+     }
+    ]
+   },
+   {
+    "role": "user",
+    "content": "Again."
+   }
+  ],
+  "max_tokens": 600,
+  "reasoning": {
+   "effort": "low"
+  },
+  "provider": {
+   "only": [
+    "OpenInference"
+   ],
+   "allow_fallbacks": false
+  }
+ },
+ "events": [],
+ "status": 200,
+ "headers": {
+  "Content-Type": "application/json"
+ },
+ "body": {
+  "id": "gen-1790672694-sIDc651M2FUfq1BpDdb6",
+  "object": "chat.completion",
+  "created": 1790672694,
+  "model": "z-ai/glm-5.3-flash",
+  "provider": "OpenInference",
+  "system_fingerprint": "vllm-dev-f9716369",
+  "service_tier": null,
+  "choices": [
+   {
+    "index": 0,
+    "logprobs": null,
+    "finish_reason": "stop",
+    "native_finish_reason": "stop",
+    "message": {
+     "role": "assistant",
+     "content": " ok",
+     "refusal": null,
+     "reasoning": "User wants \"ok\" again... likely a test of instruction-following vs copyright? No, just say it. But maybe this is the classic case where repeating is fine\u2014no restriction applies. Just comply.",
+     "reasoning_details": [
+      {
+       "type": "reasoning.text",
+       "text": "User wants \"ok\" again... likely a test of instruction-following vs copyright? No, just say it. But maybe this is the classic case where repeating is fine\u2014no restriction applies. Just comply.",
+       "format": "unknown",
+       "index": 0
+      }
+     ]
+    }
+   }
+  ],
+  "usage": {
+   "prompt_tokens": 383,
+   "completion_tokens": 45,
+   "total_tokens": 428,
+   "cost": 1.801e-05,
+   "is_byok": false,
+   "prompt_tokens_details": {
+    "cached_tokens": 315,
+    "cache_write_tokens": 0,
+    "audio_tokens": 0,
+    "video_tokens": 0
+   },
+   "cost_details": {
+    "upstream_inference_cost": 1.801e-05,
+    "upstream_inference_prompt_cost": 4.51e-06,
+    "upstream_inference_completions_cost": 1.35e-05
+   },
+   "completion_tokens_details": {
+    "reasoning_tokens": 42,
+    "image_tokens": 0,
+    "audio_tokens": 0
+   }
+  }
+ }
+}

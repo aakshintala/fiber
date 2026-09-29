@@ -1,0 +1,18 @@
+{
+ "request": {
+  "model": "z-ai/glm-5.3-flash",
+  "messages": [
+   {
+    "role": "user",
+    "content": "Say ok."
+   }
+  ],
+  "max_tokens": 50,
+  "reasoning": {
+   "effort": "none"
+  }
+ },
+ "events": [],
+ "status": 400,
+ "body": "{\"error\":{\"message\":\"Reasoning is mandatory for this endpoint and cannot be disabled.\",\"code\":400,\"metadata\":{\"provider_name\":null}}}"
+}
