@@ -465,7 +465,6 @@ any or all of them, running a verification gate afterwards, reporting a git
 change set — is orchestration that is identical for any agent binary, and a
 supervisor that knows only about Fiber is worth less than one that does not.
 
-## Not settled here
+## Related
 
-- The TUI's own shape:
-  [TUI: scrollback or full screen?](https://github.com/aakshintala/fiber/issues/15)
+- The terminal's own shape: `docs/tui.md`

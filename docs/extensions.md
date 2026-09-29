@@ -526,8 +526,9 @@ reach the session only as a client does. It reads the event stream,
 including what its session half sends with `host.emit`, and sends driver
 commands, including its own extension's commands. A crash in a TUI extension
 cannot stop the session (`docs/invocation.md`, "Processes"). What a TUI
-extension may draw, and through which seam, is the TUI's to settle, after
-[TUI: scrollback or full screen?](https://github.com/aakshintala/fiber/issues/15).
+extension may draw, and through which seam, is the TUI's to settle, in
+[TUI extension seams](https://github.com/aakshintala/fiber/issues/163). The
+terminal itself is `docs/tui.md`.
 A future GUI's extensions take the same shape.
 
 ## Loading, and cost when nothing is loaded

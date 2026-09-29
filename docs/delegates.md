@@ -92,7 +92,8 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 - The receipt says which of these happened.
 - A person reaches any delegate in the tree: the driver commands `steer` and
   `reply` take an optional `session_id`, and each parent forwards a command
-  addressed to a descendant down the tree.
+  addressed to a descendant down the tree. How the terminal shows and steers
+  delegates is `docs/tui.md`.
 - `delegate_message` acts only on the caller's own delegates, as `jobs` does.
 
 ## Identity and resume
@@ -252,5 +253,3 @@ The `job_*` kinds are unchanged. A delegate adds two kinds keyed by `job_id`, as
   [Harness extensions: running another agent as a delegate](https://github.com/aakshintala/fiber/issues/77).
 - Messaging a session that was not started as a delegate:
   [Intercom: messaging a session you did not start](https://github.com/aakshintala/fiber/issues/78).
-- Showing and steering delegates in the terminal:
-  [Epic: TUI](https://github.com/aakshintala/fiber/issues/82).
