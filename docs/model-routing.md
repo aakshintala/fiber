@@ -33,7 +33,7 @@ On OpenAI's own endpoint, `instructions` and a system message in `input`
 give the same answer and the same prompt cache, and switching between the two
 keeps the cached prefix. A function tool with no `strict` key is treated as
 `strict: true`: OpenAI makes every property required and adds
-`additionalProperties: false`. Fiber sends `strict` explicitly. Details:
+`additionalProperties: false`. Details:
 [research/openai-responses-probe](../research/openai-responses-probe/README.md).
 
 An extension cannot add a protocol. A vendor with a new wire format needs a
