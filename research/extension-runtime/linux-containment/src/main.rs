@@ -263,8 +263,8 @@ fn run_case(name: &str) {
             lua.set_memory_limit(8 * 1024 * 1024).unwrap();
             let f = lua.create_function(|lua, ()| { let s = vec![b'x'; 64 << 20]; lua.create_string(&s) }).unwrap();
             lua.globals().set("f", f).unwrap();
-            let r = lua.load("return pcall(f)").eval::<(bool, mlua::Value)>();
-            println!("RESULT {name} {:?}", r.map(|(ok, v)| (ok, format!("{v:?}").chars().take(80).collect::<String>())).map_err(|e| err_msg(&e)));
+            let r = lua.load("local ok, e = pcall(f) return ok, tostring(e)").eval::<(bool, String)>();
+            println!("RESULT {name} {:?}", r.map(|(ok, v)| (ok, v.lines().next().unwrap_or("").chars().take(100).collect::<String>())).map_err(|e| err_msg(&e)));
             println!("RESULT {name} vm_after={:?}", lua.load("return 1+1").eval::<i64>());
         }
         "oom_rust_create_table" => {
@@ -277,8 +277,8 @@ fn run_case(name: &str) {
                 #[allow(unreachable_code)] Ok(())
             }).unwrap();
             lua.globals().set("f", f).unwrap();
-            let r = lua.load("return pcall(f)").eval::<(bool, mlua::Value)>();
-            println!("RESULT {name} {:?}", r.map(|(ok, v)| (ok, format!("{v:?}").chars().take(80).collect::<String>())).map_err(|e| err_msg(&e)));
+            let r = lua.load("local ok, e = pcall(f) return ok, tostring(e)").eval::<(bool, String)>();
+            println!("RESULT {name} {:?}", r.map(|(ok, v)| (ok, v.lines().next().unwrap_or("").chars().take(100).collect::<String>())).map_err(|e| err_msg(&e)));
             println!("RESULT {name} vm_after={:?}", lua.load("return 1+1").eval::<i64>());
         }
         "oom_in_hook" => {
@@ -308,8 +308,10 @@ fn run_case(name: &str) {
                 Ok(())
             }).unwrap();
             lua.globals().set("with_lock", f).unwrap();
-            let r = lua.load("return pcall(with_lock, function() error('lua error under lock') end)").eval::<(bool, String)>();
-            println!("RESULT {name} pcall={:?} poisoned={} try_lock_ok={} contents={:?}", r.map_err(|e| err_msg(&e)), m.is_poisoned(), m.try_lock().is_ok(), m.lock().map(|g| g.clone()).ok());
+            let r = lua.load("local ok, e = pcall(with_lock, function() error('lua error under lock') end) return ok, tostring(e)").eval::<(bool, String)>();
+            let try_ok = m.try_lock().is_ok();
+            let contents = m.lock().map(|g| g.clone()).ok();
+            println!("RESULT {name} pcall={:?} poisoned={} try_lock_ok={try_ok} contents={contents:?}", r.map_err(|e| err_msg(&e)), m.is_poisoned());
         }
         "lock_deadline_in_call" => {
             // Host fn holds a lock while running a Lua loop; the deadline hook errors mid-call.
@@ -323,7 +325,8 @@ fn run_case(name: &str) {
             }).unwrap();
             lua.globals().set("with_lock", f).unwrap();
             let r = lua.load("with_lock(function() while true do end end)").exec();
-            println!("RESULT {name} err={:?} poisoned={} try_lock_ok={}", r.map_err(|e| err_msg(&e)), m.is_poisoned(), m.try_lock().is_ok());
+            let try_ok = m.try_lock().is_ok();
+            println!("RESULT {name} err={:?} poisoned={} try_lock_ok={try_ok}", r.map_err(|e| err_msg(&e)), m.is_poisoned());
         }
         "lock_hook_holds_lock" => {
             // The hook closure itself holds the lock while calling a Lua function that errors.
@@ -338,7 +341,9 @@ fn run_case(name: &str) {
                 Ok(VmState::Continue)
             }).unwrap();
             let r = lua.load("local n=0 for i=1,100000 do n=n+i end return n").eval::<i64>();
-            println!("RESULT {name} err={:?} poisoned={} try_lock_ok={} hook_ran={}", r.map_err(|e| err_msg(&e)), m.is_poisoned(), m.try_lock().is_ok(), *m.lock().unwrap());
+            let try_ok = m.try_lock().is_ok();
+            let ran = m.lock().map(|g| *g).ok();
+            println!("RESULT {name} err={:?} poisoned={} try_lock_ok={try_ok} hook_ran={ran:?}", r.map_err(|e| err_msg(&e)), m.is_poisoned());
         }
         "lock_lua_error_longjmp_frames" => {
             // Lua error passing through a Rust callback that holds a guard, nested three deep.
@@ -352,8 +357,9 @@ fn run_case(name: &str) {
             lua.globals().set("L", f).unwrap();
             // Lua calls Rust calls Lua calls Rust ... the innermost is a Lua error() with no pcall until the outside.
             // A single lock is re-taken in a recursive callback via try_lock to show it was released.
-            let r = lua.load("local function d(n) if n==0 then error('deep') end return L(function() return d(n-1) end) end return pcall(d, 1)").eval::<(bool, String)>();
-            println!("RESULT {name} pcall={:?} poisoned={} try_lock_ok={}", r.map_err(|e| err_msg(&e)), m.is_poisoned(), m.try_lock().is_ok());
+            let r = lua.load("local function d(n) if n==0 then error('deep') end return L(function() return d(n-1) end) end local ok, e = pcall(d, 1) return ok, tostring(e)").eval::<(bool, String)>();
+            let try_ok = m.try_lock().is_ok();
+            println!("RESULT {name} pcall={:?} poisoned={} try_lock_ok={try_ok}", r.map_err(|e| err_msg(&e)), m.is_poisoned());
         }
         other => { eprintln!("unknown case {other}"); std::process::exit(2); }
     }
