@@ -1,0 +1,275 @@
+[
+ {
+  "label": "4 cache_control markers",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 200,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:12 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "anthropic-ratelimit-input-tokens-limit": "500000",
+   "anthropic-ratelimit-input-tokens-remaining": "500000",
+   "anthropic-ratelimit-input-tokens-reset": "2026-09-29T08:54:12Z",
+   "anthropic-ratelimit-output-tokens-limit": "80000",
+   "anthropic-ratelimit-output-tokens-remaining": "80000",
+   "anthropic-ratelimit-output-tokens-reset": "2026-09-29T08:54:12Z",
+   "anthropic-ratelimit-requests-limit": "1000",
+   "anthropic-ratelimit-requests-remaining": "999",
+   "anthropic-ratelimit-requests-reset": "2026-09-29T08:54:11Z",
+   "anthropic-ratelimit-tokens-limit": "580000",
+   "anthropic-ratelimit-tokens-remaining": "580000",
+   "anthropic-ratelimit-tokens-reset": "2026-09-29T08:54:12Z",
+   "Server": "cloudflare",
+   "request-id": "req_011CfXSzxNWWsp9w1sxdcbub",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 8,
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "hi",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "Block 0. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 1. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 2. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ]
+  },
+  "body": {
+   "model": "claude-sonnet-5-5",
+   "id": "msg_011CfXSzxsmp4XSw2RKxyW3e",
+   "type": "message",
+   "role": "assistant",
+   "content": [
+    {
+     "type": "text",
+     "text": "Hi there! How can I"
+    }
+   ],
+   "container": null,
+   "stop_reason": "max_tokens",
+   "stop_sequence": null,
+   "stop_details": null,
+   "usage": {
+    "input_tokens": 80,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0,
+    "cache_creation": {
+     "ephemeral_5m_input_tokens": 0,
+     "ephemeral_1h_input_tokens": 0
+    },
+    "output_tokens": 8,
+    "output_tokens_details": {
+     "thinking_tokens": 0
+    },
+    "service_tier": "standard",
+    "inference_geo": "global"
+   },
+   "diagnostics": null
+  }
+ },
+ {
+  "label": "5 cache_control markers",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:12 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXT12JtftmmPhjVJLDKF",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 8,
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "hi",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "Block 0. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 1. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 2. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 3. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ]
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "A maximum of 4 blocks with cache_control may be provided. Found 5."
+   },
+   "request_id": "req_011CfXT12JtftmmPhjVJLDKF"
+  }
+ },
+ {
+  "label": "6 markers (tools + 4 system + 1 message... =6)",
+  "url": "https://api.anthropic.com/v1/messages",
+  "status": 400,
+  "headers": {
+   "Date": "Tue, 29 Sep 2026 08:54:13 GMT",
+   "Content-Type": "application/json",
+   "Transfer-Encoding": "chunked",
+   "Connection": "close",
+   "x-should-retry": "false",
+   "request-id": "req_011CfXT13quyC75We48D7QQu",
+   "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+   "Server": "cloudflare",
+   "vary": "Accept-Encoding",
+   "Content-Security-Policy": "default-src 'none'; frame-ancestors 'none'",
+   "cf-cache-status": "DYNAMIC",
+   "X-Robots-Tag": "none"
+  },
+  "request": {
+   "model": "claude-sonnet-5-5",
+   "max_tokens": 8,
+   "messages": [
+    {
+     "role": "user",
+     "content": [
+      {
+       "type": "text",
+       "text": "hi",
+       "cache_control": {
+        "type": "ephemeral"
+       }
+      }
+     ]
+    }
+   ],
+   "system": [
+    {
+     "type": "text",
+     "text": "Block 0. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 1. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 2. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    },
+    {
+     "type": "text",
+     "text": "Block 3. Filler sentence number 0 to make this block long enough.",
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ],
+   "tools": [
+    {
+     "name": "get_weather",
+     "description": "Get the weather for a city.",
+     "input_schema": {
+      "type": "object",
+      "properties": {
+       "city": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "city"
+      ]
+     },
+     "cache_control": {
+      "type": "ephemeral"
+     }
+    }
+   ]
+  },
+  "body": {
+   "type": "error",
+   "error": {
+    "type": "invalid_request_error",
+    "message": "A maximum of 4 blocks with cache_control may be provided. Found 6."
+   },
+   "request_id": "req_011CfXT13quyC75We48D7QQu"
+  }
+ }
+]
