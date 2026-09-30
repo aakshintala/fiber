@@ -46,7 +46,8 @@ Databricks model, unless the person's `projects/<key>/config.json` sets
 another, or they pass `-c model=...` for one run.
 
 Objects merge key by key, so a layer changes only the keys it names. Any other
-value, a list included, replaces the one below it.
+value, a list included, replaces the one below it. A provider's `credential` replaces
+the one below it as a whole: it does not merge key by key.
 
 The per-project file is the person's own setting for one project. It lives in
 Fiber home, not the repository, so it covers every worktree of the project
@@ -91,7 +92,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
-| `permissions.mode` | `docs/permissions.md` | no | The mode a new session starts in: `auto` or `yolo` (`docs/permissions.md`, "Modes"). |
+| `permissions.mode` | `auto` | no | The mode a new session starts in: `auto` or `yolo` (`docs/permissions.md`, "Modes"). |
 | `reviewer.model` | a small, fast model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |

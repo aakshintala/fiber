@@ -68,7 +68,6 @@ impl Setup {
             workspace: self.workspace(),
             project: key(),
             overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
-            headless: false,
         })
     }
 }

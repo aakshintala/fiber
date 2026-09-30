@@ -37,7 +37,7 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
         ),
         (
             &["permissions", "mode"],
-            json!("auto"),
+            json!("yolo"),
             json!(1),
             "one of \"auto\", \"yolo\"",
             false,
@@ -568,6 +568,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         json!({
             "cache": {"lifetime": "1h"},
             "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
+            "permissions": {"mode": "auto"},
             "quota": {"notice_at": 80},
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},

@@ -73,10 +73,10 @@ impl ConfigError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Json { .. }
-            | Self::WrongType { .. }
-            | Self::Io { .. }
-            | Self::NotPlain { .. } => ErrorCode::ConfigInvalid,
+            Self::Json { .. } | Self::WrongType { .. } | Self::NotPlain { .. } => {
+                ErrorCode::ConfigInvalid
+            }
+            Self::Io { .. } => ErrorCode::IoFailed,
             Self::FiberHome(_) | Self::Override { .. } => ErrorCode::Usage,
             Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,
         }

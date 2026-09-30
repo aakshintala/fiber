@@ -66,5 +66,5 @@ fn a_fiber_home_that_cannot_be_created_is_an_error() {
     let file = setup.root().join("file");
     fs::write(&file, "").unwrap();
     let e = fiber_home(Some(file.join("home").into()), None).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(e.code(), ErrorCode::IoFailed);
 }

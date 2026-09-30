@@ -100,10 +100,12 @@ const LIFETIMES: &[&str] = &["5m", "1h"];
 pub(crate) const KEYS: &[Key] = &[
     key("model", Str, YES, None),
     key("roles.*", Str, YES, None),
-    // A headless run's default is `auto` (docs/permissions.md, "Headless"),
-    // set in `Config::load`. The terminal's default is not settled yet, so it
-    // has none here.
-    key("permissions.mode", OneOf(&["auto", "yolo"]), NO, None),
+    key(
+        "permissions.mode",
+        OneOf(&["auto", "yolo"]),
+        NO,
+        Some("\"auto\""),
+    ),
     key("reviewer.model", Str, NO, None),
     key("reviewer.block_limits.consecutive", Count, NO, Some("3")),
     key("reviewer.block_limits.session", Count, NO, Some("20")),

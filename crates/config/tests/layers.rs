@@ -6,8 +6,8 @@ mod common;
 
 use std::fs;
 
-use common::{Setup, key};
-use config::{Config, ProjectKey, Source, Sources};
+use common::Setup;
+use config::{CredentialSource, ProjectKey, Source};
 use contract::ErrorCode;
 use serde_json::json;
 
@@ -298,11 +298,11 @@ fn a_file_that_is_not_an_object_is_config_invalid() {
 }
 
 #[test]
-fn a_file_that_cannot_be_read_is_config_invalid() {
+fn a_file_that_cannot_be_read_is_io_failed_naming_it() {
     let setup = Setup::new();
     fs::create_dir_all(setup.project()).unwrap();
     let e = setup.load(&[]).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(e.code(), ErrorCode::IoFailed);
     assert!(
         e.to_string()
             .starts_with(&format!("{}: ", setup.project().display()))
@@ -392,7 +392,22 @@ fn a_repository_file_that_is_a_directory_or_a_fifo_is_refused() {
         .status()
         .unwrap();
     assert!(made.success());
-    let e = setup.load(&[]).unwrap_err();
+    // Reading a FIFO would block forever, so the load gets a deadline.
+    let (tx, rx) = std::sync::mpsc::channel();
+    let (home, workspace) = (setup.home(), setup.workspace());
+    std::thread::spawn(move || {
+        let loaded = config::Config::load(config::Sources {
+            home,
+            workspace,
+            project: common::key(),
+            overrides: Vec::new(),
+        });
+        tx.send(loaded.map(drop)).unwrap();
+    });
+    let e = rx
+        .recv_timeout(std::time::Duration::from_secs(10))
+        .expect("the load blocked reading a FIFO")
+        .unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert!(e.to_string().contains("not a regular file"), "{e}");
 }
@@ -425,27 +440,63 @@ fn config_debug_shows_no_run_flag_value() {
 }
 
 #[test]
-fn a_headless_run_starts_in_auto_mode() {
+fn every_session_starts_in_auto_mode_unless_configured() {
     let setup = Setup::new();
-    let load = |headless| {
-        Config::load(Sources {
-            home: setup.home(),
-            workspace: setup.workspace(),
-            project: key(),
-            overrides: Vec::new(),
-            headless,
-        })
-        .unwrap()
-    };
     assert_eq!(
-        load(true).get("permissions.mode", None),
+        setup.load(&[]).unwrap().get("permissions.mode", None),
         Some((json!("auto"), Source::Default))
     );
-    assert_eq!(load(false).get("permissions.mode", None), None);
     setup.write(&setup.global(), r#"{"permissions": {"mode": "yolo"}}"#);
     assert_eq!(
-        load(true).get("permissions.mode", None).unwrap().0,
+        setup
+            .load(&[])
+            .unwrap()
+            .get("permissions.mode", None)
+            .unwrap()
+            .0,
         json!("yolo")
+    );
+}
+
+#[test]
+fn a_credential_replaces_the_one_below_it_as_a_whole() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"openrouter": {"credential": {"env": "OPENROUTER_API_KEY"}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {"openrouter": {"credential": {"file": "/k"}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let (value, source) = config.get("providers.openrouter.credential", None).unwrap();
+    assert_eq!(source, Source::Project(setup.project()));
+    assert_eq!(
+        serde_json::from_value::<CredentialSource>(value).unwrap(),
+        CredentialSource::File("/k".into())
+    );
+}
+
+#[test]
+fn a_provider_without_a_credential_keeps_the_one_below_it() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"openrouter": {"credential": {"env": "KEY"}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {"other": {"credential": {"env": "B"}}}}"#,
+    );
+    let merged = setup.load(&[]).unwrap().merged(None);
+    assert_eq!(
+        merged["providers"]["openrouter"]["credential"],
+        json!({"env": "KEY"})
+    );
+    assert_eq!(
+        merged["providers"]["other"]["credential"],
+        json!({"env": "B"})
     );
 }
 

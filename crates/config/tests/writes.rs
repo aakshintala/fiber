@@ -131,7 +131,7 @@ fn a_write_that_cannot_rename_into_place_fails_and_leaves_no_temporary_file() {
     let setup = Setup::new();
     fs::create_dir_all(setup.global().join("occupied")).unwrap();
     let e = set_global(&setup.home(), "model", json!("a/b")).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(e.code(), ErrorCode::IoFailed);
     let mut left: Vec<_> = fs::read_dir(setup.home())
         .unwrap()
         .map(|e| e.unwrap().file_name().into_string().unwrap())
@@ -283,7 +283,7 @@ fn removing_an_extension_whose_file_cannot_be_deleted_fails() {
     )
     .unwrap();
     let e = remove_extension_settings(&setup.home(), ACME).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(e.code(), ErrorCode::IoFailed);
 }
 
 #[test]
@@ -291,7 +291,7 @@ fn removing_an_extension_when_projects_is_not_a_directory_fails() {
     let setup = Setup::new();
     setup.write(&setup.home().join("projects"), "");
     let e = remove_extension_settings(&setup.home(), ACME).unwrap_err();
-    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(e.code(), ErrorCode::IoFailed);
     assert!(e.to_string().contains("projects"));
 }
 

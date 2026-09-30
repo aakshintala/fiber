@@ -44,11 +44,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
         r#"{"model": "databricks/databricks-claude-opus-5", "tui": {"hover": false}}"#,
     );
     setup.write(&setup.project(), r#"{"handoff": {"tokens": 100}}"#);
-    let out = resolve(
-        &setup,
-        &["--model", "a/b", "--headless", "-c", "retry.attempts=9"],
-    )
-    .unwrap();
+    let out = resolve(&setup, &["--model", "a/b", "-c", "retry.attempts=9"]).unwrap();
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
     let merged: Value = serde_json::from_slice(&out.stdout).unwrap();

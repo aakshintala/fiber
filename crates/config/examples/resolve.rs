@@ -3,7 +3,7 @@
 //!
 //! ```text
 //! FIBER_HOME=/tmp/home cargo run -p config --example resolve -- \
-//!     <workspace> <project-key> [--model provider/model] [--headless] [-c key=value]...
+//!     <workspace> <project-key> [--model provider/model] [-c key=value]...
 //! ```
 //!
 //! The merged JSON goes to stdout and each notice to stderr. A failure prints
@@ -14,7 +14,8 @@ use std::process::ExitCode;
 
 use config::{Config, ConfigError, ProjectKey, Sources};
 
-const USAGE: &str = "usage: resolve <workspace> <project-key> [--model provider/model] [--headless] [-c key=value]...";
+const USAGE: &str =
+    "usage: resolve <workspace> <project-key> [--model provider/model] [-c key=value]...";
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
@@ -23,19 +24,14 @@ fn main() -> ExitCode {
     };
     let mut model = None;
     let mut overrides = Vec::new();
-    let mut headless = false;
     while let Some(flag) = args.next() {
-        if flag == "--headless" {
-            headless = true;
-            continue;
-        }
         match (flag.as_str(), args.next()) {
             ("--model", Some(value)) => model = Some(value),
             ("-c", Some(value)) => overrides.push(value),
             _ => return fail(USAGE),
         }
     }
-    match run(workspace, project, model.as_deref(), overrides, headless) {
+    match run(workspace, project, model.as_deref(), overrides) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => fail(&format!("{}: {e}", code(&e))),
     }
@@ -46,7 +42,6 @@ fn run(
     project: String,
     model: Option<&str>,
     overrides: Vec<String>,
-    headless: bool,
 ) -> Result<(), ConfigError> {
     let home = config::fiber_home_from_env()?;
     let config = Config::load(Sources {
@@ -54,7 +49,6 @@ fn run(
         workspace: workspace.into(),
         project: ProjectKey::new(project)?,
         overrides,
-        headless,
     })?;
     let mut err = std::io::stderr().lock();
     for notice in config.notices() {

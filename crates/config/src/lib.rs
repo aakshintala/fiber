@@ -37,8 +37,6 @@ pub struct Sources {
     pub project: ProjectKey,
     /// Each `-c key=value` from the command line, in order.
     pub overrides: Vec<String>,
-    /// Whether the run has no client, such as `fiber ask`.
-    pub headless: bool,
 }
 
 /// The layer a value came from (`docs/configuration.md`, "Layers").
@@ -132,20 +130,11 @@ impl Config {
         let home = sources.home;
         let fiber = sources.workspace.join(".fiber");
         let project_dir = home.join("projects").join(sources.project.as_str());
-        let mut defaults = keys::defaults();
-        if sources.headless {
-            // docs/permissions.md, "Headless": a run with no client defaults
-            // to auto.
-            path::set(
-                &mut defaults,
-                &["permissions".into(), "mode".into()],
-                "auto".into(),
-            );
-        }
         let mut notices = Vec::new();
-        let mut layers = vec![(Source::Default, defaults)];
+        let mut layers = vec![(Source::Default, keys::defaults())];
         let repository_file = fiber.join("config.json");
-        let repository = if plain(&fiber, true)? && plain(&repository_file, false)? {
+        plain(&fiber, true)?;
+        let repository = if plain(&repository_file, false)? {
             read(&repository_file)?
         } else {
             None
@@ -199,7 +188,25 @@ impl Config {
     pub fn merged(&self, model: Option<&str>) -> Value {
         let mut merged = Value::Object(Map::new());
         for (_, layer) in &self.layers {
-            path::merge(&mut merged, &view(layer, model));
+            let upper = view(layer, model);
+            // A provider's credential replaces the one below it as a whole
+            // (docs/configuration.md, "Layers").
+            for (name, provider) in upper
+                .get("providers")
+                .and_then(Value::as_object)
+                .into_iter()
+                .flatten()
+            {
+                if provider.get("credential").is_some()
+                    && let Some(below) = merged
+                        .get_mut("providers")
+                        .and_then(|p| p.get_mut(name))
+                        .and_then(Value::as_object_mut)
+                {
+                    below.remove("credential");
+                }
+            }
+            path::merge(&mut merged, &upper);
         }
         merged
     }
@@ -313,8 +320,9 @@ fn snapshot_settings(
     into: &mut BTreeMap<PathBuf, Vec<u8>>,
 ) -> Result<(), ConfigError> {
     let dir = layer_dir.join("config");
-    if repo && !(plain(layer_dir, true)? && plain(&dir, true)?) {
-        return Ok(());
+    if repo {
+        plain(layer_dir, true)?;
+        plain(&dir, true)?;
     }
     let entries = match fs::read_dir(&dir) {
         Ok(entries) => entries,
