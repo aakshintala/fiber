@@ -1,0 +1,346 @@
+//! `docs/configuration.md`, "Layers", "Per model" and "When Fiber reads
+//! configuration": which layer wins, how objects merge, `-c`, and what a
+//! problem in a file reports.
+
+mod common;
+
+use std::fs;
+
+use common::Setup;
+use config::Source;
+use contract::ErrorCode;
+use serde_json::json;
+
+fn model_layers(setup: &Setup) {
+    setup.write(
+        &setup.global(),
+        r#"{"model": "openrouter/anthropic/claude-sonnet-5"}"#,
+    );
+    setup.write(
+        &setup.repository(),
+        r#"{"model": "databricks/databricks-claude-opus-5"}"#,
+    );
+}
+
+#[test]
+fn the_repository_wins_over_the_global_file() {
+    let setup = Setup::new();
+    model_layers(&setup);
+    assert_eq!(
+        setup.load(&[]).unwrap().get("model", None),
+        Some((
+            json!("databricks/databricks-claude-opus-5"),
+            Source::Repository(setup.repository())
+        ))
+    );
+}
+
+#[test]
+fn the_per_project_file_wins_over_the_repository() {
+    let setup = Setup::new();
+    model_layers(&setup);
+    setup.write(&setup.project(), r#"{"model": "openai/gpt-5.6"}"#);
+    assert_eq!(
+        setup.load(&[]).unwrap().get("model", None),
+        Some((json!("openai/gpt-5.6"), Source::Project(setup.project())))
+    );
+}
+
+#[test]
+fn a_run_flag_wins_over_every_file() {
+    let setup = Setup::new();
+    model_layers(&setup);
+    setup.write(&setup.project(), r#"{"model": "openai/gpt-5.6"}"#);
+    let config = setup
+        .load(&["model=anthropic/claude-opus-5", "handoff.tokens=200000"])
+        .unwrap();
+    assert_eq!(
+        config.get("model", None),
+        Some((json!("anthropic/claude-opus-5"), Source::Run))
+    );
+    assert_eq!(
+        config.get("handoff.tokens", None),
+        Some((json!(200000), Source::Run))
+    );
+}
+
+#[test]
+fn a_later_run_flag_wins_over_an_earlier_one() {
+    let setup = Setup::new();
+    let config = setup.load(&["model=a/b", "model=c/d"]).unwrap();
+    assert_eq!(config.get("model", None), Some((json!("c/d"), Source::Run)));
+}
+
+#[test]
+fn objects_merge_key_by_key_and_lists_replace() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"handoff": {"tokens": 1000}, "tui": {"panel": {"cards": ["session", "jobs"]}}}"#,
+    );
+    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
+    setup.write(
+        &setup.project(),
+        r#"{"tui": {"panel": {"cards": ["quota"]}}}"#,
+    );
+    let merged = setup.load(&[]).unwrap().merged(None);
+    assert_eq!(
+        merged["handoff"],
+        json!({"enabled": true, "nudge": false, "tokens": 1000, "window_fraction": 0.7})
+    );
+    assert_eq!(merged["tui"]["panel"]["cards"], json!(["quota"]));
+    assert_eq!(merged["tui"]["hover"], json!(true));
+}
+
+#[test]
+fn an_object_names_the_highest_layer_that_set_part_of_it() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"handoff": {"tokens": 1000}}"#);
+    setup.write(&setup.repository(), r#"{"handoff": {"nudge": false}}"#);
+    let (value, source) = setup.load(&[]).unwrap().get("handoff", None).unwrap();
+    assert_eq!(source, Source::Repository(setup.repository()));
+    assert_eq!(value["tokens"], json!(1000));
+}
+
+#[test]
+fn a_per_model_key_wins_over_the_same_layers_top_level() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"handoff": {"tokens": 400000}, "cache": {"lifetime": "1h"},
+            "models": {"databricks/databricks-claude-opus-5": {
+                "handoff": {"window_fraction": 0.5}, "cache": {"lifetime": "5m"}}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    let opus = Some("databricks/databricks-claude-opus-5");
+    assert_eq!(
+        config.get("handoff.window_fraction", opus),
+        Some((json!(0.5), Source::Global(setup.global())))
+    );
+    assert_eq!(config.get("cache.lifetime", opus).unwrap().0, json!("5m"));
+    assert_eq!(config.get("handoff.tokens", opus).unwrap().0, json!(400000));
+    assert_eq!(
+        config
+            .get("cache.lifetime", Some("openai/gpt-5.6"))
+            .unwrap()
+            .0,
+        json!("1h")
+    );
+    assert_eq!(config.get("cache.lifetime", None).unwrap().0, json!("1h"));
+    assert_eq!(config.merged(opus)["cache"]["lifetime"], json!("5m"));
+    assert_eq!(config.merged(None)["cache"]["lifetime"], json!("1h"));
+}
+
+#[test]
+fn a_later_layers_top_level_wins_over_an_earlier_layers_per_model_key() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"models": {"a/b": {"handoff": {"tokens": 1}}}}"#,
+    );
+    setup.write(&setup.repository(), r#"{"handoff": {"tokens": 2}}"#);
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.get("handoff.tokens", Some("a/b")),
+        Some((json!(2), Source::Repository(setup.repository())))
+    );
+}
+
+#[test]
+fn a_run_flag_value_is_json_or_else_a_bare_string() {
+    let setup = Setup::new();
+    let config = setup
+        .load(&[
+            "handoff.enabled=false",
+            "tui.panel.cards=[\"quota\"]",
+            "model=openai/gpt-5.6",
+            "models.\"openai/gpt-5.6\".cache.lifetime=5m",
+            "mcp.servers.\"my.server\".url=https://example.com",
+        ])
+        .unwrap();
+    assert!(config.notices().is_empty(), "{:?}", config.notices());
+    assert_eq!(config.get("handoff.enabled", None).unwrap().0, json!(false));
+    assert_eq!(
+        config.get("tui.panel.cards", None).unwrap().0,
+        json!(["quota"])
+    );
+    assert_eq!(
+        config.get("model", None).unwrap().0,
+        json!("openai/gpt-5.6")
+    );
+    assert_eq!(
+        config
+            .get("cache.lifetime", Some("openai/gpt-5.6"))
+            .unwrap()
+            .0,
+        json!("5m")
+    );
+    assert_eq!(
+        config.get("mcp.servers.\"my.server\".url", None).unwrap().0,
+        json!("https://example.com")
+    );
+}
+
+#[test]
+fn a_run_flag_that_is_not_key_equals_value_is_a_usage_error() {
+    let setup = Setup::new();
+    for (arg, named) in [
+        ("model", "model"),
+        ("a..b=1", "a..b"),
+        (".a=1", ".a"),
+        ("a.=1", "a."),
+        ("=1", ""),
+        ("\"a=1", "\"a"),
+        ("\"a\"b=1", "\"a\"b"),
+    ] {
+        let e = setup.load(&[arg]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{arg}");
+        assert_eq!(
+            e.to_string(),
+            format!("`{named}` is not a dotted key and a value, as in `-c handoff.tokens=200000`."),
+            "{arg}"
+        );
+    }
+}
+
+#[test]
+fn a_run_flag_of_the_wrong_type_names_the_flag() {
+    let setup = Setup::new();
+    let e = setup.load(&["handoff.tokens=many"]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(
+        e.to_string(),
+        "-c: `handoff.tokens` must be a whole number of zero or more."
+    );
+}
+
+#[test]
+fn an_unknown_key_is_a_notice_and_is_otherwise_ignored() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"frobnicate": 1, "handoff": {"tokens": 5, "zap": true}, "model": "a/b"}"#,
+    );
+    let config = setup.load(&["future.key=1"]).unwrap();
+    let messages: Vec<_> = config.notices().iter().map(|n| n.message.clone()).collect();
+    let global = setup.global().display().to_string();
+    assert_eq!(
+        messages,
+        [
+            format!("{global}: ignored `frobnicate`, which this Fiber does not know."),
+            format!("{global}: ignored `handoff.zap`, which this Fiber does not know."),
+            "-c: ignored `future`, which this Fiber does not know.".to_owned(),
+        ]
+    );
+    assert!(
+        config
+            .notices()
+            .iter()
+            .all(|n| n.code == ErrorCode::ConfigKeyIgnored)
+    );
+    assert!(config.notices().iter().all(|n| n.extension.is_none()));
+    let merged = config.merged(None);
+    assert_eq!(merged.get("frobnicate"), None);
+    assert_eq!(merged["handoff"].get("zap"), None);
+    assert_eq!(merged["handoff"]["tokens"], json!(5));
+    assert_eq!(merged["model"], json!("a/b"));
+}
+
+#[test]
+fn a_key_with_a_dot_is_quoted_when_named() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"models": {"openai/gpt-5.6": {"speed": 1}}}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert!(
+        config.notices()[0]
+            .message
+            .contains("`models.\"openai/gpt-5.6\".speed`")
+    );
+}
+
+#[test]
+fn invalid_json_is_config_invalid_naming_the_file_and_line() {
+    for (text, line, column) in [
+        ("{\"model\": \"a/b\",}", 1, 17),
+        ("{\n  // a comment\n  \"model\": \"a/b\"\n}", 2, 3),
+        ("", 1, 0),
+    ] {
+        let setup = Setup::new();
+        setup.write(&setup.repository(), text);
+        let e = setup.load(&[]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+        assert_eq!(
+            e.to_string(),
+            format!(
+                "{} is not valid JSON (line {line}, column {column}). Fix the file and try again.",
+                setup.repository().display()
+            )
+        );
+    }
+}
+
+#[test]
+fn a_file_that_is_not_an_object_is_config_invalid() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), "[1, 2]");
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{}: `(the whole file)` must be an object.",
+            setup.global().display()
+        )
+    );
+}
+
+#[test]
+fn a_file_that_cannot_be_read_is_config_invalid() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.project()).unwrap();
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string()
+            .starts_with(&format!("{}: ", setup.project().display()))
+    );
+}
+
+#[test]
+fn a_layer_with_no_file_is_skipped() {
+    let setup = Setup::new();
+    setup.write(&setup.project(), r#"{"model": "a/b"}"#);
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.get("model", None),
+        Some((json!("a/b"), Source::Project(setup.project())))
+    );
+    assert!(config.notices().is_empty());
+}
+
+#[test]
+fn a_source_prints_as_where_it_is() {
+    let setup = Setup::new();
+    assert_eq!(Source::Default.to_string(), "the built-in defaults");
+    assert_eq!(Source::Run.to_string(), "-c");
+    for source in [
+        Source::Global(setup.global()),
+        Source::Repository(setup.repository()),
+        Source::Project(setup.project()),
+    ] {
+        assert!(
+            source
+                .to_string()
+                .starts_with(&setup.root().display().to_string())
+        );
+    }
+}
+
+#[test]
+fn a_query_that_is_not_a_dotted_key_finds_nothing() {
+    let setup = Setup::new();
+    assert_eq!(setup.load(&[]).unwrap().get("handoff..tokens", None), None);
+}

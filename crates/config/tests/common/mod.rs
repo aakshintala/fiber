@@ -1,9 +1,11 @@
 //! A Fiber home and a workspace in a temporary directory, removed when
 //! dropped. Tests never touch the real home.
 
+#![cfg(test)]
 #![allow(dead_code, reason = "each test file uses a different part")]
 
 use std::fs;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -49,7 +51,10 @@ impl Setup {
     }
 
     pub(crate) fn project(&self) -> PathBuf {
-        self.home().join("projects").join(PROJECT).join("config.json")
+        self.home()
+            .join("projects")
+            .join(PROJECT)
+            .join("config.json")
     }
 
     pub(crate) fn write(&self, file: &Path, text: &str) {
@@ -80,4 +85,9 @@ pub(crate) fn nest(path: &[&str], value: Value) -> Value {
         map.insert((*name).to_owned(), inner);
         Value::Object(map)
     })
+}
+
+/// A file's permission bits.
+pub(crate) fn mode(path: &Path) -> u32 {
+    fs::metadata(path).unwrap().permissions().mode() & 0o777
 }

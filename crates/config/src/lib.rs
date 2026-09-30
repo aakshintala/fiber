@@ -93,7 +93,9 @@ impl Config {
                 path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
             let value = serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.into()));
             match key_path.as_slice() {
-                [area, name, settings, rest @ ..] if area == "extensions" && settings == "settings" => {
+                [area, name, settings, rest @ ..]
+                    if area == "extensions" && settings == "settings" =>
+                {
                     let settings = run_settings
                         .entry(name.clone())
                         .or_insert_with(|| Value::Object(Map::new()));
@@ -111,7 +113,11 @@ impl Config {
                 true,
             ),
             (
-                Source::Project(home.join("projects").join(&sources.project).join("config.json")),
+                Source::Project(
+                    home.join("projects")
+                        .join(&sources.project)
+                        .join("config.json"),
+                ),
                 false,
             ),
         ];
@@ -193,7 +199,10 @@ impl Config {
                 true,
             ),
             (
-                write::settings_file(&home.join("projects").join(&self.sources.project), extension),
+                write::settings_file(
+                    &home.join("projects").join(&self.sources.project),
+                    extension,
+                ),
                 false,
             ),
         ];
@@ -325,12 +334,16 @@ pub fn fiber_home(
 ) -> Result<PathBuf, ConfigError> {
     let dir = match fiber_home {
         Some(value) if value.is_empty() => {
-            return Err(ConfigError::FiberHome("FIBER_HOME is empty; set it to an absolute path or unset it."));
+            return Err(ConfigError::FiberHome(
+                "FIBER_HOME is empty; set it to an absolute path or unset it.",
+            ));
         }
         Some(value) => {
             let dir = PathBuf::from(value);
             if dir.is_relative() {
-                return Err(ConfigError::FiberHome("FIBER_HOME must be an absolute path."));
+                return Err(ConfigError::FiberHome(
+                    "FIBER_HOME must be an absolute path.",
+                ));
             }
             dir
         }
