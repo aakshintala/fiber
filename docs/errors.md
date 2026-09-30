@@ -16,7 +16,7 @@ Every failure is `error { code, message }`: on `tool_call_completed`,
   deadline that passed, on a tool call, a job or a delegate.
 - Codes are an open set. An unknown code is a generic failure, and the consumer
   shows the message. Adding a code is additive; renaming or removing one is a
-  breaking change (`docs/events.md`, "Versioning").
+  breaking change (`docs/events.md`, "No such heading").
 - `message` is Fiber's own sentence, and it says what to do when there is a
   fix: "OpenRouter rejected the API key (HTTP 401). Run `fiber login
   openrouter`." The terminal shows the message as it is. A headless caller reads
