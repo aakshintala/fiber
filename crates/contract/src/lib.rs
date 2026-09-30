@@ -5,6 +5,7 @@
 //! (`docs/errors.md`). It contains no behaviour beyond serialisation.
 
 mod codes;
+pub mod commands;
 mod envelope;
 pub mod events;
 mod ids;
