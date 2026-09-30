@@ -376,7 +376,8 @@ the rationale and the rejected layouts are
   so the child always matches its parent's version. The session process
   runs no image code; the child reads the header too
   (`docs/model-routing.md`, "Image limits"). Spawning a child that does
-  nothing takes 1.7 ms (macOS).
+  nothing takes 1.7 ms on macOS, measured with the probe in
+  `research/image-limits/README.md`.
 - **The terminal is its own process.** `fiber` starts a `fiber serve` session
   and is its client zero: commands down the pipe, events back up it. It draws
   what arrives and has no path to state the stream does not carry. It opens a

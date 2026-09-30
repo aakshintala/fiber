@@ -149,10 +149,10 @@ Notes:
   image child's, measured on September 29, 2026
   (`research/image-limits/README.md`); the session never runs image code, so
   the "all of the above together" row does not include it. An 81-megapixel
-  PNG, which the 50-megapixel cap refuses, peaks at about 308 MB in the child. A header-only read with `image`
-  costs 4,184 KiB in the session on Linux x86_64, which is why the child
+  PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB in the probe on Linux x86_64. A header-only read with
+  `image` costs 4,184 KiB in the probe, which is why the child and not the session
   reads the header. `image` alone is not used: its own resize builds a
-  full-width f32 buffer and doubles memory and time (157 MB against 72 MB
+  full-width f32 buffer and doubles memory and time (157,120 KiB against 72,352 KiB
   peak, 201 ms against 107 ms per 12 MP photo, macOS). Separate crates
   (zune-jpeg, png, gif, image-webp, fast_image_resize, jpeg-encoder) are not
   used: jpeg-encoder's licence includes IJG, which is not on the allowed

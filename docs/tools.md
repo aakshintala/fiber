@@ -111,6 +111,8 @@ by content.
 ## Bounded results
 
 - A tool that declares no cap is cut at 16 KiB of model-facing content.
+  Image parts do not count toward the cap and are never cut; their limit is
+  `docs/model-routing.md`, "Image limits".
   Configuration can override any tool's cap (`docs/configuration.md`). A tool may declare a larger or
   smaller cap. `read` and `web_fetch` keep the 16 KiB default ("File tools",
   "Web fetch and web search").

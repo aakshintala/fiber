@@ -264,9 +264,10 @@ every request (Fiber keeps no vendor-side state), so one 4.5 MB image would
 outweigh a 600k-token text context in bytes. 2000 px fits Anthropic's
 2000 px per-image rule for requests with more than 20 images,
 Bedrock/Vertex's 5 MB, and OpenAI's 30,000-patch limit (2000×2000 is 3,969
-patches). A 2000 px screenshot PNG is about 170 KB of base64 at Default
-compression; a 2000 px photo JPEG at quality 80 is about 430 to 670 KB of
-base64.
+patches). Measured: a 2000 px screenshot is 162,676 bytes of base64 as PNG at Default
+compression, and six photographs fitted inside 2000 px are 232,204 to
+672,632 bytes of base64 as JPEG at quality 80
+(`research/image-limits/README.md`).
 
 Fitting keeps the aspect ratio, never enlarges, and uses Lanczos3. A JPEG
 input is re-encoded as JPEG at quality 80; any other input as PNG at
