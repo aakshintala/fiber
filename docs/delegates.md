@@ -341,7 +341,7 @@ in for it in session messaging (`docs/tools.md`, "Messaging other sessions"):
 - **The parent binds its socket.** It binds `~/.fiber/run/<session_id>` when
   each of the delegate's runs starts and unlinks it when the run ends. It
   removes a stale socket first, as a lock holder does (`docs/state.md`,
-  "Sockets"). `session_list` lists the delegate like any other. The socket
+  "What each part holds"). `session_list` lists the delegate like any other. The socket
   accepts only `message` (`docs/invocation.md`). After the parent is sent
   `close`, it is rejected `closing`.
 - **A message in is delivered as `delegate_message` delivers one.** A harness
