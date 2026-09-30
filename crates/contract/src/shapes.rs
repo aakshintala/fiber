@@ -115,6 +115,22 @@ pub struct Tokens {
     pub output: u64,
 }
 
+/// `usage`: totals over some set of model calls, folded from their
+/// `usage_recorded` lines. They are output, never a source.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Usage {
+    /// The calls' tokens, summed.
+    pub tokens: Tokens,
+    /// US dollars billed per token, summed over the calls without
+    /// `subscription` whose cost is known; `0` when there were none; `null`
+    /// when there were some and none had a known cost.
+    #[serde(deserialize_with = "nullable")]
+    pub cost: Option<f64>,
+    /// US dollars at API prices for the calls with `subscription`; `0` when
+    /// there were none.
+    pub subscription_cost: f64,
+}
+
 /// One `ask_user` question as the model called it (`docs/tools.md`, "The
 /// call"). Its keys are the tool's argument names.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

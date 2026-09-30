@@ -31,6 +31,9 @@ codes! {
     AuthenticationFailed,
     /// The block budget ran out with no human to answer.
     Blocked,
+    /// The spending budget was reached, or an extension refused a model
+    /// request.
+    BudgetExceeded,
     /// A turn is running.
     Busy,
     /// The session was sent `close`.

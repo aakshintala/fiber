@@ -162,12 +162,14 @@ result. `turn_completed` is `failed`, with `error` set to the cause, on:
 - a model call that failed after its retries: that call's code
 - `context_overflow` after the overflow rule's one retry, or with automatic
   handoff off (`docs/handoff.md`)
-- `hook_failed` from a `turn_start` or `turn_end` hook (`docs/extensions.md`,
-  "When a hook fails")
+- `hook_failed` from a `turn_start`, `before_model_call` or `turn_end` hook
+  (`docs/extensions.md`, "When a hook fails")
 - `blocked`: with no human to answer, the session used up its block budget
   (`docs/permissions.md`, "Headless")
 - `output_truncated`: a second reply in a row cut off by the output-token limit
   (`docs/loop.md`, "A reply cut off by the output limit")
+- `budget_exceeded`: the session reached `budget.usd`, or a `before_model_call`
+  hook refused the request (`docs/loop.md`, "Spending budget")
 
 ## Registry
 
@@ -178,6 +180,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
 | `authentication_failed` | model call, turn | the provider rejected the credential |
 | `blocked` | turn | the block budget ran out with no human to answer |
+| `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `closing` | tool call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions") |
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |

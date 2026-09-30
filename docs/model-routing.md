@@ -159,6 +159,7 @@ For each model:
 - a prompt addendum, text appended to the system prompt for this model only
   (`docs/system-prompt.md`, "The model's addendum")
 - context window, output token limit, input kinds and cost
+- whether a subscription login covers it ("Cost")
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
@@ -241,6 +242,21 @@ overage past a cap is invisible in every response Fiber has seen
 shape stays in the provider's package rather than in the protocol. When it
 runs, and what the model and the person see, is `docs/tools.md`, "Provider
 quota".
+
+### Cost
+
+A call's `cost` in `usage_recorded` is the vendor's own figure where the
+response or a generation lookup reports one, as OpenRouter's does
+(`docs/events.md`, "Usage and notices"). Otherwise it is the model's declared
+`cost` prices applied to the call's `tokens`, each kind at its own price. A
+model with neither has `cost` `null`, and the person sees its tokens only.
+
+A model that a subscription login serves declares `"subscription": true`
+beside its prices, which are the vendor's API prices. Its calls are logged
+with `subscription`, so the person sees what the work would cost on an API
+key, kept apart from money billed per token, and `budget.usd` never counts
+them (`docs/loop.md`, "Spending budget"). ChatGPT/codex declares every model
+this way.
 
 ## Image limits
 

@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::action::Progress;
 use super::context::Outcome;
-use crate::shapes::{Failure, Mode, Point, Process, Question, Tokens, Worktree};
+use crate::shapes::{Failure, Mode, Point, Process, Question, Usage, Worktree};
 use crate::{CommandId, ErrorCode, JobId, SessionId};
 
 /// Why an MCP server failed.
@@ -227,16 +227,6 @@ pub struct JobLine {
     /// Deliveries suppressed since the last one, when any were.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub suppressed: Option<u64>,
-}
-
-/// A delegate run's totals.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Usage {
-    /// Its tokens.
-    pub tokens: Tokens,
-    /// In US dollars; `null` when unknown.
-    #[serde(deserialize_with = "crate::shapes::nullable")]
-    pub cost: Option<f64>,
 }
 
 /// An isolated delegate's worktree when it finished.

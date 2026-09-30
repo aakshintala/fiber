@@ -181,6 +181,17 @@ vocabulary of `docs/permissions.md`, "Effects":
 | `cache_write` | object | yes | input tokens written to the cache, keyed by cache lifetime (`"5m"`, `"1h"`); `{}` when nothing was written |
 | `output` | integer | yes | output tokens, reasoning included |
 
+### `usage`
+
+Totals over some set of model calls, folded from their `usage_recorded`
+lines. They are output, never a source.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `tokens` | `tokens` | yes | the calls' tokens, summed |
+| `cost` | number or null | yes | US dollars billed per token, summed over the calls without `subscription` whose cost is known; `0` when there were none; `null` when there were some and none had a known cost |
+| `subscription_cost` | number | yes | US dollars at API prices for the calls with `subscription`; `0` when there were none |
+
 ### `questions`
 
 An array of `ask_user` questions as the model called them: `header`,
@@ -230,6 +241,7 @@ Durable. The last line a process writes for a session.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `exit_code` | integer | yes | the process's exit code (`docs/invocation.md`, "Lifecycle") |
+| `usage` | `usage` | yes | this process's model calls for the session, its delegates included (`docs/loop.md`, "Spending budget"); a cost that settles after exit is missing from it |
 | `final_action_id` | string | no | the `action_id` of the final assistant message, when there is one |
 | `text` | string | no | that message's text; present exactly when `final_action_id` is |
 | `error` | `error` | no | why the process failed (`docs/errors.md`, "What a caller gets") |
@@ -661,7 +673,8 @@ none.
 | `model` | string | yes | the model reference, `provider/model` |
 | `tokens` | `tokens` | yes | the call's tokens |
 | `web_searches` | integer | no | hosted web searches, where the provider reports them |
-| `cost` | number or null | yes | in US dollars; `null` when unknown |
+| `cost` | number or null | yes | in US dollars: the vendor's own figure where it reports one, otherwise the model's declared prices applied to `tokens` (`docs/model-routing.md`, "Cost"); `null` when neither exists |
+| `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |
 | `extension` | string | no | the extension whose `host.model` made the call |
 
 #### `quota_noticed`
@@ -1020,7 +1033,7 @@ Durable. Written just before `job_completed`.
 | `text` | string | yes | the final message, bounded as `docs/tools.md`, "Bounded results", says |
 | `artifact` | string | no | the full final message's path, when cut |
 | `questions` | `questions` | no | when the delegate's turn ended on `ask_user` |
-| `usage` | object | yes | the run's totals: `tokens` (`tokens`) and `cost` (number or null) |
+| `usage` | `usage` | yes | the run's totals |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) and `dirty` (boolean) |
 
 #### `job_completed`

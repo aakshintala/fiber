@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::shapes::{ContentPart, Failure, Mode, Point, Process, Question, Sender};
+use crate::shapes::{ContentPart, Failure, Mode, Point, Process, Question, Sender, Usage};
 use crate::{ActionId, CommandId, JobId, RequestId, Seq, SessionId};
 
 /// `fiber_started`: the first line a process writes for a session.
@@ -21,6 +21,10 @@ pub struct FiberStarted {
 pub struct FiberExited {
     /// The process's exit code (`docs/invocation.md`, "Lifecycle").
     pub exit_code: i32,
+    /// This process's model calls for the session, its delegates included
+    /// (`docs/loop.md`, "Spending budget"); a cost that settles after exit is
+    /// missing from it.
+    pub usage: Usage,
     /// The final assistant message, when there is one.
     #[serde(flatten)]
     pub final_message: Option<FinalMessage>,
