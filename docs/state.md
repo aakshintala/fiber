@@ -32,8 +32,8 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
 ## Override
 
 One environment variable, `FIBER_HOME`, relocates all of Fiber home. It must
-be an absolute path. An empty or relative value is a startup error naming the
-variable; Fiber never falls back to `~/.fiber`. A supervisor that meant to
+be an absolute path. An empty or relative value is a startup error, code `usage`,
+naming the variable; Fiber never falls back to `~/.fiber`. A supervisor that meant to
 isolate a run and passed an empty value by mistake would otherwise silently
 share the person's real sessions and credentials.
 
