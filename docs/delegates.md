@@ -293,8 +293,7 @@ As Lua, none of which runs on a model request:
   workspace, and the harness session id.
 - `line(text)` is called with each line the harness prints, and returns what
   that line carries, if anything: the final answer, usage, quota, or a
-  failure. Usage says whether a subscription login ran it
-  (`docs/model-routing.md`, "Cost").
+  failure.
 - `models()` returns the harness's model references. It is cached and
   refreshed as a provider's model discovery is (`docs/model-routing.md`,
   "Model discovery").
@@ -327,9 +326,9 @@ As Lua, none of which runs on a model request:
   waits for the next run.
 - **Usage.** The parent writes one `usage_recorded` per run, from the usage
   `line` returned. Its cost is the harness's own where it reports one, or
-  computed from the declared prices, and it carries `subscription` when the
-  harness ran on a subscription login. The parent's budget counts it unless it
-  carries `subscription` (`docs/loop.md`, "Spending budget").
+  computed from the declared prices. It carries `subscription` when the
+  harness ran on a subscription login, and the parent's budget then skips it
+  (`docs/loop.md`, "Spending budget").
 - **Quota.** `quota()` runs when `delegate_models` needs it, as a provider's
   does (`docs/tools.md`, "Provider quota"). Quota that `line` returns from a
   running delegate replaces the stored value, with no fetch.
