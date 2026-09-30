@@ -58,3 +58,8 @@ fn a_payload_that_is_not_an_object_is_rejected() {
     let line = r#"{"kind":"x","session_id":"s","ts":1,"schema_version":1,"payload":[]}"#;
     assert!(serde_json::from_str::<Envelope>(line).is_err());
 }
+
+#[test]
+fn demo_a_failing_test() {
+    assert_eq!(1 + 1, 3);
+}
