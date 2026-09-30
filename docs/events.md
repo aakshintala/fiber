@@ -56,14 +56,16 @@ not recognise and ignores fields it does not know.
 
 The one line that is not an envelope is the `fiber_exited` a process prints when
 it fails before any session exists (`docs/errors.md`, "Before a session
-exists"). It is not written to any log. It carries `kind`, `schema_version`,
-`exit_code` and `error`, and has no `session_id`, `ts`, `seq` or `payload`. Only
+exists"). It is not written to any log. It carries `kind`, `schema_version`
+and a `payload` holding `exit_code` and `error`, as `fiber_exited` does. It has no
+`session_id`, `ts` or `seq`. A caller reads `.payload.exit_code` and
+`.payload.error` on the last line whatever happened. Only
 this line may lack a session, and its own type says so, so no other kind can
 drift into having none. It keeps `kind` so that `fiber ask … | tail -1` reads the
 verdict whatever happened.
 
 ```json
-{"kind":"fiber_exited","schema_version":1,"exit_code":1,"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."}}
+{"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
 ## Durable and ephemeral

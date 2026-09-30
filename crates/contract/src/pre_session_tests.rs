@@ -14,7 +14,7 @@ fn doc_example() -> &'static str {
 fn the_doc_example_round_trips_byte_for_byte() {
     let line = doc_example();
     let exit: PreSessionExit = serde_json::from_str(line).unwrap();
-    assert_eq!(exit.exit_code, 1);
+    assert_eq!(exit.payload.exit_code, 1);
     assert_eq!(serde_json::to_string(&exit).unwrap(), line);
 }
 
@@ -38,5 +38,8 @@ fn any_other_kind_is_rejected() {
 #[test]
 fn a_built_line_matches_the_doc_example() {
     let example: PreSessionExit = serde_json::from_str(doc_example()).unwrap();
-    assert_eq!(PreSessionExit::new(1, example.error.clone()), example);
+    assert_eq!(
+        PreSessionExit::new(1, example.payload.error.clone().unwrap()),
+        example
+    );
 }
