@@ -245,8 +245,9 @@ quota".
 ## Image limits
 
 Every image is processed once, when it enters the session: an image from
-`read`, from `web_fetch`, in an MCP tool result, or pasted in a `prompt` or
-`steer` command. The processed file is what is written to the session's
+`read`, in an MCP tool result, or pasted in a `prompt` or `steer` command.
+`web_fetch` saves an image as downloaded and gives its path, so the image
+enters through `read`. The processed file is what is written to the session's
 `artifacts/`, what the log's `image` part names (path, mime_type, width and
 height of the stored file), and what every request sends. A resume sends the
 same bytes. The provider module does not resize.

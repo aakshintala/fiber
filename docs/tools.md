@@ -754,10 +754,9 @@ backend.
   are.
 - A PDF, or a PNG, JPEG, GIF or WebP image, is saved to the session's
   `artifacts/` and the result gives its path. The model reads it with `read`,
-  which already handles both ("File tools"). An image is processed once when
-  it arrives (`docs/model-routing.md`, "Image limits"). An image that cannot
-  be read, or is over 50 megapixels, fails with `unsupported_file` and the
-  decoder's message (or the pixel count).
+  which already handles both ("File tools"). The saved file is the bytes as
+  downloaded; `read` processes an image (`docs/model-routing.md`, "Image
+  limits").
 - Any other content type fails with `unsupported_file`, giving its type and
   size.
 - The cap is the 16 KiB default ("Bounded results"). A cut keeps the start of
