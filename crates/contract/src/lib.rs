@@ -9,6 +9,7 @@ pub mod commands;
 mod envelope;
 pub mod events;
 mod ids;
+mod pre_session;
 pub mod shapes;
 
 pub use codes::ErrorCode;
@@ -16,3 +17,4 @@ pub use envelope::{Envelope, SCHEMA_VERSION};
 pub use ids::{
     ActionId, CommandId, GenerationId, JobId, ProviderCallId, RequestId, Seq, SessionId, TurnId,
 };
+pub use pre_session::PreSessionExit;
