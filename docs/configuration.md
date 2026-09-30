@@ -46,7 +46,8 @@ Databricks model, unless the person's `projects/<key>/config.json` sets
 another, or they pass `-c model=...` for one run.
 
 Objects merge key by key, so a layer changes only the keys it names. Any other
-value, a list included, replaces the one below it.
+value, a list included, replaces the one below it. A provider's `credential` replaces
+the one below it as a whole: it does not merge key by key.
 
 The per-project file is the person's own setting for one project. It lives in
 Fiber home, not the repository, so it covers every worktree of the project
@@ -91,7 +92,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
-| `permissions.mode` | `docs/permissions.md` | no | The mode a new session starts in: `auto` or `yolo` (`docs/permissions.md`, "Modes"). |
+| `permissions.mode` | `auto` | no | The mode a new session starts in: `auto` or `yolo` (`docs/permissions.md`, "Modes"). |
 | `reviewer.model` | a small, fast model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
@@ -107,6 +108,7 @@ set the key.
 | `tools."<name>".deferred` | the tool's own | yes | Whether the tool is deferred (`docs/tools.md`, "What is deferred by default"). |
 | `web_search.backend` | the one installed | no | The search backend `web_search` uses when more than one is installed (`docs/tools.md`, "Web fetch and web search"). |
 | `shell.read_only."<command>".flags` | none | no | Adds a command to the shell classifier's read-only list, with the flags it may take and stay read-only, such as `["--json", "-p"]` (`docs/tools.md`, "Search", "Other command-line tools"). |
+| `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
 | `extensions."<name>".version` | none | yes, with approval | Declares an extension for the repository, to be fetched (`docs/extensions.md`, "Extensions a repository brings"). |
@@ -353,6 +355,9 @@ provider extension declares") lists:
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
 - `cost` is in US dollars per million tokens.
+- `subscription` is `true` for a model a subscription login serves; its `cost`
+  is then the vendor's API prices (`docs/model-routing.md`, "Cost"). Absent
+  means false.
 
 A provider with a `models()` function returns a list in exactly the shape of
 `models`. Fiber caches it at `cache/models/<name>.json`.

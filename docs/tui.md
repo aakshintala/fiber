@@ -126,7 +126,8 @@ The default cards, in order:
 - **Session:** the working directory, with the permission mode as one word
   beside it; the git branch; model, effort and thinking; a context bar that
   fills toward the automatic handoff point, with a marker there; tokens, cache
-  hit rate and cost; output speed and turns; and one "tools" line naming any
+  hit rate, cost billed and cost on subscription, delegates included, against
+  `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
   MCP server that is down.
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one card for all of them, two rows each, at most 6 rows
@@ -173,6 +174,9 @@ the conversation. The views are:
   the person can finish an interactive step the model started.
 - **The model picker:** models by provider with roles marked, effort and
   thinking chips, and the size of the prompt-cache rebuild a switch costs.
+- **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
+  down by turn, by model and by delegate, each with tokens by kind, cost billed
+  and cost on subscription, and the budget left when `budget.usd` is set.
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results.
 - **Changed files:** a file list with the chosen file's hunks.
@@ -255,8 +259,11 @@ offers resume.
 - **One card per turn.** The prompt that starts a turn floats above its card,
   as a tinted bubble on the right, at most about 70% of the width, with the
   time under it. A steering message sits inside the card where it landed, as a
-  labelled rule ("steer · 14:15") over bold text. A ▣ line closes the card
-  with the outcome, duration and call count.
+  labelled rule ("steer · 14:15") over bold text. A dim ▣ line closes the card
+  with the outcome, duration, call count and the turn's usage, its delegates'
+  spend during the turn included: "▣ completed · 38s · 12 calls · 18.2k tokens
+  · $0.41 · $1.10 on subscription". A figure that is zero is left out, and a
+  model with no price shows tokens only (`docs/model-routing.md`, "Cost").
 - **Replies lead, tool groups sit back.** Nothing inside the card is indented:
   replies, summary lines, steering messages and answers all start at the
   card's edge. A tool group has no band of its own, and its summary line is dim

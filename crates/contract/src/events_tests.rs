@@ -179,6 +179,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         "options": [{"label": "a", "description": "d"}, {"label": "b"}]}]);
     let tokens =
         json!({"input": 1, "cache_read": 2, "cache_write": {"5m": 3, "1h": 4}, "output": 5});
+    let usage = json!({"tokens": tokens, "cost": 0.5, "subscription_cost": 0.1});
     let settings =
         json!({"model": "p/m", "effort": "high", "thinking": "on", "cache_lifetime": "5m"});
     vec![
@@ -188,7 +189,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "fiber_exited",
-            json!({"exit_code": 1, "final_action_id": "a", "text": "t",
+            json!({"exit_code": 1, "usage": usage, "final_action_id": "a", "text": "t",
             "error": error, "suspended_on": "r", "questions": questions}),
         ),
         (
@@ -382,7 +383,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "usage_recorded",
             json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
-            "web_searches": 1, "cost": 0.25, "extension": "e"}),
+            "web_searches": 1, "cost": 0.25, "subscription": true, "extension": "e"}),
         ),
         (
             "quota_noticed",
@@ -493,7 +494,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "delegate_finished",
             json!({"job_id": "j", "text": "t", "artifact": "artifacts/f",
-            "questions": questions, "usage": {"tokens": tokens, "cost": null},
+            "questions": questions,
+            "usage": {"tokens": tokens, "cost": null, "subscription_cost": 0.0},
             "worktree": {"path": "/t", "branch": "b", "dirty": true}}),
         ),
         (
@@ -687,8 +689,14 @@ fn a_required_key_that_may_be_null_must_be_present() {
         );
     }
     let finished = |usage: Value| json!({"job_id": "j", "text": "t", "usage": usage});
-    assert!(read("delegate_finished", finished(json!({"tokens": tokens}))).is_err());
-    let with_null = finished(json!({"tokens": tokens, "cost": null}));
+    assert!(
+        read(
+            "delegate_finished",
+            finished(json!({"tokens": tokens, "subscription_cost": 0.0}))
+        )
+        .is_err()
+    );
+    let with_null = finished(json!({"tokens": tokens, "cost": null, "subscription_cost": 0.0}));
     assert!(read("delegate_finished", with_null).unwrap().is_some());
     let opening = |git: Value| {
         json!({"environment": {"date": "d", "os": "o", "arch": "a", "shell": "s",

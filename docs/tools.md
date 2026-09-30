@@ -946,8 +946,9 @@ readonly"), and in `auto` the reviewer judges the send. Without it, a
 
 **Nothing limits how many messages sessions exchange.** Two sessions can
 wake each other indefinitely while no person watches. An extension can refuse
-messages in `before_message`; how much a session may spend is
-[Token and cost display, and spending budgets](https://github.com/aakshintala/fiber/issues/192).
+messages in `before_message`, and `budget.usd` stops each session once it has
+spent its limit (`docs/loop.md`, "Spending budget"). On a subscription the
+budget counts nothing, so only the subscription's own limit ends the pair.
 
 **Delegates on another harness receive through their parent.** The parent
 binds the delegate's socket and delivers what arrives; the delegate sends
