@@ -120,6 +120,10 @@ given the diff, the ticket, the docs it cites, `CONTEXT.md` and
 - Spec: the diff does what the ticket and its `docs/<area>.md` pages say.
 - Standards: the items in `docs/code-quality.md`, "What a reviewer checks".
 
+A pull request that changes only docs, in wording taken from an owner ruling
+recorded on its ticket, has no separate reviewer. The orchestrator checks the
+diff against the ruling and says so in the pull request body.
+
 The review is posted on the pull request as a comment. Each finding is
 either fixed, and the fix's diff reviewed again, or answered in a reply that
 cites evidence: a test, a doc line, a command's output. The pull request
