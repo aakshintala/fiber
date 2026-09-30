@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Runs a pull request's new and changed tests against its base commit, and
+# passes only if at least one of them fails there (docs/testing.md, "Proving
+# a test bites"). A test counts as changed when its test file changed. A test
+# file the base commit lacks is declared in its parent module there, the way
+# docs/code-quality.md, "Size", includes it.
+#
+# Usage: scripts/bug-base BASE
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+base=$(git merge-base "$1" HEAD)
+# shellcheck disable=SC2046
+plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$base" HEAD))
+filter=$(sed -n 's/^filter\t//p' <<<"$plan")
+if [ -z "$filter" ]; then
+  echo "bug-base: the pull request changes no test file, so no test shows the bug"
+  exit 1
+fi
+
+tree=$(mktemp -d)
+git worktree add --quiet --detach "$tree" "$base"
+trap 'git worktree remove --force "$tree"' EXIT
+
+package_args=()
+while IFS=$'\t' read -r -a fields; do
+  kind=${fields[0]:-}
+  case $kind in
+    package) package_args+=(-p "${fields[1]}") ;;
+    file)
+      path=${fields[1]}
+      mkdir -p "$tree/$(dirname "$path")"
+      git show "HEAD:$path" >"$tree/$path"
+      if [ ${#fields[@]} -gt 2 ] && ! git cat-file -e "$base:$path" 2>/dev/null; then
+        # The candidates are parent-file and declaration pairs; the first
+        # parent that exists at the base commit declares the new file.
+        parent=
+        for ((i = 2; i + 1 < ${#fields[@]}; i += 2)); do
+          if [ -f "$tree/${fields[i]}" ]; then
+            parent=${fields[i]}
+            declaration=${fields[i + 1]}
+            break
+          fi
+        done
+        if [ -z "$parent" ]; then
+          echo "bug-base: $path has no parent module at the base commit"
+        elif ! grep -qE '(^|[^[:alnum:]_])mod[[:space:]]+tests([^[:alnum:]_]|$)' "$tree/$parent"; then
+          printf '\n%s\n' "$declaration" >>"$tree/$parent"
+          echo "bug-base: declared $path in $parent"
+        fi
+      fi
+      ;;
+  esac
+done <<<"$plan"
+
+echo "bug-base: running $filter at $base"
+status=0
+(cd "$tree" && cargo nextest run --no-fail-fast "${package_args[@]}" -E "$filter") || status=$?
+
+# nextest-metadata's exit codes: 100 when a test failed, 101 when the build
+# failed and 4 when no test matched. Only a failed test shows the bug.
+case $status in
+  100) echo "bug-base: ok, a new or changed test fails on the base commit" ;;
+  0) echo "bug-base: every new and changed test passes on the base commit, so none shows the bug"; exit 1 ;;
+  101) echo "bug-base: the tests do not build on the base commit, so none ran there"; exit 1 ;;
+  4) echo "bug-base: no new or changed test runs on the base commit"; exit 1 ;;
+  *) echo "bug-base: nextest exited $status on the base commit"; exit 1 ;;
+esac

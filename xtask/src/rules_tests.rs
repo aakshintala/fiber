@@ -1,0 +1,248 @@
+use super::*;
+
+const CODE_QUALITY: &str = "# Code quality
+
+## `unsafe`
+
+ An indented line is not a heading.
+
+| Crate | File | Why |
+|---|---|---|
+| none yet | | |
+
+### A subsection
+
+## Types
+
+| Crate | File | Why |
+|---|---|---|
+| `log` | `crates/log/src/lib.rs` | not the unsafe table |
+";
+
+fn listed() -> String {
+    CODE_QUALITY.replacen(
+        "| none yet | | |",
+        "| `tools` | `crates/tools/src/pty.rs` | pre_exec |",
+        1,
+    )
+}
+
+const DEPENDENCIES: &str = "# Dependencies
+
+## Runtime dependencies
+
+| Crate | Used for |
+|---|---:|
+| serde, serde_json | wire formats |
+| `ureq` | HTTP |
+| all of the above together | |
+
+## Waiting on other decisions
+
+| Crate | Needed if |
+|---|---|
+| rusqlite, SQLite bundled | a database |
+
+## Tests and development tools
+
+| Crate or tool | Kind | Used for |
+|---|---|---|
+| insta | dev-dependency | snapshots |
+";
+
+fn file(krate: &str, rel: &str, source: String) -> RustFile {
+    let dir = if krate == "xtask" {
+        "xtask".to_owned()
+    } else {
+        format!("crates/{krate}")
+    };
+    RustFile {
+        krate: krate.to_owned(),
+        path: format!("{dir}/{rel}"),
+        rel: rel.to_owned(),
+        source,
+    }
+}
+
+#[test]
+fn the_line_cap_fails_a_source_file_over_800_lines() {
+    let files = [
+        file("log", "src/big.rs", "x\n".repeat(801)),
+        file("log", "src/ok.rs", "x\n".repeat(800)),
+    ];
+    assert_eq!(
+        over_cap(&files),
+        ["crates/log/src/big.rs: 801 lines, over the 800-line cap"]
+    );
+}
+
+#[test]
+fn test_files_have_no_line_cap() {
+    let files = [
+        file("log", "src/tests.rs", "x\n".repeat(5000)),
+        file("log", "src/a_tests.rs", "x\n".repeat(5000)),
+        file("log", "tests/t.rs", "x\n".repeat(5000)),
+    ];
+    assert_eq!(over_cap(&files), Vec::<String>::new());
+}
+
+#[test]
+fn unsafe_is_found_in_code() {
+    assert!(uses_unsafe("fn f() { unsafe { g() } }").unwrap());
+    assert!(uses_unsafe("unsafe fn f() {}").unwrap());
+    assert!(uses_unsafe("let s = \"a\\\"b\"; unsafe {}").unwrap());
+    assert!(uses_unsafe("let c = '\\''; let d = 'x'; unsafe {}").unwrap());
+    assert!(uses_unsafe("fn f<'a>(x: &'a str) { unsafe {} }").unwrap());
+    assert!(uses_unsafe("/* a */ unsafe {}").unwrap());
+    assert!(uses_unsafe("let s = r#\"x\"#; unsafe {}").unwrap());
+}
+
+#[test]
+fn unsafe_in_comments_strings_and_names_is_not_code() {
+    assert!(
+        !uses_unsafe("#![deny(unsafe_code)]\n// unsafe here\n/* unsafe\n */ fn f() {}").unwrap()
+    );
+    assert!(!uses_unsafe("let s = \"unsafe\"; let t = \"\\\" unsafe\";").unwrap());
+    assert!(!uses_unsafe("let s = r#\"unsafe \"quoted\" \"#;").unwrap());
+    assert!(!uses_unsafe("let s = r\"unsafe\";").unwrap());
+    assert!(!uses_unsafe("fn not_unsafe() {} fn unsafely() {}").unwrap());
+    assert!(!uses_unsafe("// unsafe at the end").unwrap());
+}
+
+#[test]
+fn the_unsafe_check_passes_when_code_and_table_agree() {
+    let clean = [file("log", "src/lib.rs", "fn f() {}".to_owned())];
+    assert_eq!(unsafe_mismatches(&clean, CODE_QUALITY), Ok(vec![]));
+    let pty = [file("tools", "src/pty.rs", "unsafe { x() }".to_owned())];
+    assert_eq!(unsafe_mismatches(&pty, &listed()), Ok(vec![]));
+}
+
+#[test]
+fn the_unsafe_check_fails_unsafe_the_table_does_not_list() {
+    let files = [file("log", "src/lib.rs", "unsafe { x() }".to_owned())];
+    assert_eq!(
+        unsafe_mismatches(&files, CODE_QUALITY),
+        Ok(vec!["crates/log/src/lib.rs: uses unsafe, but the table in docs/code-quality.md does not list it".to_owned()])
+    );
+}
+
+#[test]
+fn the_unsafe_check_fails_a_listed_file_without_unsafe() {
+    let files = [file("tools", "src/pty.rs", "fn f() {}".to_owned())];
+    assert_eq!(
+        unsafe_mismatches(&files, &listed()),
+        Ok(vec![
+            "crates/tools/src/pty.rs: listed for tools in docs/code-quality.md, but uses no unsafe"
+                .to_owned()
+        ])
+    );
+}
+
+#[test]
+fn the_unsafe_check_needs_its_table() {
+    assert!(unsafe_mismatches(&[], "# Code quality\n").is_err());
+}
+
+#[test]
+fn a_section_ends_at_the_next_heading_of_its_level() {
+    let lines = section(CODE_QUALITY, "`unsafe`").unwrap();
+    assert_eq!(lines.first(), Some(&""));
+    assert!(lines.contains(&"### A subsection"));
+    assert!(!lines.contains(&"## Types"));
+    assert_eq!(section(CODE_QUALITY, "Missing"), None);
+    assert_eq!(section("#Types\n", "Types"), None);
+}
+
+#[test]
+fn only_the_admitted_tables_list_crates() {
+    let names: Vec<String> = admitted(DEPENDENCIES).unwrap().into_iter().collect();
+    assert_eq!(names, ["insta", "serde", "serde_json", "ureq"]);
+    assert!(admitted("# Dependencies\n").is_err());
+}
+
+#[test]
+fn a_dependency_that_is_not_listed_fails() {
+    let deps: BTreeSet<(String, String)> =
+        [("contract", "serde"), ("log", "insta"), ("log", "rusqlite")]
+            .iter()
+            .map(|(a, b)| ((*a).to_owned(), (*b).to_owned()))
+            .collect();
+    assert_eq!(
+        unlisted(&deps, DEPENDENCIES),
+        Ok(vec![
+            "log depends on rusqlite, which docs/dependencies.md does not list".to_owned()
+        ])
+    );
+}
+
+/// Each Rust literal and comment form, holding quotes, backslashes and the
+/// word itself, so a scanner that misreads its end sees the wrong code.
+const FORMS: [&str; 17] = [
+    r#""a\"b unsafe \\""#,
+    r##"r#"a"b unsafe"#"##,
+    r###"r##"a"#b"##"###,
+    r#"r"a\""#,
+    r#"b"a\"b unsafe""#,
+    r##"br#"a"b unsafe"#"##,
+    r#"br"a\""#,
+    r#"c"a\"b unsafe""#,
+    r##"cr#"a"b unsafe"#"##,
+    r"'\''",
+    r"'\u{22}'",
+    "'\"'",
+    r"b'\''",
+    "b'\"'",
+    "/* a \" /* b ' */ \" unsafe */",
+    "/* \" */",
+    "// \" unsafe\n",
+];
+
+#[test]
+fn unsafe_after_every_literal_form_is_found() {
+    for form in FORMS {
+        assert!(
+            uses_unsafe(&format!("let x = {form}; unsafe {{}}")).unwrap(),
+            "{form}"
+        );
+    }
+}
+
+#[test]
+fn unsafe_inside_every_literal_form_is_not_code() {
+    for form in FORMS {
+        assert!(!uses_unsafe(&format!("let x = {form};")).unwrap(), "{form}");
+    }
+}
+
+#[test]
+fn lifetimes_labels_and_raw_identifiers_are_code() {
+    let unsafe_after = |code: &str| uses_unsafe(&format!("{code} unsafe {{}}")).unwrap();
+    assert!(unsafe_after("fn f<'a>(x: &'a str) -> &'a str { x }"));
+    assert!(unsafe_after("fn f() { 'outer: loop { break 'outer; } }"));
+    assert!(unsafe_after("let r#type = 1; let b = br; let c = cr;"));
+    assert!(!uses_unsafe("let r#unsafe = 1;").unwrap());
+}
+
+#[test]
+fn a_string_right_after_an_identifier_hides_nothing() {
+    assert!(uses_unsafe(r#"fn f() { stringify!(b""""); unsafe {} }"#).unwrap());
+    assert!(uses_unsafe(r#"fn f() { m!(b"" ""); unsafe {} }"#).unwrap());
+}
+
+#[test]
+fn a_file_that_does_not_tokenise_fails_the_check_by_name() {
+    for source in [
+        "\"unterminated unsafe",
+        "/* never closed unsafe",
+        "fn f() { unsafe {}",
+        "r\"open",
+    ] {
+        assert!(uses_unsafe(source).is_err(), "{source:?}");
+    }
+    let files = [file("log", "src/lib.rs", "fn f() {".to_owned())];
+    let error = unsafe_mismatches(&files, CODE_QUALITY).unwrap_err();
+    assert!(
+        error.starts_with("crates/log/src/lib.rs: does not tokenise as Rust: "),
+        "{error}"
+    );
+}
