@@ -100,22 +100,24 @@ impl Queue {
         self.ready.notify_one();
     }
 
-    /// Tells the watcher the log is gone.
+    /// Tells the watcher the log is gone, unless it already knows the log
+    /// failed.
     pub(crate) fn close(&self) {
-        self.end(End::Closed);
+        let mut state = self.lock();
+        if matches!(state.end, End::Open) {
+            state.end = End::Closed;
+        }
+        drop(state);
+        self.ready.notify_one();
     }
 
     /// Tells the watcher the log stopped on a failed write. It still gets
     /// every line written before, and catches up first if it fell behind.
     pub(crate) fn fail(&self, session: &str, cause: &str) {
-        self.end(End::Failed {
+        self.lock().end = End::Failed {
             session: session.to_owned(),
             cause: cause.to_owned(),
-        });
-    }
-
-    fn end(&self, end: End) {
-        self.lock().end = end;
+        };
         self.ready.notify_one();
     }
 }

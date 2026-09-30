@@ -92,6 +92,12 @@ fn child_writing_past_a_file_size_limit() {
         .recv_timeout(DEADLINE)
         .expect("a watcher of a stopped log to return at once");
     assert_eq!(got, Err(ErrorCode::IoFailed));
+
+    // Dropping the stopped log does not turn its failure into a clean end.
+    let mut orphan = log.watch();
+    drop(log);
+    let ended = orphan.recv().unwrap_err();
+    assert_eq!(ended.code(), ErrorCode::IoFailed);
 }
 
 /// How many durable lines the child writes before its write fails. With an
