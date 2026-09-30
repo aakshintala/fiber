@@ -195,6 +195,11 @@ final message, any questions, usage totals and worktree state. Their keys are
 ## Lifetime
 
 - A delegate survives cancellation of its parent's turn, as every job does.
+  An approval or question the delegate is waiting on stays pending, because
+  the cancel resolves only the requests in the parent's own turn
+  (`docs/architecture.md`, "Cancellation"). The person still answers it with
+  `reply` naming the delegate's `session_id`, and its resolved line goes in
+  the delegate's log alone. This holds for a delegate on any harness.
 - A delegate that finishes its task with jobs of its own still running follows
   the rule for a session about to end (`docs/tools.md`): it is woken once, then
   waited for.

@@ -280,7 +280,9 @@ One press of the cancel key ends the **turn**:
 - a pending approval or question in the turn ends with its resolved line
   before its call completes: `permission_resolved` with `decision: deny` and
   `decided_by: cancel`, or `interaction_resolved` with `by: fiber` and
-  `declined: true`, so a client clears its panel as it does on any answer,
+  `declined: true`, so a client clears its panel as it does on any answer. A
+  delegate's pending request is not in the turn and stays pending
+  (`docs/delegates.md`, "Lifetime"),
 - the turn ends with `turn_completed { outcome: interrupted }`,
 - background jobs keep running, because a job outlives the turn that started
   it,
