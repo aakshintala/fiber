@@ -54,6 +54,20 @@ A durable line, which carries `seq`, and an ephemeral one, which does not:
 Kind-specific fields live under `payload`. A consumer skips any `kind` it does
 not recognise and ignores fields it does not know.
 
+The one line that is not an envelope is the `fiber_exited` a process prints when
+it fails before any session exists (`docs/errors.md`, "Before a session
+exists"). It is not written to any log. It carries `kind`, `schema_version`
+and a `payload` holding `exit_code` and `error`, as `fiber_exited` does. It has no
+`session_id`, `ts` or `seq`. A caller reads `.payload.exit_code` and
+`.payload.error` on the last line whatever happened. Only
+this line may lack a session, and its own type says so, so no other kind can
+drift into having none. It keeps `kind` so that `fiber ask … | tail -1` reads the
+verdict whatever happened.
+
+```json
+{"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
+```
+
 ## Durable and ephemeral
 
 **A line is durable if and only if it carries `seq`.** There is no separate
@@ -222,11 +236,11 @@ Durable. The last line a process writes for a session.
 | `suspended_on` | string | no | the `request_id` of the pending approval or question the process exited on (`docs/invocation.md`, "Lifecycle") |
 | `questions` | `questions` | no | copied from the last `turn_completed`, when its turn ended on questions |
 
-A process is not a named unit in the glossary; these two lines record its
-boundary without inventing one. They are durable for one reason: a
-`fiber_started` with no matching `fiber_exited` is the only record that a process
-died rather than finished. A session that was rewound ends with `rewound`
-instead, which closes the boundary the same way ("Rewind"). That is the same trick tool calls use below.
+A process is the unit these two lines bound (`CONTEXT.md`). They are
+durable for one reason: a `fiber_started` with no matching `fiber_exited` is the
+only record that a process died rather than finished. A session that was rewound
+ends with `rewound` instead, which closes the boundary the same way ("Rewind").
+That is the same trick tool calls use below.
 
 `fiber_exited` copies the final message's text as well as pointing at it, so a
 one-shot caller reads the last line and is done:
