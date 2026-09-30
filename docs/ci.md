@@ -49,8 +49,8 @@ A pull request runs only what its diff can affect.
 - A file outside a crate that the crate compiles in runs that crate alone,
   not the crates that depend on it. A change to `docs/events.md`,
   `docs/errors.md` or `docs/invocation.md` runs `contract`, whose tests
-  check the code against them. The selector lists these files, and its tests
-  fail when the list and the source disagree.
+  check the code against them. The selector lists these files, and the gate
+  fails when the list and the source disagree.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
@@ -86,6 +86,8 @@ On Linux x86_64 alone:
 - the docs check, below
 - no non-test source file over 800 lines
 - the `unsafe` table in `docs/code-quality.md` matches the code
+- the compiled-in list matches the files crates compile in from outside
+  their directory
 - every crate a `Cargo.toml` names is listed in `docs/dependencies.md`
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each

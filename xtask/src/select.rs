@@ -2,6 +2,11 @@
 //! and the verdict behind the `CI` check.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::Path;
+
+use proc_macro2::{Delimiter, TokenStream, TokenTree};
+
+use crate::rules::RustFile;
 
 /// A workspace member: its directory relative to the workspace root, and
 /// the members it depends on.
@@ -76,6 +81,87 @@ fn compiled_in(path: &str) -> impl Iterator<Item = &'static str> {
     COMPILED_IN
         .iter()
         .filter_map(move |(p, krate)| (*p == path).then_some(*krate))
+}
+
+fn include_path(stream: TokenStream) -> Option<String> {
+    stream.into_iter().find_map(|tree| match tree {
+        TokenTree::Literal(lit) => {
+            let text = lit.to_string();
+            text.strip_prefix('"')
+                .and_then(|s| s.strip_suffix('"'))
+                .map(str::to_owned)
+        }
+        TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Punct(_) => None,
+    })
+}
+
+fn include_literals(source: &str) -> Result<Vec<String>, proc_macro2::LexError> {
+    fn walk(stream: TokenStream, out: &mut Vec<String>) {
+        let mut tokens = stream.into_iter();
+        while let Some(tree) = tokens.next() {
+            match tree {
+                TokenTree::Ident(ident) if ident == "include_str" || ident == "include_bytes" => {
+                    if let Some(TokenTree::Punct(p)) = tokens.next()
+                        && p.as_char() == '!'
+                        && let Some(TokenTree::Group(group)) = tokens.next()
+                    {
+                        if group.delimiter() == Delimiter::Parenthesis
+                            && let Some(path) = include_path(group.stream())
+                        {
+                            out.push(path);
+                        }
+                        walk(group.stream(), out);
+                    }
+                }
+                TokenTree::Group(group) => walk(group.stream(), out),
+                TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
+            }
+        }
+    }
+    let mut out = Vec::new();
+    walk(source.parse()?, &mut out);
+    Ok(out)
+}
+
+pub(crate) fn compiled_in_mismatches(
+    files: &[RustFile],
+    members: &Members,
+) -> Result<Vec<String>, String> {
+    let mut found = BTreeSet::new();
+    for f in files {
+        let literals = include_literals(&f.source)
+            .map_err(|e| format!("{}: does not tokenise as Rust: {e}", f.path))?;
+        let dir = Path::new(&f.path).parent().unwrap_or(Path::new(""));
+        let Some(member) = members.get(&f.krate) else {
+            continue;
+        };
+        let prefix = format!("{}/", member.dir);
+        for lit in literals {
+            let target = crate::docs::join(dir, &lit)
+                .to_string_lossy()
+                .replace('\\', "/");
+            if target == member.dir || target.starts_with(&prefix) {
+                continue;
+            }
+            found.insert((target, f.krate.clone()));
+        }
+    }
+    let listed: BTreeSet<(String, String)> = COMPILED_IN
+        .iter()
+        .map(|(path, krate)| ((*path).to_owned(), (*krate).to_owned()))
+        .collect();
+    let mut failures: Vec<String> = found
+        .difference(&listed)
+        .map(|(path, krate)| {
+            format!("{path}: {krate} compiles it in, but the compiled-in list does not list it")
+        })
+        .collect();
+    failures.extend(
+        listed.difference(&found).map(|(path, krate)| {
+            format!("{path}: listed for {krate}, but no crate compiles it in")
+        }),
+    );
+    Ok(failures)
 }
 
 fn runs_all(path: &str) -> bool {

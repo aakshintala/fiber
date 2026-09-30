@@ -1,7 +1,6 @@
-use std::fs;
-use std::path::{Component, Path, PathBuf};
-
 use super::*;
+
+use crate::rules::RustFile;
 
 fn members() -> Members {
     let member = |dir: &str, deps: &[&str]| Member {
@@ -521,147 +520,60 @@ fn dependents_follow_a_chain_of_any_length() {
     );
 }
 
-fn cargo_package_name(toml: &str) -> String {
-    let section = toml.split("[package]").nth(1).unwrap();
-    for line in section.lines() {
-        let line = line.trim();
-        if line.starts_with('[') {
-            break;
-        }
-        let Some(rest) = line.strip_prefix("name") else {
-            continue;
-        };
-        let rest = rest.trim().strip_prefix('=').unwrap().trim();
-        return rest.trim_matches('"').to_owned();
+fn contract_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "contract".to_owned(),
+        path: "crates/contract/src/lib.rs".to_owned(),
+        rel: "src/lib.rs".to_owned(),
+        source: source.to_owned(),
     }
-    panic!("no package name");
 }
 
-fn workspace_member_dirs(root: &Path) -> Vec<(String, PathBuf)> {
-    let toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
-    let inner = toml
-        .split_once("members")
-        .unwrap()
-        .1
-        .split_once('[')
-        .unwrap()
-        .1
-        .split_once(']')
-        .unwrap()
-        .0;
-    inner
-        .split(',')
-        .filter_map(|entry| {
-            let rel = entry.trim().strip_prefix('"')?.strip_suffix('"')?;
-            Some(rel.to_owned())
-        })
-        .map(|rel| {
-            let dir = root.join(&rel);
-            let pkg = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
-            (cargo_package_name(&pkg), dir)
-        })
+fn listed_includes() -> String {
+    COMPILED_IN
+        .iter()
+        .map(|(path, _)| format!("include_str!(\"../../../{path}\");\n"))
         .collect()
 }
 
-fn rust_sources(dir: &Path) -> Vec<PathBuf> {
-    let mut files = Vec::new();
-    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
-        for entry in fs::read_dir(dir).unwrap() {
-            let entry = entry.unwrap();
-            let path = entry.path();
-            if entry.file_type().unwrap().is_dir() {
-                if entry.file_name() != "target" {
-                    walk(&path, files);
-                }
-            } else if path.extension().is_some_and(|ext| ext == "rs") {
-                files.push(path);
-            }
-        }
-    }
-    walk(dir, &mut files);
-    files
-}
-
-fn include_literals(source: &str) -> Vec<String> {
-    let mut paths = Vec::new();
-    let mut rest = source;
-    while let Some(offset) = rest.find("include_") {
-        rest = rest.get(offset..).unwrap();
-        let name_len = if rest.starts_with("include_str!") {
-            "include_str!".len()
-        } else if rest.starts_with("include_bytes!") {
-            "include_bytes!".len()
-        } else {
-            rest = rest.get("include_".len()..).unwrap_or("");
-            continue;
-        };
-        let after = rest.get(name_len..).unwrap_or("").trim_start();
-        if let Some(after) = after.strip_prefix('(') {
-            let after = after.trim_start();
-            if let Some(path) = quoted_string(after) {
-                paths.push(path);
-            }
-        }
-        rest = rest.get(name_len..).unwrap_or("");
-    }
-    paths
-}
-
-fn quoted_string(s: &str) -> Option<String> {
-    let mut chars = s.strip_prefix('"')?.chars();
-    let mut out = String::new();
-    loop {
-        match chars.next()? {
-            '"' => return Some(out),
-            '\\' => out.push(chars.next()?),
-            c => out.push(c),
-        }
-    }
-}
-
-fn join_normalized(base: &Path, rel: &str) -> PathBuf {
-    let mut out = PathBuf::new();
-    for component in base.join(rel).components() {
-        match component {
-            Component::ParentDir => {
-                out.pop();
-            }
-            Component::CurDir => {}
-            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => out.push(component),
-        }
-    }
-    out
-}
-
-fn repo_relative(root: &Path, path: &Path) -> String {
-    path.strip_prefix(root)
-        .unwrap_or(path)
-        .to_string_lossy()
-        .replace('\\', "/")
+#[test]
+fn a_listed_include_passes() {
+    let files = [contract_src(&listed_includes())];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
+    );
 }
 
 #[test]
-fn compiled_in_table_matches_include_macros() {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let mut found = BTreeSet::new();
-    for (krate, dir) in workspace_member_dirs(root) {
-        for file in rust_sources(&dir) {
-            let source = fs::read_to_string(&file).unwrap();
-            let Some(parent) = file.parent() else {
-                continue;
-            };
-            for lit in include_literals(&source) {
-                let target = join_normalized(parent, &lit);
-                if target.starts_with(&dir) {
-                    continue;
-                }
-                found.insert((repo_relative(root, &target), krate.clone()));
-            }
-        }
-    }
-    let expected: BTreeSet<(String, String)> = super::COMPILED_IN
-        .iter()
-        .map(|(path, krate)| ((*path).to_owned(), (*krate).to_owned()))
-        .collect();
-    assert_eq!(found, expected);
+fn an_unlisted_outside_include_fails() {
+    let source = format!("{}include_str!(\"../../../README.md\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        ["README.md: contract compiles it in, but the compiled-in list does not list it"]
+    );
+}
+
+#[test]
+fn an_include_inside_the_crate_dir_is_ignored() {
+    let source = format!("{}include_str!(\"owned.md\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_include_str_in_a_comment_is_ignored() {
+    let source = format!(
+        "{}// include_str!(\"../../../README.md\");",
+        listed_includes()
+    );
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
+    );
 }

@@ -55,9 +55,9 @@ It runs, for the crates `docs/ci.md`, "Selection", chooses, what CI's
 per-platform job runs: `cargo fmt --check`, clippy with the workspace lints,
 the tests under nextest, and doc-tests. It also runs the cheap Linux x86_64
 checks from `docs/ci.md`: the 800-line file cap, the `unsafe` table, the
-dependency list and the docs check. CI runs the same script, the
-platform-independent checks on Linux x86_64 only, so the gate and CI cannot
-drift.
+compiled-in list, the dependency list and the docs check. CI runs the same
+script, the platform-independent checks on Linux x86_64 only, so the gate
+and CI cannot drift.
 
 Mutation testing runs in CI only.
 

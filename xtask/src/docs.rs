@@ -163,7 +163,7 @@ fn is_external(target: &str) -> bool {
 }
 
 /// `base` joined with `rel`, with `.` and `..` resolved.
-fn join(base: &Path, rel: &str) -> PathBuf {
+pub(crate) fn join(base: &Path, rel: &str) -> PathBuf {
     let mut out = PathBuf::new();
     for component in base.join(rel).components() {
         match component {
