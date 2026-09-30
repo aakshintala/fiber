@@ -169,7 +169,7 @@ pub(crate) fn leaf(path: &[String]) -> Option<&'static Key> {
 /// Whether a path is an object that holds keys, such as `handoff`.
 fn interior(path: &[String]) -> bool {
     KEYS.iter()
-        .any(|k| segments(k).count() > path.len() && prefix_matches(k, path))
+        .any(|k| segments(k).nth(path.len()).is_some() && prefix_matches(k, path))
 }
 
 /// The built-in defaults layer: every key whose default names no `*`.
