@@ -306,14 +306,18 @@ impl Config {
         };
         let file = write::settings_file(&dir, extension);
         let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-        write::update(&file, &key, value.clone())?;
-        // The file on disk may hold other sessions' writes too; this session
-        // sees only its own until its next load.
+        // The session's copy is built first. A copy this session read as
+        // invalid JSON fails the write before the disk is touched: "Invalid
+        // JSON, or a value of the wrong type, is a startup error", and the
+        // session sees a repaired file at its next reload.
         let mut cached = match self.settings_files.get(&file) {
             Some(bytes) => parse(&file, bytes)?,
             None => Value::Object(Map::new()),
         };
-        path::set(&mut cached, &key, value);
+        path::set(&mut cached, &key, value.clone());
+        // The file on disk may hold other sessions' writes too; this session
+        // sees only its own until its next load.
+        write::update(&file, &key, value)?;
         self.settings_files
             .insert(file, cached.to_string().into_bytes());
         Ok(())

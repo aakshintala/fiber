@@ -343,3 +343,25 @@ fn a_session_s_own_write_does_not_bring_in_another_session_s() {
         json!({"model": "m", "region": "eu"})
     );
 }
+
+#[test]
+fn a_write_over_settings_this_session_read_as_invalid_fails_before_touching_disk() {
+    let setup = Setup::new();
+    let file = setup.home().join("config/github.com-acme-fiber-acme.json");
+    setup.write(&file, "{\"a\": 1,}");
+    let mut config = setup.load(&[]).unwrap();
+    setup.write(&file, r#"{"a": 1}"#);
+    let e = config
+        .set_extension_setting(ACME, Scope::Machine, "b", json!(2))
+        .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(fs::read_to_string(&file).unwrap(), r#"{"a": 1}"#);
+    let mut reloaded = setup.load(&[]).unwrap();
+    reloaded
+        .set_extension_setting(ACME, Scope::Machine, "b", json!(2))
+        .unwrap();
+    assert_eq!(
+        reloaded.extension_settings(ACME, &[]).unwrap().0,
+        json!({"a": 1, "b": 2})
+    );
+}
