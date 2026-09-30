@@ -88,26 +88,25 @@ fn test_files_have_no_line_cap() {
 
 #[test]
 fn unsafe_is_found_in_code() {
-    assert!(uses_unsafe("fn f() { unsafe { g() } }"));
-    assert!(uses_unsafe("unsafe fn f() {}"));
-    assert!(uses_unsafe("let s = \"a\\\"b\"; unsafe {}"));
-    assert!(uses_unsafe("let c = '\\''; let d = 'x'; unsafe {}"));
-    assert!(uses_unsafe("fn f<'a>(x: &'a str) { unsafe {} }"));
-    assert!(uses_unsafe("/* a */ unsafe {}"));
-    assert!(uses_unsafe("let s = r#\"x\"#; unsafe {}"));
+    assert!(uses_unsafe("fn f() { unsafe { g() } }").unwrap());
+    assert!(uses_unsafe("unsafe fn f() {}").unwrap());
+    assert!(uses_unsafe("let s = \"a\\\"b\"; unsafe {}").unwrap());
+    assert!(uses_unsafe("let c = '\\''; let d = 'x'; unsafe {}").unwrap());
+    assert!(uses_unsafe("fn f<'a>(x: &'a str) { unsafe {} }").unwrap());
+    assert!(uses_unsafe("/* a */ unsafe {}").unwrap());
+    assert!(uses_unsafe("let s = r#\"x\"#; unsafe {}").unwrap());
 }
 
 #[test]
 fn unsafe_in_comments_strings_and_names_is_not_code() {
-    assert!(!uses_unsafe(
-        "#![deny(unsafe_code)]\n// unsafe here\n/* unsafe\n */ fn f() {}"
-    ));
-    assert!(!uses_unsafe("let s = \"unsafe\"; let t = \"\\\" unsafe\";"));
-    assert!(!uses_unsafe("let s = r#\"unsafe \"quoted\" \"#;"));
-    assert!(!uses_unsafe("let s = r\"unsafe\";"));
-    assert!(!uses_unsafe("fn not_unsafe() {} fn unsafely() {}"));
-    assert!(!uses_unsafe("// unsafe at the end"));
-    assert!(!uses_unsafe("/* unsafe never closed"));
+    assert!(
+        !uses_unsafe("#![deny(unsafe_code)]\n// unsafe here\n/* unsafe\n */ fn f() {}").unwrap()
+    );
+    assert!(!uses_unsafe("let s = \"unsafe\"; let t = \"\\\" unsafe\";").unwrap());
+    assert!(!uses_unsafe("let s = r#\"unsafe \"quoted\" \"#;").unwrap());
+    assert!(!uses_unsafe("let s = r\"unsafe\";").unwrap());
+    assert!(!uses_unsafe("fn not_unsafe() {} fn unsafely() {}").unwrap());
+    assert!(!uses_unsafe("// unsafe at the end").unwrap());
 }
 
 #[test]
@@ -176,35 +175,6 @@ fn a_dependency_that_is_not_listed_fails() {
     );
 }
 
-#[test]
-fn code_only_keeps_code_and_blanks_the_rest() {
-    let cases = [
-        ("a // c\nb // d", "a \nb "),
-        ("a /* c */ b", "a   b"),
-        ("a /* x /* y */ z */ b", "a   b"),
-        ("a / b * c", "a / b * c"),
-        ("x \"s\\\"t\" y", "x \"\" y"),
-        ("x \"a\\\\\" y", "x \"\" y"),
-        ("x r#\"a\"b\"# z", "x \"\" z"),
-        ("x r\"a\\\" z", "x \"\" z"),
-        ("x r##\"a\"#b\"## z", "x \"\" z"),
-        ("x br#\"a\"# z", "x \"\" z"),
-        ("x cr\"a\" z", "x \"\" z"),
-        ("x b\"a\" c\"b\" z", "x \"\" \"\" z"),
-        ("x b'a' b'\\n' z", "x \"\" \"\" z"),
-        ("a '\\n' b '\\'' c 'x' d", "a \"\" b \"\" c \"\" d"),
-        ("a '\\u{1F600}' b", "a \"\" b"),
-        ("\"unterminated unsafe", "\"\""),
-        ("/* unterminated", " "),
-        ("/* a /* b */ unterminated", " "),
-        ("// only", ""),
-        ("r\"open", "\"\""),
-    ];
-    for (source, code) in cases {
-        assert_eq!(code_only(source), code, "{source:?}");
-    }
-}
-
 /// Each Rust literal and comment form, holding quotes, backslashes and the
 /// word itself, so a scanner that misreads its end sees the wrong code.
 const FORMS: [&str; 17] = [
@@ -231,7 +201,7 @@ const FORMS: [&str; 17] = [
 fn unsafe_after_every_literal_form_is_found() {
     for form in FORMS {
         assert!(
-            uses_unsafe(&format!("let x = {form}; unsafe {{}}")),
+            uses_unsafe(&format!("let x = {form}; unsafe {{}}")).unwrap(),
             "{form}"
         );
     }
@@ -240,35 +210,39 @@ fn unsafe_after_every_literal_form_is_found() {
 #[test]
 fn unsafe_inside_every_literal_form_is_not_code() {
     for form in FORMS {
-        assert!(!uses_unsafe(&format!("let x = {form};")), "{form}");
+        assert!(!uses_unsafe(&format!("let x = {form};")).unwrap(), "{form}");
     }
 }
 
 #[test]
-fn lifetimes_and_labels_are_code() {
-    assert!(uses_unsafe(
-        "fn f<'a>(x: &'a str) -> &'a str { unsafe { x } }"
-    ));
-    assert!(uses_unsafe("'outer: loop { break 'outer; } unsafe {}"));
-    assert_eq!(code_only("fn f<'a>(x: &'a T) {}"), "fn f<'a>(x: &'a T) {}");
-    assert_eq!(
-        code_only("'outer: loop { break 'outer; }"),
-        "'outer: loop { break 'outer; }"
-    );
+fn lifetimes_labels_and_raw_identifiers_are_code() {
+    let unsafe_after = |code: &str| uses_unsafe(&format!("{code} unsafe {{}}")).unwrap();
+    assert!(unsafe_after("fn f<'a>(x: &'a str) -> &'a str { x }"));
+    assert!(unsafe_after("fn f() { 'outer: loop { break 'outer; } }"));
+    assert!(unsafe_after("let r#type = 1; let b = br; let c = cr;"));
+    assert!(!uses_unsafe("let r#unsafe = 1;").unwrap());
 }
 
 #[test]
-fn identifiers_that_look_like_prefixes_are_code() {
+fn a_string_right_after_an_identifier_hides_nothing() {
+    assert!(uses_unsafe(r#"fn f() { stringify!(b""""); unsafe {} }"#).unwrap());
+    assert!(uses_unsafe(r#"fn f() { m!(b"" ""); unsafe {} }"#).unwrap());
+}
+
+#[test]
+fn a_file_that_does_not_tokenise_fails_the_check_by_name() {
     for source in [
-        "r#type",
-        "for x in xs",
-        "abr(\"a\")",
-        "c(1)",
-        "b (2)",
-        "br",
-        "cr",
+        "\"unterminated unsafe",
+        "/* never closed unsafe",
+        "fn f() { unsafe {}",
+        "r\"open",
     ] {
-        let expected = source.replace("\"a\"", "\"\"");
-        assert_eq!(code_only(source), expected, "{source}");
+        assert!(uses_unsafe(source).is_err(), "{source:?}");
     }
+    let files = [file("log", "src/lib.rs", "fn f() {".to_owned())];
+    let error = unsafe_mismatches(&files, CODE_QUALITY).unwrap_err();
+    assert!(
+        error.starts_with("crates/log/src/lib.rs: does not tokenise as Rust: "),
+        "{error}"
+    );
 }

@@ -4,6 +4,8 @@
 
 use std::collections::BTreeSet;
 
+use proc_macro2::{TokenStream, TokenTree};
+
 use crate::select::is_test_file;
 
 const LINE_CAP: usize = 800;
@@ -31,154 +33,17 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .collect()
 }
 
-/// `source` with comments and literals removed, so what is left is code.
-/// It knows every Rust literal form: strings, raw strings, byte and C
-/// strings with or without `r`, chars and byte chars, and tells a char from
-/// a lifetime. Block comments nest. Every step consumes at least one
-/// character.
-pub(crate) fn code_only(source: &str) -> String {
-    let mut out = String::new();
-    let mut it = source.chars();
-    let mut prev = ' ';
-    while let Some(c) = it.next() {
-        if c == '/' && peek(&it, 0) == '/' {
-            if it.by_ref().any(|c| c == '\n') {
-                out.push('\n');
-            }
-        } else if c == '/' && peek(&it, 0) == '*' {
-            it.next();
-            skip_block_comment(&mut it);
-            out.push(' ');
-        } else if !is_ident(prev)
-            && let Some(literal) = literal_start(c, &it)
-        {
-            match literal {
-                Literal::Quoted { opening, quote } => {
-                    it.by_ref().take(opening).for_each(drop);
-                    skip_quoted(&mut it, quote);
-                }
-                Literal::Raw { opening, hashes } => {
-                    it.by_ref().take(opening).for_each(drop);
-                    skip_past(&mut it, &format!("\"{}", "#".repeat(hashes)));
-                }
-            }
-            out.push_str("\"\"");
-        } else {
-            out.push(c);
-        }
-        prev = c;
-    }
-    out
-}
-
-/// A literal that starts at the character just taken from `it`. `opening`
-/// counts the characters still to consume up to and including the opening
-/// quote.
-enum Literal {
-    /// A string, char, byte or C literal ending at an unescaped `quote`.
-    Quoted { opening: usize, quote: char },
-    /// A raw literal ending at `"` and `hashes` hashes.
-    Raw { opening: usize, hashes: usize },
-}
-
-fn literal_start(c: char, it: &std::str::Chars<'_>) -> Option<Literal> {
-    let hashes_at = |n: usize| it.clone().skip(n).take_while(|h| *h == '#').count();
-    // `n` is where the hashes start, after `c`.
-    let raw = |n: usize| {
-        let hashes = hashes_at(n);
-        (peek(it, n + hashes) == '"').then_some(Literal::Raw {
-            opening: n + hashes + 1,
-            hashes,
+/// Whether Rust `source` uses the `unsafe` keyword. proc-macro2 tokenises
+/// it, so comments, literals and doc comments are never read as code.
+pub(crate) fn uses_unsafe(source: &str) -> Result<bool, proc_macro2::LexError> {
+    fn walk(stream: TokenStream) -> bool {
+        stream.into_iter().any(|tree| match tree {
+            TokenTree::Ident(ident) => ident == "unsafe",
+            TokenTree::Group(group) => walk(group.stream()),
+            TokenTree::Punct(_) | TokenTree::Literal(_) => false,
         })
-    };
-    // A char literal is one character or one escape between quotes; any
-    // other `'` starts a lifetime or a label.
-    let char_literal = |n: usize| peek(it, n) == '\\' || peek(it, n + 1) == '\'';
-    match (c, peek(it, 0)) {
-        ('"', _) => Some(Literal::Quoted {
-            opening: 0,
-            quote: '"',
-        }),
-        ('\'', _) if char_literal(0) => Some(Literal::Quoted {
-            opening: 0,
-            quote: '\'',
-        }),
-        ('b', '\'') => Some(Literal::Quoted {
-            opening: 1,
-            quote: '\'',
-        }),
-        ('b' | 'c', '"') => Some(Literal::Quoted {
-            opening: 1,
-            quote: '"',
-        }),
-        ('b' | 'c', 'r') => raw(1),
-        ('r', _) => raw(0),
-        _ => None,
     }
-}
-
-fn peek(it: &std::str::Chars<'_>, n: usize) -> char {
-    it.clone().nth(n).unwrap_or('\0')
-}
-
-/// Consumes `it` through the `*/` that closes a block comment whose `/*`
-/// was just consumed, counting nested comments.
-fn skip_block_comment(it: &mut std::str::Chars<'_>) {
-    let mut depth = 1usize;
-    while let Some(c) = it.next() {
-        if c == '/' && peek(it, 0) == '*' {
-            it.next();
-            depth += 1;
-        } else if c == '*' && peek(it, 0) == '/' {
-            it.next();
-            depth -= 1;
-            if depth == 0 {
-                return;
-            }
-        }
-    }
-}
-
-/// Consumes `it` through the first `quote` no backslash escapes.
-fn skip_quoted(it: &mut std::str::Chars<'_>, quote: char) {
-    while let Some(c) = it.next() {
-        if c == '\\' {
-            it.next();
-        } else if c == quote {
-            return;
-        }
-    }
-}
-
-/// Consumes `it` through the first `close`.
-fn skip_past(it: &mut std::str::Chars<'_>, close: &str) {
-    let mut seen = String::new();
-    for c in it.by_ref() {
-        seen.push(c);
-        if seen.ends_with(close) {
-            return;
-        }
-    }
-}
-
-fn is_ident(c: char) -> bool {
-    c.is_alphanumeric() || c == '_'
-}
-
-/// Whether Rust `source` uses `unsafe` in code.
-pub(crate) fn uses_unsafe(source: &str) -> bool {
-    let code = code_only(source);
-    code.match_indices("unsafe").any(|(i, _)| {
-        let before = code
-            .get(..i)
-            .and_then(|s| s.chars().next_back())
-            .unwrap_or(' ');
-        let after = code
-            .get(i + "unsafe".len()..)
-            .and_then(|s| s.chars().next())
-            .unwrap_or(' ');
-        !is_ident(before) && !is_ident(after)
-    })
+    Ok(walk(source.parse()?))
 }
 
 /// The body of the section under `heading`, up to the next heading of the
@@ -247,11 +112,16 @@ pub(crate) fn unsafe_mismatches(
     files: &[RustFile],
     code_quality: &str,
 ) -> Result<Vec<String>, String> {
-    let used: BTreeSet<(String, String)> = files
-        .iter()
-        .filter(|f| uses_unsafe(&f.source))
-        .map(|f| (f.krate.clone(), f.path.clone()))
-        .collect();
+    let mut used = BTreeSet::new();
+    for f in files {
+        // A file that does not tokenise could hide `unsafe`, so it fails the
+        // check rather than being skipped.
+        if uses_unsafe(&f.source)
+            .map_err(|e| format!("{}: does not tokenise as Rust: {e}", f.path))?
+        {
+            used.insert((f.krate.clone(), f.path.clone()));
+        }
+    }
     let listed = unsafe_table(code_quality)?;
     let mut failures: Vec<String> = used
         .difference(&listed)
