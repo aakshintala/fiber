@@ -17,11 +17,14 @@ pub(crate) type Members = BTreeMap<String, Member>;
 /// What a diff runs.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Selection {
-    /// Every file is Markdown or under `docs/` or `research/`.
+    /// Every file is Markdown or under `docs/` or `research/`, and none is a
+    /// file a crate compiles in.
     Docs,
-    /// A manifest, the lock file, the toolchain pin or a workflow changed.
+    /// A manifest, the lock file, the toolchain pin, a workflow, anything
+    /// under `scripts/`, or gate configuration changed.
     All(Vec<String>),
-    /// The crates the diff touches and every crate that depends on them.
+    /// The crates the diff touches and every crate that depends on them, plus
+    /// any crate that compiles in a changed file from outside its directory.
     Crates(Vec<String>),
 }
 
@@ -43,6 +46,20 @@ impl Selection {
 }
 
 const RUN_ALL_NAMES: [&str; 3] = ["Cargo.lock", "Cargo.toml", "rust-toolchain.toml"];
+/// Root-level gate configuration (`docs/ci.md`, "Selection").
+const RUN_ALL_ROOTS: [&str; 4] = [
+    ".cargo/config.toml",
+    ".config/nextest.toml",
+    "clippy.toml",
+    "deny.toml",
+];
+/// Files outside a crate that the crate compiles in, and the crate that
+/// compiles each one (`docs/ci.md`, "Selection").
+const COMPILED_IN: &[(&str, &str)] = &[
+    ("docs/errors.md", "contract"),
+    ("docs/events.md", "contract"),
+    ("docs/invocation.md", "contract"),
+];
 /// `docs/ci.md`: one shard per 25 mutants, at most 6.
 const MUTANTS_PER_SHARD: u64 = 25;
 const MAX_SHARDS: u64 = 6;
@@ -51,9 +68,22 @@ fn is_docs_file(path: &str) -> bool {
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
 }
 
+fn is_compiled_in(path: &str) -> bool {
+    COMPILED_IN.iter().any(|(p, _)| *p == path)
+}
+
+fn compiled_in(path: &str) -> impl Iterator<Item = &'static str> {
+    COMPILED_IN
+        .iter()
+        .filter_map(move |(p, krate)| (*p == path).then_some(*krate))
+}
+
 fn runs_all(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
-    RUN_ALL_NAMES.contains(&name) || path.starts_with(".github/")
+    RUN_ALL_NAMES.contains(&name)
+        || path.starts_with(".github/")
+        || path.starts_with("scripts/")
+        || RUN_ALL_ROOTS.contains(&path)
 }
 
 /// The workspace member whose directory holds `path`: the innermost one.
@@ -84,18 +114,26 @@ pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeS
 }
 
 pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
-    if files.iter().all(|f| is_docs_file(f)) {
-        return Selection::Docs;
-    }
     if files.iter().any(|f| runs_all(f)) {
         return Selection::All(members.keys().cloned().collect());
     }
+    if files.iter().all(|f| is_docs_file(f) && !is_compiled_in(f)) {
+        return Selection::Docs;
+    }
+    let compiled: BTreeSet<String> = files
+        .iter()
+        .flat_map(|f| compiled_in(f))
+        .filter(|name| members.contains_key(*name))
+        .map(str::to_owned)
+        .collect();
     let touched = files
         .iter()
         .filter_map(|f| owner(f, members))
         .map(str::to_owned)
         .collect();
-    Selection::Crates(dependents(touched, members).into_iter().collect())
+    let mut selected = dependents(touched, members);
+    selected.extend(compiled);
+    Selection::Crates(selected.into_iter().collect())
 }
 
 pub(crate) fn shard_count(mutants: u64) -> u64 {

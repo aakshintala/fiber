@@ -1,3 +1,6 @@
+use std::fs;
+use std::path::{Component, Path, PathBuf};
+
 use super::*;
 
 fn members() -> Members {
@@ -44,6 +47,11 @@ fn manifests_toolchain_and_workflows_run_everything() {
         "crates/log/Cargo.toml",
         "rust-toolchain.toml",
         ".github/workflows/ci.yml",
+        "scripts/check",
+        "clippy.toml",
+        "deny.toml",
+        ".cargo/config.toml",
+        ".config/nextest.toml",
     ] {
         let selection = classify(&strings(&["docs/ci.md", trigger]), &members());
         assert_eq!(selection, Selection::All(everything.clone()), "{trigger}");
@@ -100,8 +108,75 @@ fn the_innermost_crate_owns_a_file() {
 #[test]
 fn code_outside_every_crate_runs_no_crate() {
     assert_eq!(
-        classify(&strings(&["scripts/check"]), &members()),
+        classify(&strings(&["LICENSE"]), &members()),
         Selection::Crates(vec![])
+    );
+}
+
+#[test]
+fn a_compiled_in_doc_runs_its_crate_alone() {
+    for path in ["docs/events.md", "docs/errors.md", "docs/invocation.md"] {
+        let selection = classify(&strings(&[path]), &members());
+        assert_eq!(
+            selection,
+            Selection::Crates(strings(&["contract"])),
+            "{path}"
+        );
+        assert_eq!(selection.mode(), "crates", "{path}");
+    }
+}
+
+#[test]
+fn readme_alone_runs_the_docs_job() {
+    assert_eq!(
+        classify(&strings(&["README.md"]), &members()),
+        Selection::Docs
+    );
+}
+
+#[test]
+fn a_crate_prompt_runs_the_docs_job() {
+    assert_eq!(
+        classify(&strings(&["crates/loop/prompt/system.md"]), &members()),
+        Selection::Docs
+    );
+}
+
+#[test]
+fn scripts_check_alone_runs_everything() {
+    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    let selection = classify(&strings(&["scripts/check"]), &members());
+    assert_eq!(selection, Selection::All(everything));
+    assert_eq!(selection.mode(), "all");
+}
+
+#[test]
+fn clippy_toml_runs_everything() {
+    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    assert_eq!(
+        classify(&strings(&["clippy.toml"]), &members()),
+        Selection::All(everything)
+    );
+}
+
+#[test]
+fn nextest_toml_runs_everything() {
+    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    assert_eq!(
+        classify(&strings(&[".config/nextest.toml"]), &members()),
+        Selection::All(everything)
+    );
+}
+
+#[test]
+fn a_compiled_in_doc_unions_with_a_crate_change() {
+    let selection = classify(
+        &strings(&["docs/events.md", "crates/log/src/lib.rs"]),
+        &members(),
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["contract", "log", "loop"]))
     );
 }
 
@@ -444,4 +519,149 @@ fn dependents_follow_a_chain_of_any_length() {
         selected.into_iter().collect::<Vec<_>>(),
         strings(&["log", "loop", "tui", "zed"])
     );
+}
+
+fn cargo_package_name(toml: &str) -> String {
+    let section = toml.split("[package]").nth(1).unwrap();
+    for line in section.lines() {
+        let line = line.trim();
+        if line.starts_with('[') {
+            break;
+        }
+        let Some(rest) = line.strip_prefix("name") else {
+            continue;
+        };
+        let rest = rest.trim().strip_prefix('=').unwrap().trim();
+        return rest.trim_matches('"').to_owned();
+    }
+    panic!("no package name");
+}
+
+fn workspace_member_dirs(root: &Path) -> Vec<(String, PathBuf)> {
+    let toml = fs::read_to_string(root.join("Cargo.toml")).unwrap();
+    let inner = toml
+        .split_once("members")
+        .unwrap()
+        .1
+        .split_once('[')
+        .unwrap()
+        .1
+        .split_once(']')
+        .unwrap()
+        .0;
+    inner
+        .split(',')
+        .filter_map(|entry| {
+            let rel = entry.trim().strip_prefix('"')?.strip_suffix('"')?;
+            Some(rel.to_owned())
+        })
+        .map(|rel| {
+            let dir = root.join(&rel);
+            let pkg = fs::read_to_string(dir.join("Cargo.toml")).unwrap();
+            (cargo_package_name(&pkg), dir)
+        })
+        .collect()
+}
+
+fn rust_sources(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    fn walk(dir: &Path, files: &mut Vec<PathBuf>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = entry.path();
+            if entry.file_type().unwrap().is_dir() {
+                if entry.file_name() != "target" {
+                    walk(&path, files);
+                }
+            } else if path.extension().is_some_and(|ext| ext == "rs") {
+                files.push(path);
+            }
+        }
+    }
+    walk(dir, &mut files);
+    files
+}
+
+fn include_literals(source: &str) -> Vec<String> {
+    let mut paths = Vec::new();
+    let mut rest = source;
+    while let Some(offset) = rest.find("include_") {
+        rest = rest.get(offset..).unwrap();
+        let name_len = if rest.starts_with("include_str!") {
+            "include_str!".len()
+        } else if rest.starts_with("include_bytes!") {
+            "include_bytes!".len()
+        } else {
+            rest = rest.get("include_".len()..).unwrap_or("");
+            continue;
+        };
+        let after = rest.get(name_len..).unwrap_or("").trim_start();
+        if let Some(after) = after.strip_prefix('(') {
+            let after = after.trim_start();
+            if let Some(path) = quoted_string(after) {
+                paths.push(path);
+            }
+        }
+        rest = rest.get(name_len..).unwrap_or("");
+    }
+    paths
+}
+
+fn quoted_string(s: &str) -> Option<String> {
+    let mut chars = s.strip_prefix('"')?.chars();
+    let mut out = String::new();
+    loop {
+        match chars.next()? {
+            '"' => return Some(out),
+            '\\' => out.push(chars.next()?),
+            c => out.push(c),
+        }
+    }
+}
+
+fn join_normalized(base: &Path, rel: &str) -> PathBuf {
+    let mut out = PathBuf::new();
+    for component in base.join(rel).components() {
+        match component {
+            Component::ParentDir => {
+                out.pop();
+            }
+            Component::CurDir => {}
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => out.push(component),
+        }
+    }
+    out
+}
+
+fn repo_relative(root: &Path, path: &Path) -> String {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .to_string_lossy()
+        .replace('\\', "/")
+}
+
+#[test]
+fn compiled_in_table_matches_include_macros() {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut found = BTreeSet::new();
+    for (krate, dir) in workspace_member_dirs(root) {
+        for file in rust_sources(&dir) {
+            let source = fs::read_to_string(&file).unwrap();
+            let Some(parent) = file.parent() else {
+                continue;
+            };
+            for lit in include_literals(&source) {
+                let target = join_normalized(parent, &lit);
+                if target.starts_with(&dir) {
+                    continue;
+                }
+                found.insert((repo_relative(root, &target), krate.clone()));
+            }
+        }
+    }
+    let expected: BTreeSet<(String, String)> = super::COMPILED_IN
+        .iter()
+        .map(|(path, krate)| ((*path).to_owned(), (*krate).to_owned()))
+        .collect();
+    assert_eq!(found, expected);
 }

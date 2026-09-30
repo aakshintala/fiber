@@ -41,9 +41,16 @@ A newer push to a pull request cancels that pull request's older run.
 A pull request runs only what its diff can affect.
 
 - A diff in which every file is Markdown, or is under `docs/` or
-  `research/`, runs the docs job alone: the docs check, below.
-- A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`
-  or anything under `.github/` runs everything.
+  `research/`, runs the docs job alone: the docs check, below. A file a
+  crate compiles in is the exception, below.
+- A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`,
+  anything under `.github/` or `scripts/`, `clippy.toml`, `deny.toml`,
+  `.cargo/config.toml` or `.config/nextest.toml` runs everything.
+- A file outside a crate that the crate compiles in runs that crate alone,
+  not the crates that depend on it. A change to `docs/events.md`,
+  `docs/errors.md` or `docs/invocation.md` runs `contract`, whose tests
+  check the code against them. The selector lists these files, and its tests
+  fail when the list and the source disagree.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).

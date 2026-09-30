@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# The gate (docs/workflow.md, "The gate"). Runs the checks for the crates a
-# diff touches and every crate that depends on them, as docs/ci.md,
-# "Selection", chooses them.
+# The gate (docs/workflow.md, "The gate"). Runs the checks docs/ci.md,
+# "Selection", chooses for the diff.
 #
 # Usage: scripts/check [--base REV] [--platform-only | --shared-only]
 #
