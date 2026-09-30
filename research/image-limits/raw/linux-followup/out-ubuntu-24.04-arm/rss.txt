@@ -1,0 +1,29 @@
+base 1688 KiB, binary 332488
+## image binary=1512192
+only= peak_rss_kib=150100
+only=photo peak_rss_kib=144360
+only=shot peak_rss_kib=141400
+only=small.gif peak_rss_kib=3864
+only=small.webp peak_rss_kib=4460
+only=flat-9000 peak_rss_kib=534448
+## image-parts binary=3150552
+only= peak_rss_kib=69140
+only=photo peak_rss_kib=69144
+only=shot peak_rss_kib=65444
+only=small.gif peak_rss_kib=4016
+only=small.webp peak_rss_kib=4596
+only=flat-9000 peak_rss_kib=307056
+## image-fir binary=3478272
+only= peak_rss_kib=69292
+only=photo peak_rss_kib=69292
+only=shot peak_rss_kib=66116
+only=small.gif peak_rss_kib=4004
+only=small.webp peak_rss_kib=4724
+only=flat-9000 peak_rss_kib=307420
+## image-header binary=987904
+only= peak_rss_kib=5856
+only=photo peak_rss_kib=5856
+only=shot peak_rss_kib=5856
+only=small.gif peak_rss_kib=5856
+only=small.webp peak_rss_kib=5856
+only=flat-9000 peak_rss_kib=5856
