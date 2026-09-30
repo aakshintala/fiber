@@ -1,0 +1,686 @@
+use std::collections::{BTreeMap, BTreeSet};
+
+use serde_json::{Value, json};
+
+use super::*;
+use crate::{SessionId, TurnId};
+
+const DOC: &str = include_str!("../../../docs/events.md");
+
+/// Each kind under `docs/events.md`, "Kinds", with the class its text gives
+/// and the keys its payload table lists.
+fn doc_kinds() -> BTreeMap<&'static str, (Class, BTreeSet<&'static str>)> {
+    let kinds = DOC.split("\n## Kinds\n").nth(1).unwrap();
+    let kinds = kinds.split("\n## ").next().unwrap();
+    let mut found = BTreeMap::new();
+    for section in kinds.split("\n### ").skip(1) {
+        let mut blocks = section.split("\n#### ");
+        let intro = blocks.next().unwrap();
+        for block in blocks {
+            let name = block.split('`').nth(1).unwrap();
+            let class = block
+                .lines()
+                .find_map(|line| {
+                    if line.starts_with("Durable") {
+                        Some(Class::Durable)
+                    } else if line.starts_with("Ephemeral") {
+                        Some(Class::Ephemeral)
+                    } else {
+                        None
+                    }
+                })
+                .or_else(|| {
+                    intro
+                        .contains("Both are ephemeral")
+                        .then_some(Class::Ephemeral)
+                })
+                .unwrap_or_else(|| panic!("{name} has no class"));
+            found.insert(name, (class, table_keys(block)));
+        }
+    }
+    found
+}
+
+/// The keys of the first `| Key |` table in a block.
+fn table_keys(block: &'static str) -> BTreeSet<&'static str> {
+    let Some(table) = block.split("| Key |").nth(1) else {
+        return BTreeSet::new();
+    };
+    table
+        .lines()
+        .skip(2)
+        .take_while(|line| line.starts_with('|'))
+        .map(|line| line.split('`').nth(1).unwrap())
+        .collect()
+}
+
+fn line(kind: &str, payload: Value) -> Envelope {
+    Envelope {
+        kind: kind.into(),
+        session_id: SessionId("s".into()),
+        ts: 1,
+        schema_version: crate::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::from_value(payload).unwrap(),
+    }
+}
+
+/// The lines under `docs/events.md`, "The envelope".
+fn doc_examples() -> Vec<&'static str> {
+    let section = DOC.split("## The envelope").nth(1).unwrap();
+    let block = section.split("```json\n").nth(1).unwrap();
+    block.split("```").next().unwrap().lines().collect()
+}
+
+#[test]
+fn the_doc_examples_round_trip_through_their_kinds_byte_for_byte() {
+    for text in doc_examples() {
+        let mut envelope: Envelope = serde_json::from_str(text).unwrap();
+        let event = Event::from_envelope(&envelope).unwrap().unwrap();
+        assert_eq!(event.kind(), envelope.kind);
+        envelope.payload = event.payload().unwrap();
+        assert_eq!(serde_json::to_string(&envelope).unwrap(), text);
+    }
+}
+
+#[test]
+fn the_doc_example_turn_reads_as_its_type() {
+    let envelope: Envelope = serde_json::from_str(doc_examples()[0]).unwrap();
+    let Some(Event::TurnStarted(turn)) = Event::from_envelope(&envelope).unwrap() else {
+        panic!("not a turn_started");
+    };
+    let [
+        InputItem::Message {
+            content, sender, ..
+        },
+    ] = turn.input.as_slice()
+    else {
+        panic!("not one message");
+    };
+    assert_eq!(sender.origin, crate::shapes::Origin::Driver);
+    assert_eq!(sender.command_id, crate::CommandId("c_7f3a".into()));
+    assert_eq!(
+        content,
+        &[crate::shapes::ContentPart::Text {
+            text: "fix the failing test".into()
+        }]
+    );
+    assert_eq!(envelope.turn_id, Some(TurnId("t_9a02".into())));
+}
+
+#[test]
+fn every_kind_in_the_doc_is_known_with_its_class() {
+    let doc = doc_kinds();
+    let code: BTreeMap<_, _> = KINDS.iter().copied().collect();
+    assert_eq!(code.len(), KINDS.len(), "a kind is declared twice");
+    let doc_classes: BTreeMap<_, _> = doc.iter().map(|(k, (c, _))| (*k, *c)).collect();
+    assert_eq!(code, doc_classes);
+}
+
+#[test]
+fn a_reader_skips_an_unknown_kind() {
+    let envelope = line("kind_from_the_future", json!({"anything": 1}));
+    assert_eq!(Event::from_envelope(&envelope).unwrap(), None);
+}
+
+#[test]
+fn a_reader_ignores_an_unknown_field() {
+    let envelope = line(
+        "clients",
+        json!({"count": 2, "field_from_the_future": true}),
+    );
+    let event = Event::from_envelope(&envelope).unwrap().unwrap();
+    assert_eq!(event, Event::Clients(Clients { count: 2 }));
+    assert_eq!(Value::Object(event.payload().unwrap()), json!({"count": 2}));
+}
+
+#[test]
+fn a_known_kind_with_a_payload_that_does_not_fit_is_an_error() {
+    let envelope = line("clients", json!({"count": "two"}));
+    assert!(Event::from_envelope(&envelope).is_err());
+}
+
+#[test]
+fn an_unknown_content_part_or_input_item_reads_as_unknown() {
+    let payload = json!({"input": [
+        {"type": "hologram"},
+        {"type": "message", "source": "driver", "command_id": "c",
+         "content": [{"type": "smell", "notes": "citrus"}]},
+    ]});
+    let event = Event::from_envelope(&line("turn_started", payload)).unwrap();
+    let Some(Event::TurnStarted(turn)) = event else {
+        panic!("not a turn_started");
+    };
+    assert_eq!(turn.input[0], InputItem::Unknown);
+    let InputItem::Message { content, .. } = &turn.input[1] else {
+        panic!("not a message");
+    };
+    assert_eq!(content, &[crate::shapes::ContentPart::Unknown]);
+}
+
+#[test]
+fn durable_and_ephemeral_events_say_so() {
+    let delta = Event::AssistantMessageDelta(TextDelta { text: "Hel".into() });
+    assert_eq!(delta.class(), Class::Ephemeral);
+    assert_eq!(Event::StepStarted(Empty {}).class(), Class::Durable);
+}
+
+/// One payload per kind, or more where the doc makes keys exclusive, with
+/// every key the doc lists for it.
+fn samples() -> Vec<(&'static str, Value)> {
+    let error = json!({"code": "timeout", "message": "m", "retry_after": 1.5,
+        "provider": {"name": "p", "status": 429, "message": "slow down"}});
+    let process = json!({"exit_code": 1, "signal": "SIGKILL", "timed_out": false});
+    let content = json!([{"type": "text", "text": "t"},
+        {"type": "image", "path": "artifacts/a.png", "mime_type": "image/png", "width": 2, "height": 3}]);
+    let questions = json!([{"header": "h", "question": "q", "multiSelect": true,
+        "options": [{"label": "a", "description": "d"}, {"label": "b"}]}]);
+    let tokens =
+        json!({"input": 1, "cache_read": 2, "cache_write": {"5m": 3, "1h": 4}, "output": 5});
+    let settings =
+        json!({"model": "p/m", "effort": "high", "thinking": "on", "cache_lifetime": "5m"});
+    vec![
+        (
+            "fiber_started",
+            json!({"version": "0.0.1", "resumed": false, "mode": "auto"}),
+        ),
+        (
+            "fiber_exited",
+            json!({"exit_code": 1, "final_action_id": "a", "text": "t",
+            "error": error, "suspended_on": "r", "questions": questions}),
+        ),
+        (
+            "session_started",
+            json!({"workspace": "/w",
+            "parent": {"session_id": "s", "delegate_id": "j"},
+            "forked_from": {"session_id": "s", "seq": 3},
+            "rewind": {"summary": "s", "note": "n", "jobs": ["j"]}}),
+        ),
+        (
+            "rewound",
+            json!({"new_session_id": "s2", "seq": 4, "jobs": []}),
+        ),
+        (
+            "turn_started",
+            json!({"input": [
+            {"type": "message", "content": content, "source": "session",
+             "from_session_id": "s0", "command_id": "c", "changed_by": ["e"]},
+            {"type": "message", "content": [], "source": "extension", "extension": "e",
+             "command_id": "c"},
+            {"type": "shell_command", "seq": 2},
+            {"type": "jobs", "job_ids": ["j"]},
+            {"type": "handoff", "command_id": "c"}]}),
+        ),
+        ("step_started", json!({})),
+        (
+            "turn_completed",
+            json!({"outcome": "failed", "error": error, "questions": questions}),
+        ),
+        (
+            "steering_applied",
+            json!({"content": content, "source": "extension", "extension": "e",
+            "command_id": "c", "changed_by": ["e"]}),
+        ),
+        (
+            "steering_applied",
+            json!({"content": content, "source": "session",
+            "from_session_id": "s0", "command_id": "c"}),
+        ),
+        (
+            "steering_queue",
+            json!({"messages": [{"content": content, "source": "driver",
+            "command_id": "c"}]}),
+        ),
+        (
+            "shell_command",
+            json!({"command": "ls", "output": "o", "artifact": "artifacts/o.log",
+            "process": process}),
+        ),
+        ("session_named", json!({"name": null, "by": "person"})),
+        ("clients", json!({"count": 1})),
+        (
+            "context_added",
+            json!({"text": "t", "extension": "e", "hook": "turn_start"}),
+        ),
+        ("assistant_message_started", json!({})),
+        ("assistant_message_delta", json!({"text": "Hel"})),
+        (
+            "assistant_message_completed",
+            json!({"outcome": "failed", "text": "", "error": error,
+            "attempt": 2}),
+        ),
+        (
+            "tool_call_arguments_delta",
+            json!({"index": 0, "name": "read", "text": "{\"pa"}),
+        ),
+        ("reasoning_started", json!({})),
+        ("reasoning_delta", json!({"text": "hmm"})),
+        (
+            "reasoning_completed",
+            json!({"text": "", "provider_item": {"id": "rs_1"}}),
+        ),
+        (
+            "tool_call_requested",
+            json!({"name": "read", "arguments": "{not json",
+            "provider_id": "call_1"}),
+        ),
+        (
+            "tool_call_started",
+            json!({"effects": ["reads", "writes", "executes", "network"],
+            "reversible": false, "paths": ["/a"], "arguments": {"path": "/a"},
+            "changed_by": ["e"]}),
+        ),
+        (
+            "tool_call_delta",
+            json!({"text": "t", "details": {"pct": 5}}),
+        ),
+        (
+            "tool_call_completed",
+            json!({"status": "failed", "reason": "r", "error": error,
+            "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
+            "changes": [{"path": "/a", "added": 1, "removed": 2}],
+            "control": {"handoff": "note"}, "changed_by": ["e"]}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": [], "reversible": true,
+            "paths": ["/a"], "step": "review",
+            "escalation": {"cause": "reviewer_failed", "error": error},
+            "rule": {"subject": "npm test", "prefix": "npm"}}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["writes"], "reversible": true,
+            "step": "review", "escalation": {"cause": "consecutive_blocks", "reason": "r"}}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["executes"], "reversible": true,
+            "step": "review"}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["reads"],
+            "reversible": true, "step": "standing_ask",
+            "standing_rule": {"scope": "global", "prefix": "npm"}}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["network"], "reversible": false,
+            "step": "readonly"}),
+        ),
+        (
+            "permission_resolved",
+            json!({"request_id": "r", "decision": "allow",
+            "decided_by": "reviewer", "reason": "r", "feedback": "f",
+            "grant": {"tool": "shell", "prefix": "npm"},
+            "rule": {"tool": "shell", "prefix": "npm"},
+            "reviewer": {"model": "p/m", "stage": 2}}),
+        ),
+        (
+            "mode_changed",
+            json!({"before": "readonly", "after": "yolo", "by": "request",
+            "request_id": "r"}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "multi_select",
+            "action_ids": ["a"], "extension": "e", "prompt": "p",
+            "options": [{"label": "a"}]}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "select", "prompt": "p",
+            "options": [{"label": "a", "description": "d"}]}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "confirm", "prompt": "p"}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "text_input", "prompt": "p"}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "form", "fields": questions}),
+        ),
+        (
+            "interaction_resolved",
+            json!({"request_id": "r", "by": "fiber", "declined": true}),
+        ),
+        (
+            "interaction_resolved",
+            json!({"request_id": "r", "by": "person", "confirmed": false}),
+        ),
+        (
+            "interaction_resolved",
+            json!({"request_id": "r", "by": "person", "labels": []}),
+        ),
+        (
+            "interaction_resolved",
+            json!({"request_id": "r", "by": "person", "text": "t"}),
+        ),
+        (
+            "interaction_resolved",
+            json!({"request_id": "r", "by": "person", "note": "n",
+            "answers": [{"skipped": true}, {"labels": ["a"], "text": "t"}, {"labels": []}]}),
+        ),
+        (
+            "usage_recorded",
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
+            "web_searches": 1, "cost": 0.25, "extension": "e"}),
+        ),
+        (
+            "quota_noticed",
+            json!({"provider": "p", "window": "5h", "percent_used": 80.5,
+            "resets_at": 17, "notice_at": 80.0}),
+        ),
+        (
+            "retry_scheduled",
+            json!({"code": "rate_limited", "attempt": 2, "delay_ms": 500}),
+        ),
+        (
+            "notice",
+            json!({"code": "extension_failed", "message": "m", "extension": "e"}),
+        ),
+        (
+            "preamble_built",
+            json!({"reason": "switch", "model": "p/m", "context_window": 200000,
+            "trigger_at": 140000, "effort": "high", "thinking": "on", "tool_choice": "auto",
+            "cache_lifetime": "1h", "system_prompt": "s",
+            "tools": [{"name": "read", "deferred": false, "definition": {"type": "object"}}]}),
+        ),
+        (
+            "model_changed",
+            json!({"before": settings, "after": settings, "source": "extension",
+            "extension": "e"}),
+        ),
+        (
+            "opening_message",
+            json!({"environment": {"date": "2026-09-29", "os": "linux",
+            "arch": "x86_64", "shell": "bash", "workspace": "/w", "git": {"branch": null},
+            "session_log": "/l"}, "instruction_files": [{"path": "/a", "content": "c"}],
+            "skills": []}),
+        ),
+        (
+            "instruction_file",
+            json!({"path": "/a", "reason": "own_edit", "content": "c",
+            "sent": "none"}),
+        ),
+        ("date_changed", json!({"date": "2026-09-30"})),
+        ("handoff_started", json!({"trigger": "overflow"})),
+        (
+            "handoff_completed",
+            json!({"outcome": "completed", "note": ["a"], "tokens_before": 9,
+            "instructions": "i"}),
+        ),
+        (
+            "handoff_completed",
+            json!({"outcome": "completed", "note_text": "n", "extension": "e",
+            "tokens_before": 9}),
+        ),
+        (
+            "handoff_completed",
+            json!({"outcome": "failed", "error": error, "tokens_before": 9}),
+        ),
+        ("context_nudged", json!({"tokens": 100, "trigger_at": 140})),
+        (
+            "mcp_server_failed",
+            json!({"server": "m", "reason": "not_logged_in",
+            "will_restart": true, "error": error}),
+        ),
+        ("mcp_server_ready", json!({"server": "m"})),
+        (
+            "reloaded",
+            json!({"servers": {"kept": ["a"], "restarted": [], "started": [],
+            "stopped": []}, "extensions": ["e"],
+            "failed": [{"server": "m", "reason": "died", "error": error}]}),
+        ),
+        (
+            "extension_state_set",
+            json!({"extension": "e", "key": "k", "value": [1],
+            "on_fork": "at_point"}),
+        ),
+        (
+            "extension_state_unset",
+            json!({"extension": "e", "key": "k"}),
+        ),
+        ("extension_ui", json!({"extension": "e", "status": ""})),
+        (
+            "extension_ui",
+            json!({"extension": "e", "widget": "w", "lines": ["l"]}),
+        ),
+        ("extension_message", json!({"extension": "e", "data": "d"})),
+        (
+            "extension_exec",
+            json!({"extension": "e", "program": "git", "args": ["status"],
+            "cwd": "/w", "process": process}),
+        ),
+        (
+            "job_started",
+            json!({"job_id": "j", "tool": "shell", "extension": "e",
+            "description": "d", "output_path": "/o"}),
+        ),
+        (
+            "delegate_started",
+            json!({"job_id": "j", "delegate_session_id": "s2",
+            "harness": "fiber", "model": "p/m", "mode": "readonly", "workspace": "/w",
+            "worktree": {"path": "/t", "branch": "b"},
+            "forked_from": {"session_id": "s", "seq": 3}}),
+        ),
+        (
+            "job_delta",
+            json!({"job_id": "j", "text": "t", "details": null}),
+        ),
+        (
+            "job_line",
+            json!({"job_id": "j", "lines": "a\nb", "suppressed": 3}),
+        ),
+        (
+            "delegate_finished",
+            json!({"job_id": "j", "text": "t", "artifact": "artifacts/f",
+            "questions": questions, "usage": {"tokens": tokens, "cost": null},
+            "worktree": {"path": "/t", "branch": "b", "dirty": true}}),
+        ),
+        (
+            "job_completed",
+            json!({"job_id": "j", "status": "cancelled", "error": error,
+            "process": process, "output_tail": "tail"}),
+        ),
+        ("jobs_pending_notified", json!({"job_ids": ["j"]})),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"new_session_id": "s2"}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"tools": [
+            {"name": "read", "source": "builtin", "state": "full", "bytes": 10, "tokens": 3},
+            {"name": "x", "source": "mcp", "server": "m", "state": "deferred", "bytes": 1},
+            {"name": "y", "source": "extension", "extension": "e", "state": "loaded",
+             "bytes": 1}]}}),
+        ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"output": "o",
+            "artifact": "artifacts/o", "process": process}}),
+        ),
+        ("command_accepted", json!({"command_id": "c"})),
+        (
+            "command_rejected",
+            json!({"command_id": "c", "code": "busy", "message": "m"}),
+        ),
+        (
+            "command_rejected",
+            json!({"code": "malformed", "message": "m"}),
+        ),
+    ]
+}
+
+#[test]
+fn every_sample_reads_as_its_kind_and_writes_back_unchanged() {
+    for (kind, payload) in samples() {
+        let event = Event::from_envelope(&line(kind, payload.clone()))
+            .unwrap_or_else(|e| panic!("{kind}: {e}"))
+            .unwrap();
+        assert_eq!(event.kind(), kind);
+        let written = Value::Object(event.payload().unwrap());
+        // `null` details read as absent, which is the one lossy key here.
+        let expected = if kind == "job_delta" {
+            json!({"job_id": "j", "text": "t"})
+        } else {
+            payload
+        };
+        assert_eq!(written, expected, "{kind}");
+    }
+}
+
+#[test]
+fn the_samples_cover_every_key_each_kind_lists() {
+    let mut covered: BTreeMap<&str, BTreeSet<String>> = BTreeMap::new();
+    for (kind, payload) in samples() {
+        let keys = covered.entry(kind).or_default();
+        keys.extend(payload.as_object().unwrap().keys().cloned());
+    }
+    for (kind, (_, keys)) in doc_kinds() {
+        let listed: BTreeSet<String> = keys.iter().map(|k| (*k).to_owned()).collect();
+        assert_eq!(covered.get(kind), Some(&listed), "{kind}");
+    }
+}
+
+fn read(kind: &str, payload: Value) -> Result<Option<Event>, serde_json::Error> {
+    Event::from_envelope(&line(kind, payload))
+}
+
+#[test]
+fn a_handoff_note_is_the_actions_or_a_hook_text_never_both() {
+    let both = json!({"outcome": "completed", "note": ["a"], "note_text": "n",
+        "extension": "e", "tokens_before": 9});
+    assert!(read("handoff_completed", both).is_err());
+    let hook_without_extension = json!({"outcome": "completed", "note_text": "n",
+        "tokens_before": 9});
+    assert!(read("handoff_completed", hook_without_extension).is_err());
+    let extension_without_hook = json!({"outcome": "completed", "extension": "e",
+        "tokens_before": 9});
+    assert!(read("handoff_completed", extension_without_hook).is_err());
+}
+
+#[test]
+fn a_permission_request_carries_only_the_keys_its_step_defines() {
+    let base = || json!({"request_id": "r", "effects": [], "reversible": true});
+    let rule = json!({"subject": "npm test", "prefix": "npm"});
+    let standing = json!({"scope": "project", "prefix": "npm"});
+    let escalation = json!({"cause": "session_blocks", "reason": "r"});
+    let invalid = [
+        ("standing_ask", vec![]),
+        (
+            "standing_ask",
+            vec![("standing_rule", &standing), ("escalation", &escalation)],
+        ),
+        (
+            "standing_ask",
+            vec![("standing_rule", &standing), ("rule", &rule)],
+        ),
+        ("readonly", vec![("standing_rule", &standing)]),
+        ("readonly", vec![("escalation", &escalation)]),
+        ("readonly", vec![("rule", &rule)]),
+        ("review", vec![("standing_rule", &standing)]),
+    ];
+    for (step, keys) in invalid {
+        let mut payload = base();
+        payload["step"] = json!(step);
+        for (key, value) in &keys {
+            payload[*key] = (*value).clone();
+        }
+        assert!(
+            read("permission_requested", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
+fn an_interaction_request_carries_only_the_keys_its_kind_defines() {
+    let options = json!([{"label": "a"}]);
+    let fields = json!([{"header": "h", "question": "q", "options": []}]);
+    let prompt = json!("p");
+    let invalid = [
+        ("confirm", vec![]),
+        ("confirm", vec![("prompt", &prompt), ("options", &options)]),
+        ("confirm", vec![("prompt", &prompt), ("fields", &fields)]),
+        ("select", vec![("prompt", &prompt)]),
+        ("select", vec![("options", &options)]),
+        (
+            "multi_select",
+            vec![
+                ("prompt", &prompt),
+                ("options", &options),
+                ("fields", &fields),
+            ],
+        ),
+        (
+            "text_input",
+            vec![("prompt", &prompt), ("options", &options)],
+        ),
+        ("form", vec![]),
+        ("form", vec![("fields", &fields), ("prompt", &prompt)]),
+        ("form", vec![("fields", &fields), ("options", &options)]),
+    ];
+    for (kind, keys) in invalid {
+        let mut payload = json!({"request_id": "r", "kind": kind});
+        for (key, value) in &keys {
+            payload[*key] = (*value).clone();
+        }
+        assert!(
+            read("interaction_requested", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
+fn a_required_key_that_may_be_null_must_be_present() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let cases = [
+        ("session_named", json!({"by": "person"}), "name"),
+        (
+            "usage_recorded",
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens}),
+            "cost",
+        ),
+    ];
+    for (kind, mut payload, key) in cases {
+        assert!(read(kind, payload.clone()).is_err(), "{kind} without {key}");
+        payload[key] = Value::Null;
+        assert!(
+            read(kind, payload).unwrap().is_some(),
+            "{kind} with null {key}"
+        );
+    }
+    let finished = |usage: Value| json!({"job_id": "j", "text": "t", "usage": usage});
+    assert!(read("delegate_finished", finished(json!({"tokens": tokens}))).is_err());
+    let with_null = finished(json!({"tokens": tokens, "cost": null}));
+    assert!(read("delegate_finished", with_null).unwrap().is_some());
+    let opening = |git: Value| {
+        json!({"environment": {"date": "d", "os": "o", "arch": "a", "shell": "s",
+            "workspace": "/w", "git": git, "session_log": "/l"},
+            "instruction_files": [], "skills": []})
+    };
+    assert!(read("opening_message", opening(json!({}))).is_err());
+    assert!(
+        read("opening_message", opening(json!({"branch": null})))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn declined_and_skipped_are_only_ever_true() {
+    let declined = json!({"request_id": "r", "by": "fiber", "declined": false});
+    assert!(read("interaction_resolved", declined).is_err());
+    let skipped = json!({"request_id": "r", "by": "person", "answers": [{"skipped": false}]});
+    assert!(read("interaction_resolved", skipped).is_err());
+}

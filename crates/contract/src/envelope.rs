@@ -3,26 +3,11 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-/// The session an event belongs to. Opaque, and unique within Fiber home.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct SessionId(pub String);
+use crate::{ActionId, Seq, SessionId, TurnId};
 
-/// The turn an event is about. Opaque, and unique within its session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct TurnId(pub String);
-
-/// The action an event is about. Opaque, and unique within its session.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct ActionId(pub String);
-
-/// A durable event's position in its session log: contiguous, never reset or
-/// reused.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(transparent)]
-pub struct Seq(pub u64);
+/// The `schema_version` every line this build writes carries
+/// (`docs/events.md`, "Versioning").
+pub const SCHEMA_VERSION: u32 = 1;
 
 /// One event line. The fields serialize in the order `docs/events.md` lists
 /// them, and an optional field is absent when it does not apply, never
@@ -46,7 +31,8 @@ pub struct Envelope {
     /// Present on durable lines only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seq: Option<Seq>,
-    /// The kind-specific body.
+    /// The kind-specific body. Its keys serialize sorted, because serde_json's
+    /// `preserve_order` is never enabled (`docs/prompt-cache.md`).
     pub payload: Map<String, Value>,
 }
 
