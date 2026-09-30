@@ -32,10 +32,10 @@ A step is one round-trip to the model. Each step does this, in order:
    the conversation, in arrival order; each steering message is logged as its
    own `steering_applied`. Nothing is held back for a later step.
 2. Check how full the context is, and hand off if it is past the threshold
-   (`docs/handoff.md`, "Triggers"). Then check the budget and run
-   `before_model_call` ("Spending budget").
+   (`docs/handoff.md`, "Triggers").
 3. Build the request: the preamble (`docs/prompt-cache.md`) followed by the
-   conversation ("What the model is sent").
+   conversation ("What the model is sent"). Then check the budget and run
+   `before_model_call` ("Spending budget").
 4. Send it and stream the reply, emitting its actions as they arrive. A tool
    call's arguments stream as raw text in `tool_call_arguments_delta`
    (`docs/events.md`) and are parsed once, when the model finishes emitting
@@ -127,7 +127,7 @@ A call with `subscription` does not count, because a subscription bills
 nothing per call; its own limit ends it as `quota_exceeded`. A `cost` still
 `null` counts as zero until it settles.
 
-Before each step's model request, after the handoff check, the loop checks
+Once each step's model request is built, before it is sent, the loop checks
 the budget and then runs `before_model_call` hooks (`docs/extensions.md`,
 "The hook points"). When the spend has reached `budget.usd`, or a hook
 refuses, the request is not sent:
@@ -140,8 +140,10 @@ refuses, the request is not sent:
 The call that crosses the limit completes, so a session overshoots by at most
 one call, or by one run of a delegate on another harness, which reports its
 cost only when the run ends. A delegate checks no budget of its own; its
-parent's covers it. Raising `budget.usd` (`/settings`, or `-c` on resume) and
-sending a message continues the work.
+parent's covers it. To continue, the person raises `budget.usd` and reloads
+(`/settings` does both), or resumes with `-c budget.usd=…`
+(`docs/configuration.md`, "When Fiber reads configuration"), then sends a
+message.
 
 ## Interrupt
 

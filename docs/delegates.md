@@ -328,8 +328,8 @@ As Lua, none of which runs on a model request:
 - **Usage.** The parent writes one `usage_recorded` per run, from the usage
   `line` returned. Its cost is the harness's own where it reports one, or
   computed from the declared prices, and it carries `subscription` when the
-  harness ran on a subscription login. The parent's budget counts it
-  (`docs/loop.md`, "Spending budget").
+  harness ran on a subscription login. The parent's budget counts it unless it
+  carries `subscription` (`docs/loop.md`, "Spending budget").
 - **Quota.** `quota()` runs when `delegate_models` needs it, as a provider's
   does (`docs/tools.md`, "Provider quota"). Quota that `line` returns from a
   running delegate replaces the stored value, with no fetch.
