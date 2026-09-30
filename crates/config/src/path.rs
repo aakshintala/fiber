@@ -69,12 +69,7 @@ pub(crate) fn merge(lower: &mut Value, upper: &Value) {
     match (lower, upper) {
         (Value::Object(below), Value::Object(above)) => {
             for (name, value) in above {
-                match below.get_mut(name) {
-                    Some(existing) => merge(existing, value),
-                    None => {
-                        below.insert(name.clone(), value.clone());
-                    }
-                }
+                merge(below.entry(name.clone()).or_insert(Value::Null), value);
             }
         }
         (below, above) => *below = above.clone(),

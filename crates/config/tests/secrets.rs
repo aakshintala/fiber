@@ -131,3 +131,39 @@ fn a_stored_secret_is_not_part_of_the_configuration() {
         serde_json::json!({"env": "OPENROUTER_API_KEY"})
     );
 }
+
+#[test]
+fn a_credential_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("planted");
+    fs::write(&outside, VALUE).unwrap();
+    fs::create_dir_all(setup.home().join("credentials")).unwrap();
+    let link = setup.home().join("credentials/openrouter");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let e = read_secret(&setup.home(), "openrouter").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string().starts_with(&link.display().to_string()),
+        "{e}"
+    );
+    assert!(!e.to_string().contains(VALUE));
+}
+
+#[test]
+fn a_credentials_directory_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("planted");
+    fs::create_dir_all(&outside).unwrap();
+    fs::write(outside.join("openrouter"), VALUE).unwrap();
+    let link = setup.home().join("credentials");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let e = read_secret(&setup.home(), "openrouter").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string().starts_with(&link.display().to_string()),
+        "{e}"
+    );
+    let e = store_secret(&setup.home(), "acme", &Secret::new(VALUE.into())).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(!outside.join("acme").exists());
+}

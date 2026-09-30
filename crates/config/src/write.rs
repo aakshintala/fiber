@@ -11,7 +11,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use serde_json::{Map, Value};
 
 use crate::error::ConfigError;
-use crate::{keys, path, slug};
+use crate::home::read;
+use crate::{Source, keys, path};
 
 /// Which extension settings file `host.config.set` writes: the same words
 /// `host.data_dir` takes.
@@ -24,37 +25,17 @@ pub enum Scope {
 }
 
 /// Sets one key in the global `config.json` (`fiber config set`, the model
-/// picker). The value's type is checked against "Keys" when the key is known;
-/// nothing else is.
+/// picker). The value's type, and the type of every known key it holds, is
+/// checked against "Keys"; nothing else is.
 pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigError> {
     let file = home.join("config.json");
-    let segments = parse_key(key)?;
-    if let Some(known) = keys::leaf(&segments)
-        && !known.kind.accepts(&value)
-    {
-        return Err(ConfigError::WrongType {
-            source_name: file.display().to_string(),
-            key: path::display(&segments),
-            expected: known.kind.expected(),
-        });
+    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    let mut candidate = Value::Object(Map::new());
+    path::set(&mut candidate, &segments, value.clone());
+    if let Value::Object(map) = candidate {
+        keys::check(map, &Source::Global(file.clone()), &mut Vec::new())?;
     }
-    update(&file, &segments, value)
-}
-
-/// Sets one key in an extension's settings file (`host.config.set`).
-pub fn set_extension_setting(
-    home: &Path,
-    project: &str,
-    extension: &str,
-    scope: Scope,
-    key: &str,
-    value: Value,
-) -> Result<(), ConfigError> {
-    let dir = match scope {
-        Scope::Machine => home.to_path_buf(),
-        Scope::Project => home.join("projects").join(project),
-    };
-    update(&settings_file(&dir, extension), &parse_key(key)?, value)
+    update(&file, &segments, value).map(drop)
 }
 
 /// Deletes an extension's settings in the global and every per-project layer
@@ -92,16 +73,14 @@ pub fn remove_extension_settings(home: &Path, extension: &str) -> Result<(), Con
 
 /// `config/<slug>.json` under a layer's directory.
 pub(crate) fn settings_file(dir: &Path, extension: &str) -> PathBuf {
-    dir.join("config").join(format!("{}.json", slug(extension)))
-}
-
-fn parse_key(key: &str) -> Result<Vec<String>, ConfigError> {
-    path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })
+    // `<extension>` is slugged as for `extensions/` (docs/state.md).
+    dir.join("config")
+        .join(format!("{}.json", extension.replace('/', "-")))
 }
 
 /// Reads `file` under its lock, sets one key and writes the whole file back,
-/// keys sorted with a 2-space indent.
-fn update(file: &Path, key: &[String], value: Value) -> Result<(), ConfigError> {
+/// keys sorted with a 2-space indent. Returns what it wrote.
+pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<Vec<u8>, ConfigError> {
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
@@ -116,15 +95,12 @@ fn update(file: &Path, key: &[String], value: Value) -> Result<(), ConfigError> 
         .open(&lock_name)
         .map_err(io)?;
     lock.lock().map_err(io)?;
-    let mut root = match fs::read(file) {
-        Ok(bytes) => crate::parse(file, &bytes)?,
-        Err(e) if e.kind() == ErrorKind::NotFound => Value::Object(Map::new()),
-        Err(source) => return Err(io(source)),
-    };
+    let mut root = read(file)?.unwrap_or_else(|| Value::Object(Map::new()));
     path::set(&mut root, key, value);
     let mut text = serde_json::to_string_pretty(&root).map_err(|e| io(e.into()))?;
     text.push('\n');
-    write_atomic(file, text.as_bytes(), 0o666)
+    write_atomic(file, text.as_bytes(), 0o666)?;
+    Ok(text.into_bytes())
 }
 
 fn make_parent(file: &Path) -> Result<(), ConfigError> {
@@ -159,7 +135,11 @@ pub(crate) fn write_atomic(file: &Path, bytes: &[u8], mode: u32) -> Result<(), C
         NEXT.fetch_add(1, Ordering::Relaxed)
     ));
     let tmp = PathBuf::from(tmp_name);
-    let written = write_synced(&tmp, bytes, mode).and_then(|()| fs::rename(&tmp, file));
+    let dir = file.parent().unwrap_or(Path::new("."));
+    // Syncing the directory makes the rename itself survive a crash.
+    let written = write_synced(&tmp, bytes, mode)
+        .and_then(|()| fs::rename(&tmp, file))
+        .and_then(|()| File::open(dir)?.sync_all());
     if written.is_err() {
         fs::remove_file(&tmp).unwrap_or(());
     }

@@ -44,7 +44,11 @@ fn it_prints_the_merged_configuration_and_the_notices() {
         r#"{"model": "databricks/databricks-claude-opus-5", "tui": {"hover": false}}"#,
     );
     setup.write(&setup.project(), r#"{"handoff": {"tokens": 100}}"#);
-    let out = resolve(&setup, &["--model", "a/b", "-c", "retry.attempts=9"]).unwrap();
+    let out = resolve(
+        &setup,
+        &["--model", "a/b", "--headless", "-c", "retry.attempts=9"],
+    )
+    .unwrap();
     let stderr = String::from_utf8(out.stderr).unwrap();
     assert!(out.status.success(), "{stderr}");
     let merged: Value = serde_json::from_slice(&out.stdout).unwrap();
@@ -56,6 +60,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
     assert_eq!(merged["retry"]["attempts"], json!(9));
     assert_eq!(merged["cache"]["lifetime"], json!("5m"));
     assert_eq!(merged["tui"]["hover"], json!(true));
+    assert_eq!(merged["permissions"]["mode"], json!("auto"));
     assert_eq!(
         stderr,
         format!(

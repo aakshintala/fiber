@@ -5,6 +5,11 @@
 
 use serde_json::{Map, Value};
 
+use contract::ErrorCode;
+use contract::events::Notice;
+
+use crate::Source;
+use crate::error::ConfigError;
 use crate::path::display;
 use crate::secret::CredentialSource;
 
@@ -42,7 +47,11 @@ impl Kind {
             Self::BoolMap => value
                 .as_object()
                 .is_some_and(|map| map.values().all(Value::is_boolean)),
-            Self::Credential => serde_json::from_value::<CredentialSource>(value.clone()).is_ok(),
+            Self::Credential => match serde_json::from_value(value.clone()) {
+                Ok(CredentialSource::Command(argv)) => !argv.is_empty(),
+                Ok(CredentialSource::Env(_) | CredentialSource::File(_)) => true,
+                Err(_) => false,
+            },
         }
     }
 
@@ -91,6 +100,9 @@ const LIFETIMES: &[&str] = &["5m", "1h"];
 pub(crate) const KEYS: &[Key] = &[
     key("model", Str, YES, None),
     key("roles.*", Str, YES, None),
+    // A headless run's default is `auto` (docs/permissions.md, "Headless"),
+    // set in `Config::load`. The terminal's default is not settled yet, so it
+    // has none here.
     key("permissions.mode", OneOf(&["auto", "yolo"]), NO, None),
     key("reviewer.model", Str, NO, None),
     key("reviewer.block_limits.consecutive", Count, NO, Some("3")),
@@ -187,60 +199,51 @@ pub(crate) fn defaults() -> Value {
     root
 }
 
-/// A key checking a layer dropped.
-pub(crate) enum Ignored {
-    /// Not in "Keys".
-    Unknown(String),
-    /// Person-only, set by a repository.
-    PersonOnly(String),
-}
-
-/// A key whose value has the wrong type, which refuses the whole layer.
-pub(crate) struct WrongType {
-    pub(crate) key: String,
-    pub(crate) expected: String,
-}
-
-/// Checks one layer against "Keys", returning the keys it may set. Unknown and
-/// refused keys are pushed onto `ignored`; a wrongly typed value is an error.
+/// Checks one layer against "Keys", returning the keys it may set. An unknown
+/// key, or one a repository may not set, is a notice; a wrongly typed value
+/// is an error.
 pub(crate) fn check(
     layer: Map<String, Value>,
-    repo: bool,
-    ignored: &mut Vec<Ignored>,
-) -> Result<Map<String, Value>, WrongType> {
-    walk(layer, &mut Vec::new(), repo, ignored)
+    source: &Source,
+    notices: &mut Vec<Notice>,
+) -> Result<Map<String, Value>, ConfigError> {
+    walk(layer, &mut Vec::new(), source, notices)
 }
 
 fn walk(
     map: Map<String, Value>,
     path: &mut Vec<String>,
-    repo: bool,
-    ignored: &mut Vec<Ignored>,
-) -> Result<Map<String, Value>, WrongType> {
+    source: &Source,
+    notices: &mut Vec<Notice>,
+) -> Result<Map<String, Value>, ConfigError> {
+    let ignored = |path: &[String], why: &str| Notice {
+        code: ErrorCode::ConfigKeyIgnored,
+        message: format!("{source}: ignored `{}`, which {why}.", display(path)),
+        extension: None,
+    };
+    let wrong = |path: &[String], expected: String| ConfigError::WrongType {
+        source_name: source.to_string(),
+        key: display(path),
+        expected,
+    };
     let mut kept = Map::new();
     for (name, value) in map {
         path.push(name.clone());
         if let Some(key) = leaf(path) {
-            if repo && !key.repo {
-                ignored.push(Ignored::PersonOnly(display(path)));
+            if matches!(source, Source::Repository(_)) && !key.repo {
+                notices.push(ignored(path, "a repository may not set"));
             } else if key.kind.accepts(&value) {
                 kept.insert(name, value);
             } else {
-                return Err(WrongType {
-                    key: display(path),
-                    expected: key.kind.expected(),
-                });
+                return Err(wrong(path, key.kind.expected()));
             }
         } else if interior(path) {
             let Value::Object(inner) = value else {
-                return Err(WrongType {
-                    key: display(path),
-                    expected: "an object".into(),
-                });
+                return Err(wrong(path, "an object".into()));
             };
-            kept.insert(name, Value::Object(walk(inner, path, repo, ignored)?));
+            kept.insert(name, Value::Object(walk(inner, path, source, notices)?));
         } else {
-            ignored.push(Ignored::Unknown(display(path)));
+            notices.push(ignored(path, "this Fiber does not know"));
         }
         path.pop();
     }

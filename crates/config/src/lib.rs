@@ -5,16 +5,15 @@
 //! (`docs/state.md`, "Override") and keeps secrets in `credentials/`.
 
 mod error;
+mod home;
 mod keys;
 mod path;
 mod secret;
 mod write;
 
-use std::ffi::OsString;
+use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, DirBuilder};
-use std::io::ErrorKind;
-use std::os::unix::fs::DirBuilderExt;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
@@ -22,23 +21,24 @@ use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use error::ConfigError;
+pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use secret::{CredentialSource, Secret, read_secret, store_secret};
-pub use write::{Scope, remove_extension_settings, set_extension_setting, set_global};
+pub use write::{Scope, remove_extension_settings, set_global};
 
-use keys::Ignored;
+use home::{parse, plain, read, read_bytes};
 
 /// Where to read configuration from.
-#[derive(Debug, Clone)]
 pub struct Sources {
     /// Fiber home ([`fiber_home`]).
     pub home: PathBuf,
     /// The workspace, whose `.fiber/` is the repository layer.
     pub workspace: PathBuf,
-    /// The project's key, naming `projects/<key>/` in Fiber home
-    /// (`docs/state.md`, "Projects").
-    pub project: String,
+    /// The project, naming `projects/<key>/` in Fiber home.
+    pub project: ProjectKey,
     /// Each `-c key=value` from the command line, in order.
     pub overrides: Vec<String>,
+    /// Whether the run has no client, such as `fiber ask`.
+    pub headless: bool,
 }
 
 /// The layer a value came from (`docs/configuration.md`, "Layers").
@@ -68,20 +68,41 @@ impl fmt::Display for Source {
     }
 }
 
-/// The merged configuration: every layer that was present, checked against
-/// "Keys", lowest first.
-#[derive(Debug, Clone)]
+/// A session's configuration, read once: every layer that was present,
+/// checked against "Keys", lowest first, and every extension settings file.
+/// Nothing here is read again until the next load (`docs/configuration.md`,
+/// "When Fiber reads configuration").
+#[derive(Clone)]
 pub struct Config {
-    sources: Sources,
+    home: PathBuf,
+    workspace: PathBuf,
+    project: ProjectKey,
     layers: Vec<(Source, Value)>,
     /// `-c extensions."<name>".settings.<key>=value`, by extension.
     run_settings: Map<String, Value>,
+    /// The bytes of every `config/<extension>.json` in each layer, by path.
+    settings_files: BTreeMap<PathBuf, Vec<u8>>,
     notices: Vec<Notice>,
+}
+
+/// Shows where the configuration came from, never a value: a `-c` value or an
+/// extension's setting may be something the person would not print.
+impl fmt::Debug for Config {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sources: Vec<&Source> = self.layers.iter().map(|(source, _)| source).collect();
+        f.debug_struct("Config")
+            .field("layers", &sources)
+            .field("settings_files", &self.settings_files.keys())
+            .field("notices", &self.notices)
+            .finish_non_exhaustive()
+    }
 }
 
 impl Config {
     /// Reads every layer. An unknown key, or a key a repository may not set,
     /// becomes a notice; invalid JSON or a wrongly typed value is an error.
+    /// A repository's file that is a symbolic link or not a regular file is
+    /// refused, since a repository is someone else's text.
     pub fn load(sources: Sources) -> Result<Self, ConfigError> {
         let mut run = Value::Object(Map::new());
         let mut run_settings = Map::new();
@@ -89,13 +110,16 @@ impl Config {
             let (key, text) = arg
                 .split_once('=')
                 .ok_or_else(|| ConfigError::Override { arg: arg.clone() })?;
-            let key_path =
-                path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+            let bad = || ConfigError::Override { arg: key.into() };
+            let key_path = path::parse(key).ok_or_else(bad)?;
             let value = serde_json::from_str(text).unwrap_or_else(|_| Value::String(text.into()));
             match key_path.as_slice() {
                 [area, name, settings, rest @ ..]
                     if area == "extensions" && settings == "settings" =>
                 {
+                    if rest.is_empty() {
+                        return Err(bad());
+                    }
                     let settings = run_settings
                         .entry(name.clone())
                         .or_insert_with(|| Value::Object(Map::new()));
@@ -105,40 +129,60 @@ impl Config {
             }
         }
 
-        let home = &sources.home;
+        let home = sources.home;
+        let fiber = sources.workspace.join(".fiber");
+        let project_dir = home.join("projects").join(sources.project.as_str());
+        let mut defaults = keys::defaults();
+        if sources.headless {
+            // docs/permissions.md, "Headless": a run with no client defaults
+            // to auto.
+            path::set(
+                &mut defaults,
+                &["permissions".into(), "mode".into()],
+                "auto".into(),
+            );
+        }
+        let mut notices = Vec::new();
+        let mut layers = vec![(Source::Default, defaults)];
+        let repository_file = fiber.join("config.json");
+        let repository = if plain(&fiber, true)? && plain(&repository_file, false)? {
+            read(&repository_file)?
+        } else {
+            None
+        };
         let files = [
-            (Source::Global(home.join("config.json")), false),
             (
-                Source::Repository(sources.workspace.join(".fiber").join("config.json")),
-                true,
+                Source::Global(home.join("config.json")),
+                read(&home.join("config.json"))?,
             ),
+            (Source::Repository(repository_file), repository),
             (
-                Source::Project(
-                    home.join("projects")
-                        .join(&sources.project)
-                        .join("config.json"),
-                ),
-                false,
+                Source::Project(project_dir.join("config.json")),
+                read(&project_dir.join("config.json"))?,
             ),
         ];
-        let mut notices = Vec::new();
-        let mut layers = vec![(Source::Default, keys::defaults())];
-        for (source, repo) in files {
-            if let Some(file) = file_of(&source)
-                && let Some(value) = read(file)?
-            {
-                let checked = check_layer(value, &source, repo, &mut notices)?;
+        for (source, value) in files {
+            if let Some(value) = value {
+                let checked = check_layer(value, &source, &mut notices)?;
                 layers.push((source, checked));
             }
         }
         if !sources.overrides.is_empty() {
-            let checked = check_layer(run, &Source::Run, false, &mut notices)?;
+            let checked = check_layer(run, &Source::Run, &mut notices)?;
             layers.push((Source::Run, checked));
         }
+
+        let mut settings_files = BTreeMap::new();
+        for (dir, repo) in [(&home, false), (&fiber, true), (&project_dir, false)] {
+            snapshot_settings(dir, repo, &mut settings_files)?;
+        }
         Ok(Self {
-            sources,
+            home,
+            workspace: sources.workspace,
+            project: sources.project,
             layers,
             run_settings,
+            settings_files,
             notices,
         })
     }
@@ -182,7 +226,8 @@ impl Config {
         }
     }
 
-    /// An extension's settings, merged across its layers
+    /// An extension's settings, merged across its layers as they were when
+    /// this configuration was loaded, plus its own writes since
     /// (`docs/configuration.md`, "Extension settings"). The repository's file
     /// may set only the keys the extension's manifest lists under
     /// `repo_settings`; any other key there is a notice and is ignored.
@@ -191,16 +236,15 @@ impl Config {
         extension: &str,
         repo_settings: &[&str],
     ) -> Result<(Value, Vec<Notice>), ConfigError> {
-        let home = &self.sources.home;
         let files = [
-            (write::settings_file(home, extension), false),
+            (write::settings_file(&self.home, extension), false),
             (
-                write::settings_file(&self.sources.workspace.join(".fiber"), extension),
+                write::settings_file(&self.workspace.join(".fiber"), extension),
                 true,
             ),
             (
                 write::settings_file(
-                    &home.join("projects").join(&self.sources.project),
+                    &self.home.join("projects").join(self.project.as_str()),
                     extension,
                 ),
                 false,
@@ -209,10 +253,10 @@ impl Config {
         let mut merged = Value::Object(Map::new());
         let mut notices = Vec::new();
         for (file, repo) in files {
-            let Some(value) = read(&file)? else {
+            let Some(bytes) = self.settings_files.get(&file) else {
                 continue;
             };
-            let Value::Object(mut map) = value else {
+            let Value::Object(mut map) = parse(&file, bytes)? else {
                 return Err(top_level(&file.display().to_string()));
             };
             if repo {
@@ -238,6 +282,60 @@ impl Config {
         }
         Ok((merged, notices))
     }
+
+    /// Sets one key in an extension's settings file (`host.config.set`). The
+    /// value is visible to this configuration at once, and to other sessions
+    /// at their next load ("When Fiber reads configuration").
+    pub fn set_extension_setting(
+        &mut self,
+        extension: &str,
+        scope: Scope,
+        key: &str,
+        value: Value,
+    ) -> Result<(), ConfigError> {
+        let dir = match scope {
+            Scope::Machine => self.home.clone(),
+            Scope::Project => self.home.join("projects").join(self.project.as_str()),
+        };
+        let file = write::settings_file(&dir, extension);
+        let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+        let written = write::update(&file, &key, value)?;
+        self.settings_files.insert(file, written);
+        Ok(())
+    }
+}
+
+/// Reads every `*.json` in a layer directory's `config/` into `into`. In a
+/// repository, the layer directory, `config/` and each file must be plain.
+fn snapshot_settings(
+    layer_dir: &Path,
+    repo: bool,
+    into: &mut BTreeMap<PathBuf, Vec<u8>>,
+) -> Result<(), ConfigError> {
+    let dir = layer_dir.join("config");
+    if repo && !(plain(layer_dir, true)? && plain(&dir, true)?) {
+        return Ok(());
+    }
+    let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(source) => return Err(ConfigError::Io { file: dir, source }),
+    };
+    for entry in entries {
+        let file = entry
+            .map_err(|source| ConfigError::Io {
+                file: dir.clone(),
+                source,
+            })?
+            .path();
+        if file.extension().is_none_or(|e| e != "json") || (repo && !plain(&file, false)?) {
+            continue;
+        }
+        if let Some(bytes) = read_bytes(&file)? {
+            into.insert(file, bytes);
+        }
+    }
+    Ok(())
 }
 
 /// A layer with its `models."<model>"` laid over its top level.
@@ -251,13 +349,6 @@ fn view(layer: &Value, model: Option<&str>) -> Value {
     view
 }
 
-fn file_of(source: &Source) -> Option<&Path> {
-    match source {
-        Source::Global(file) | Source::Repository(file) | Source::Project(file) => Some(file),
-        Source::Default | Source::Run => None,
-    }
-}
-
 fn top_level(source_name: &str) -> ConfigError {
     ConfigError::WrongType {
         source_name: source_name.into(),
@@ -269,105 +360,10 @@ fn top_level(source_name: &str) -> ConfigError {
 fn check_layer(
     value: Value,
     source: &Source,
-    repo: bool,
     notices: &mut Vec<Notice>,
 ) -> Result<Value, ConfigError> {
-    let name = source.to_string();
     let Value::Object(map) = value else {
-        return Err(top_level(&name));
+        return Err(top_level(&source.to_string()));
     };
-    let mut ignored = Vec::new();
-    let checked = keys::check(map, repo, &mut ignored);
-    notices.extend(ignored.into_iter().map(|dropped| {
-        let why = match dropped {
-            Ignored::Unknown(key) => format!("ignored `{key}`, which this Fiber does not know"),
-            Ignored::PersonOnly(key) => format!("ignored `{key}`, which a repository may not set"),
-        };
-        Notice {
-            code: ErrorCode::ConfigKeyIgnored,
-            message: format!("{name}: {why}."),
-            extension: None,
-        }
-    }));
-    checked
-        .map(Value::Object)
-        .map_err(|wrong| ConfigError::WrongType {
-            source_name: name,
-            key: wrong.key,
-            expected: wrong.expected,
-        })
-}
-
-/// A file's JSON, or `None` when it does not exist.
-fn read(file: &Path) -> Result<Option<Value>, ConfigError> {
-    match fs::read(file) {
-        Ok(bytes) => parse(file, &bytes).map(Some),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
-        Err(source) => Err(ConfigError::Io {
-            file: file.to_path_buf(),
-            source,
-        }),
-    }
-}
-
-/// Strict JSON: no comments, no trailing commas.
-pub(crate) fn parse(file: &Path, bytes: &[u8]) -> Result<Value, ConfigError> {
-    serde_json::from_slice(bytes).map_err(|e| ConfigError::Json {
-        file: file.to_path_buf(),
-        line: e.line(),
-        column: e.column(),
-    })
-}
-
-/// An extension's name as a file name: every `/` becomes `-`, as for
-/// `extensions/` (`docs/state.md`, "What each part holds").
-pub(crate) fn slug(name: &str) -> String {
-    name.replace('/', "-")
-}
-
-/// Fiber home: `FIBER_HOME` when set, which must be an absolute path, or
-/// `.fiber` in the home directory. A missing directory is created, mode 0700
-/// (`docs/state.md`, "Override").
-pub fn fiber_home(
-    fiber_home: Option<OsString>,
-    home: Option<OsString>,
-) -> Result<PathBuf, ConfigError> {
-    let dir = match fiber_home {
-        Some(value) if value.is_empty() => {
-            return Err(ConfigError::FiberHome(
-                "FIBER_HOME is empty; set it to an absolute path or unset it.",
-            ));
-        }
-        Some(value) => {
-            let dir = PathBuf::from(value);
-            if dir.is_relative() {
-                return Err(ConfigError::FiberHome(
-                    "FIBER_HOME must be an absolute path.",
-                ));
-            }
-            dir
-        }
-        None => match home.map(PathBuf::from) {
-            Some(home) if home.is_absolute() => home.join(".fiber"),
-            Some(_) | None => {
-                return Err(ConfigError::FiberHome(
-                    "HOME is not an absolute path, so Fiber home is unknown; set FIBER_HOME.",
-                ));
-            }
-        },
-    };
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&dir)
-        .map_err(|source| ConfigError::Io {
-            file: dir.clone(),
-            source,
-        })?;
-    Ok(dir)
-}
-
-/// [`fiber_home`] from the process's `FIBER_HOME` and `HOME`.
-pub fn fiber_home_from_env() -> Result<PathBuf, ConfigError> {
-    fiber_home(std::env::var_os("FIBER_HOME"), std::env::var_os("HOME"))
+    keys::check(map, source, notices).map(Value::Object)
 }

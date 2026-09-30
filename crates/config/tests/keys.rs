@@ -320,7 +320,7 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
         (
             &["providers", "openrouter", "credential"],
             json!({"command": ["op", "read"]}),
-            json!({"shell": "op"}),
+            json!({"command": []}),
             "one of {\"env\": name}",
             false,
         ),
@@ -385,19 +385,6 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
     ]
 }
 
-fn dotted(path: &[&str]) -> String {
-    path.iter()
-        .map(|s| {
-            if s.contains('.') {
-                format!("\"{s}\"")
-            } else {
-                (*s).to_owned()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join(".")
-}
-
 #[test]
 fn every_key_reads_a_value_of_its_type() {
     for (path, good, _, _, _) in rows() {
@@ -410,7 +397,7 @@ fn every_key_reads_a_value_of_its_type() {
             config.notices()
         );
         assert_eq!(
-            config.get(&dotted(path), None),
+            config.get(&path.join("."), None),
             Some((good, Source::Global(setup.global()))),
             "{path:?}"
         );
@@ -428,7 +415,7 @@ fn a_value_of_the_wrong_type_is_config_invalid_naming_the_file_and_key() {
         let start = format!(
             "{}: `{}` must be {expected}",
             setup.project().display(),
-            dotted(path)
+            path.join(".")
         );
         assert!(
             message.starts_with(&start) && message.ends_with('.'),
@@ -443,7 +430,7 @@ fn a_repository_sets_only_the_keys_the_table_allows() {
         let setup = Setup::new();
         setup.write(&setup.repository(), &nest(path, good.clone()).to_string());
         let config = setup.load(&[]).unwrap();
-        let got = config.get(&dotted(path), None);
+        let got = config.get(&path.join("."), None);
         if repo {
             assert!(config.notices().is_empty(), "{path:?}");
             assert_eq!(
@@ -466,7 +453,7 @@ fn a_repository_sets_only_the_keys_the_table_allows() {
                 format!(
                     "{}: ignored `{}`, which a repository may not set.",
                     setup.repository().display(),
-                    dotted(path)
+                    path.join(".")
                 )
             );
         }

@@ -6,8 +6,8 @@ mod common;
 
 use std::fs;
 
-use common::Setup;
-use config::Source;
+use common::{Setup, key};
+use config::{Config, ProjectKey, Source, Sources};
 use contract::ErrorCode;
 use serde_json::json;
 
@@ -343,4 +343,124 @@ fn a_source_prints_as_where_it_is() {
 fn a_query_that_is_not_a_dotted_key_finds_nothing() {
     let setup = Setup::new();
     assert_eq!(setup.load(&[]).unwrap().get("handoff..tokens", None), None);
+}
+
+#[test]
+fn a_repository_file_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("private.json");
+    setup.write(&outside, r#"{"model": "a/b"}"#);
+    fs::create_dir_all(setup.workspace().join(".fiber")).unwrap();
+    std::os::unix::fs::symlink(&outside, setup.repository()).unwrap();
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(
+        e.to_string(),
+        format!(
+            "{} is a symbolic link or not a regular file, so Fiber does not read it.",
+            setup.repository().display()
+        )
+    );
+}
+
+#[test]
+fn a_fiber_directory_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("elsewhere");
+    setup.write(&outside.join("config.json"), r#"{"model": "a/b"}"#);
+    let link = setup.workspace().join(".fiber");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string().starts_with(&link.display().to_string()),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_repository_file_that_is_a_directory_or_a_fifo_is_refused() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.repository()).unwrap();
+    assert_eq!(
+        setup.load(&[]).unwrap_err().code(),
+        ErrorCode::ConfigInvalid
+    );
+    fs::remove_dir(setup.repository()).unwrap();
+    let made = std::process::Command::new("mkfifo")
+        .arg(setup.repository())
+        .status()
+        .unwrap();
+    assert!(made.success());
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(e.to_string().contains("not a regular file"), "{e}");
+}
+
+#[test]
+fn the_person_s_own_file_may_be_a_symbolic_link() {
+    let setup = Setup::new();
+    let dotfiles = setup.root().join("dotfiles.json");
+    setup.write(&dotfiles, r#"{"model": "a/b"}"#);
+    std::os::unix::fs::symlink(&dotfiles, setup.global()).unwrap();
+    assert_eq!(
+        setup.load(&[]).unwrap().get("model", None).unwrap().0,
+        json!("a/b")
+    );
+}
+
+#[test]
+fn config_debug_shows_no_run_flag_value() {
+    let setup = Setup::new();
+    let config = setup
+        .load(&[
+            "api_key=SECRET-1a2b",
+            "extensions.acme.settings.token=SECRET-3c4d",
+            "model=SECRET-5e6f",
+        ])
+        .unwrap();
+    let debug = format!("{config:?}");
+    assert!(!debug.contains("SECRET"), "{debug}");
+    assert!(debug.contains("Run"), "{debug}");
+}
+
+#[test]
+fn a_headless_run_starts_in_auto_mode() {
+    let setup = Setup::new();
+    let load = |headless| {
+        Config::load(Sources {
+            home: setup.home(),
+            workspace: setup.workspace(),
+            project: key(),
+            overrides: Vec::new(),
+            headless,
+        })
+        .unwrap()
+    };
+    assert_eq!(
+        load(true).get("permissions.mode", None),
+        Some((json!("auto"), Source::Default))
+    );
+    assert_eq!(load(false).get("permissions.mode", None), None);
+    setup.write(&setup.global(), r#"{"permissions": {"mode": "yolo"}}"#);
+    assert_eq!(
+        load(true).get("permissions.mode", None).unwrap().0,
+        json!("yolo")
+    );
+}
+
+#[test]
+fn a_project_key_is_one_file_name() {
+    assert_eq!(
+        ProjectKey::new("-Users-alice-work").unwrap().as_str(),
+        "-Users-alice-work"
+    );
+    for bad in ["", ".", "..", "a/b", "/Users/alice/work", "a\0b"] {
+        let e = ProjectKey::new(bad).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::InvalidArguments, "{bad:?}");
+        assert_eq!(
+            e.to_string(),
+            format!("`{bad}` is not a project key: it must be one file name in projects/.")
+        );
+    }
 }

@@ -140,3 +140,47 @@ fn a_run_flag_for_an_extension_s_own_key_is_configuration_not_a_setting() {
     );
     assert_eq!(config.extension_settings("acme", &[]).unwrap().0, json!({}));
 }
+
+#[test]
+fn a_run_flag_for_the_whole_settings_object_is_a_usage_error() {
+    let setup = Setup::new();
+    for arg in [
+        "extensions.acme.settings=5",
+        "extensions.acme.settings={\"a\": 1}",
+    ] {
+        let e = setup.load(&[arg]).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{arg}");
+    }
+}
+
+#[test]
+fn a_repository_settings_file_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("private.json");
+    setup.write(&outside, r#"{"workspace_url": "https://private"}"#);
+    let link = setup.workspace().join(".fiber").join(FILE);
+    std::fs::create_dir_all(link.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string().starts_with(&link.display().to_string()),
+        "{e}"
+    );
+}
+
+#[test]
+fn a_repository_settings_directory_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("elsewhere");
+    setup.write(&outside.join("github.com-acme-fiber-acme.json"), "{}");
+    std::fs::create_dir_all(setup.workspace().join(".fiber")).unwrap();
+    let link = setup.workspace().join(".fiber/config");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let e = setup.load(&[]).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(
+        e.to_string().starts_with(&link.display().to_string()),
+        "{e}"
+    );
+}

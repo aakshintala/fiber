@@ -48,6 +48,19 @@ pub enum ConfigError {
         /// The argument as given, up to any `=`.
         arg: String,
     },
+    /// A repository file, or a credential, that is a symbolic link or not a
+    /// regular file or directory.
+    #[error("{} is a symbolic link or not a regular file, so Fiber does not read it.", file.display())]
+    NotPlain {
+        /// The path.
+        file: PathBuf,
+    },
+    /// A project key that is not one file name.
+    #[error("`{key}` is not a project key: it must be one file name in projects/.")]
+    ProjectKey {
+        /// The key.
+        key: String,
+    },
     /// A secret's name that is not one file name.
     #[error("`{name}` is not a secret's name: it must be one file name in credentials/.")]
     SecretName {
@@ -60,11 +73,12 @@ impl ConfigError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Json { .. } | Self::WrongType { .. } | Self::Io { .. } => {
-                ErrorCode::ConfigInvalid
-            }
+            Self::Json { .. }
+            | Self::WrongType { .. }
+            | Self::Io { .. }
+            | Self::NotPlain { .. } => ErrorCode::ConfigInvalid,
             Self::FiberHome(_) | Self::Override { .. } => ErrorCode::Usage,
-            Self::SecretName { .. } => ErrorCode::InvalidArguments,
+            Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,
         }
     }
 }

@@ -9,7 +9,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
-use config::{Config, ConfigError, Sources};
+use config::{Config, ConfigError, ProjectKey, Sources};
 use serde_json::{Map, Value};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -66,8 +66,9 @@ impl Setup {
         Config::load(Sources {
             home: self.home(),
             workspace: self.workspace(),
-            project: PROJECT.into(),
+            project: key(),
             overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
+            headless: false,
         })
     }
 }
@@ -90,4 +91,9 @@ pub(crate) fn nest(path: &[&str], value: Value) -> Value {
 /// A file's permission bits.
 pub(crate) fn mode(path: &Path) -> u32 {
     fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+/// The project key the tests use.
+pub(crate) fn key() -> ProjectKey {
+    ProjectKey::new(PROJECT).unwrap()
 }

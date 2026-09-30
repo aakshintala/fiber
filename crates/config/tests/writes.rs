@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 
 use common::{PROJECT, Setup};
-use config::{Scope, remove_extension_settings, set_extension_setting, set_global};
+use config::{Scope, remove_extension_settings, set_global};
 use contract::ErrorCode;
 use serde_json::json;
 
@@ -115,8 +115,10 @@ fn a_write_to_a_key_that_is_not_dotted_is_a_usage_error() {
             .code(),
         ErrorCode::Usage
     );
+    let mut config = setup.load(&[]).unwrap();
     assert_eq!(
-        set_extension_setting(&setup.home(), PROJECT, ACME, Scope::Machine, "", json!(1))
+        config
+            .set_extension_setting(ACME, Scope::Machine, "", json!(1))
             .unwrap_err()
             .code(),
         ErrorCode::Usage
@@ -168,24 +170,13 @@ fn concurrent_writers_lose_no_key() {
 #[test]
 fn an_extension_setting_is_written_to_the_scope_it_names() {
     let setup = Setup::new();
-    set_extension_setting(
-        &setup.home(),
-        PROJECT,
-        ACME,
-        Scope::Machine,
-        "region",
-        json!("eu"),
-    )
-    .unwrap();
-    set_extension_setting(
-        &setup.home(),
-        PROJECT,
-        ACME,
-        Scope::Project,
-        "model",
-        json!("m"),
-    )
-    .unwrap();
+    let mut config = setup.load(&[]).unwrap();
+    config
+        .set_extension_setting(ACME, Scope::Machine, "region", json!("eu"))
+        .unwrap();
+    config
+        .set_extension_setting(ACME, Scope::Project, "model", json!("m"))
+        .unwrap();
     assert_eq!(
         fs::read_to_string(setup.home().join("config/github.com-acme-fiber-acme.json")).unwrap(),
         "{\n  \"region\": \"eu\"\n}\n"
@@ -201,12 +192,10 @@ fn an_extension_setting_is_written_to_the_scope_it_names() {
         .unwrap(),
         "{\n  \"model\": \"m\"\n}\n"
     );
-    let (settings, _) = setup
-        .load(&[])
-        .unwrap()
-        .extension_settings(ACME, &[])
-        .unwrap();
-    assert_eq!(settings, json!({"model": "m", "region": "eu"}));
+    let expected = json!({"model": "m", "region": "eu"});
+    assert_eq!(config.extension_settings(ACME, &[]).unwrap().0, expected);
+    let reloaded = setup.load(&[]).unwrap();
+    assert_eq!(reloaded.extension_settings(ACME, &[]).unwrap().0, expected);
     assert!(
         !setup.global().exists(),
         "an extension never rewrites config.json"
@@ -214,32 +203,65 @@ fn an_extension_setting_is_written_to_the_scope_it_names() {
 }
 
 #[test]
+fn another_session_sees_a_setting_only_at_its_next_reload() {
+    let setup = Setup::new();
+    let mut writer = setup.load(&[]).unwrap();
+    let other = setup.load(&[]).unwrap();
+    writer
+        .set_extension_setting(ACME, Scope::Machine, "region", json!("eu"))
+        .unwrap();
+    assert_eq!(other.extension_settings(ACME, &[]).unwrap().0, json!({}));
+    let reloaded = setup.load(&[]).unwrap();
+    assert_eq!(
+        reloaded.extension_settings(ACME, &[]).unwrap().0,
+        json!({"region": "eu"})
+    );
+}
+
+#[test]
+fn a_setting_written_on_disk_after_loading_is_not_seen_until_reload() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    setup.write(
+        &setup.home().join("config/github.com-acme-fiber-acme.json"),
+        r#"{"a": 1}"#,
+    );
+    assert_eq!(config.extension_settings(ACME, &[]).unwrap().0, json!({}));
+}
+
+#[test]
+fn a_write_keeps_the_extension_s_other_settings_in_the_session() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.home().join("config/github.com-acme-fiber-acme.json"),
+        r#"{"a": 1}"#,
+    );
+    let mut config = setup.load(&[]).unwrap();
+    config
+        .set_extension_setting(ACME, Scope::Machine, "b", json!(2))
+        .unwrap();
+    assert_eq!(
+        config.extension_settings(ACME, &[]).unwrap().0,
+        json!({"a": 1, "b": 2})
+    );
+}
+
+#[test]
 fn removing_an_extension_deletes_its_global_and_every_per_project_file() {
     let setup = Setup::new();
-    for project in ["p1", "p2"] {
-        set_extension_setting(&setup.home(), project, ACME, Scope::Project, "a", json!(1)).unwrap();
-        set_extension_setting(
-            &setup.home(),
-            project,
-            "other",
-            Scope::Project,
-            "a",
-            json!(1),
-        )
-        .unwrap();
-    }
-    fs::create_dir_all(setup.home().join("projects/p3")).unwrap();
-    set_extension_setting(&setup.home(), "p1", ACME, Scope::Machine, "a", json!(1)).unwrap();
-    remove_extension_settings(&setup.home(), ACME).unwrap();
-    assert!(
-        !setup
-            .home()
-            .join("config/github.com-acme-fiber-acme.json")
-            .exists()
-    );
+    let file = "github.com-acme-fiber-acme.json";
     for project in ["p1", "p2"] {
         let dir = setup.home().join("projects").join(project).join("config");
-        assert!(!dir.join("github.com-acme-fiber-acme.json").exists());
+        setup.write(&dir.join(file), "{}");
+        setup.write(&dir.join("other.json"), "{}");
+    }
+    fs::create_dir_all(setup.home().join("projects/p3")).unwrap();
+    setup.write(&setup.home().join("config").join(file), "{}");
+    remove_extension_settings(&setup.home(), ACME).unwrap();
+    assert!(!setup.home().join("config").join(file).exists());
+    for project in ["p1", "p2"] {
+        let dir = setup.home().join("projects").join(project).join("config");
+        assert!(!dir.join(file).exists());
         assert!(dir.join("other.json").exists());
     }
 }
@@ -271,4 +293,29 @@ fn removing_an_extension_when_projects_is_not_a_directory_fails() {
     let e = remove_extension_settings(&setup.home(), ACME).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert!(e.to_string().contains("projects"));
+}
+
+#[test]
+fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
+    let setup = Setup::new();
+    for (key, value) in [
+        ("handoff", json!(5)),
+        ("handoff", json!({"tokens": "many"})),
+        ("mcp", json!({"servers": {"gh": {"required": "yes"}}})),
+        ("providers.x", json!({"credential": {"command": []}})),
+    ] {
+        let e = set_global(&setup.home(), key, value).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{key}");
+        assert!(!setup.global().exists(), "{key}");
+    }
+    set_global(&setup.home(), "handoff", json!({"tokens": 5})).unwrap();
+    assert_eq!(
+        setup
+            .load(&[])
+            .unwrap()
+            .get("handoff.tokens", None)
+            .unwrap()
+            .0,
+        json!(5)
+    );
 }

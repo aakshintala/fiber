@@ -5,12 +5,12 @@
 
 use std::fmt;
 use std::fs;
-use std::io::ErrorKind;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
 use crate::error::ConfigError;
+use crate::home::{one_file_name, plain};
 use crate::write::write_atomic;
 
 /// Where a provider's credential comes from, as `providers."<name>".credential`
@@ -50,21 +50,26 @@ impl fmt::Debug for Secret {
 }
 
 /// `credentials/<name>` in Fiber home, refusing a name that is not one file
-/// name.
+/// name, and a `credentials/` that is a symbolic link, which a tool call or a
+/// repository could plant to redirect secrets.
 fn secret_path(home: &Path, name: &str) -> Result<PathBuf, ConfigError> {
-    if name.is_empty() || name == "." || name == ".." || name.contains(['/', '\0']) {
+    if !one_file_name(name) {
         return Err(ConfigError::SecretName { name: name.into() });
     }
-    Ok(home.join("credentials").join(name))
+    let dir = home.join("credentials");
+    plain(&dir, true)?;
+    Ok(dir.join(name))
 }
 
 /// Reads `credentials/<name>` (`host.secret(name)`). `None` when there is no
-/// such file.
+/// such file; a symbolic link there is refused.
 pub fn read_secret(home: &Path, name: &str) -> Result<Option<Secret>, ConfigError> {
     let path = secret_path(home, name)?;
+    if !plain(&path, false)? {
+        return Ok(None);
+    }
     match fs::read_to_string(&path) {
         Ok(value) => Ok(Some(Secret(value))),
-        Err(e) if e.kind() == ErrorKind::NotFound => Ok(None),
         Err(source) => Err(ConfigError::Io { file: path, source }),
     }
 }
