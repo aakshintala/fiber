@@ -17,8 +17,8 @@ session like any other.
 **Process**:
 One run of the Fiber binary, from launch to exit. It opens zero or more sessions
 over its life: none when it fails at startup, and two after a rewind.
-`fiber_started` and `fiber_exited` mark its boundary inside each session it
-opens.
+In each session it opens, `fiber_started` opens its boundary, and `fiber_exited`
+or `rewound` closes it.
 _Avoid_: run, instance
 
 **Turn**:
@@ -360,4 +360,4 @@ the two vocabularies collide. When reading pi:
 | Input arrives, Fiber works, Fiber yields | **turn** | agent run (`agent_start` … `agent_settled`) |
 | One round-trip to the model | **step** | **turn** (`turn_start` / `turn_end`) |
 | One message, reasoning block or tool call | **action** | message (`message_start` / `message_update`) |
-| One process, launch to exit | *(unnamed)* | *(unnamed)* |
+| One process, launch to exit | **process** | *(unnamed)* |

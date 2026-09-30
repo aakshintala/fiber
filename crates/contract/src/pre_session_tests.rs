@@ -39,7 +39,13 @@ fn any_other_kind_is_rejected() {
 fn a_built_line_matches_the_doc_example() {
     let example: PreSessionExit = serde_json::from_str(doc_example()).unwrap();
     assert_eq!(
-        PreSessionExit::new(1, example.payload.error.clone().unwrap()),
+        PreSessionExit::new(1, example.payload.error.clone()),
         example
     );
+}
+
+#[test]
+fn a_line_without_an_error_is_rejected() {
+    let line = r#"{"kind":"fiber_exited","schema_version":1,"payload":{"exit_code":1}}"#;
+    assert!(serde_json::from_str::<PreSessionExit>(line).is_err());
 }

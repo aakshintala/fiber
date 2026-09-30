@@ -1,11 +1,9 @@
 //! The line a process prints when it fails before any session exists
 //! (`docs/errors.md`, "Before a session exists").
 
-use serde::ser::Error as _;
-use serde::{Deserialize, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
 use crate::SCHEMA_VERSION;
-use crate::events::FiberExited;
 use crate::shapes::Failure;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -17,33 +15,30 @@ enum Kind {
 /// The `fiber_exited` line of a process that failed before any session
 /// existed. It is not an [`Envelope`](crate::Envelope): it has no
 /// `session_id`, `ts` or `seq` (`docs/events.md`, "The envelope"). Its
-/// `payload` is the `fiber_exited` payload with `exit_code` and `error`.
+/// `payload` holds `error` and `exit_code`, and nothing else.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PreSessionExit {
     kind: Kind,
     /// The schema version this line is written against.
     pub schema_version: u32,
-    /// The exit code and why the process failed. Its keys serialize sorted,
-    /// as an envelope's payload does.
-    #[serde(serialize_with = "sorted")]
-    pub payload: FiberExited,
+    /// Why the process failed, and its exit code.
+    pub payload: PreSessionPayload,
 }
 
-fn sorted<S: Serializer>(payload: &FiberExited, serializer: S) -> Result<S::Ok, S::Error> {
-    let value = serde_json::to_value(payload).map_err(S::Error::custom)?;
-    value.serialize(serializer)
+/// The body of a [`PreSessionExit`]. The fields are declared in sorted order,
+/// as an envelope's payload keys serialize.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PreSessionPayload {
+    /// Why the process failed.
+    pub error: Failure,
+    /// The process's exit code (`docs/invocation.md`, "Lifecycle").
+    pub exit_code: i32,
 }
 
 impl PreSessionExit {
     /// The line for a process that exits with `exit_code` because of `error`.
     pub fn new(exit_code: i32, error: Failure) -> Self {
-        let payload = FiberExited {
-            exit_code,
-            final_message: None,
-            error: Some(error),
-            suspended_on: None,
-            questions: None,
-        };
+        let payload = PreSessionPayload { error, exit_code };
         Self {
             kind: Kind::FiberExited,
             schema_version: SCHEMA_VERSION,

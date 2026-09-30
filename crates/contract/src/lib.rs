@@ -17,4 +17,4 @@ pub use envelope::{Envelope, SCHEMA_VERSION};
 pub use ids::{
     ActionId, CommandId, GenerationId, JobId, ProviderCallId, RequestId, Seq, SessionId, TurnId,
 };
-pub use pre_session::PreSessionExit;
+pub use pre_session::{PreSessionExit, PreSessionPayload};
