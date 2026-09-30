@@ -1,0 +1,98 @@
+//! Owns the session directory (`docs/events.md`, "Writing" and "The session
+//! directory"; `docs/state.md`). It is the only thing that opens
+//! `events.jsonl`, holds `session.lock`, mints `seq` and decides when to
+//! fsync, and it hands every event to whoever is watching.
+//!
+//! [`Log`] is the writing side, one per session process. [`read`] and
+//! [`Watcher`] are the reading side, which `tui` and `doors` may use
+//! (`docs/architecture.md`, "The call rules").
+
+mod read;
+mod write;
+
+use std::io;
+use std::path::{Path, PathBuf};
+
+use contract::{ErrorCode, SessionId};
+
+pub use read::{Watcher, read};
+pub use write::Log;
+
+/// The log's name in a session directory.
+const EVENTS: &str = "events.jsonl";
+/// The lock file's name in a session directory.
+const LOCK: &str = "session.lock";
+/// The directory for bytes too large to inline.
+const ARTIFACTS: &str = "artifacts";
+
+/// Where a project's session directories live in Fiber home
+/// (`docs/state.md`, "Projects"): `projects/<key>/sessions`, where the key is
+/// the project's identity path with every `/` made `-`. `project` is that
+/// identity path, symlinks already resolved.
+pub fn sessions_dir(home: &Path, project: &Path) -> PathBuf {
+    let key = project.to_string_lossy().replace('/', "-");
+    home.join("projects").join(key).join("sessions")
+}
+
+/// What can go wrong opening, writing or reading a session.
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    /// Another writer holds the session's lock.
+    #[error("session {session} is held by {holder}; only one Fiber process may write a session")]
+    Held {
+        /// The session.
+        session: String,
+        /// Who holds it, such as `process 4242`.
+        holder: String,
+    },
+    /// The session directory, or its log, does not exist.
+    #[error("no session at {0}")]
+    NotFound(PathBuf),
+    /// A complete line in the log is not an event line.
+    #[error("{path}, line {line}: {source}")]
+    Unreadable {
+        /// The log.
+        path: PathBuf,
+        /// The line's number, from 1.
+        line: usize,
+        /// Why it did not parse.
+        source: serde_json::Error,
+    },
+    /// An event could not be written as JSON.
+    #[error("cannot write an event as JSON: {0}")]
+    Encode(#[from] serde_json::Error),
+    /// The file system refused.
+    #[error("{path}: {source}")]
+    Io {
+        /// The file or directory.
+        path: PathBuf,
+        /// The failure.
+        source: io::Error,
+    },
+}
+
+impl Error {
+    /// The stable code a consumer switches on (`docs/errors.md`). A failure
+    /// with none, such as a full disk, is one `docs/errors.md` does not yet
+    /// settle ("Not settled here").
+    pub fn code(&self) -> Option<ErrorCode> {
+        match self {
+            Self::Held { .. } => Some(ErrorCode::SessionHeld),
+            Self::NotFound(_) => Some(ErrorCode::SessionNotFound),
+            Self::Unreadable { .. } | Self::Encode(_) | Self::Io { .. } => None,
+        }
+    }
+}
+
+/// Wraps an I/O failure with the path it happened on.
+fn io_at(path: &Path) -> impl FnOnce(io::Error) -> Error + '_ {
+    move |source| Error::Io {
+        path: path.to_owned(),
+        source,
+    }
+}
+
+/// The session directory of `id` in `sessions`.
+fn session_path(sessions: &Path, id: &SessionId) -> PathBuf {
+    sessions.join(&id.0)
+}
