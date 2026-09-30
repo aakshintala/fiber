@@ -244,7 +244,7 @@ fn a_second_writer_refuses_and_names_the_holder() {
         matches!(&err, Error::Held { holder: h, .. } if *h == holder),
         "{err:?}"
     );
-    assert_eq!(err.code(), Some(ErrorCode::SessionHeld));
+    assert_eq!(err.code(), ErrorCode::SessionHeld);
     assert_eq!(
         err.to_string(),
         format!("session s_1 is held by {holder}; only one Fiber process may write a session")
@@ -297,7 +297,7 @@ fn opening_a_missing_session_names_it() {
     let Err(err) = Log::open(tmp.path(), id("s_none")) else {
         panic!("opened a session that does not exist");
     };
-    assert_eq!(err.code(), Some(ErrorCode::SessionNotFound));
+    assert_eq!(err.code(), ErrorCode::SessionNotFound);
     assert!(err.to_string().contains("s_none"), "{err}");
     assert!(!tmp.session(&id("s_none")).exists());
 }

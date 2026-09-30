@@ -16,6 +16,7 @@ use std::path::Path;
 use std::process::Command;
 
 use common::*;
+use contract::ErrorCode;
 use log::{Error, Log, read};
 use serde_json::json;
 
@@ -36,6 +37,8 @@ fn child_writing_past_a_file_size_limit() {
     );
     let first = log.append(&big, None, None).unwrap_err();
     assert!(matches!(first, Error::Io { .. }), "{first:?}");
+    assert_eq!(first.code(), ErrorCode::IoFailed);
+    assert!(first.to_string().contains("events.jsonl"), "{first}");
 
     // Every later append refuses, even one that would fit.
     let later = log.append(&empty("step_started"), None, None).unwrap_err();
@@ -43,6 +46,7 @@ fn child_writing_past_a_file_size_limit() {
         matches!(&later, Error::Poisoned { session, .. } if session == "s_1"),
         "{later:?}"
     );
+    assert_eq!(later.code(), ErrorCode::IoFailed);
     assert!(log.append(&delta("x"), None, None).is_err());
 
     // A watcher is told, rather than left waiting for a line it will never

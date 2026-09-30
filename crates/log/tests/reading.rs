@@ -79,14 +79,14 @@ fn a_reader_refuses_a_complete_line_that_does_not_parse_and_names_it() {
     file.write_all(b"not json\n").unwrap();
     let err = read(&dir).unwrap_err();
     assert!(err.to_string().contains("line 2"), "{err}");
-    assert_eq!(err.code(), None);
+    assert_eq!(err.code(), contract::ErrorCode::LogCorrupt);
 }
 
 #[test]
 fn reading_a_missing_session_is_not_found() {
     let tmp = TestDir::new("read-missing");
     let err = read(&tmp.session(&id("s_x"))).unwrap_err();
-    assert_eq!(err.code(), Some(contract::ErrorCode::SessionNotFound));
+    assert_eq!(err.code(), contract::ErrorCode::SessionNotFound);
 }
 
 #[test]

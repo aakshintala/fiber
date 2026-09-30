@@ -83,17 +83,15 @@ pub enum Error {
 }
 
 impl Error {
-    /// The stable code a consumer switches on (`docs/errors.md`). A failure
-    /// with none, such as a full disk, is one `docs/errors.md` does not yet
-    /// settle ("Not settled here").
-    // `None` is a stopgap until #241 gives these cases their codes.
-    pub fn code(&self) -> Option<ErrorCode> {
+    /// The stable code a consumer switches on (`docs/errors.md`,
+    /// "Registry").
+    pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Held { .. } => Some(ErrorCode::SessionHeld),
-            Self::NotFound(_) => Some(ErrorCode::SessionNotFound),
-            Self::Poisoned { .. } | Self::Unreadable { .. } | Self::Encode(_) | Self::Io { .. } => {
-                None
-            }
+            Self::Held { .. } => ErrorCode::SessionHeld,
+            Self::NotFound(_) => ErrorCode::SessionNotFound,
+            // Only a failed write or fsync stops a log.
+            Self::Poisoned { .. } | Self::Io { .. } => ErrorCode::IoFailed,
+            Self::Unreadable { .. } | Self::Encode(_) => ErrorCode::LogCorrupt,
         }
     }
 }
