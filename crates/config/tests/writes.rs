@@ -319,3 +319,27 @@ fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
         json!(5)
     );
 }
+
+#[test]
+fn a_session_s_own_write_does_not_bring_in_another_session_s() {
+    let setup = Setup::new();
+    let mut a = setup.load(&[]).unwrap();
+    let mut b = setup.load(&[]).unwrap();
+    b.set_extension_setting(ACME, Scope::Machine, "region", json!("eu"))
+        .unwrap();
+    a.set_extension_setting(ACME, Scope::Machine, "model", json!("m"))
+        .unwrap();
+    assert_eq!(
+        a.extension_settings(ACME, &[]).unwrap().0,
+        json!({"model": "m"})
+    );
+    assert_eq!(
+        setup
+            .load(&[])
+            .unwrap()
+            .extension_settings(ACME, &[])
+            .unwrap()
+            .0,
+        json!({"model": "m", "region": "eu"})
+    );
+}

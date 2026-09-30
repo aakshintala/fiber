@@ -306,8 +306,16 @@ impl Config {
         };
         let file = write::settings_file(&dir, extension);
         let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
-        let written = write::update(&file, &key, value)?;
-        self.settings_files.insert(file, written);
+        write::update(&file, &key, value.clone())?;
+        // The file on disk may hold other sessions' writes too; this session
+        // sees only its own until its next load.
+        let mut cached = match self.settings_files.get(&file) {
+            Some(bytes) => parse(&file, bytes)?,
+            None => Value::Object(Map::new()),
+        };
+        path::set(&mut cached, &key, value);
+        self.settings_files
+            .insert(file, cached.to_string().into_bytes());
         Ok(())
     }
 }

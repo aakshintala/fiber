@@ -35,7 +35,7 @@ pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigErro
     if let Value::Object(map) = candidate {
         keys::check(map, &Source::Global(file.clone()), &mut Vec::new())?;
     }
-    update(&file, &segments, value).map(drop)
+    update(&file, &segments, value)
 }
 
 /// Deletes an extension's settings in the global and every per-project layer
@@ -79,8 +79,8 @@ pub(crate) fn settings_file(dir: &Path, extension: &str) -> PathBuf {
 }
 
 /// Reads `file` under its lock, sets one key and writes the whole file back,
-/// keys sorted with a 2-space indent. Returns what it wrote.
-pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<Vec<u8>, ConfigError> {
+/// keys sorted with a 2-space indent.
+pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<(), ConfigError> {
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
@@ -99,8 +99,7 @@ pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<Vec<u8
     path::set(&mut root, key, value);
     let mut text = serde_json::to_string_pretty(&root).map_err(|e| io(e.into()))?;
     text.push('\n');
-    write_atomic(file, text.as_bytes(), 0o666)?;
-    Ok(text.into_bytes())
+    write_atomic(file, text.as_bytes(), 0o666)
 }
 
 fn make_parent(file: &Path) -> Result<(), ConfigError> {
