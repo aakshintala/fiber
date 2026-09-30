@@ -96,7 +96,7 @@ pub struct Repair {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RepairFix {
-    /// A null the schema does not allow was dropped.
+    /// A `null` sent for an optional property was dropped.
     NullDropped,
     /// A string became the number the schema wants.
     StringToNumber,
