@@ -128,6 +128,7 @@ set the key.
 | `tui.hover` | true | no | Whether hover highlights the click target under the pointer; false drops mouse mode 1003 (`docs/tui.md`, "Mouse and hover"). |
 | `tui.inline_images` | true | no | Whether images show inline where the terminal speaks kitty's graphics protocol (`docs/tui.md`, "Images"). |
 | `tui.logo_glyph` | `"⌇"` | no | The glyph before the name in the logo, `"⌇"` or `"≈"`, for a font without ⌇ (`docs/tui.md`, "The logo"). |
+| `tui.slots."<slot>"` | none | no | The extension that fills a slot two extensions replace, such as `tui.slots."ledger_row:shell"`; the same for a key two extensions bind, as `tui.slots."key:ctrl+k"` (`docs/tui.md`, "When two extensions want one slot"). |
 
 Hook order and hook timeouts are person-only because a redaction hook depends
 on both. A repository that could move another hook in front of it, or cut its
@@ -297,6 +298,7 @@ holds what `docs/extensions.md` ("What a package holds") lists:
   "name": "github.com/acme/fiber-acme",
   "version": "v1.4.0",
   "fiber": "0.3.0",
+  "api": 1,
   "depends": { "github.com/acme/oauth-helper": "v1.2.0" },
   "binaries": {
     "darwin-arm64": { "url": "https://...", "sha256": "..." }
@@ -313,7 +315,9 @@ holds what `docs/extensions.md` ("What a package holds") lists:
 }
 ```
 
-`fiber` is the lowest Fiber version it runs on. `process` is present only for
+`fiber` is the lowest Fiber version it runs on. `api` is the extension API's
+major version it was written for; Fiber loads it only when that is Fiber's own
+(`docs/extensions.md`, "The extension API version"). `process` is present only for
 a process extension, and `exit_timeout_ms` has no default. `prompt` names a
 file in the package whose text goes in the system prompt
 (`docs/system-prompt.md`, "Extension texts").

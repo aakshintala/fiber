@@ -31,11 +31,8 @@ commands".
   rendered history and reads the log again as the person scrolls ("History and
   paging").
 
-What a TUI extension may draw, and through which seam, is
-[TUI extension seams](https://github.com/aakshintala/fiber/issues/163). Which
-language TUI extensions are written in is
-[Epic: TUI](https://github.com/aakshintala/fiber/issues/82); it need not be
-Lua.
+An extension may change everything the terminal draws, through the slots in
+"Extension seams".
 
 ## The start page
 
@@ -677,8 +674,9 @@ theme set, the theme follows the terminal's light or dark appearance and
 switches when the terminal reports a change, as pi's `light/dark` setting
 does.
 
-A theme sets colours only. Anything bigger goes through the extension seams
-([TUI extension seams](https://github.com/aakshintala/fiber/issues/163)).
+A theme sets colours only. It gives each colour role a value, and an
+extension's spans name the same roles ("What a renderer returns"). Anything
+bigger goes through "Extension seams".
 
 ### Reduced motion
 
@@ -765,6 +763,197 @@ Not yet measured:
 - sessions much larger than the one above
 - dragging the scroll bar's thumb
 
+## Extension seams
+
+An extension may change everything the terminal draws. It does this through a
+TUI extension (`docs/extensions.md`, "Commands and screens"): Lua 5.4 scripts
+that run in the terminal's process. Settled by
+[TUI extension seams](https://github.com/aakshintala/fiber/issues/163).
+
+The terminal is built from named slots. Each slot has a built-in renderer in
+Rust, and an extension may replace it or add slots of its own. The machinery
+around the slots stays the terminal's: paging, scrolling, selection, search and
+the panel's scrolling. So every extension keeps what "History and paging" and
+"Reading and copying" promise. A program that wants to draw the whole screen
+itself is a separate client of `fiber serve`, not a TUI extension.
+
+### The slots
+
+| Slot | What it draws |
+|---|---|
+| `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
+| `start_page` | The start page |
+| `turn_card` | A turn's card and its ▣ line |
+| `prompt` | A person's prompt bubble |
+| `reply` | An assistant reply |
+| `group_line` | A tool group's summary line |
+| `ledger_row:<tool>` | A ledger row for the named tool |
+| `ledger_row` | A ledger row for any tool without its own |
+| `thinking_line` | A thinking line |
+| `steer` | A steering message in its card |
+| `answers` | The "you answered" rule after a question form |
+| `handoff_band` | A handoff's band |
+| `error_line` | A failed turn's ✗ line |
+| `notice` | A notice |
+| `card:<name>` | A panel card: `session`, `changed_files`, `delegates`, `jobs`, or one an extension adds |
+| `working_line` | The working line |
+| `steering_queue` | The queued steering messages |
+| `input_box` | The input box |
+| `status_rows` | The narrow layout's status rows |
+| `view:<name>` | A swapped view, built in or one an extension adds |
+| `overlay:<name>` | An overlay an extension adds, drawn over the conversation |
+| `approval` | The approval panel, draw-only |
+| `question_form` | The question form, draw-only |
+| `extension_approval` | The approval of a repository's extensions, draw-only |
+
+A slot receives what its built-in renderer receives, and all of it comes from
+the event stream. A ledger row, for example, receives the call's name,
+arguments, status, exit code, duration, line count, `changes` and error, folded
+from its `tool_call_*` events. No slot sees the terminal's internals.
+
+`layout` places regions and never draws them. It receives the screen's size
+and returns a rectangle for each region it shows. A region it leaves out is not
+shown. A layout does its own narrow layout and shedding. The "Fiber needs
+40×10" floor stays the terminal's.
+
+The three draw-only slots decide how an approval, a question form or an
+extension approval looks, never what it sends. An extension may restyle and
+reorder their choices. It cannot add, remove or relabel one, and its key
+handler never sees their keys. The choices, their keys and the `reply` they
+send stay the terminal's, so an extension never approves a tool call
+(`docs/extensions.md`, "Host calls").
+
+A TUI extension also binds keys to its own commands or to built-in actions, and
+adds slash commands, which join the one list ("Slash commands"). A theme stays
+a file that sets colours only ("Themes").
+
+### What a renderer returns
+
+A renderer receives the slot's input and the width, and returns lines. Each
+line is a list of spans:
+
+```lua
+{ text = " exit 0 ", fg = "success", bg = "surface", bold = true,
+  dim = false, italic = false, underline = false,
+  link = "https://…", click = "badge" }
+```
+
+- `text` is required. Everything else is optional.
+- `fg` and `bg` name one of the theme's colour roles, such as `success`,
+  `muted` or `accent`. There are no hex colours and no escape codes, so every
+  extension follows the theme, a light or dark switch and `NO_COLOR`. The
+  roles are listed with the themes and belong to the extension API.
+- `link` makes the span an OSC 8 link, written by the terminal.
+- `click` makes the span's cells a click target with that id ("Input and
+  focus").
+
+The terminal builds the cells and the plain text from the same spans, so what
+is drawn and what is selected, copied or searched cannot differ. It measures
+width by grapheme cluster and cuts or pads each line to the width, so an
+extension cannot overflow its slot or move its neighbours. A span whose text
+holds a control character is the wrong shape.
+
+In the screen-reader mode ("Screen readers") the input carries `flat = true`.
+The terminal drops every style, and a renderer should return one line for the
+item.
+
+A renderer may call `builtin(input, width)`, which returns the built-in
+renderer's spans. An extension that only adds a badge to a row decorates the
+built-in rather than drawing the row again.
+
+### How a TUI extension runs
+
+- **On the terminal's thread.** Each TUI extension has its own Lua VM there.
+  Its event handlers and timers run as coroutines, and a host call suspends
+  the coroutine until the reply arrives through the terminal's event loop, as
+  on the session side. Between callbacks the VM is idle, so a renderer is
+  always called at once and answers at once. A renderer makes no host call.
+- **Every callback declares its timeout.** Renderers, key and click handlers,
+  the layout, event handlers, timers and loading alike, as on the session side
+  (`docs/extensions.md`, "How an extension runs"). The same two-stage
+  instruction hook enforces it.
+- **Loading comes before the first frame.** A replaced layout or input box
+  changes the first frame, so the terminal loads its TUI extensions before
+  drawing it ("Performance"). An extension that passes its loading timeout is
+  switched off, and the frame goes ahead without it.
+- **Each drawn item is cached** by its input, the width and the theme. A
+  renderer runs again only when one of those changes, so an unchanged frame
+  calls no Lua and scrolling or searching costs what it costs for built-in
+  rows. The cache lives with the paging window and is dropped with its pages.
+
+Measured in the prototype on macOS arm64, on a session of 1,047 tool calls
+([research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md)): a
+Lua ledger row costs about 8 µs to draw, more than half of it crossing between
+Rust and Lua. With the cache, scrolling took 0.63% of a core against 0.59% for
+built-in rows, and Lua ran zero times while scrolling or searching. Without
+it, every rebuild of the conversation would call Lua for every row. The timings
+do not carry over to Linux; the call counts do.
+
+### Input and focus
+
+One slot has focus at a time: the input box, an open view, or the overlay on
+top. An extension's view or overlay takes focus when it opens.
+
+- **Keys** reach the focused slot first, as names such as `ctrl+o`, `alt+up`
+  or `shift+enter`, and typed text as text. A paste is one event. The handler
+  returns whether it handled the key. A key it did not handle goes to the key
+  map as if no extension were there.
+- **Esc** closes whatever is on top, unless the focused slot handles it
+  itself.
+- **The second Ctrl+C always quits** ("Quit and detach"), whatever the focused
+  slot does, so a slot that swallows every key cannot trap the person. The
+  first Ctrl+C is the slot's.
+- **A click** on a span with a `click` id goes to that slot's click handler.
+  The wheel, a drag and any click it does not handle go to the terminal, so
+  scrolling and selection keep working.
+
+A key that needs the kitty keyboard protocol, such as `shift+enter`, works
+once keyboard detection finishes ("Keys", "Rules"). An extension that binds
+one gives a legacy path too, as the built-ins do.
+
+### Animation
+
+A renderer may declare `animate = { interval_ms }`. While its item is on
+screen and reduced motion is off, the terminal calls it again every interval
+with a `frame` count in its input. It stops when the item scrolls off, its
+view closes, or the extension stops it. Under reduced motion the renderer gets
+`frame = 0` once and is not called again, so every extension animation has a
+still form, as the glimmer does ("The working line"). A hidden animation costs
+nothing.
+
+An extension's own timers (`host.after`, `host.every`) are for work other than
+drawing. They wake the terminal whether or not anything is on screen, which is
+the extension author's cost to keep down.
+
+### When an extension fails
+
+- **An error or a wrong shape** falls back to the built-in for that item. The
+  failure is cached against the item's input, so the renderer is not called
+  again until that input changes. One notice names the extension, the slot
+  and the Lua error, the first time only. A key or click handler that errors
+  counts as not having handled the input. An extension's own view or overlay
+  has no built-in, so it closes.
+- **A timeout** switches the extension off in this terminal until `reload`,
+  with one notice. Every slot it replaced goes back to its built-in, so one
+  freeze of the declared length is the most it can cost.
+- **A replaced input box that fails** hands over to the built-in box with the
+  draft intact, because the terminal holds the draft.
+
+### When two extensions want one slot
+
+Panel cards, views, overlays and slash commands are keyed by the extension's
+name, so they stack. A slot that holds one thing conflicts: a ledger row for
+one tool, the input box, the layout, or one key.
+
+- **Two extensions replace the same slot:** neither gets it. The built-in
+  stays, and a notice names both. `tui.slots."<slot>"` names the one that
+  wins (`docs/configuration.md`). Two extensions binding the same key follow
+  the same rule, as `tui.slots."key:<key>"`. This is the rule for commands
+  (`docs/extensions.md`, "Commands and screens").
+- **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.
+- **An extension replacing a built-in** is not a conflict. The extension wins,
+  as it does for a tool it registers by name.
+
 ## Performance
 
 The terminal holds the budgets in `docs/performance.md`: its idle memory, idle
@@ -773,8 +962,9 @@ CPU and time to first frame. The design keeps to them this way:
 - **Nothing runs while nothing happens.** With no turn, delegate or job
   running, there is no timer: no frame, no byte written. A still pointer sends
   nothing under hover.
-- **The first frame waits on nothing but the opening pass.** Keyboard
-  detection, the logo's image and session listing each arrive after it.
+- **The first frame waits on nothing but the opening pass and loading TUI
+  extensions.** Keyboard detection, the logo's image and session listing each
+  arrive after it. The budget is measured with no TUI extension installed.
   Attaching to a session reads its whole log once before the first frame
   ("History and paging"): about 8.5 ms per MiB of log on macOS arm64, so a
   large session takes longer to open than a new one.
@@ -797,14 +987,16 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 | `tui.hover` | Hover, and mode 1003 |
 | `tui.inline_images` | Inline images |
 | `tui.logo_glyph` | ⌇ or ≈ in the logo |
+| `tui.slots."<slot>"` | Which extension fills a slot or key two extensions want ("When two extensions want one slot") |
 
 The tools view writes an MCP server's or an extension's `tools.enabled` and
 `tools.disabled`.
 
 ## Not settled here
 
-- What a TUI extension may draw:
-  [TUI extension seams](https://github.com/aakshintala/fiber/issues/163)
+- The fields of each slot's input, which follow the payload tables of
+  [Contract: key tables for every event payload](https://github.com/aakshintala/fiber/issues/182)
+- The list of the theme's colour roles
 - The command envelope, `reply`, approvals and cancel:
   [Contract: the command envelope, reply, approvals and cancel](https://github.com/aakshintala/fiber/issues/181)
 - Key tables for every event payload:
@@ -826,6 +1018,9 @@ The tools view writes an MCP server's or an extension's `tools.enabled` and
   prototype on sessions sized from the owner's usage.
 - [research/tui-prototype/PAGING.md](../research/tui-prototype/PAGING.md): the
   paging probe.
+- [research/tui-prototype/SEAMS.md](../research/tui-prototype/SEAMS.md): a
+  Lua renderer for one tool's ledger row, its cost with and without the cache,
+  and the span shape that kept selection, copy and search working.
 - [research/tui-prototype/CHECK.md](../research/tui-prototype/CHECK.md): the
   checks run by eye in Ghostty.
 
