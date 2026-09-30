@@ -54,11 +54,9 @@ impl Log {
         // cannot lose a directory that a later fsynced line lives in.
         let missing: Vec<&Path> = sessions.ancestors().take_while(|d| !d.exists()).collect();
         for new in missing.iter().rev() {
-            make_dir(new, true)?;
-            fsyncs += 1;
+            make_dir(new, true, &mut fsyncs)?;
         }
-        make_dir(&dir, false)?;
-        fsyncs += 1;
+        make_dir(&dir, false, &mut fsyncs)?;
         let artifacts = dir.join(ARTIFACTS);
         DirBuilder::new()
             .mode(0o700)
@@ -71,8 +69,7 @@ impl Log {
             .create_new(true)
             .open(&path)
             .map_err(io_at(&path))?;
-        sync_dir(&dir)?;
-        fsyncs += 1;
+        sync_dir(&dir, &mut fsyncs)?;
         let mut inner = Inner::new(id, dir, events, lock, 0);
         inner.fsyncs = fsyncs;
         Ok(Self::from(inner))
@@ -225,17 +222,18 @@ impl Inner {
 /// Makes the directory `dir`, private to the person (`docs/state.md`), and
 /// fsyncs its entry in its parent. `exists_ok` lets another process have
 /// made it first.
-fn make_dir(dir: &Path, exists_ok: bool) -> Result<(), Error> {
+fn make_dir(dir: &Path, exists_ok: bool, fsyncs: &mut u64) -> Result<(), Error> {
     DirBuilder::new()
         .recursive(exists_ok)
         .mode(0o700)
         .create(dir)
         .map_err(io_at(dir))?;
-    sync_dir(dir.parent().unwrap_or(dir))
+    sync_dir(dir.parent().unwrap_or(dir), fsyncs)
 }
 
-/// Makes the entries in the directory `dir` durable.
-fn sync_dir(dir: &Path) -> Result<(), Error> {
+/// Makes the entries in the directory `dir` durable, counting the fsync.
+fn sync_dir(dir: &Path, fsyncs: &mut u64) -> Result<(), Error> {
+    *fsyncs += 1;
     File::open(dir)
         .and_then(|d| d.sync_all())
         .map_err(io_at(dir))
