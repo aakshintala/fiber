@@ -16,6 +16,9 @@ fn main() {
         if image_timing::handle_child_args() {
             return;
         }
+        if image_timing::run_if_png_photos() {
+            return;
+        }
         if image_timing::run_if_timing() {
             return;
         }

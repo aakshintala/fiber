@@ -1,6 +1,7 @@
 //! In-process timings and child-process spawn probes for image workloads.
 //! Enable with `IMAGE_TIMING=1` (requires `image` or `image-fir`). Child modes:
 //! `IMAGE_CHILD=noop`, `IMAGE_CHILD=fit <path>`. Parent spawn bench: `IMAGE_SPAWN_BENCH=1`.
+//! Photograph PNG cost table: `IMAGE_PNG_PHOTOS=1` with `IMAGE_PHOTO_MANIFEST` (requires `image-fir`).
 
 use std::hint::black_box;
 use std::path::Path;
@@ -105,6 +106,16 @@ fn b64_len(bytes: usize) -> usize {
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
+}
+
+fn median_only(samples: &mut [f64]) -> f64 {
+    samples.sort_by(|a, b| a.partial_cmp(b).unwrap());
+    let n = samples.len();
+    if n % 2 == 0 {
+        (samples[n / 2 - 1] + samples[n / 2]) / 2.0
+    } else {
+        samples[n / 2]
+    }
 }
 
 fn median_p90(samples: &mut [f64]) -> (f64, f64) {
@@ -306,6 +317,105 @@ fn backend_for_build() -> Backend {
     return Backend::Fir;
     #[cfg(all(feature = "image", not(feature = "image-fir")))]
     return Backend::Image;
+}
+
+#[cfg(feature = "image-fir")]
+fn encode_png_default(img: &DynamicImage) -> Vec<u8> {
+    let mut out = Vec::new();
+    PngEncoder::new_with_quality(&mut out, CompressionType::Default, PngFilterType::Adaptive)
+        .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
+        .unwrap();
+    out
+}
+
+#[cfg(feature = "image-fir")]
+fn resize_fir_path(bytes: &[u8]) -> (DynamicImage, u32, u32, u32, u32) {
+    let img = image::load_from_memory(bytes).unwrap();
+    let (w, h) = img.dimensions();
+    let (nw, nh) = fit_dims(w, h);
+    let img = resize_fir(img, nw, nh);
+    (img, w, h, nw, nh)
+}
+
+#[cfg(feature = "image-fir")]
+fn bench_photo_file(path: &Path, label: &str) {
+    let bytes = std::fs::read(path).unwrap();
+    let (sw, sh) = ImageReader::open(path)
+        .unwrap()
+        .with_guessed_format()
+        .unwrap()
+        .into_dimensions()
+        .unwrap();
+    let (img, _, _, rw, rh) = resize_fir_path(&bytes);
+    let mut png_times = Vec::with_capacity(5);
+    let mut jpeg_times = Vec::with_capacity(5);
+    let mut png_bytes = 0usize;
+    let mut jpeg_bytes = 0usize;
+    for _ in 0..5 {
+        let t0 = Instant::now();
+        let out = encode_png_default(&img);
+        png_times.push(ms(t0.elapsed()));
+        png_bytes = out.len();
+        black_box(out);
+    }
+    for _ in 0..5 {
+        let t0 = Instant::now();
+        let out = encode_jpeg_q80(&img);
+        jpeg_times.push(ms(t0.elapsed()));
+        jpeg_bytes = out.len();
+        black_box(out);
+    }
+    let png_b64 = b64_len(png_bytes);
+    let jpeg_b64 = b64_len(jpeg_bytes);
+    let png_med = median_only(&mut png_times);
+    let jpeg_med = median_only(&mut jpeg_times);
+    let cap = 1_048_576usize;
+    println!(
+        "label={label} path={} source={}x{} source_bytes={} resized={}x{} \
+png_bytes={} png_b64={} png_under_1mib_b64={} png_encode_median_ms={:.3} \
+jpeg_bytes={} jpeg_b64={} jpeg_under_1mib_b64={} jpeg_encode_median_ms={:.3}",
+        path.display(),
+        sw,
+        sh,
+        bytes.len(),
+        rw,
+        rh,
+        png_bytes,
+        png_b64,
+        png_b64 < cap,
+        png_med,
+        jpeg_bytes,
+        jpeg_b64,
+        jpeg_b64 < cap,
+        jpeg_med,
+    );
+}
+
+#[cfg(feature = "image-fir")]
+pub fn run_if_png_photos() -> bool {
+    if std::env::var("IMAGE_PNG_PHOTOS").as_deref() != Ok("1") {
+        return false;
+    }
+    let manifest = std::env::var("IMAGE_PHOTO_MANIFEST").expect("IMAGE_PHOTO_MANIFEST path");
+    println!("image_png_photos backend=image-fir");
+    for line in std::fs::read_to_string(&manifest).unwrap().lines() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let (label, path) = line.split_once('\t').expect("manifest line: label<TAB>path");
+        bench_photo_file(Path::new(path), label);
+    }
+    true
+}
+
+#[cfg(not(feature = "image-fir"))]
+pub fn run_if_png_photos() -> bool {
+    if std::env::var("IMAGE_PNG_PHOTOS").as_deref() == Ok("1") {
+        eprintln!("IMAGE_PNG_PHOTOS requires --features image-fir");
+        std::process::exit(1);
+    }
+    false
 }
 
 pub fn run_if_timing() -> bool {

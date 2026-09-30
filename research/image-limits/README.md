@@ -445,3 +445,43 @@ file.
 A short-lived decoder child pays about 2 ms to start on this Mac; the photo
 fit adds about 100–200 ms depending on the resize backend, on top of that spawn
 overhead.
+
+## Follow-up: photographs as PNG (macOS)
+
+Platform: macOS 26.6.2, Apple M3 Pro. `image-fir` only: decode with the
+`image` crate, Lanczos3 resize with `fast_image_resize`, fit inside 2000×2000
+(never enlarge). After resize, every output is encoded as PNG with
+`PngEncoder::new_with_quality(CompressionType::Default, FilterType::Adaptive)`
+even when the input was JPEG; JPEG quality 80 is timed separately on the same
+pixels. Encode times are the median of five iterations (resize done once per
+file). Base64 length is standard encoding with no newlines; the 1 MiB cap is
+1,048,576 encoded bytes. Raw lines: `raw/macos-followup/png-photos/results.txt`.
+Probe: `IMAGE_PNG_PHOTOS=1` and `IMAGE_PHOTO_MANIFEST` (`src/image_timing.rs`).
+
+Source files (photos are not committed; three HEIC wallpapers were converted
+with `sips -s format jpeg` into `raw/macos-followup/png-photos/converted/`,
+see `conversion.log`):
+
+1. Synthetic: `research/image-limits/fixtures/photo-4000x3000.jpg` (from `gen/`).
+2. `/System/Library/Wallpapers/.default/DefaultAerial.jpg`
+3. `/System/Library/PrivateFrameworks/SystemDesktopAppearance.framework/Versions/A/Resources/DefaultBackground.jpg`
+4. `/System/Library/Desktop Pictures/.wallpapers/Sonoma Horizon/Sonoma Horizon.heic` → converted JPEG
+5. `/System/Library/Desktop Pictures/Sonoma.heic` → converted JPEG
+6. `/System/Library/Desktop Pictures/iMac Green.heic` → converted JPEG
+
+| Source | Input size | Resized | PNG bytes / b64 | PNG &lt; 1 MiB b64 | PNG encode med (ms) | JPEG q80 bytes / b64 | JPEG &lt; 1 MiB b64 | JPEG encode med (ms) |
+|---|---:|---|---:|---|---:|---:|---|---:|
+| synthetic 4000×3000 | 3,794,590 B | 2000×1500 | 3,818,343 / 5,091,124 | no | 374 | 320,715 / 427,620 | yes | 23 |
+| DefaultAerial.jpg 3840×2160 | 5,617,703 B | 2000×1125 | 2,990,653 / 3,987,540 | no | 292 | 350,014 / 466,688 | yes | 19 |
+| DefaultBackground.jpg 3840×2160 | 4,744,778 B | 2000×1125 | 3,693,104 / 4,924,140 | no | 279 | 504,473 / 672,632 | yes | 21 |
+| Sonoma Horizon (HEIC→JPEG) 3840×2160 | 1,746,024 B | 2000×1125 | 3,197,005 / 4,262,676 | no | 240 | 423,750 / 565,000 | yes | 20 |
+| Sonoma.heic→JPEG 6016×6016 | 2,392,955 B | 2000×2000 | 2,562,697 / 3,416,932 | no | 616 | 174,151 / 232,204 | yes | 27 |
+| iMac Green.heic→JPEG 6016×6016 | 8,312,896 B | 2000×2000 | 3,706,977 / 4,942,636 | no | 631 | 236,309 / 315,080 | yes | 28 |
+
+For every photograph tested here, default PNG after a 2000 px fit is roughly
+3.4–5.1 MiB of base64 and takes about 240–630 ms to encode on this Mac. JPEG
+quality 80 of the same resized pixels stays between about 232 KiB and 673 KiB
+of base64 (all under 1 MiB) and encodes in about 19–28 ms. A policy that
+re-encodes all resized images as PNG would miss Anthropic-style base64 size
+limits on these inputs unless Fiber uses a slower, smaller PNG setting or keeps
+JPEG for photographic sources.
