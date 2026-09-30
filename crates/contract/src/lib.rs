@@ -6,7 +6,9 @@
 
 mod codes;
 mod envelope;
+pub mod events;
 mod ids;
+pub mod shapes;
 
 pub use codes::ErrorCode;
 pub use envelope::{Envelope, SCHEMA_VERSION};
