@@ -62,17 +62,24 @@ fn child_writing_past_a_file_size_limit() {
 
     // The lagging watcher first gets every durable line that was written,
     // then the failure, rather than waiting for a line it will never get.
-    let mut durable = Vec::new();
-    let ended = loop {
-        match watcher.recv() {
-            Ok(Some(line)) if line.is_durable() => durable.push(line),
-            Ok(Some(_)) => {}
-            Ok(None) => panic!("the watcher ended without the failure"),
-            Err(e) => break e,
-        }
-    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut durable = Vec::new();
+        let ended = loop {
+            match watcher.recv() {
+                Ok(Some(line)) if line.is_durable() => durable.push(line),
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("the watcher ended without the failure"),
+                Err(e) => break e,
+            }
+        };
+        tx.send((durable, ended.code())).unwrap();
+    });
+    let (durable, ended) = rx
+        .recv_timeout(DEADLINE)
+        .expect("the watcher to end with the failure before the deadline");
     assert_eq!(durable, written);
-    assert!(matches!(ended, Error::Poisoned { .. }), "{ended:?}");
+    assert_eq!(ended, ErrorCode::IoFailed);
 
     // A watcher made after the failure gets it at once.
     let mut late = log.watch();
@@ -82,14 +89,17 @@ fn child_writing_past_a_file_size_limit() {
             .unwrap();
     });
     let got = rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(DEADLINE)
         .expect("a watcher of a stopped log to return at once");
     assert_eq!(got, Err(ErrorCode::IoFailed));
 }
 
-/// How many durable lines the child writes before its write fails: far more
-/// than a watcher's queue holds.
-const STEPS: usize = 3000;
+/// How many durable lines the child writes before its write fails. With an
+/// ephemeral line each, more than a watcher's queue holds.
+const STEPS: usize = 600;
+
+/// How long the child waits for a watcher.
+const DEADLINE: Duration = Duration::from_secs(10);
 
 #[test]
 fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {

@@ -122,7 +122,7 @@ fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
     let log = Log::create(tmp.path(), id("s_1")).unwrap();
     let watcher = log.watch();
     // Past any bounded queue while nobody receives, ending on a durable line.
-    let durable: Vec<Envelope> = (0..3000)
+    let durable: Vec<Envelope> = (0..600)
         .map(|_| {
             log.append(&delta("x"), None, None).unwrap();
             log.append(&empty("step_started"), None, None).unwrap()
