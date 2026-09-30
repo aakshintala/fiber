@@ -38,6 +38,20 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 
 ## Before a call runs
 
+- Arguments the model sent are repaired first, where the tool's input schema
+  allows exactly one reading of them: a `null` sent for an optional property
+  is dropped, a string is turned into a number or boolean where the schema
+  asks for one, and a string holding JSON is parsed where the schema asks for
+  an array or object, and kept only if the result passes the check. Nothing
+  else is repaired: JSON that does not parse, a misspelt or foreign tool name,
+  and a missing or unknown property all fail the check. Repair is the same for
+  every protocol, model and tool, built-in, MCP or extension. The model is not
+  told, and its call is sent back to it as written. `tool_call_requested`
+  records what was repaired (`docs/events.md`). Arguments a `before_tool` hook
+  rewrote are never repaired. The faults seen in the owner's sessions, and
+  what pi, Codex, Claude Code, opencode and rig repair:
+  [research/reply-faults](../research/reply-faults/README.md),
+  [research/reply-repair-harvest](../research/reply-repair-harvest/README.md).
 - Arguments are checked against the input schema before the effects function is
   called. A call that fails the check completes as `failed` with code
   `invalid_arguments` and never writes `tool_call_started`, so the log proves

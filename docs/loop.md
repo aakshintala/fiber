@@ -158,8 +158,11 @@ Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.
 
 ## What the loop does not do
 
-- Detect repetition. None of pi, codex or Claude Code does it in the loop.
-  Repairing malformed model output before the loop sees it is the map's
-  "canonical turn" item.
+- Detect repetition, or turn tool calls written into prose into calls. None
+  of pi, Codex, Claude Code, opencode or rig does either, and neither
+  appeared in 39,061 pi turns or 31,326 Claude Code turns of the owner's
+  sessions ([research/reply-faults](../research/reply-faults/README.md)).
+  The one repair Fiber makes to a reply is to tool-call arguments
+  (`docs/tools.md`, "Before a call runs").
 - Guard against a `turn_end` hook that always continues. Such an extension
   runs the turn until a person or caller sends `cancel`.
