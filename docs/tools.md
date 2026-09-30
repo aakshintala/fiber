@@ -32,7 +32,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   `docs/architecture.md` ("Tool calls in a step").
 - Adapting a schema to each wire protocol, and carrying images to a protocol
   that cannot take them in a tool result, is the provider module's job, not the
-  tool's.
+  tool's. It never rewrites a schema to fit strict mode. A tool is sent with `strict:
+  true` only when its schema fits the vendor's strict subset, as every
+  built-in tool's does (`docs/model-routing.md`, "Protocols and providers").
 
 ## Before a call runs
 
@@ -853,6 +855,85 @@ first prompt.
   sessions. Its definition counts toward the built-in budget ("Size budget in
   CI").
 - Each name is written as `session_named` (`docs/events.md`).
+
+## Messaging other sessions
+
+Settled by
+[Intercom: messaging a session you did not start](https://github.com/aakshintala/fiber/issues/78);
+that ticket's resolution holds the probes and the rejected alternatives.
+
+A session sends a session message to another running session of the same
+account: one it did not start, a sibling delegate, or a session in another
+project. Messaging a session's own delegates is `delegate_message`
+(`docs/delegates.md`).
+
+| Tool | Arguments | What it does |
+|---|---|---|
+| `session_list` | none | Lists every running session of the account, delegates included. |
+| `session_message` | `id`, `text` | Sends a session message to one running session. |
+
+**`session_list` shows running sessions only.** Each entry has the session's
+id, its name, its workspace, and its parent's id when it is a delegate. A
+session is running when its socket accepts a connection (`docs/invocation.md`, "Processes"). The tool declares `reads`.
+
+**`session_message` addresses a session by its full id.** The model lists
+sessions first, so a name or a prefix would add ambiguity and save nothing.
+The text is plain text; a session message carries no images.
+
+**A session message reaches only a running session.** The sender connects to
+the target's socket, sends the driver command `message`, reads the answer and
+closes the connection at once, so it never keeps the target alive
+(`docs/invocation.md`, "Lifecycle"). The target runs `before_message` before
+it answers, so the call answers `delivered` only once the message is in the
+target's inbox. Otherwise it fails with one of:
+
+- `unreachable`: no running session has this id, whether it exited or never
+  existed
+- `closing`: the target was sent `close` (`docs/invocation.md`)
+- `message_refused`: the target's `before_message` refused it, with the
+  hook's reason (`docs/extensions.md`, "Hooks")
+- `hook_failed`: the target's `blocking` `before_message` failed
+
+A session may message itself. The message arrives as steering at its own next
+step, which lets a test drive the whole path with one session.
+
+A message for a session that has exited belongs on the ticket or with
+whoever orchestrates the work. Fiber keeps no mailbox. An extension that runs
+persistent seats replaces `session_list` and `session_message` with its own,
+and keeps what mail it needs (`docs/extensions.md`, "Registering").
+
+**The target takes it as it takes any message.** It enters the loop's inbox
+(`docs/architecture.md`, "One inbox"). During a turn it is a steering message
+and joins at the next step boundary. Between turns it starts a turn
+(`docs/loop.md`, "Starting a turn"). `before_message` runs on it, so an
+extension can rewrite or refuse it. It is logged with `source` `session`
+(`docs/events.md`, "Where a message came from"). The model sees it framed
+with the sender's id and name.
+
+**A session message is not the person's voice.** The target's reviewer never
+reads one as the person's instructions (`docs/permissions.md`, "The
+reviewer"). It is a request from another session, and the target acts on it
+under its own mode.
+
+**Sending declares `writes`, not reversible.** It changes what another session
+does. So a `readonly` root session asks to leave `readonly` first, a
+`readonly` delegate's send is refused (`docs/permissions.md`, "Leaving
+readonly"), and in `auto` the reviewer judges the send. Without it, a
+`readonly` session could ask a `yolo` peer to make the change for it.
+
+**Nothing limits how many messages sessions exchange.** Two sessions can
+wake each other indefinitely while no person watches. An extension can refuse
+messages in `before_message`; how much a session may spend is
+[Token and cost display, and spending budgets](https://github.com/aakshintala/fiber/issues/192).
+
+**Delegates on another harness receive through their parent.** The parent
+binds the delegate's socket and delivers what arrives; the delegate sends
+through `fiber mcp serve` (`docs/delegates.md`, "Delegates on another
+harness").
+
+Both tools are declared in every session, so they never differ between
+sessions. Their definitions count toward the built-in budget ("Size
+budget in CI").
 
 ## Provider quota
 

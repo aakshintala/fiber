@@ -96,13 +96,19 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `rate_limited` | HTTP 429 | yes |
 | `provider_unavailable` | HTTP 5xx, including 503 and 529 overload, HTTP 408 and HTTP 409 | yes |
 | `connection_failed` | DNS, TLS, a refused or dropped connection | yes |
-| `stream_incomplete` | a stream that ended before its protocol's terminal event, or an error inside an HTTP 200 response that no other code matches | yes |
+| `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit | never |
 | `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh that failed | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
-| `refused` | the provider declined to answer on policy grounds | never |
+| `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
 | `model_not_found` | the provider does not know the model | never |
 | `invalid_request` | any other HTTP 4xx | never |
+| `unknown_stop_reason` | a stop or finish reason the protocol does not map; the message carries the raw value | never |
+
+Every stop or finish reason a protocol documents is mapped in its native
+module. An unknown one fails the call as `unknown_stop_reason`, whatever the
+protocol. A reason a vendor documents that Fiber has not mapped is a Fiber
+bug, and a release fixes it.
 
 The status alone cannot classify: OpenRouter sends an upstream's context
 overflow as HTTP 200 with the error in the body or the last stream chunk. The
@@ -110,7 +116,8 @@ provider crate reads the body, per protocol and per upstream.
 
 The Retried column is the default. A response header `x-should-retry: true`
 or `false` overrides it for that response (`docs/model-routing.md`, "When a
-model call fails").
+model call fails"). It never overrides `quota_exceeded` or
+`unknown_stop_reason`, which are never retried.
 
 A wait longer than 60 seconds fails at once as `rate_limited` with
 `retry_after` set, so a person or a caller can decide.
@@ -169,6 +176,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
 | `authentication_failed` | model call, turn | the provider rejected the credential |
 | `blocked` | turn | the block budget ran out with no human to answer |
+| `closing` | tool call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions") |
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
@@ -188,6 +196,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_server_unapproved` | exit | a repository's MCP server is not approved |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
+| `message_refused` | tool call | the target session's `before_message` refused a session message |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
@@ -210,6 +219,8 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `timeout` | tool call, job | a deadline passed |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
+| `unreachable` | tool call | `session_message` named an id no running session has |
+| `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
 | `usage` | exit | Fiber was called wrongly; exits 2 |
@@ -225,7 +236,8 @@ Notices, for a failure outside any action:
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
 Driver command rejections (`malformed`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`)
+`session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
+`closing`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

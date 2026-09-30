@@ -85,9 +85,11 @@ with no extension in use creates no VM and pays no idle cost.
 - **A panic in a host callback ends the session.** Fiber builds with
   `panic = "abort"` and holds all its code, host callbacks included, to a
   no-panic bar that its lints enforce (`docs/code-quality.md`). Under unwind,
-  mlua hands a host callback's panic to the extension as an ordinary Lua
-  error, so a Fiber bug would pass as an extension error. Extension-level Lua
-  errors are safe either way.
+  with mlua 0.12, a host callback's panic unwinds through Lua's frames, past
+  the extension's `pcall`, to the Rust caller, and leaves any mutex the
+  callback held poisoned. Abort ends the process at the panic instead
+  ([research/extension-runtime/linux-containment](../../research/extension-runtime/linux-containment/README.md)).
+  Extension-level Lua errors are safe either way.
 
 - **JSON is a permanent host-owned API.** Lua has no built-in JSON, so
   `json.decode`/`encode` are host functions Fiber maintains. QuickJS would have

@@ -252,6 +252,10 @@ Project instruction files are also excluded. They live in the repository, so
 including them would let a repository write into the reviewer's prompt — the
 hole that stripping tool output was meant to close.
 
+A session message from another session is excluded too (`docs/tools.md`,
+"Messaging other sessions"). Another model wrote it, so including it would let
+one session approve calls in another by messaging it.
+
 ### How it runs
 
 Two stages. The first asks for a single token: does this need thinking about.

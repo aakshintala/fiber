@@ -14,7 +14,8 @@ driver command, session and event mean what it says there and nothing else.
 
 Fiber is an MCP client. The client is built into the binary, as the wire
 protocols in `docs/model-routing.md` are. Fiber serves no MCP
-([ADR 0005](adr/0005-no-mcp-server-the-supervisor-is-external.md)).
+for delegating to Fiber
+([ADR 0005](adr/0005-the-delegation-supervisor-is-external.md)).
 
 Fiber speaks two transports:
 
@@ -30,6 +31,10 @@ to a server with `fiber mcp login <server>`. Token refresh follows the provider
 rule in `docs/model-routing.md`, "Credentials": lock the credential file,
 re-read it, refresh once. A headless start with no valid token counts as
 the server failing to start (see [Starting servers](#starting-servers)).
+
+Fiber is an MCP server in one place: `fiber mcp serve`, which a delegate on
+another harness uses to send session messages (`docs/delegates.md`,
+"Delegates on another harness").
 
 ## Tools and their names
 

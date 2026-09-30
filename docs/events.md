@@ -177,9 +177,10 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `source` | string | yes | `driver`, a client's command, or `extension`, an extension's `host.drive`; a closed set |
+| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; or `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
-| `command_id` | string | yes | the id of the `prompt` or `steer` command that sent it |
+| `from_session_id` | string | no | the sending session's id, when `source` is `session` |
+| `command_id` | string | yes | the id of the `prompt`, `steer` or `message` command that sent it |
 
 ### `changed_by`
 
@@ -282,7 +283,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 
 | `type` | Keys | Meaning |
 |---|---|---|
-| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver or an extension |
+| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver, an extension or another session |
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
 | `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
@@ -311,7 +312,8 @@ Durable. A steering message a running turn received at a step boundary.
 | `content` | content parts | yes | the message as the turn received it |
 | `source` | string | yes | as in "Where a message came from" |
 | `extension` | string | no | as in "Where a message came from" |
-| `command_id` | string | yes | the id of the `steer` command that sent it |
+| `from_session_id` | string | no | as in "Where a message came from" |
+| `command_id` | string | yes | the id of the `steer` or `message` command that sent it |
 | `changed_by` | `changed_by` | no | when a hook rewrote the message |
 
 #### `steering_queue`
@@ -421,6 +423,18 @@ Durable.
 | `error` | `error` | no | on `failed`, with `retry_after` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
 | `attempt` | integer | no | on `failed`: 1 for the first attempt at this request, 2 for its first retry, and so on |
 
+#### `tool_call_arguments_delta`
+
+Ephemeral. A tool call the model is still emitting, under the assistant
+message's `action_id`. The arguments are parsed once, when the call finishes
+(`docs/loop.md`, "One step"); `tool_call_requested` then carries them.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `index` | integer | yes | the call's position within the message, from 0 |
+| `name` | string | no | the tool's name, once the provider has sent it |
+| `text` | string | yes | the raw argument text added since the last delta |
+
 #### `reasoning_started`
 
 Durable. The payload is `{}`.
@@ -450,7 +464,7 @@ Durable. The model finished emitting the call.
 |---|---|---|---|
 | `name` | string | yes | the tool's name as the model called it |
 | `arguments` | any JSON | yes | the arguments as the model sent them: an object, or a string holding the raw text when it was not JSON |
-| `provider_id` | string | yes | the provider's own id for the call ("Identity and ordering") |
+| `provider_id` | string | no | the provider's own id for the call ("Identity and ordering"); absent when the reply carried none |
 
 #### `tool_call_started`
 

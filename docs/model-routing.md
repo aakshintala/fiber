@@ -49,6 +49,12 @@ accepted, and the response reported `strict: true` with the schema rewritten
 an explicit `strict: true` was rejected with a 400. Details:
 [research/openai-responses-probe](../research/openai-responses-probe/README.md).
 
+So Fiber sends `strict` on every tool, on every protocol that has strict mode,
+and decides it per tool. It sends `true` only when the tool's schema already
+fits the vendor's strict subset, and `false` otherwise. Fiber never rewrites a
+schema to fit, and never moves keywords into the description. Fiber's built-in
+tools are written to fit the strict subset.
+
 An extension cannot add a protocol. A vendor with a new wire format needs a
 Fiber release.
 
@@ -120,6 +126,10 @@ Measured against `gemini-3.1-flash-lite` on the Gemini API:
   `AUTO` returned arguments that broke an enum and an integer type. In the
   sample it did not force a call.
 
+A `functionCall` that arrives without an `id` is logged with no `provider_id`
+(`docs/events.md`, `tool_call_requested`). Fiber pairs the call with its result
+by its action id, which stays local. Only an id the model emitted is sent back.
+
 The Gemini API answers HTTP 404 "no longer available to new users" for
 `gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
 in September 2026.
@@ -168,11 +178,19 @@ needs is declared, or it is not set.
   `reasoning_content` and `reasoning_details` on a replayed assistant message.
 - OpenRouter, with `z-ai/glm-5.3-flash`, accepts `cache_control` on a system
   part, the last message and a tool, and accepts `ttl` on the system part. It also accepted one request with
-  an invalid `type`. This shows acceptance only. Whether OpenRouter passes
-  any placement or `ttl` upstream is not settled.
+  an invalid `type`. This shows acceptance only. With
+  `anthropic/claude-haiku-4.5` pinned to the Anthropic upstream, OpenRouter
+  passes markers on the system part, the last message and a tool, and `ttl`,
+  through to Anthropic (`research/openai-completions-probe`).
 - Tool-call deltas from `gpt-6-luna` and from OpenRouter with
   `z-ai/glm-5.3-flash` carry `index`. OpenRouter adds
   `: OPENROUTER PROCESSING` comment lines to the stream.
+
+Every protocol reports `input` without cache reads and writes, as
+`docs/events.md` (`tokens`) defines it. Where a vendor's input figure includes
+them, the protocol's module subtracts them. OpenRouter's `prompt_tokens`
+includes `cached_tokens`, for example 15 with 14 cached
+(`research/openai-completions-probe`).
 
 Here is the Databricks gateway as an example. It serves about 53 models. Claude
 models work only through its Anthropic route, because its default route rejects
@@ -366,8 +384,8 @@ Fiber retries these failures:
 - a stream that ends before its protocol's terminal event
 
 A response header `x-should-retry` overrides the status: `true` retries the
-failure, `false` does not. Fiber never retries quota or billing errors, whatever
-the header says.
+failure, `false` does not. Fiber never retries quota or billing errors, or an
+`unknown_stop_reason`, whatever the header says.
 
 Among the responses probed, only Anthropic sent `x-should-retry`: `false` on its
 400 and 404 responses, `true` on a 429. Anthropic's 429 also carried
@@ -380,6 +398,12 @@ reached a 429 (`research/retry-signals/`). No vendor sent `retry-after-ms`.
 The saved responses had statuses 200, 400, 401, 403, 404, 405 and 429; no 409,
 425 or 501 appeared, which does not show a vendor never sends them.
 
+The wait a provider asks for, in seconds, becomes the error's `retry_after`.
+Fiber reads it from `retry-after`. On `google-generative-ai`, Fiber reads
+`Retry-After` or the error body's `RetryInfo.retryDelay`, whichever is present.
+That is the shape Google documents, and it is unprobed: no Gemini 429 was
+reached (`research/retry-signals/`).
+
 The defaults are 3 retries with exponential backoff: 2 seconds, then 4, then
 8, with each delay capped at 60 seconds. If the server asks Fiber to wait longer
 than 60 seconds, the call fails at once with that wait in the error, so a person
@@ -390,6 +414,11 @@ the whole run.
 When a stream dies midway, the partial text is not kept, because deltas are
 ephemeral. A tool call the model finished emitting inside a failed message
 never runs. The retry asks the model again.
+
+An `openai-responses` stream that ends in `response.failed` is one such
+failure. Everything it already streamed is dropped, finished tool calls
+included, and the call is retried. Its code comes from the error body, and is
+`stream_incomplete` when no other code matches (`docs/errors.md`).
 
 When the retries run out, the step fails with the provider's error. Fiber never
 switches to another model or provider on its own.

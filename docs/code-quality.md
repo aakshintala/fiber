@@ -103,11 +103,13 @@ behaves like the one that ships. A panic ends its process, which is one
 session ([ADR 0009](adr/0009-each-session-is-one-process.md)), and resuming
 continues from the log, which is fsynced around every side effect
 ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)). Under
-unwind, a panic inside a function that a Lua extension calls reaches the
-extension as an ordinary Lua error that its `pcall` can catch and ignore,
-so a Fiber bug would pass as an extension error. The lints above make code
-that can panic fail to compile, so the bar holds for host callbacks along
-with everything else.
+unwind, a panic inside a function that a Lua extension calls unwinds through
+Lua's frames, past the extension's `pcall`, to the Rust caller, and leaves any
+mutex the callback held poisoned. Abort ends the process at the panic, so no
+code runs on half-changed state. Probed with mlua 0.12 on Linux x86_64
+([research/extension-runtime/linux-containment](../research/extension-runtime/linux-containment/README.md)).
+The lints above make code that can panic fail to compile, so the bar holds
+for host callbacks along with everything else.
 
 Release builds also set `overflow-checks = true`, so an integer overflow
 panics instead of wrapping to a wrong value. Code that wants wrapping says so
