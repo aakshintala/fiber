@@ -6,3 +6,9 @@
 mod envelope;
 
 pub use envelope::{ActionId, Envelope, Seq, SessionId, TurnId};
+
+/// Demo.
+#[must_use]
+pub fn demo_clippy(x: u8) -> bool {
+    return x == x;
+}
