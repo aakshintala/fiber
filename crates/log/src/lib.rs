@@ -45,6 +45,17 @@ pub enum Error {
         /// Who holds it, such as `process 4242`.
         holder: String,
     },
+    /// An earlier write or fsync failed, so the log refuses to write more.
+    /// Reopening the session carries on from its last complete line.
+    #[error(
+        "session {session} stopped writing after a failed write ({cause}); reopen it to carry on"
+    )]
+    Poisoned {
+        /// The session.
+        session: String,
+        /// The failure that stopped it.
+        cause: String,
+    },
     /// The session directory, or its log, does not exist.
     #[error("no session at {0}")]
     NotFound(PathBuf),
@@ -75,11 +86,14 @@ impl Error {
     /// The stable code a consumer switches on (`docs/errors.md`). A failure
     /// with none, such as a full disk, is one `docs/errors.md` does not yet
     /// settle ("Not settled here").
+    // `None` is a stopgap until #241 gives these cases their codes.
     pub fn code(&self) -> Option<ErrorCode> {
         match self {
             Self::Held { .. } => Some(ErrorCode::SessionHeld),
             Self::NotFound(_) => Some(ErrorCode::SessionNotFound),
-            Self::Unreadable { .. } | Self::Encode(_) | Self::Io { .. } => None,
+            Self::Poisoned { .. } | Self::Unreadable { .. } | Self::Encode(_) | Self::Io { .. } => {
+                None
+            }
         }
     }
 }

@@ -3,22 +3,27 @@
 //! and fans every event out to watchers.
 
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::thread;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use contract::events::{Class, Event};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
-use crate::read::{Queue, Watcher, complete_len};
+use crate::read::{Feed, Watcher, complete_len, watcher};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
 /// A session's log, open for writing. Only one exists per session at a time,
 /// across every process: the lock on `session.lock` is held until it is
 /// dropped. It is shared by whoever emits events, behind one lock
 /// (`docs/architecture.md`, "The threads").
+///
+/// A failed write or fsync stops it: every later append returns
+/// [`Error::Poisoned`], and every watcher ends with it. Reopening the session
+/// truncates whatever part of a line the failure left.
 pub struct Log {
     inner: Mutex<Inner>,
 }
@@ -28,30 +33,32 @@ struct Inner {
     dir: PathBuf,
     events: File,
     /// Holds the session's lock for as long as it is open.
-    _lock: File,
+    _lock: Lock,
     /// The `seq` the next durable line gets.
     next: u64,
     fsyncs: u64,
-    watchers: Vec<Weak<Queue>>,
+    feeds: Vec<Feed>,
+    /// Why the log stopped, once a write or fsync failed.
+    failed: Option<String>,
 }
 
 impl Log {
     /// Creates the session directory `id` in `sessions` (see
-    /// [`crate::sessions_dir`]), holding `events.jsonl`, `session.lock` and
-    /// `artifacts/` and nothing else, and takes its lock. Refuses a session
-    /// that already exists.
+    /// [`crate::sessions_dir`]; an absolute path), holding `events.jsonl`,
+    /// `session.lock` and `artifacts/` and nothing else, and takes its lock.
+    /// Refuses a session that already exists.
     pub fn create(sessions: &Path, id: SessionId) -> Result<Self, Error> {
         let dir = session_path(sessions, &id);
-        // Fiber home's directories are private to the person (`docs/state.md`).
-        DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(sessions)
-            .map_err(io_at(sessions))?;
-        DirBuilder::new()
-            .mode(0o700)
-            .create(&dir)
-            .map_err(io_at(&dir))?;
+        let mut fsyncs = 0;
+        // Each new directory's entry is fsynced in its parent, so a crash
+        // cannot lose a directory that a later fsynced line lives in.
+        let missing: Vec<&Path> = sessions.ancestors().take_while(|d| !d.exists()).collect();
+        for new in missing.iter().rev() {
+            make_dir(new, true)?;
+            fsyncs += 1;
+        }
+        make_dir(&dir, false)?;
+        fsyncs += 1;
         let artifacts = dir.join(ARTIFACTS);
         DirBuilder::new()
             .mode(0o700)
@@ -64,17 +71,16 @@ impl Log {
             .create_new(true)
             .open(&path)
             .map_err(io_at(&path))?;
+        sync_dir(&dir)?;
+        fsyncs += 1;
         let mut inner = Inner::new(id, dir, events, lock, 0);
-        // A crash must not lose the session's directory entries.
-        inner.sync_dir(sessions)?;
-        let dir = inner.dir.clone();
-        inner.sync_dir(&dir)?;
+        inner.fsyncs = fsyncs;
         Ok(Self::from(inner))
     }
 
     /// Opens the existing session `id` in `sessions` for writing, taking its
-    /// lock. A torn tail left by a crash is truncated first, and `seq`
-    /// carries on from the last complete line.
+    /// lock. A torn tail left by a crash or a failed write is truncated
+    /// first, and `seq` carries on from the last complete line.
     pub fn open(sessions: &Path, id: SessionId) -> Result<Self, Error> {
         let dir = session_path(sessions, &id);
         let path = dir.join(EVENTS);
@@ -111,6 +117,13 @@ impl Log {
         action_id: Option<ActionId>,
     ) -> Result<Envelope, Error> {
         let mut inner = self.lock();
+        if let Some(cause) = &inner.failed {
+            return Err(Error::Poisoned {
+                session: inner.session_id.0.clone(),
+                cause: cause.clone(),
+            });
+        }
+        let sync = fsyncs(event, action_id.is_some());
         let mut line = Envelope {
             kind: event.kind().to_owned(),
             session_id: inner.session_id.clone(),
@@ -126,33 +139,23 @@ impl Log {
                 line.seq = Some(Seq(inner.next));
                 let mut bytes = serde_json::to_vec(&line)?;
                 bytes.push(b'\n');
-                // One line, one write, so a reader never sees half of one
-                // unless the process dies mid-write (`docs/state.md`).
-                let path = inner.dir.join(EVENTS);
-                inner.events.write_all(&bytes).map_err(io_at(&path))?;
-                inner.next += 1;
-                if fsyncs(event) {
-                    inner.sync()?;
+                if let Err(e) = inner.write(&bytes, sync) {
+                    inner.stop(&e);
+                    return Err(e);
                 }
             }
             Class::Ephemeral => {}
         }
-        inner.watchers.retain(|w| match w.upgrade() {
-            Some(queue) => {
-                queue.push(&line);
-                true
-            }
-            None => false,
-        });
+        inner.feeds.retain_mut(|feed| feed.push(&line));
         Ok(line)
     }
 
     /// A watcher that receives every event appended from now on.
     pub fn watch(&self) -> Watcher {
         let mut inner = self.lock();
-        let queue = Arc::new(Queue::default());
-        inner.watchers.push(Arc::downgrade(&queue));
-        Watcher::new(queue, inner.dir.clone(), inner.next)
+        let (feed, watcher) = watcher(inner.dir.clone(), inner.next);
+        inner.feeds.push(feed);
+        watcher
     }
 
     /// How many fsyncs this log has made, counted where they are made
@@ -174,16 +177,8 @@ impl From<Inner> for Log {
     }
 }
 
-impl Drop for Log {
-    fn drop(&mut self) {
-        for queue in self.lock().watchers.iter().filter_map(Weak::upgrade) {
-            queue.close();
-        }
-    }
-}
-
 impl Inner {
-    fn new(session_id: SessionId, dir: PathBuf, events: File, lock: File, next: u64) -> Self {
+    fn new(session_id: SessionId, dir: PathBuf, events: File, lock: Lock, next: u64) -> Self {
         Self {
             session_id,
             dir,
@@ -191,45 +186,155 @@ impl Inner {
             _lock: lock,
             next,
             fsyncs: 0,
-            watchers: Vec::new(),
+            feeds: Vec::new(),
+            failed: None,
         }
     }
 
-    /// Makes every line written so far durable.
-    fn sync(&mut self) -> Result<(), Error> {
-        self.fsyncs += 1;
-        self.events
-            .sync_data()
-            .map_err(io_at(&self.dir.join(EVENTS)))
+    /// Appends one line in one write, and fsyncs it when `sync` says. A write
+    /// that stops short is a failure, not retried: the part written is
+    /// already a torn tail, which reopening truncates.
+    fn write(&mut self, bytes: &[u8], sync: bool) -> Result<(), Error> {
+        let path = self.dir.join(EVENTS);
+        let written = self.events.write(bytes).map_err(io_at(&path))?;
+        if written < bytes.len() {
+            let short = format!("wrote {written} of {} bytes", bytes.len());
+            return Err(io_at(&path)(io::Error::new(
+                io::ErrorKind::WriteZero,
+                short,
+            )));
+        }
+        self.next += 1;
+        if sync {
+            self.fsyncs += 1;
+            self.events.sync_data().map_err(io_at(&path))?;
+        }
+        Ok(())
     }
 
-    /// Makes the entries in the directory `dir` durable.
-    fn sync_dir(&mut self, dir: &Path) -> Result<(), Error> {
-        self.fsyncs += 1;
-        File::open(dir)
-            .and_then(|d| d.sync_all())
-            .map_err(io_at(dir))
+    /// Stops the log after `error`, and ends every watcher with it.
+    fn stop(&mut self, error: &Error) {
+        let cause = error.to_string();
+        for feed in self.feeds.drain(..) {
+            feed.fail(&self.session_id.0, &cause);
+        }
+        self.failed = Some(cause);
     }
 }
 
-/// Whether appending `event` ends with an fsync (`docs/events.md`,
-/// "Writing"): the record of a side effect once it has happened, and the two
-/// records written before their effect, `assistant_message_started` before
-/// the model request and `tool_call_started` before the tool runs. Every
-/// other durable line is made durable by the next of these.
-fn fsyncs(event: &Event) -> bool {
-    matches!(
-        event,
-        Event::AssistantMessageStarted(_)
-            | Event::AssistantMessageCompleted(_)
-            | Event::ToolCallStarted(_)
-            | Event::ToolCallCompleted(_)
-    )
+/// Makes the directory `dir`, private to the person (`docs/state.md`), and
+/// fsyncs its entry in its parent. `exists_ok` lets another process have
+/// made it first.
+fn make_dir(dir: &Path, exists_ok: bool) -> Result<(), Error> {
+    DirBuilder::new()
+        .recursive(exists_ok)
+        .mode(0o700)
+        .create(dir)
+        .map_err(io_at(dir))?;
+    sync_dir(dir.parent().unwrap_or(dir))
 }
 
-/// Takes the session's lock and writes the holder's name into it, or names
+/// Makes the entries in the directory `dir` durable.
+fn sync_dir(dir: &Path) -> Result<(), Error> {
+    File::open(dir)
+        .and_then(|d| d.sync_all())
+        .map_err(io_at(dir))
+}
+
+/// Whether appending `event` ends with an fsync. `docs/events.md`,
+/// "Writing": "Fsync the record of a side effect after it happens and before
+/// causing the next one", except `assistant_message_started` and
+/// `tool_call_started`, fsynced before their effect. A side effect costs
+/// money or touches the world: a model call, a tool call, or a process run
+/// outside one. Every other durable line is made durable by the next fsync.
+/// Every kind is listed, so a new one does not compile until it is placed.
+fn fsyncs(event: &Event, in_action: bool) -> bool {
+    match event {
+        // Before the model request is sent, and before the tool runs.
+        Event::AssistantMessageStarted(_) | Event::ToolCallStarted(_) => true,
+        // A model call and a tool call, once they have happened; a command
+        // the person ran, and a program an extension ran.
+        Event::AssistantMessageCompleted(_)
+        | Event::ToolCallCompleted(_)
+        | Event::ShellCommand(_)
+        | Event::ExtensionExec(_) => true,
+        // A reviewer's or an extension's model call belongs to no action, and
+        // no other line records it. The conversation's own call is recorded
+        // by `assistant_message_completed`.
+        Event::UsageRecorded(_) => !in_action,
+        // A job and a delegate start inside a tool call, whose two fsyncs
+        // bracket the start, and their news reaches the model at a step
+        // boundary, ahead of a model request's fsync. The rest record no
+        // effect.
+        Event::FiberStarted(_)
+        | Event::FiberExited(_)
+        | Event::SessionStarted(_)
+        | Event::Rewound(_)
+        | Event::TurnStarted(_)
+        | Event::StepStarted(_)
+        | Event::TurnCompleted(_)
+        | Event::SteeringApplied(_)
+        | Event::SessionNamed(_)
+        | Event::ContextAdded(_)
+        | Event::ReasoningStarted(_)
+        | Event::ReasoningCompleted(_)
+        | Event::ToolCallRequested(_)
+        | Event::PermissionRequested(_)
+        | Event::PermissionResolved(_)
+        | Event::ModeChanged(_)
+        | Event::InteractionRequested(_)
+        | Event::InteractionResolved(_)
+        | Event::QuotaNoticed(_)
+        | Event::PreambleBuilt(_)
+        | Event::ModelChanged(_)
+        | Event::OpeningMessage(_)
+        | Event::InstructionFile(_)
+        | Event::DateChanged(_)
+        | Event::HandoffStarted(_)
+        | Event::HandoffCompleted(_)
+        | Event::ContextNudged(_)
+        | Event::McpServerFailed(_)
+        | Event::McpServerReady(_)
+        | Event::Reloaded(_)
+        | Event::ExtensionStateSet(_)
+        | Event::ExtensionStateUnset(_)
+        | Event::JobStarted(_)
+        | Event::DelegateStarted(_)
+        | Event::JobLine(_)
+        | Event::DelegateFinished(_)
+        | Event::JobCompleted(_)
+        | Event::JobsPendingNotified(_) => false,
+        // Ephemeral: never written.
+        Event::SteeringQueue(_)
+        | Event::Clients(_)
+        | Event::AssistantMessageDelta(_)
+        | Event::ToolCallArgumentsDelta(_)
+        | Event::ReasoningDelta(_)
+        | Event::ToolCallDelta(_)
+        | Event::RetryScheduled(_)
+        | Event::Notice(_)
+        | Event::ExtensionUi(_)
+        | Event::ExtensionMessage(_)
+        | Event::JobDelta(_)
+        | Event::CommandAccepted(_)
+        | Event::CommandRejected(_) => false,
+    }
+}
+
+/// The session's lock, held while the file is open. Letting go clears the
+/// holder's pid, so a later refusal never names a process that let go.
+struct Lock(File);
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        // Best effort: the lock itself is released when the file closes.
+        self.0.set_len(0).unwrap_or(());
+    }
+}
+
+/// Takes the session's lock and writes the holder's pid into it, or names
 /// who holds it.
-fn lock(dir: &Path, id: &SessionId) -> Result<File, Error> {
+fn lock(dir: &Path, id: &SessionId) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
     let mut file = OpenOptions::new()
         .read(true)
@@ -241,24 +346,33 @@ fn lock(dir: &Path, id: &SessionId) -> Result<File, Error> {
     match file.try_lock() {
         Ok(()) => {
             file.set_len(0).map_err(io_at(&path))?;
-            writeln!(file, "{}", std::process::id()).map_err(io_at(&path))?;
-            Ok(file)
+            file.write_all(format!("{}\n", std::process::id()).as_bytes())
+                .map_err(io_at(&path))?;
+            Ok(Lock(file))
         }
-        Err(TryLockError::WouldBlock) => {
-            // The holder writes its pid just after taking the lock, so a
-            // refusal in between cannot name it.
-            let pid = fs::read_to_string(&path).unwrap_or_default();
-            let holder = match pid.trim() {
-                "" => "another process".to_owned(),
-                pid => format!("process {pid}"),
-            };
-            Err(Error::Held {
-                session: id.0.clone(),
-                holder,
-            })
-        }
+        Err(TryLockError::WouldBlock) => Err(Error::Held {
+            session: id.0.clone(),
+            holder: holder(&path),
+        }),
         Err(TryLockError::Error(e)) => Err(io_at(&path)(e)),
     }
+}
+
+// ponytail: a holder that crashed leaves its pid, and a new holder that has
+// not yet replaced it is misnamed for those microseconds; a liveness check on
+// the pid if that ever matters.
+/// Names the holder of the lock at `path`. A holder writes its pid just
+/// after taking the lock, so the file may still be empty; it is read again
+/// for up to 50 ms before giving up.
+fn holder(path: &Path) -> String {
+    for _ in 0..50 {
+        let pid = fs::read_to_string(path).unwrap_or_default();
+        if !pid.trim().is_empty() {
+            return format!("process {}", pid.trim());
+        }
+        thread::sleep(Duration::from_millis(1));
+    }
+    "a process whose pid is not yet recorded".to_owned()
 }
 
 /// Milliseconds since the epoch, for `ts`.

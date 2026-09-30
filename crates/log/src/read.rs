@@ -6,7 +6,8 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::mpsc::{Receiver, RecvError, SyncSender, TrySendError, sync_channel};
+use std::sync::{Arc, Mutex, PoisonError};
 
 use contract::Envelope;
 
@@ -45,52 +46,76 @@ pub(crate) fn complete_len(bytes: &[u8]) -> usize {
     bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
 }
 
-/// How many events a watcher's queue holds before it falls behind. Picked,
-/// not measured.
+// ponytail: 1,024 is picked, not measured. std's bounded channel allocates
+// every slot up front, 160 bytes each (152 for an `Envelope` on 64-bit), so
+// 160 KiB per watcher. The busy-session memory budget
+// (`docs/performance.md`) and a slow watcher's measured lag would set it.
+/// How many events a watcher's channel holds before it falls behind.
 const CAPACITY: usize = 1024;
 
-/// One watcher's bounded queue, shared by the log that fills it and the
-/// watcher that drains it.
+/// What happens to a watcher once its channel is empty and disconnected.
 #[derive(Default)]
-pub(crate) struct Queue {
-    state: Mutex<State>,
-    ready: Condvar,
+pub(crate) enum Next {
+    /// The log is gone; the watcher ends.
+    #[default]
+    End,
+    /// The watcher fell behind, and the log carried on in a new channel.
+    Rearmed(Receiver<Envelope>),
+    /// A write failed and the log stopped.
+    Failed {
+        /// The session.
+        session: String,
+        /// The failure.
+        cause: String,
+    },
 }
 
-#[derive(Default)]
-struct State {
-    lines: VecDeque<Envelope>,
-    /// The queue filled and lines were dropped since the watcher last caught
-    /// up from the log.
-    lagged: bool,
-    /// The log is gone; nothing more will arrive.
-    closed: bool,
+type Shared = Arc<Mutex<Next>>;
+
+fn set(shared: &Shared, next: Next) -> Next {
+    std::mem::replace(
+        &mut *shared.lock().unwrap_or_else(PoisonError::into_inner),
+        next,
+    )
 }
 
-impl Queue {
-    fn lock(&self) -> MutexGuard<'_, State> {
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
+/// The log's end of one watcher. Sending never blocks the writer.
+pub(crate) struct Feed {
+    tx: SyncSender<Envelope>,
+    shared: Shared,
+}
 
-    /// Hands the watcher `line` without ever blocking the writer. A watcher
-    /// that has fallen behind gets nothing until it catches up: it re-reads
-    /// the durable lines it missed from the log, and the ephemeral ones are
-    /// lost, which costs nothing (`docs/architecture.md`, "Streaming").
-    pub(crate) fn push(&self, line: &Envelope) {
-        let mut state = self.lock();
-        if state.lagged || state.lines.len() >= CAPACITY {
-            state.lagged = true;
-        } else {
-            state.lines.push_back(line.clone());
+impl Feed {
+    /// Hands the watcher `line`; false once the watcher is gone. A watcher
+    /// whose channel is full gets a new one and re-reads the durable lines it
+    /// missed from the log; the ephemeral ones are lost, which costs nothing
+    /// (`docs/architecture.md`, "Streaming").
+    pub(crate) fn push(&mut self, line: &Envelope) -> bool {
+        if Arc::strong_count(&self.shared) == 1 {
+            return false;
         }
-        drop(state);
-        self.ready.notify_one();
+        match self.tx.try_send(line.clone()) {
+            Ok(()) => true,
+            Err(TrySendError::Full(_)) => {
+                let (tx, rx) = sync_channel(CAPACITY);
+                set(&self.shared, Next::Rearmed(rx));
+                self.tx = tx;
+                true
+            }
+            Err(TrySendError::Disconnected(_)) => false,
+        }
     }
 
-    /// Tells the watcher the log is gone.
-    pub(crate) fn close(&self) {
-        self.lock().closed = true;
-        self.ready.notify_one();
+    /// Ends the watcher with the failure that stopped the log, once it has
+    /// every line it was sent.
+    pub(crate) fn fail(self, session: &str, cause: &str) {
+        set(
+            &self.shared,
+            Next::Failed {
+                session: session.to_owned(),
+                cause: cause.to_owned(),
+            },
+        );
     }
 }
 
@@ -99,7 +124,8 @@ impl Queue {
 /// a watcher that falls behind re-reads the durable lines it missed from the
 /// log by `seq`, and loses the ephemeral ones.
 pub struct Watcher {
-    queue: Arc<Queue>,
+    rx: Receiver<Envelope>,
+    shared: Shared,
     dir: PathBuf,
     /// The `seq` of the next durable line this watcher has not yet returned.
     next: u64,
@@ -107,43 +133,56 @@ pub struct Watcher {
     backlog: VecDeque<Envelope>,
 }
 
-/// What the watcher takes from its queue.
-enum Taken {
-    Line(Envelope),
-    CatchUp,
-    Closed,
+/// A watcher and the log's end of it, for a log whose next `seq` is `next`.
+pub(crate) fn watcher(dir: PathBuf, next: u64) -> (Feed, Watcher) {
+    let (tx, rx) = sync_channel(CAPACITY);
+    let shared = Shared::default();
+    let feed = Feed {
+        tx,
+        shared: Arc::clone(&shared),
+    };
+    let watcher = Watcher {
+        rx,
+        shared,
+        dir,
+        next,
+        backlog: VecDeque::new(),
+    };
+    (feed, watcher)
 }
 
 impl Watcher {
-    pub(crate) fn new(queue: Arc<Queue>, dir: PathBuf, next: u64) -> Self {
-        Self {
-            queue,
-            dir,
-            next,
-            backlog: VecDeque::new(),
-        }
-    }
-
     /// The next event, waiting for one to be written. `None` once the log is
-    /// dropped and every event written before that has been returned.
+    /// dropped and every event written before that has been returned; an
+    /// error if the log stopped on a failed write.
     pub fn recv(&mut self) -> Result<Option<Envelope>, Error> {
         loop {
             let line = match self.backlog.pop_front() {
                 Some(line) => line,
-                None => match self.take() {
-                    Taken::Line(line) => line,
-                    Taken::CatchUp => {
-                        // ponytail: re-reads the whole log to find the lines it
-                        // missed; a read from an offset by `seq` when logs grow
-                        // large enough for a lagging watcher to notice.
-                        self.backlog = read(&self.dir)?.into();
-                        continue;
-                    }
-                    Taken::Closed => return Ok(None),
+                None => match self.rx.recv() {
+                    Ok(line) => line,
+                    Err(RecvError) => match set(&self.shared, Next::End) {
+                        Next::Rearmed(rx) => {
+                            // ponytail: re-reads the whole log to find the
+                            // lines it missed; a read from an offset by `seq`
+                            // when logs grow large enough to notice.
+                            self.rx = rx;
+                            // What the new channel holds so far is stale:
+                            // its durable lines are in the log, read next,
+                            // and its ephemeral ones are obsolete by then.
+                            while self.rx.try_recv().is_ok() {}
+                            self.backlog = read(&self.dir)?.into();
+                            continue;
+                        }
+                        Next::End => return Ok(None),
+                        Next::Failed { session, cause } => {
+                            return Err(Error::Poisoned { session, cause });
+                        }
+                    },
                 },
             };
             match line.seq {
-                // Already returned, from the queue or from the log.
+                // Already returned, from the channel or from the log.
                 Some(seq) if seq.0 < self.next => {}
                 Some(seq) => {
                     self.next = seq.0 + 1;
@@ -151,30 +190,6 @@ impl Watcher {
                 }
                 None => return Ok(Some(line)),
             }
-        }
-    }
-
-    /// Waits for a line, for the need to catch up, or for the end. The
-    /// lagged flag is cleared before the log is re-read, so a line written
-    /// after the re-read is queued, never lost.
-    fn take(&self) -> Taken {
-        let mut state = self.queue.lock();
-        loop {
-            if let Some(line) = state.lines.pop_front() {
-                return Taken::Line(line);
-            }
-            if state.lagged {
-                state.lagged = false;
-                return Taken::CatchUp;
-            }
-            if state.closed {
-                return Taken::Closed;
-            }
-            state = self
-                .queue
-                .ready
-                .wait(state)
-                .unwrap_or_else(PoisonError::into_inner);
         }
     }
 }

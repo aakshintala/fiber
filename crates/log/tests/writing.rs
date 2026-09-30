@@ -111,19 +111,15 @@ fn a_line_carries_the_envelope_the_log_fills_in() {
 
 /// The fsyncs a log has made once each event is appended, counted as
 /// `docs/performance.md`, "Measuring", counts them: at the call site.
-fn fsyncs_after_each(log: &Log, events: &[Event]) -> Vec<(String, u64)> {
+fn fsyncs_after_each(log: &Log, events: &[Event]) -> Vec<(&'static str, u64)> {
     let base = log.fsyncs();
     events
         .iter()
         .map(|e| {
             log.append(e, None, None).unwrap();
-            (e.kind().to_owned(), log.fsyncs() - base)
+            (e.kind(), log.fsyncs() - base)
         })
         .collect()
-}
-
-fn owned(rows: &[(&str, u64)]) -> Vec<(String, u64)> {
-    rows.iter().map(|(k, n)| ((*k).to_owned(), *n)).collect()
 }
 
 #[test]
@@ -143,14 +139,14 @@ fn a_quiet_text_turn_costs_two_fsyncs_bracketing_the_model_request() {
     // line is on disk before the request is sent; `step_started` rides on it.
     assert_eq!(
         fsyncs_after_each(&log, &turn),
-        owned(&[
+        [
             ("turn_started", 0),
             ("step_started", 0),
             ("assistant_message_started", 1),
             ("assistant_message_delta", 1),
             ("assistant_message_completed", 2),
             ("turn_completed", 2),
-        ])
+        ]
     );
 }
 
@@ -170,22 +166,70 @@ fn a_tool_call_costs_two_fsyncs_the_first_before_it_runs() {
     ];
     assert_eq!(
         fsyncs_after_each(&log, &call),
-        owned(&[
+        [
             ("tool_call_requested", 0),
             ("tool_call_started", 1),
             ("tool_call_delta", 1),
             ("tool_call_completed", 2),
-        ])
+        ]
     );
 }
 
 #[test]
-fn creating_a_session_fsyncs_its_directory_entries() {
-    let tmp = TestDir::new("fsync-create");
+fn a_process_an_extension_runs_is_fsynced_once_it_has_run() {
+    let tmp = TestDir::new("fsync-exec");
     let log = Log::create(tmp.path(), id("s_1")).unwrap();
-    // The session directory's entry in `sessions/`, and the log's, lock's
-    // and `artifacts/`'s entries in the session directory.
-    assert_eq!(log.fsyncs(), 2);
+    log.append(&session_started(), None, None).unwrap();
+    let process = json!({"exit_code": 0, "timed_out": false});
+    let effects = [
+        event(
+            "extension_exec",
+            json!({"extension": "e", "program": "git", "args": [], "cwd": "/w", "process": process}),
+        ),
+        event(
+            "shell_command",
+            json!({"command": "ls", "output": "", "process": process}),
+        ),
+    ];
+    assert_eq!(
+        fsyncs_after_each(&log, &effects),
+        [("extension_exec", 1), ("shell_command", 2)]
+    );
+}
+
+#[test]
+fn a_model_call_outside_the_conversation_is_fsynced_once_its_usage_is_recorded() {
+    let tmp = TestDir::new("fsync-usage");
+    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let usage = event(
+        "usage_recorded",
+        json!({
+            "generation_id": "g",
+            "model": "p/m",
+            "tokens": {"input": 1, "cache_read": 0, "cache_write": {}, "output": 1},
+            "cost": null,
+        }),
+    );
+    let base = log.fsyncs();
+    // A reviewer's call belongs to no action, and no other line records it.
+    log.append(&usage, None, None).unwrap();
+    assert_eq!(log.fsyncs() - base, 1);
+    // The conversation's call is recorded by `assistant_message_completed`.
+    log.append(&usage, None, Some(ActionId("a_1".into())))
+        .unwrap();
+    assert_eq!(log.fsyncs() - base, 1);
+}
+
+#[test]
+fn creating_a_session_fsyncs_the_parent_of_every_directory_it_makes() {
+    let tmp = TestDir::new("fsync-create");
+    let sessions = tmp.path().join("projects").join("k").join("sessions");
+    // The test directory, `projects`, `k`, `sessions` and the session
+    // directory are new, and each one's entry is fsynced in its parent; then
+    // the session directory is, for the log, the lock and `artifacts/`.
+    assert_eq!(Log::create(&sessions, id("s_1")).unwrap().fsyncs(), 6);
+    // A second session makes only its own directory.
+    assert_eq!(Log::create(&sessions, id("s_2")).unwrap().fsyncs(), 2);
 }
 
 #[test]
@@ -207,6 +251,33 @@ fn a_second_writer_refuses_and_names_the_holder() {
     );
     let lock = fs::read_to_string(tmp.session(&id("s_1")).join("session.lock")).unwrap();
     assert_eq!(lock.trim(), std::process::id().to_string());
+}
+
+#[test]
+fn a_holder_that_has_not_yet_recorded_its_pid_is_named_as_such() {
+    let tmp = TestDir::new("lock-empty");
+    drop(Log::create(tmp.path(), id("s_1")).unwrap());
+    // A holder between taking the lock and writing its pid.
+    let lock = tmp.session(&id("s_1")).join("session.lock");
+    let holder = fs::OpenOptions::new().write(true).open(&lock).unwrap();
+    holder.set_len(0).unwrap();
+    holder.try_lock().unwrap();
+    let Err(err) = Log::open(tmp.path(), id("s_1")) else {
+        panic!("opened a held session");
+    };
+    assert_eq!(
+        err.to_string(),
+        "session s_1 is held by a process whose pid is not yet recorded; \
+         only one Fiber process may write a session"
+    );
+}
+
+#[test]
+fn a_writer_that_lets_go_clears_its_pid() {
+    let tmp = TestDir::new("lock-clear");
+    drop(Log::create(tmp.path(), id("s_1")).unwrap());
+    let lock = tmp.session(&id("s_1")).join("session.lock");
+    assert_eq!(fs::read_to_string(lock).unwrap(), "");
 }
 
 #[test]
