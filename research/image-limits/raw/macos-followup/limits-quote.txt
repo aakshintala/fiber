@@ -1,0 +1,11 @@
+From image 0.25.10 src/io/limits.rs (Default for Limits), lines 49-56:
+
+        Limits {
+            max_image_width: None,
+            max_image_height: None,
+            max_alloc: Some(512 * 1024 * 1024),
+        }
+
+ImageReader::new sets limits: Limits::default() at src/io/image_reader_type.rs lines 89-94.
+load_from_memory calls ImageReader::new(...).with_guessed_format()?.decode() (src/images/dynimage.rs lines 1676-1679).
+decode() uses self.limits (cloned), calls limits.reserve(decoder.total_bytes())?, then decoder.set_limits(limits) (src/io/image_reader_type.rs lines 311-320).

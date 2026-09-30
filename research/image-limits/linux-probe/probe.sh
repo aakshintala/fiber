@@ -13,7 +13,7 @@ peak() { IMAGE_ONLY=$2 /usr/bin/time -v $1 2>&1 >/dev/null | awk -F': ' '/Maximu
 median() { for _ in 1 2 3 4 5; do peak "$1" "$2"; done | sort -n | sed -n 3p; }
 cargo build --release -q --target-dir target/base || echo "build failed base" >> $OUT/errors.txt
 echo "base $(median target/base/release/dependency-rss nothing) KiB, binary $(stat -c %s target/base/release/dependency-rss)" > $OUT/rss.txt
-for f in image image-parts; do
+for f in image image-parts image-fir image-header; do
   cargo build --release -q --features $f --target-dir target/$f || { echo "build failed $f" >> $OUT/errors.txt; continue; }
   B=target/$f/release/dependency-rss
   echo "## $f binary=$(stat -c %s $B)" >> $OUT/rss.txt

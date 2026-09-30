@@ -3,11 +3,26 @@
 #![allow(unused)]
 use std::hint::black_box;
 
+#[cfg(any(feature = "image", feature = "image-fir"))]
+mod image_timing;
+
 fn text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {i}: the quick brown fox_{i} jumps over 42 lazy dogs\n")).collect()
 }
 
 fn main() {
+    #[cfg(any(feature = "image", feature = "image-fir"))]
+    {
+        if image_timing::handle_child_args() {
+            return;
+        }
+        if image_timing::run_if_png_photos() {
+            return;
+        }
+        if image_timing::run_if_timing() {
+            return;
+        }
+    }
     #[cfg(feature = "serde_json")]
     {
         #[derive(serde::Serialize, serde::Deserialize)]
@@ -148,6 +163,83 @@ fn main() {
             assert!(a == b, "resize of {name} is not deterministic");
             eprintln!("{name}: {} -> {} bytes, deterministic", bytes.len(), a.len());
             black_box(a);
+        }
+    }
+    #[cfg(feature = "image-fir")]
+    {
+        // Same workload as `image`, but resize with fast_image_resize (Lanczos3) instead of
+        // imageops::resize. Uses fast_image_resize's optional `image` feature (IntoImageView).
+        use fast_image_resize::{FilterType, ResizeAlg, ResizeOptions, Resizer};
+        use image::{
+            DynamicImage, GenericImageView, ImageBuffer, ImageEncoder, ImageFormat,
+            codecs::{jpeg::JpegEncoder, png::PngEncoder},
+        };
+        let dir = std::env::var("IMAGE_FIXTURES").unwrap_or_else(|_| "../image-limits/fixtures".into());
+        let empty_like = |w: u32, h: u32, src: &DynamicImage| -> DynamicImage {
+            match src {
+                DynamicImage::ImageLuma8(_) => DynamicImage::ImageLuma8(ImageBuffer::new(w, h)),
+                DynamicImage::ImageLumaA8(_) => DynamicImage::ImageLumaA8(ImageBuffer::new(w, h)),
+                DynamicImage::ImageRgb8(_) => DynamicImage::ImageRgb8(ImageBuffer::new(w, h)),
+                DynamicImage::ImageRgba8(_) => DynamicImage::ImageRgba8(ImageBuffer::new(w, h)),
+                DynamicImage::ImageLuma16(_) => DynamicImage::ImageLuma16(ImageBuffer::new(w, h)),
+                DynamicImage::ImageLumaA16(_) => DynamicImage::ImageLumaA16(ImageBuffer::new(w, h)),
+                DynamicImage::ImageRgb16(_) => DynamicImage::ImageRgb16(ImageBuffer::new(w, h)),
+                DynamicImage::ImageRgba16(_) => DynamicImage::ImageRgba16(ImageBuffer::new(w, h)),
+                DynamicImage::ImageRgb32F(_) => DynamicImage::ImageRgb32F(ImageBuffer::new(w, h)),
+                DynamicImage::ImageRgba32F(_) => DynamicImage::ImageRgba32F(ImageBuffer::new(w, h)),
+                _ => panic!("unsupported pixel layout"),
+            }
+        };
+        let fit = |bytes: &[u8]| -> Vec<u8> {
+            let img = image::load_from_memory(bytes).unwrap();
+            let (w, h) = img.dimensions();
+            let (nw, nh) = if w > 2000 || h > 2000 {
+                let s = (2000.0 / w as f64).min(2000.0 / h as f64);
+                (((w as f64 * s).round() as u32).max(1), ((h as f64 * s).round() as u32).max(1))
+            } else {
+                (w, h)
+            };
+            let img = if (nw, nh) == (w, h) {
+                img
+            } else {
+                let mut dst = empty_like(nw, nh, &img);
+                let opts = ResizeOptions::new().resize_alg(ResizeAlg::Convolution(FilterType::Lanczos3));
+                Resizer::new().resize(&img, &mut dst, &opts).unwrap();
+                dst
+            };
+            let mut out = Vec::new();
+            match image::guess_format(bytes).unwrap() {
+                ImageFormat::Jpeg => {
+                    JpegEncoder::new_with_quality(&mut out, 80)
+                        .encode_image(&DynamicImage::ImageRgb8(img.to_rgb8()))
+                        .unwrap();
+                }
+                _ => PngEncoder::new(&mut out)
+                    .write_image(img.as_bytes(), img.width(), img.height(), img.color().into())
+                    .unwrap(),
+            }
+            out
+        };
+        let only = std::env::var("IMAGE_ONLY").unwrap_or_default();
+        for name in ["photo-4000x3000.jpg", "shot-4000x3000.png", "small.gif", "small.webp", "flat-9000x9000.png"].into_iter().filter(|n| n.contains(&only) && (only.contains("flat") || !n.contains("flat"))) {
+            let bytes = std::fs::read(format!("{dir}/{name}")).unwrap();
+            let (a, b) = (fit(&bytes), fit(&bytes));
+            assert!(a == b, "resize of {name} is not deterministic");
+            eprintln!("{name}: {} -> {} bytes, deterministic", bytes.len(), a.len());
+            black_box(a);
+        }
+    }
+    #[cfg(feature = "image-header")]
+    {
+        use image::ImageReader;
+        let dir = std::env::var("IMAGE_FIXTURES").unwrap_or_else(|_| "../image-limits/fixtures".into());
+        for name in ["photo-4000x3000.jpg", "shot-4000x3000.png", "small.gif", "small.webp", "flat-9000x9000.png"] {
+            let path = format!("{dir}/{name}");
+            let reader = ImageReader::open(&path).unwrap().with_guessed_format().unwrap();
+            let format = reader.format().unwrap();
+            let (w, h) = reader.into_dimensions().unwrap();
+            eprintln!("{name}: {w}x{h} {format:?}");
+            black_box((w, h));
         }
     }
     #[cfg(feature = "jsonschema")]

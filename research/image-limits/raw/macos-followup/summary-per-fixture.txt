@@ -1,0 +1,9 @@
+image__photo-4000x3000.jpg peak_kib=155968 over=154960
+image__shot-4000x3000.png peak_kib=141024 over=140016
+image__flat-9000x9000.png peak_kib=533472 over=532464
+image-parts__photo-4000x3000.jpg peak_kib=67600 over=66592
+image-parts__shot-4000x3000.png peak_kib=63968 over=62960
+image-parts__flat-9000x9000.png peak_kib=305680 over=304672
+image-fir__photo-4000x3000.jpg peak_kib=71168 over=70160
+image-fir__shot-4000x3000.png peak_kib=64864 over=63856
+image-fir__flat-9000x9000.png peak_kib=305760 over=304752

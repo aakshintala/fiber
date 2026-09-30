@@ -41,8 +41,13 @@ image-webp = { version = "0.2", optional = true }
 fast_image_resize = { version = "6", optional = true }
 
 [features]
+image = ["dep:image"]
 # The four codecs and a resizer as separate crates, without the image crate.
 image-parts = ["dep:zune-jpeg", "dep:jpeg-encoder", "dep:png", "dep:gif", "dep:image-webp", "dep:fast_image_resize"]
+# image crate decode/encode; fast_image_resize (with its `image` feature) for Lanczos3 resize.
+image-fir = ["dep:image", "dep:fast_image_resize", "fast_image_resize/image"]
+# Header-only dimensions via image::ImageReader (no pixel decode).
+image-header = ["dep:image"]
 serde_json = ["dep:serde", "dep:serde_json"]
 jsonschema = ["dep:jsonschema", "dep:serde_json"]
 # Built-in shell search: ripgrep's walker, regex adapter and search loop.

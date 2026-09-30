@@ -156,7 +156,7 @@ consumer shows an unknown part as a placeholder.
 | `type` | Keys | Meaning |
 |---|---|---|
 | `text` | `text` (string) | text |
-| `image` | `path` (string), `mime_type` (string), `width` (integer), `height` (integer) | an image file in the session's `artifacts/`, its type, such as `image/png`, and its size in pixels, so a client lays it out without decoding it |
+| `image` | `path` (string), `mime_type` (string), `width` (integer), `height` (integer) | the processed image file in the session's `artifacts/` (`docs/model-routing.md`, "Image limits"), its type, such as `image/png`, and its size in pixels, so a client lays it out without decoding it |
 
 The log never holds an image's bytes. A tool's image and a pasted image are
 both written to `artifacts/` and named by path.

@@ -12,9 +12,13 @@ is `docs/dependencies.md`, "Measuring memory".
 ## What a budget covers
 
 A budget covers one process: a session (`fiber serve`) or the terminal. MCP
-servers, process extensions, shell commands and delegates are processes of
-their own and are not counted. A delegate is a `fiber serve` and holds the
-same budgets as any session.
+servers, process extensions, shell commands, delegates and image children
+are processes of their own and are not counted. A delegate is a `fiber serve`
+and holds the same budgets as any session. The image child's memory is its
+own process's, not the session's. Peak over an empty program is 68,076 KiB
+on Linux x86_64, 67,604 KiB on Linux arm64 and 72,352 KiB on macOS arm64;
+an 81-megapixel PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB
+(`research/image-limits/README.md`).
 
 Every workload runs a fresh install's default load: the first-party provider
 extension the session uses and the compiled-in tools. It runs no MCP server,

@@ -40,6 +40,10 @@ assumes the heavy end.
 - Every session starts its own MCP servers and process extensions, a
   delegate included. Nothing is shared between sessions (`docs/mcp.md`,
   "Where servers run"; `docs/extensions.md`).
+- An image child is a short-lived process, one per image. The session
+  starts it by running `fiber` again with an internal command, not a door.
+  The session process runs no image code (`docs/invocation.md`,
+  "Processes").
 - The terminal UI is its own process, client zero of the `fiber serve` it
   spawns, over that process's stdin and stdout.
 - Every running session listens on a local socket for further clients.
@@ -58,7 +62,8 @@ assumes the heavy end.
   process with a prompt in and an event stream out.
 - Stopping a delegate is a signal to its process group, which always works.
   A crash in C code (Lua, ring), an out-of-memory kill or a panic ends one
-  delegate and nothing else.
+  delegate and nothing else. An out-of-memory kill in an image child ends
+  that child, not the session.
 - `fiber upgrade` can restart `fiber remote` without stopping any session.
   A running session keeps its binary until it exits.
 - A TUI crash, or a TUI extension's error, cannot interrupt a session's work.

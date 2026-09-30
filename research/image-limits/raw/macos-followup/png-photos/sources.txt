@@ -1,0 +1,7 @@
+# Label and path (tab-separated). HEIC rows are converted by run.sh; converted/ is not committed.
+synthetic	ABS_FIXTURE/photo-4000x3000.jpg
+system-aerial-jpeg	/System/Library/Wallpapers/.default/DefaultAerial.jpg
+system-default-bg	/System/Library/PrivateFrameworks/SystemDesktopAppearance.framework/Versions/A/Resources/DefaultBackground.jpg
+heic-sonoma-horizon	CONVERTED/Sonoma-Horizon.jpg
+heic-sonoma	CONVERTED/Sonoma.jpg
+heic-imac-green	CONVERTED/iMac-Green.jpg

@@ -1,0 +1,3 @@
+spawn_bench exe=/Users/aakshintala/work/fiber-worktrees/130-image/research/dependency-rss/target/timing-image/release/dependency-rss
+spawn_noop median_ms=1.729 p90_ms=1.812
+spawn_fit median_ms=200.962 p90_ms=271.865

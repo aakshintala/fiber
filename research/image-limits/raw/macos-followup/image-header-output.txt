@@ -1,0 +1,5 @@
+photo-4000x3000.jpg: 4000x3000 Jpeg
+shot-4000x3000.png: 4000x3000 Png
+small.gif: 400x300 Gif
+small.webp: 400x300 WebP
+flat-9000x9000.png: 9000x9000 Png

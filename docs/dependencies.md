@@ -43,6 +43,11 @@ a reason to refuse one: the terminal is its own process
 other Fiber crate depends on a crate admitted only for `tui`, and CI checks
 each crate's dependency tree for it.
 
+Crates used only by the image child (`docs/invocation.md`, "Processes") meet
+every rule above, and their memory is measured and recorded, but memory is not
+a reason to refuse one: the session never runs image code, so nothing they
+admit reaches a session's memory.
+
 Transitive crates are not listed. Each one's memory is counted in the direct
 crate that pulls it in, and cargo-deny checks its licence and advisories.
 
@@ -78,7 +83,8 @@ Each figure is the crate standalone. Crates that share dependencies cost less
 together than the sum of their rows, so the table also has a row with all
 runtime crates linked into one binary. Its workloads run one after another,
 so that row is the peak of the busiest one on top of everything linked, not
-the cost of all of them holding memory at once.
+the cost of all of them holding memory at once. The image child's crates are
+not in that together binary: the session never runs image code.
 
 A new crate gets a workload in the probe and a row here, measured on Linux
 x86_64, Linux arm64 and macOS arm64. A crate is measured again when its major
@@ -114,6 +120,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | ignore, grep-searcher, grep-regex | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit") | ~0 | 380 | ~0 | 1 | 389 |
 | all of the above together | | 7,048 | 6,104 | 4,288 | 136 | 6,452 |
+| image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
 Notes:
 
@@ -136,6 +143,20 @@ Notes:
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
   x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search,
   similar and together rows were measured on September 26, 2026.
+- The image row is `image` 0.25 with default features off and only the png,
+  jpeg, gif and webp codecs, plus `fast_image_resize` 6 with its `image`
+  feature, Lanczos3. It is pure Rust and passes cargo-deny. Memory is the
+  image child's, measured on September 29, 2026
+  (`research/image-limits/README.md`); the session never runs image code, so
+  the "all of the above together" row does not include it. An 81-megapixel
+  PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB in the probe on Linux x86_64. A header-only read with
+  `image` costs 4,184 KiB in the probe, which is why the child and not the session
+  reads the header. `image` alone is not used: its own resize builds a
+  full-width f32 buffer and doubles memory and time (157,120 KiB against 72,352 KiB
+  peak, 201 ms against 107 ms per 12 MP photo, macOS). Separate crates
+  (zune-jpeg, png, gif, image-webp, fast_image_resize, jpeg-encoder) are not
+  used: jpeg-encoder's licence includes IJG, which is not on the allowed
+  list.
 
 ### Root certificates
 
@@ -171,20 +192,8 @@ already.
 |---|---|---:|---:|---:|---:|---:|
 | rusqlite, SQLite bundled | Fiber keeps a derived database, such as for cross-session search; today listing sessions reads the logs (`docs/state.md`) | 2,236 | 1,984 | ~0 | 14 | 2,268 |
 | pulldown-cmark | the terminal UI renders markdown ([Epic: TUI](https://github.com/aakshintala/fiber/issues/82)) | 428 | 384 | ~0 | 4 | 724 |
-| image, with only the png, jpeg, gif and webp codecs | `read` resizes an image to a provider's limit (`docs/model-routing.md`, "Image limits"); the busy-session memory budget must allow a decode | 148,448 | 148,160 | 157,136 | 23 | 1,410 |
 
 rusqlite carries SQLite's C source.
-
-The image row is a decode and resize of a 4000 by 3000 JPEG and PNG, measured
-on September 29, 2026. It is pure Rust, and its licences and advisories pass (`research/image-limits/raw/cargo-deny.txt`).
-Its memory follows pixel count: an 81-megapixel PNG of 1.2 MB peaks at 534,700
-KiB on Linux x86_64. That is far over the 24 MiB busy-session budget
-(`docs/performance.md`), so the crate is not admitted until that is decided.
-Separate crates (zune-jpeg, png, gif, image-webp, fast_image_resize and
-jpeg-encoder) peak at 67,884 KiB for the same workload, with 28 crates and a
-4,994 KiB binary, and jpeg-encoder's licence includes IJG, which is not on
-the allowed list. The workload is `research/dependency-rss`, and the
-comparison is `research/image-limits/README.md`.
 
 Syntax highlighting is the terminal UI's decision. The obvious crate, syntect,
 costs 8,704 KiB on Linux x86_64 just to load its syntax definitions. It has 44
