@@ -32,7 +32,8 @@ A step is one round-trip to the model. Each step does this, in order:
    the conversation, in arrival order; each steering message is logged as its
    own `steering_applied`. Nothing is held back for a later step.
 2. Check how full the context is, and hand off if it is past the threshold
-   (`docs/handoff.md`, "Triggers").
+   (`docs/handoff.md`, "Triggers"). Then check the budget and run
+   `before_model_call` ("Spending budget").
 3. Build the request: the preamble (`docs/prompt-cache.md`) followed by the
    conversation ("What the model is sent").
 4. Send it and stream the reply, emitting its actions as they arrive. A tool
@@ -109,7 +110,38 @@ A reply with no text and no tool call is a reply with no tool call: the turn
 completes normally.
 
 There is no limit on steps per turn. Spending too much is the concern of a
-budget, not a step count, and a caller can always send `cancel`.
+budget ("Spending budget"), not a step count, and a caller can always send
+`cancel`.
+
+## Spending budget
+
+Settled by
+[Token and cost display, and spending budgets](https://github.com/aakshintala/fiber/issues/192);
+that ticket's resolution holds the rationale and the rejected alternatives.
+
+`budget.usd` caps what a session spends, in US dollars billed per token
+(`docs/configuration.md`, "Keys"). It is unset by default, and unset means no
+limit. The spend it counts is the `usage` fold (`docs/events.md`): the
+session's own `usage_recorded` lines and those of its delegates, and theirs.
+A call with `subscription` does not count, because a subscription bills
+nothing per call; its own limit ends it as `quota_exceeded`. A `cost` still
+`null` counts as zero until it settles.
+
+Before each step's model request, after the handoff check, the loop checks
+the budget and then runs `before_model_call` hooks (`docs/extensions.md`,
+"The hook points"). When the spend has reached `budget.usd`, or a hook
+refuses, the request is not sent:
+
+- the turn completes `failed` with code `budget_exceeded`, whose message
+  names the limit or the extension that refused
+- the session's running delegates are stopped, as `job_stop` stops one
+  (`docs/delegates.md`, "Lifetime")
+
+The call that crosses the limit completes, so a session overshoots by at most
+one call, or by one run of a delegate on another harness, which reports its
+cost only when the run ends. A delegate checks no budget of its own; its
+parent's covers it. Raising `budget.usd` (`/settings`, or `-c` on resume) and
+sending a message continues the work.
 
 ## Interrupt
 

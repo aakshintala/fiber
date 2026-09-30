@@ -383,7 +383,7 @@ pure work plus host calls, return. The hook points are [Hooks](#hooks).
 ## Hooks
 
 A hook is asked at a fixed point in a session and may change what happens
-there. Fiber has seven hook points. Each one runs before the thing it changes
+there. Fiber has eight hook points. Each one runs before the thing it changes
 is written to the session log or sent to the model, never after. That one rule
 keeps two settled promises: the log holds exactly what happened
 ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)), and no hook
@@ -402,6 +402,7 @@ the event stream (`docs/events.md`) and has no hook point. How an extension watc
 | `before_message` | A person's or a driver's message arrives, as a turn's input or as steering, before it is logged | the message's text and images | a replacement message, a refusal with a reason, context to add |
 | `turn_start` | A turn has started, before its first model request | the turn's input and what started it | context to add |
 | `before_tool` | A call has passed its schema check and its effects function, before permission is decided | the tool's name, the arguments, the declared effects, paths and reversibility | replacement arguments, a refusal with a reason |
+| `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
 | `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged | the tool's name, the arguments, `status`, the full output, `details`, `process` | replacement `content`, replacement `details`, text for the artifact |
 | `turn_end` | The model has replied without calling a tool, so the turn would complete, before `turn_completed` is written | the model's final reply | a message to continue the turn with |
 | `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as the model would be sent it | a handoff note |
@@ -434,6 +435,15 @@ naming the extension and giving the arguments that ran. That line is part of
 `content`, so the tool's size cap applies to it. Editing the model's own call
 would tell the model it asked for something it did not, and a provider that
 signs the reasoning before a call may reject the edited request.
+
+**`before_model_call`** is where an extension enforces a spending limit, such
+as one a central service keeps. A refusal fails the turn with
+`budget_exceeded`, naming the extension, exactly as `budget.usd` does. It runs
+before every step's model request, so it must answer fast: an extension that
+reports spend to a service does that from a watcher on `usage_recorded`
+("Watchers"), keeps the service's verdict in its state ("State"), and the
+hook only reads it. A reviewer's call, a handoff note request and a
+`host.model` call are counted in `usage` but never reach this hook.
 
 **`after_tool`** runs on every call that ran: `completed`, `failed` and
 `cancelled` alike, since a cancelled command's partial output can hold a
@@ -495,6 +505,7 @@ What a `blocking` failure stops, at each point:
 | `before_message` | The message is neither logged nor sent, and the sender gets `hook_failed`. |
 | `turn_start` | The turn completes `failed` with code `hook_failed`, before any model request. |
 | `before_tool` | The call completes `failed` with code `hook_failed` and never starts. |
+| `before_model_call` | The request is not sent, and the turn completes `failed` with code `hook_failed`. |
 | `after_tool` | The call keeps the status the tool reported, since it ran. Its only content is a line saying its output was withheld because the extension's hook failed, and no artifact is written. |
 | `turn_end` | The turn completes `failed` with code `hook_failed`. |
 | `before_handoff` | The handoff completes `failed` with code `hook_failed`, as a failed note request does. |

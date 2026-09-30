@@ -293,7 +293,8 @@ As Lua, none of which runs on a model request:
   workspace, and the harness session id.
 - `line(text)` is called with each line the harness prints, and returns what
   that line carries, if anything: the final answer, usage, quota, or a
-  failure.
+  failure. Usage says whether a subscription login ran it
+  (`docs/model-routing.md`, "Cost").
 - `models()` returns the harness's model references. It is cached and
   refreshed as a provider's model discovery is (`docs/model-routing.md`,
   "Model discovery").
@@ -326,7 +327,9 @@ As Lua, none of which runs on a model request:
   waits for the next run.
 - **Usage.** The parent writes one `usage_recorded` per run, from the usage
   `line` returned. Its cost is the harness's own where it reports one, or
-  computed from the declared prices.
+  computed from the declared prices, and it carries `subscription` when the
+  harness ran on a subscription login. The parent's budget counts it
+  (`docs/loop.md`, "Spending budget").
 - **Quota.** `quota()` runs when `delegate_models` needs it, as a provider's
   does (`docs/tools.md`, "Provider quota"). Quota that `line` returns from a
   running delegate replaces the stored value, with no fetch.
@@ -393,6 +396,7 @@ session messages directly and the parent would drop out of the path.
 | Messages while running | yes, as a `user` line on its input; it joins the turn at the next step boundary |
 | Session messages out | `--mcp-config` naming `fiber mcp serve`, which adds it for the run and keeps the person's own servers |
 | Final answer, usage, cost | the `result` line: `result`, `usage` and `total_cost_usd` |
+| Subscription | the `system` `init` line's `apiKeySource`: `none` is the subscription login, and `total_cost_usd` is then an API-price estimate |
 | Quota | `rate_limit_event` lines while running, and `quota()` from `/api/oauth/usage` with Claude Code's own stored login |
 | SIGTERM | stops cleanly, so it gets the shutdown wait |
 
@@ -410,6 +414,9 @@ Probed on Claude Code 2.1.284:
   `status` line.
 - `--bare` and a clean `CLAUDE_CONFIG_DIR` both fail with "Not logged in",
   because neither reads the subscription login.
+- On 2.1.285 with a Max login, the `init` line had `apiKeySource` `none` and
+  the `result` line still had `total_cost_usd`, 0.0228 for one Haiku reply.
+  The value with an API key was not probed.
 
 ### cursor-agent
 
