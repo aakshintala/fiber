@@ -61,8 +61,9 @@ rather than per call. How the hints map to effects is `docs/mcp.md`
 ## Modes
 
 A session starts in the mode in `permissions.mode` (`docs/configuration.md`),
-which is `auto` or `yolo`. `readonly` is never a default: a person
-chooses it for one session with the `mode` command.
+which is `auto` or `yolo` and defaults to `auto`. The default is the same for
+every session, interactive or headless. `readonly` is never a default: a
+person chooses it for one session with the `mode` command.
 **Only a person changes the mode.** The model, a tool or an extension never
 does. The model only chooses the mode a new delegate starts in, never above
 its own ([Delegates](#delegates)). A person changes it in two ways:
@@ -387,8 +388,10 @@ It is the reviewer's block, recorded as a `permission_resolved` with
 
 ## Headless
 
-A run started with no client, such as `fiber ask`, defaults to `auto`. The reviewer is what stands
-in for the person, which is the case it exists for.
+A run started with no client, such as `fiber ask`, starts in the mode
+`permissions.mode` sets, `auto` by default, like every other session
+("Modes"). In `auto` the reviewer is what stands in for the
+person, which is the case it exists for.
 
 A calling harness that wants to answer can. `docs/architecture.md` settles that
 "the terminal is a watcher and a driver, never a participant" — a permission
