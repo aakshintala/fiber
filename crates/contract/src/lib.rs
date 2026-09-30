@@ -6,3 +6,5 @@
 mod envelope;
 
 pub use envelope::{ActionId, Envelope, Seq, SessionId, TurnId};
+
+pub fn  demo_fmt( )->u8{ 1 }
