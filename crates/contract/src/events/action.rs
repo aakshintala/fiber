@@ -74,6 +74,36 @@ pub struct ToolCallRequested {
     /// The provider's own id for the call; absent when the reply carried none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<ProviderCallId>,
+    /// The arguments after repair (`docs/tools.md`, "Before a call runs");
+    /// absent when nothing was repaired.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repaired: Option<Map<String, Value>>,
+    /// With `repaired`, one entry per fix.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repairs: Option<Vec<Repair>>,
+}
+
+/// One fix made to a tool call's arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repair {
+    /// A JSON Pointer into `arguments`.
+    pub path: String,
+    /// What was done there.
+    pub fix: RepairFix,
+}
+
+/// How an argument was repaired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairFix {
+    /// A null the schema does not allow was dropped.
+    NullDropped,
+    /// A string became the number the schema wants.
+    StringToNumber,
+    /// A string became the boolean the schema wants.
+    StringToBoolean,
+    /// A string holding JSON became the value it holds.
+    StringParsed,
 }
 
 /// `tool_call_started`: execution began.

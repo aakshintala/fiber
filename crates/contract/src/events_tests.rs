@@ -263,8 +263,13 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "tool_call_requested",
-            json!({"name": "read", "arguments": "{not json",
-            "provider_id": "call_1"}),
+            json!({"name": "read", "arguments": {"path": "/a", "limit": "5", "x": null},
+            "provider_id": "call_1", "repaired": {"path": "/a", "limit": 5},
+            "repairs": [
+                {"path": "/limit", "fix": "string_to_number"},
+                {"path": "/x", "fix": "null_dropped"},
+                {"path": "/a", "fix": "string_to_boolean"},
+                {"path": "/b", "fix": "string_parsed"}]}),
         ),
         (
             "tool_call_started",

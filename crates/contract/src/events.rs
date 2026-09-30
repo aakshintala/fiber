@@ -15,8 +15,8 @@ pub use action::{
     Answer, AskStep, AssistantMessageCompleted, CallStatus, Control, DecidedBy, Decision,
     Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
     InteractionResolved, MessageOutcome, ModeChanged, ModeChangedBy, PermissionRequested,
-    PermissionResolved, Progress, ReasoningCompleted, ResolvedBy, ReviewerRef, RuleOffer,
-    RuleScope, StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
+    PermissionResolved, Progress, ReasoningCompleted, Repair, RepairFix, ResolvedBy, ReviewerRef,
+    RuleOffer, RuleScope, StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
     ToolCallRequested, ToolCallStarted,
 };
 pub use context::{
