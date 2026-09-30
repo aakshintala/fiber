@@ -6,8 +6,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::events::{Decision, FormAnswer};
-use crate::shapes::Mode;
+use crate::events::Decision;
+use crate::shapes::{Mode, True};
 use crate::{CommandId, JobId, RequestId, Seq, SessionId};
 
 /// One command line: one JSON object on the driver channel.
@@ -145,7 +145,7 @@ pub enum ReplyAnswer {
     /// Declines an interaction.
     Declined {
         /// `true`.
-        declined: bool,
+        declined: True,
     },
     /// Answers `confirm`.
     Confirmed {
@@ -165,7 +165,7 @@ pub enum ReplyAnswer {
     /// Answers a `form`.
     Form {
         /// One per field, in field order.
-        answers: Vec<FormAnswer>,
+        answers: Vec<SentFormAnswer>,
         /// The person's note on the whole form.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         note: Option<String>,
@@ -180,6 +180,27 @@ pub enum ReplyAnswer {
         /// With `allow`, on a request that offers a `rule`.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         remember: Option<Remember>,
+    },
+}
+
+/// One field's answer in a form reply. Unlike the logged
+/// [`FormAnswer`](crate::events::FormAnswer), it refuses a key it does not
+/// take.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum SentFormAnswer {
+    /// The person skipped the field.
+    Skipped {
+        /// `true`.
+        skipped: True,
+    },
+    /// The person answered it.
+    Answered {
+        /// The chosen labels, possibly none.
+        labels: Vec<String>,
+        /// What the person typed, when they typed any.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
     },
 }
 

@@ -4,6 +4,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+use super::action::Progress;
 use super::context::Outcome;
 use crate::shapes::{Failure, Mode, Point, Process, Question, Tokens, Worktree};
 use crate::{CommandId, ErrorCode, JobId, SessionId};
@@ -211,12 +212,9 @@ pub struct DelegateStarted {
 pub struct JobDelta {
     /// The job.
     pub job_id: JobId,
-    /// Output added since the last delta.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-    /// Progress, as on `tool_call_delta`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub details: Option<Value>,
+    /// Its progress, as on `tool_call_delta`.
+    #[serde(flatten)]
+    pub progress: Progress,
 }
 
 /// `job_line`: what a monitor delivered to the model.
@@ -237,6 +235,7 @@ pub struct Usage {
     /// Its tokens.
     pub tokens: Tokens,
     /// In US dollars; `null` when unknown.
+    #[serde(deserialize_with = "crate::shapes::nullable")]
     pub cost: Option<f64>,
 }
 

@@ -20,6 +20,7 @@ pub struct UsageRecorded {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_searches: Option<u64>,
     /// In US dollars; `null` when unknown.
+    #[serde(deserialize_with = "crate::shapes::nullable")]
     pub cost: Option<f64>,
     /// The extension whose `host.model` made the call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -207,6 +208,7 @@ pub struct Environment {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Git {
     /// The branch; `null` when HEAD is detached.
+    #[serde(deserialize_with = "crate::shapes::nullable")]
     pub branch: Option<String>,
 }
 
@@ -301,28 +303,79 @@ pub enum Outcome {
     Cancelled,
 }
 
-/// `handoff_completed`.
+/// `handoff_completed`. A line with both `note` and `note_text`, or with
+/// `extension` apart from `note_text`, fails to read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "HandoffCompletedLine")]
 pub struct HandoffCompleted {
     /// How it ended.
     pub outcome: Outcome,
     /// On `failed`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<Failure>,
-    /// The actions carrying the note, in call order.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note: Option<Vec<ActionId>>,
-    /// A note a `before_handoff` hook wrote, in place of `note`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub note_text: Option<String>,
-    /// With `note_text`, the hook's extension.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub extension: Option<String>,
+    /// The note, when there is one.
+    #[serde(flatten)]
+    pub note: Option<Note>,
     /// The context size before the handoff, in tokens.
     pub tokens_before: u64,
     /// The person's instructions, when there were any.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub instructions: Option<String>,
+}
+
+/// A handoff's note: the actions carrying it, or a note a hook wrote in their
+/// place.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(untagged)]
+pub enum Note {
+    /// The note the model wrote.
+    Actions {
+        /// The actions carrying the note, in call order.
+        note: Vec<ActionId>,
+    },
+    /// A note a `before_handoff` hook wrote.
+    Hook {
+        /// The note.
+        note_text: String,
+        /// The hook's extension.
+        extension: String,
+    },
+}
+
+/// `handoff_completed` as a line carries it, before its note keys are
+/// checked.
+#[derive(Deserialize)]
+struct HandoffCompletedLine {
+    outcome: Outcome,
+    error: Option<Failure>,
+    note: Option<Vec<ActionId>>,
+    note_text: Option<String>,
+    extension: Option<String>,
+    tokens_before: u64,
+    instructions: Option<String>,
+}
+
+impl TryFrom<HandoffCompletedLine> for HandoffCompleted {
+    type Error = &'static str;
+
+    fn try_from(line: HandoffCompletedLine) -> Result<Self, Self::Error> {
+        let note = match (line.note, line.note_text, line.extension) {
+            (None, None, None) => None,
+            (Some(note), None, None) => Some(Note::Actions { note }),
+            (None, Some(note_text), Some(extension)) => Some(Note::Hook {
+                note_text,
+                extension,
+            }),
+            _ => return Err("a handoff note is its actions or a hook's text, never both"),
+        };
+        Ok(Self {
+            outcome: line.outcome,
+            error: line.error,
+            note,
+            tokens_before: line.tokens_before,
+            instructions: line.instructions,
+        })
+    }
 }
 
 /// `context_nudged`.

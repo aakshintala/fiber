@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::shapes::{Choice, ContentPart, DeclaredEffects, Failure, Mode, Process, Question};
+use crate::shapes::{Choice, ContentPart, DeclaredEffects, Failure, Mode, Process, Question, True};
 use crate::{ActionId, ProviderCallId, RequestId};
 
 /// Text added since the last delta, on `assistant_message_delta` and
@@ -168,15 +168,36 @@ pub struct Control {
 }
 
 /// Which step of `docs/permissions.md`, "The order a call is judged in",
-/// raised a permission request.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// raised a permission request, keyed by `step`, with the keys that step
+/// defines.
+#[derive(Debug, Clone, PartialEq, Serialize)]
+#[serde(tag = "step", rename_all = "snake_case")]
 pub enum AskStep {
     /// Step 3, a standing rule that asks.
-    StandingAsk,
+    StandingAsk {
+        /// The rule that asked.
+        standing_rule: StandingRule,
+    },
     /// Step 4, `readonly`.
     Readonly,
     /// Step 9, review.
+    Review {
+        /// In `auto`, why the reviewer handed the call to a person.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        escalation: Option<Escalation>,
+        /// The rule an allow can remember; absent when no rule can match the
+        /// call.
+        #[serde(skip_serializing_if = "Option::is_none")]
+        rule: Option<RuleOffer>,
+    },
+}
+
+/// `step` alone, as a line carries it.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum StepName {
+    StandingAsk,
+    Readonly,
     Review,
 }
 
@@ -230,26 +251,52 @@ pub struct RuleOffer {
     pub prefix: String,
 }
 
-/// `permission_requested`. The envelope's `action_id` is the tool call.
+/// `permission_requested`. The envelope's `action_id` is the tool call. A
+/// line with a key its step does not define fails to read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PermissionRequestedLine")]
 pub struct PermissionRequested {
     /// The id a `reply` names.
     pub request_id: RequestId,
     /// What the call declared.
     #[serde(flatten)]
     pub declared: DeclaredEffects,
-    /// Which step raised it.
+    /// Which step raised it, with its keys.
+    #[serde(flatten)]
     pub step: AskStep,
-    /// On `standing_ask`, the rule that asked.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub standing_rule: Option<StandingRule>,
-    /// On `review` in `auto`, why the reviewer handed the call to a person.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub escalation: Option<Escalation>,
-    /// On `review`, the rule an allow can remember; absent when no rule can
-    /// match the call.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rule: Option<RuleOffer>,
+}
+
+/// `permission_requested` as a line carries it, before its keys are checked
+/// against its step.
+#[derive(Deserialize)]
+struct PermissionRequestedLine {
+    request_id: RequestId,
+    #[serde(flatten)]
+    declared: DeclaredEffects,
+    step: StepName,
+    standing_rule: Option<StandingRule>,
+    escalation: Option<Escalation>,
+    rule: Option<RuleOffer>,
+}
+
+impl TryFrom<PermissionRequestedLine> for PermissionRequested {
+    type Error = &'static str;
+
+    fn try_from(line: PermissionRequestedLine) -> Result<Self, Self::Error> {
+        let step = match (line.step, line.standing_rule, line.escalation, line.rule) {
+            (StepName::StandingAsk, Some(standing_rule), None, None) => {
+                AskStep::StandingAsk { standing_rule }
+            }
+            (StepName::Readonly, None, None, None) => AskStep::Readonly,
+            (StepName::Review, None, escalation, rule) => AskStep::Review { escalation, rule },
+            _ => return Err("a permission request carries only the keys its step defines"),
+        };
+        Ok(Self {
+            request_id: line.request_id,
+            declared: line.declared,
+            step,
+        })
+    }
 }
 
 /// A permission decision.
@@ -355,44 +402,108 @@ pub struct ModeChanged {
     pub request_id: Option<RequestId>,
 }
 
-/// The kind of an interaction.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum InteractionKind {
+/// What an interaction asks, keyed by `kind`, with the keys that kind
+/// defines.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Interaction {
     /// Yes or no.
-    Confirm,
+    Confirm {
+        /// The question.
+        prompt: String,
+    },
     /// One option.
-    Select,
+    Select {
+        /// The question.
+        prompt: String,
+        /// The options.
+        options: Vec<Choice>,
+    },
     /// Any number of options.
-    MultiSelect,
+    MultiSelect {
+        /// The question.
+        prompt: String,
+        /// The options.
+        options: Vec<Choice>,
+    },
     /// Typed text.
-    TextInput,
+    TextInput {
+        /// The question.
+        prompt: String,
+    },
     /// Several questions.
+    Form {
+        /// One per question.
+        fields: Vec<Question>,
+    },
+}
+
+/// `kind` alone, as a line carries it.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum InteractionKind {
+    Confirm,
+    Select,
+    MultiSelect,
+    TextInput,
     Form,
 }
 
-/// `interaction_requested`. The envelope carries no `action_id`.
+/// `interaction_requested`. The envelope carries no `action_id`. A line with
+/// a key its kind does not define fails to read.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "InteractionRequestedLine")]
 pub struct InteractionRequested {
     /// The id a `reply` names.
     pub request_id: RequestId,
-    /// The interaction's kind.
-    pub kind: InteractionKind,
+    /// What it asks.
+    #[serde(flatten)]
+    pub interaction: Interaction,
     /// The tool calls that raised it; absent when no tool call raised it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub action_ids: Option<Vec<ActionId>>,
     /// The extension that raised it with `host.ask`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
-    /// The question, on every kind but `form`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub prompt: Option<String>,
-    /// On `select` and `multi_select`.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<Choice>>,
-    /// On `form`, one per question.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub fields: Option<Vec<Question>>,
+}
+
+/// `interaction_requested` as a line carries it, before its keys are checked
+/// against its kind.
+#[derive(Deserialize)]
+struct InteractionRequestedLine {
+    request_id: RequestId,
+    kind: InteractionKind,
+    action_ids: Option<Vec<ActionId>>,
+    extension: Option<String>,
+    prompt: Option<String>,
+    options: Option<Vec<Choice>>,
+    fields: Option<Vec<Question>>,
+}
+
+impl TryFrom<InteractionRequestedLine> for InteractionRequested {
+    type Error = &'static str;
+
+    fn try_from(line: InteractionRequestedLine) -> Result<Self, Self::Error> {
+        use InteractionKind as K;
+        let interaction = match (line.kind, line.prompt, line.options, line.fields) {
+            (K::Confirm, Some(prompt), None, None) => Interaction::Confirm { prompt },
+            (K::Select, Some(prompt), Some(options), None) => {
+                Interaction::Select { prompt, options }
+            }
+            (K::MultiSelect, Some(prompt), Some(options), None) => {
+                Interaction::MultiSelect { prompt, options }
+            }
+            (K::TextInput, Some(prompt), None, None) => Interaction::TextInput { prompt },
+            (K::Form, None, None, Some(fields)) => Interaction::Form { fields },
+            _ => return Err("an interaction request carries only the keys its kind defines"),
+        };
+        Ok(Self {
+            request_id: line.request_id,
+            interaction,
+            action_ids: line.action_ids,
+            extension: line.extension,
+        })
+    }
 }
 
 /// Who resolved an interaction.
@@ -425,7 +536,7 @@ pub enum Answer {
     /// Declined.
     Declined {
         /// `true`.
-        declined: bool,
+        declined: True,
     },
     /// The answer to `confirm`.
     Confirmed {
@@ -460,7 +571,7 @@ pub enum FormAnswer {
     /// The person skipped the field.
     Skipped {
         /// `true`.
-        skipped: bool,
+        skipped: True,
     },
     /// The person answered it.
     Answered {

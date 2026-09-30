@@ -3,7 +3,8 @@
 
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Serialize};
+use serde::de::{Error as _, Unexpected};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::{CommandId, ErrorCode, Seq, SessionId};
 
@@ -199,4 +200,35 @@ pub struct Worktree {
     pub path: String,
     /// Its branch.
     pub branch: String,
+}
+
+/// A marker key whose only value is `true`, such as `declined` or `skipped`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct True;
+
+impl Serialize for True {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_bool(true)
+    }
+}
+
+impl<'de> Deserialize<'de> for True {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        if bool::deserialize(deserializer)? {
+            Ok(True)
+        } else {
+            Err(D::Error::invalid_value(Unexpected::Bool(false), &"true"))
+        }
+    }
+}
+
+/// Reads a key that is required but may be `null`. serde reads a missing
+/// `Option` key as `None` unless a field names its own deserializer, so this
+/// makes a missing key an error while `null` stays `None`.
+pub(crate) fn nullable<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::deserialize(deserializer)
 }

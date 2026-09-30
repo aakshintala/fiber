@@ -171,3 +171,28 @@ fn an_unknown_command_is_refused() {
 fn a_line_without_an_id_is_refused() {
     assert!(parse(r#"{"command":"cancel"}"#).is_err());
 }
+
+#[test]
+fn a_form_answer_with_a_key_it_does_not_take_is_refused() {
+    for answer in [
+        r#"{"skipped":true,"future":1}"#,
+        r#"{"labels":[],"future":1}"#,
+    ] {
+        let line = format!(
+            r#"{{"id":"c","command":"reply","args":{{"request_id":"r","answers":[{answer}]}}}}"#
+        );
+        assert!(parse(&line).is_err(), "{answer}");
+    }
+}
+
+#[test]
+fn declined_and_skipped_are_only_ever_true() {
+    assert!(
+        parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","declined":false}}"#)
+            .is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","answers":[{"skipped":false}]}}"#)
+            .is_err()
+    );
+}

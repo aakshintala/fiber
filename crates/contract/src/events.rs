@@ -13,7 +13,7 @@ use serde_json::{Map, Value};
 
 pub use action::{
     Answer, AskStep, AssistantMessageCompleted, CallStatus, Control, DecidedBy, Decision,
-    Escalation, FileChange, FormAnswer, Grant, InteractionKind, InteractionRequested,
+    Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
     InteractionResolved, MessageOutcome, ModeChanged, ModeChangedBy, PermissionRequested,
     PermissionResolved, Progress, ReasoningCompleted, ResolvedBy, ReviewerRef, RuleOffer,
     RuleScope, StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
@@ -22,15 +22,15 @@ pub use action::{
 pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,
     HandoffTrigger, InstructionFile, InstructionFileSent, InstructionReason, InstructionSent,
-    ModelChanged, ModelSettings, Notice, OpeningMessage, Outcome, PreambleBuilt, PreambleReason,
-    QuotaNoticed, RetryScheduled, SentTool, SwitchSource, UsageRecorded,
+    ModelChanged, ModelSettings, Note, Notice, OpeningMessage, Outcome, PreambleBuilt,
+    PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SwitchSource, UsageRecorded,
 };
 pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
     ExtensionExec, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset, ExtensionUi,
     FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified,
-    McpServerFailed, McpServerReady, ReloadFailure, Reloaded, ReloadedServers, ServerFailure,
-    ToolInfo, ToolSource, ToolState, Ui, Usage,
+    McpServerFailed, McpServerReady, OnFork, ReloadFailure, Reloaded, ReloadedServers,
+    ServerFailure, ToolInfo, ToolSource, ToolState, Ui, Usage,
 };
 pub use session::{
     Clients, ContextAdded, FiberExited, FiberStarted, FinalMessage, InputItem, NamedBy, Parent,
@@ -59,8 +59,10 @@ pub struct Empty {}
 /// the kind's name and its class.
 macro_rules! kinds {
     ($($variant:ident($payload:ty) = $name:literal, $class:ident;)+) => {
-        /// One event, by kind, with its payload.
-        #[derive(Debug, Clone, PartialEq)]
+        /// One event, by kind, with its payload. It serializes as its payload
+        /// alone.
+        #[derive(Debug, Clone, PartialEq, Serialize)]
+        #[serde(untagged)]
         pub enum Event {
             $(
                 #[doc = concat!("`", $name, "`.")]
@@ -83,13 +85,6 @@ macro_rules! kinds {
                 }
             }
 
-            /// The payload, as the envelope's `payload` carries it.
-            pub fn payload(&self) -> Result<Map<String, Value>, serde_json::Error> {
-                match self {
-                    $(Self::$variant(payload) => to_map(payload),)+
-                }
-            }
-
             /// Reads a line's payload. A kind this build does not know is
             /// `Ok(None)`, for the reader to skip; keys it does not know are
             /// ignored (`docs/events.md`, "Versioning").
@@ -106,8 +101,11 @@ macro_rules! kinds {
     };
 }
 
-fn to_map<T: Serialize>(payload: &T) -> Result<Map<String, Value>, serde_json::Error> {
-    serde_json::from_value(serde_json::to_value(payload)?)
+impl Event {
+    /// The payload, as the envelope's `payload` carries it, its keys sorted.
+    pub fn payload(&self) -> Result<Map<String, Value>, serde_json::Error> {
+        serde_json::from_value(serde_json::to_value(self)?)
+    }
 }
 
 kinds! {

@@ -222,6 +222,7 @@ pub enum NamedBy {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionNamed {
     /// The name; `null` when the person cleared theirs.
+    #[serde(deserialize_with = "crate::shapes::nullable")]
     pub name: Option<String>,
     /// Who named it.
     pub by: NamedBy,

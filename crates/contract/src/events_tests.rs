@@ -287,15 +287,29 @@ fn samples() -> Vec<(&'static str, Value)> {
             "permission_requested",
             json!({"request_id": "r", "effects": [], "reversible": true,
             "paths": ["/a"], "step": "review",
-            "standing_rule": {"scope": "global", "prefix": "npm"},
             "escalation": {"cause": "reviewer_failed", "error": error},
             "rule": {"subject": "npm test", "prefix": "npm"}}),
         ),
         (
             "permission_requested",
+            json!({"request_id": "r", "effects": ["writes"], "reversible": true,
+            "step": "review", "escalation": {"cause": "consecutive_blocks", "reason": "r"}}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["executes"], "reversible": true,
+            "step": "review"}),
+        ),
+        (
+            "permission_requested",
             json!({"request_id": "r", "effects": ["reads"],
             "reversible": true, "step": "standing_ask",
-            "escalation": {"cause": "session_blocks", "reason": "r"}}),
+            "standing_rule": {"scope": "global", "prefix": "npm"}}),
+        ),
+        (
+            "permission_requested",
+            json!({"request_id": "r", "effects": ["network"], "reversible": false,
+            "step": "readonly"}),
         ),
         (
             "permission_resolved",
@@ -314,7 +328,24 @@ fn samples() -> Vec<(&'static str, Value)> {
             "interaction_requested",
             json!({"request_id": "r", "kind": "multi_select",
             "action_ids": ["a"], "extension": "e", "prompt": "p",
-            "options": [{"label": "a"}], "fields": questions}),
+            "options": [{"label": "a"}]}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "select", "prompt": "p",
+            "options": [{"label": "a", "description": "d"}]}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "confirm", "prompt": "p"}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "text_input", "prompt": "p"}),
+        ),
+        (
+            "interaction_requested",
+            json!({"request_id": "r", "kind": "form", "fields": questions}),
         ),
         (
             "interaction_resolved",
@@ -383,8 +414,17 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("handoff_started", json!({"trigger": "overflow"})),
         (
             "handoff_completed",
-            json!({"outcome": "failed", "error": error, "note": ["a"],
-            "note_text": "n", "extension": "e", "tokens_before": 9, "instructions": "i"}),
+            json!({"outcome": "completed", "note": ["a"], "tokens_before": 9,
+            "instructions": "i"}),
+        ),
+        (
+            "handoff_completed",
+            json!({"outcome": "completed", "note_text": "n", "extension": "e",
+            "tokens_before": 9}),
+        ),
+        (
+            "handoff_completed",
+            json!({"outcome": "failed", "error": error, "tokens_before": 9}),
         ),
         ("context_nudged", json!({"tokens": 100, "trigger_at": 140})),
         (
@@ -509,4 +549,138 @@ fn the_samples_cover_every_key_each_kind_lists() {
         let listed: BTreeSet<String> = keys.iter().map(|k| (*k).to_owned()).collect();
         assert_eq!(covered.get(kind), Some(&listed), "{kind}");
     }
+}
+
+fn read(kind: &str, payload: Value) -> Result<Option<Event>, serde_json::Error> {
+    Event::from_envelope(&line(kind, payload))
+}
+
+#[test]
+fn a_handoff_note_is_the_actions_or_a_hook_text_never_both() {
+    let both = json!({"outcome": "completed", "note": ["a"], "note_text": "n",
+        "extension": "e", "tokens_before": 9});
+    assert!(read("handoff_completed", both).is_err());
+    let hook_without_extension = json!({"outcome": "completed", "note_text": "n",
+        "tokens_before": 9});
+    assert!(read("handoff_completed", hook_without_extension).is_err());
+    let extension_without_hook = json!({"outcome": "completed", "extension": "e",
+        "tokens_before": 9});
+    assert!(read("handoff_completed", extension_without_hook).is_err());
+}
+
+#[test]
+fn a_permission_request_carries_only_the_keys_its_step_defines() {
+    let base = || json!({"request_id": "r", "effects": [], "reversible": true});
+    let rule = json!({"subject": "npm test", "prefix": "npm"});
+    let standing = json!({"scope": "project", "prefix": "npm"});
+    let escalation = json!({"cause": "session_blocks", "reason": "r"});
+    let invalid = [
+        ("standing_ask", vec![]),
+        (
+            "standing_ask",
+            vec![("standing_rule", &standing), ("escalation", &escalation)],
+        ),
+        (
+            "standing_ask",
+            vec![("standing_rule", &standing), ("rule", &rule)],
+        ),
+        ("readonly", vec![("standing_rule", &standing)]),
+        ("readonly", vec![("escalation", &escalation)]),
+        ("readonly", vec![("rule", &rule)]),
+        ("review", vec![("standing_rule", &standing)]),
+    ];
+    for (step, keys) in invalid {
+        let mut payload = base();
+        payload["step"] = json!(step);
+        for (key, value) in &keys {
+            payload[*key] = (*value).clone();
+        }
+        assert!(
+            read("permission_requested", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
+fn an_interaction_request_carries_only_the_keys_its_kind_defines() {
+    let options = json!([{"label": "a"}]);
+    let fields = json!([{"header": "h", "question": "q", "options": []}]);
+    let prompt = json!("p");
+    let invalid = [
+        ("confirm", vec![]),
+        ("confirm", vec![("prompt", &prompt), ("options", &options)]),
+        ("confirm", vec![("prompt", &prompt), ("fields", &fields)]),
+        ("select", vec![("prompt", &prompt)]),
+        ("select", vec![("options", &options)]),
+        (
+            "multi_select",
+            vec![
+                ("prompt", &prompt),
+                ("options", &options),
+                ("fields", &fields),
+            ],
+        ),
+        (
+            "text_input",
+            vec![("prompt", &prompt), ("options", &options)],
+        ),
+        ("form", vec![]),
+        ("form", vec![("fields", &fields), ("prompt", &prompt)]),
+        ("form", vec![("fields", &fields), ("options", &options)]),
+    ];
+    for (kind, keys) in invalid {
+        let mut payload = json!({"request_id": "r", "kind": kind});
+        for (key, value) in &keys {
+            payload[*key] = (*value).clone();
+        }
+        assert!(
+            read("interaction_requested", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
+fn a_required_key_that_may_be_null_must_be_present() {
+    let tokens = json!({"input": 1, "cache_read": 0, "cache_write": {}, "output": 1});
+    let cases = [
+        ("session_named", json!({"by": "person"}), "name"),
+        (
+            "usage_recorded",
+            json!({"generation_id": "g", "model": "p/m", "tokens": tokens}),
+            "cost",
+        ),
+    ];
+    for (kind, mut payload, key) in cases {
+        assert!(read(kind, payload.clone()).is_err(), "{kind} without {key}");
+        payload[key] = Value::Null;
+        assert!(
+            read(kind, payload).unwrap().is_some(),
+            "{kind} with null {key}"
+        );
+    }
+    let finished = |usage: Value| json!({"job_id": "j", "text": "t", "usage": usage});
+    assert!(read("delegate_finished", finished(json!({"tokens": tokens}))).is_err());
+    let with_null = finished(json!({"tokens": tokens, "cost": null}));
+    assert!(read("delegate_finished", with_null).unwrap().is_some());
+    let opening = |git: Value| {
+        json!({"environment": {"date": "d", "os": "o", "arch": "a", "shell": "s",
+            "workspace": "/w", "git": git, "session_log": "/l"},
+            "instruction_files": [], "skills": []})
+    };
+    assert!(read("opening_message", opening(json!({}))).is_err());
+    assert!(
+        read("opening_message", opening(json!({"branch": null})))
+            .unwrap()
+            .is_some()
+    );
+}
+
+#[test]
+fn declined_and_skipped_are_only_ever_true() {
+    let declined = json!({"request_id": "r", "by": "fiber", "declined": false});
+    assert!(read("interaction_resolved", declined).is_err());
+    let skipped = json!({"request_id": "r", "by": "person", "answers": [{"skipped": false}]});
+    assert!(read("interaction_resolved", skipped).is_err());
 }

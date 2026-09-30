@@ -42,21 +42,12 @@ fn doc_codes() -> BTreeSet<&'static str> {
 }
 
 #[test]
-fn every_code_in_the_docs_is_known_and_keeps_its_string() {
-    for code in doc_codes() {
-        let json = format!("\"{code}\"");
-        let parsed: ErrorCode = serde_json::from_str(&json).unwrap();
-        assert!(KNOWN.contains(&parsed), "{code} is not a known code");
-        assert_eq!(serde_json::to_string(&parsed).unwrap(), json);
-    }
-}
-
-#[test]
-fn every_known_code_is_in_the_docs() {
+fn the_known_codes_are_the_codes_in_the_docs() {
     let docs = doc_codes();
     for code in KNOWN {
-        let name = serde_json::to_value(code).unwrap();
-        assert!(docs.contains(name.as_str().unwrap()), "{name} is in no doc");
+        let json = serde_json::to_string(code).unwrap();
+        assert!(docs.contains(json.trim_matches('"')), "{json} is in no doc");
+        assert_eq!(&serde_json::from_str::<ErrorCode>(&json).unwrap(), code);
     }
     assert_eq!(KNOWN.len(), docs.len());
 }
