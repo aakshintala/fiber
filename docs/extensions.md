@@ -42,6 +42,7 @@ An extension is one directory. Its manifest, `extension.json`, states
 - its name, which is also where it is fetched from (see [Names](#names))
 - its version
 - the lowest Fiber version it runs on
+- the extension API version it was written for ("The extension API version")
 - the other extensions it depends on, each with a minimum version
 - the native binaries it ships, if any, with one download URL and one sha256
   per platform
@@ -143,8 +144,10 @@ smaller.
 
 ## How an extension runs
 
-A Lua VM runs one piece of code at a time, so each Lua extension has one
-thread and one inbox, created the first time it is used. Hook calls, watcher
+A Lua VM runs one piece of code at a time, so each Lua extension in a session
+has one thread and one inbox, created the first time it is used. A TUI
+extension runs on the terminal's own thread instead (`docs/tui.md`, "How a TUI
+extension runs"). Hook calls, watcher
 deliveries, command invocations, timer firings and replies to host calls all
 arrive there.
 
@@ -565,16 +568,24 @@ latest of each. In a session nobody can answer, such as one started by
 `fiber ask`, `host.ask` returns declined.
 
 A session never sends drawing code to a client. An extension that draws
-carries a TUI extension: Lua scripts in its package that run in the
-terminal's process, with the same runtime and rules as a Lua extension, and
-reach the session only as a client does. It reads the event stream,
-including what its session half sends with `host.emit`, and sends driver
-commands, including its own extension's commands. A crash in a TUI extension
-cannot stop the session (`docs/invocation.md`, "Processes"). What a TUI
-extension may draw, and through which seam, is the TUI's to settle, in
-[TUI extension seams](https://github.com/aakshintala/fiber/issues/163). The
-terminal itself is `docs/tui.md`.
-A future GUI's extensions take the same shape.
+carries a TUI extension: Lua 5.4 scripts in its package that run in the
+terminal's process, with the same embedding as a Lua extension, and reach the
+session only as a client does. It reads the event stream, including its
+session half's extension state and what that half sends with `host.emit`, and
+sends driver commands, including its own extension's commands. A crash in a
+TUI extension cannot stop the session (`docs/invocation.md`, "Processes").
+
+A TUI extension has the host calls that need no session: `host.http`,
+`host.exec`, `host.fs`, `host.config`, `host.data_dir`, `host.after`,
+`host.every`, `host.drive`, `host.log`, the hashes and `json`. It has no
+`host.model`, `host.delegate`, `host.ask`, `host.emit` or `state.set`, since
+each of those acts inside the session. There is no process TUI extension: a
+program that wants to draw everything itself is a separate client of
+`fiber serve`.
+
+What a TUI extension may change on screen is `docs/tui.md`, "Extension
+seams": every slot the terminal draws, the root layout, the key map and the
+slash commands. A future GUI's extensions take the same shape.
 
 ## Loading, and cost when nothing is loaded
 
@@ -583,7 +594,9 @@ extension is invoked, not at startup. A session that loads no Lua extension —
 or loads one it never calls — creates no VM and pays no idle CPU and no
 runtime memory for it. Lazy creation, not a cheap runtime, is what makes this
 true. A process extension costs its process from session start, because it
-must register before the session's first request.
+must register before the session's first request. A TUI extension's VM is
+created before the terminal's first frame, since a replaced layout or input
+box changes that frame (`docs/tui.md`, "How a TUI extension runs").
 
 One VM per extension (rather than one shared VM for all) costs about 120 KiB per
 extension — measured, `research/extension-runtime/vm-isolation/` — and buys real
@@ -649,6 +662,25 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
 - Keep what must survive a resume in `state`, never in globals.
 - Need npm, a long-lived connection or a language other than Lua? Write a
   process extension.
+
+## The extension API version
+
+An extension's manifest names the major version of the extension API it was
+written for, as `api` (`docs/configuration.md`, "An extension's manifest").
+The API is everything an extension touches: the registrations, the host calls,
+the hook points and what each receives, and the terminal's slots, their
+inputs, the span shape and the theme's roles (`docs/tui.md`, "Extension
+seams"). One number covers both halves of a package, because they ship
+together.
+
+- **Additions keep the number.** A new slot, hook point, host call or optional
+  field changes nothing for an existing extension. An extension that needs one
+  raises its manifest's lowest Fiber version.
+- **A removal or a rename raises it.** Fiber loads an extension only when its
+  `api` is Fiber's own. Otherwise the extension is not loaded, and a `notice`
+  names it and both numbers. `fiber install` refuses it the same way.
+
+The API starts at 1.
 
 ## Distribution
 

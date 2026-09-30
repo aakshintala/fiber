@@ -258,6 +258,14 @@ It reaches its session only through the event stream and driver commands, like
 any client.
 _Avoid_: UI plugin, facet
 
+### Slot
+
+A named place the terminal draws, such as a ledger row, a panel card, the input
+box or the root layout. Each has a built-in renderer, and a TUI extension may
+replace it or add slots of its own. See `docs/tui.md`, "Extension seams".
+Distinct from a seam, which is how a participant is reached in a session.
+_Avoid_: component, widget
+
 ### Extension state
 
 The values an extension keeps in a session's log, by key, so they survive a

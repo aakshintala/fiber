@@ -22,7 +22,7 @@ an 81-megapixel PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB
 
 Every workload runs a fresh install's default load: the first-party provider
 extension the session uses and the compiled-in tools. It runs no MCP server,
-no process extension and no other child process. An extension a person adds
+no process extension, no TUI extension and no other child process. An extension a person adds
 costs what it costs (about 150 KiB and one thread for a Lua extension,
 `research/extension-runtime/pass2/RESULTS.md`); that cost is its author's.
 

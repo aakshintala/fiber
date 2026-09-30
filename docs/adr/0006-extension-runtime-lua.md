@@ -8,6 +8,8 @@ Accepted. Settled by
 [Extension runtime: Lua or something else?](https://github.com/aakshintala/fiber/issues/11)
 and, for what a package holds and how it is shared,
 [Extension distribution](https://github.com/aakshintala/fiber/issues/45),
+and, for what runs in the terminal,
+[TUI extension seams](https://github.com/aakshintala/fiber/issues/163),
 against the runtime comparison in
 [#3](https://github.com/aakshintala/fiber/issues/3). The contract is
 `docs/extensions.md`; the trust model is `docs/permissions.md`; the seams are
@@ -117,11 +119,20 @@ with no extension in use creates no VM and pays no idle cost.
   idle, Bun 20 MiB and Python 10 MiB (macOS arm64,
   `research/extension-process/`).
 
-- **A Lua extension has its own thread and inbox.** Hooks, watcher events,
+- **TUI extensions are Lua too.** The part of an extension that draws in the
+  terminal runs the same embedding in the terminal's process
+  (`docs/tui.md`, "Extension seams"). One language covers both halves of a
+  package, and a TUI extension costs about 30 to 35 KiB of Lua state, where a
+  Bun process would cost about 20 MiB against the terminal's 8 MiB idle
+  budget.
+
+- **A Lua extension in a session has its own thread and inbox.** Hooks, watcher events,
   timers and replies to host calls arrive there, and a host call suspends
   the calling code as a coroutine, so an extension can poll and wait without
   an async runtime ([ADR 0004](0004-blocking-threads-no-async-runtime.md)
-  binds Fiber's Rust code, not an extension's loop).
+  binds Fiber's Rust code, not an extension's loop). A TUI extension runs on
+  the terminal's thread instead, because a renderer must answer inside the
+  frame that needs it.
 
 ## Rejected
 
@@ -156,3 +167,16 @@ RSS and a JIT, breaking the low-RSS premise; shelling out to system Node/Bun
 breaks single-binary distribution. npm's libraries stay reachable through a
 process extension, which runs Node or Bun as a separate program only when a
 person installs one.
+
+**TypeScript for the terminal's half.** UI is where TypeScript's reach is
+strongest, and pi's UI extensions are TypeScript. Two forms were weighed for
+[#163](https://github.com/aakshintala/fiber/issues/163). TUI extensions on Bun
+or Node would be a process beside the terminal, about 20 MiB for Bun idle, and
+each render would cross a pipe at 56 to 79 µs against 8 µs into Lua. npm's
+terminal libraries, such as Ink and OpenTUI, each own the whole screen, so
+none can draw into a slot. Rewriting the terminal itself in TypeScript would
+let extensions use its own components, as pi's do, but reopens
+[#147](https://github.com/aakshintala/fiber/issues/147): OpenTUI on Bun
+measured 88 MiB idle with idle wakeups, against ratatui's 1.9 MiB and none
+(`research/tui-surface/`). The terminal is a client, so it can be rewritten
+later without touching a session.
