@@ -46,11 +46,13 @@ A pull request runs only what its diff can affect.
 - A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`,
   anything under `.github/` or `scripts/`, `clippy.toml`, `deny.toml`,
   `.cargo/config.toml` or `.config/nextest.toml` runs everything.
-- A file outside a crate that the crate compiles in runs that crate alone,
-  not the crates that depend on it. A change to `docs/events.md`,
-  `docs/errors.md` or `docs/invocation.md` runs `contract`, whose tests
-  check the code against them. The selector lists these files, and the gate
-  fails when the list and the source disagree.
+- A file a crate compiles in runs that crate alone, not the crates that
+  depend on it. This covers Markdown anywhere, and any file outside the
+  crate. A change to `docs/events.md`, `docs/errors.md` or
+  `docs/invocation.md` runs `contract`, whose tests check the code against
+  them. The selector lists these files. The gate fails when the list and
+  the source disagree, or when an include's argument is not a string
+  literal.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
@@ -86,8 +88,9 @@ On Linux x86_64 alone:
 - the docs check, below
 - no non-test source file over 800 lines
 - the `unsafe` table in `docs/code-quality.md` matches the code
-- the compiled-in list matches the files crates compile in from outside
-  their directory
+- the compiled-in list matches the files crates compile in, Markdown
+  anywhere or any file outside the crate, and every include argument is a
+  string literal
 - every crate a `Cargo.toml` names is listed in `docs/dependencies.md`
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each

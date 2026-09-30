@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use proc_macro2::{Delimiter, TokenStream, TokenTree};
+use proc_macro2::{TokenStream, TokenTree};
 
 use crate::rules::RustFile;
 
@@ -29,7 +29,7 @@ pub(crate) enum Selection {
     /// under `scripts/`, or gate configuration changed.
     All(Vec<String>),
     /// The crates the diff touches and every crate that depends on them, plus
-    /// any crate that compiles in a changed file from outside its directory.
+    /// any crate that compiles in a changed listed file, without dependents.
     Crates(Vec<String>),
 }
 
@@ -58,8 +58,9 @@ const RUN_ALL_ROOTS: [&str; 4] = [
     "clippy.toml",
     "deny.toml",
 ];
-/// Files outside a crate that the crate compiles in, and the crate that
-/// compiles each one (`docs/ci.md`, "Selection").
+/// Files a crate compiles in that the selector would not otherwise route to
+/// that crate: Markdown anywhere, and every file outside the crate
+/// (`docs/ci.md`, "Selection").
 const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/errors.md", "contract"),
     ("docs/events.md", "contract"),
@@ -73,30 +74,30 @@ fn is_docs_file(path: &str) -> bool {
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
 }
 
-fn is_compiled_in(path: &str) -> bool {
-    COMPILED_IN.iter().any(|(p, _)| *p == path)
-}
-
-fn compiled_in(path: &str) -> impl Iterator<Item = &'static str> {
-    COMPILED_IN
-        .iter()
-        .filter_map(move |(p, krate)| (*p == path).then_some(*krate))
+fn string_literal(text: &str) -> Option<String> {
+    if let Some(inner) = text.strip_prefix('"') {
+        return inner.strip_suffix('"').map(str::to_owned);
+    }
+    let rest = text.strip_prefix('r')?;
+    let hashes = rest.bytes().take_while(|&b| b == b'#').count();
+    let inner = rest.get(hashes..)?.strip_prefix('"')?;
+    let close = format!("\"{}", "#".repeat(hashes));
+    inner.strip_suffix(&close).map(str::to_owned)
 }
 
 fn include_path(stream: TokenStream) -> Option<String> {
-    stream.into_iter().find_map(|tree| match tree {
-        TokenTree::Literal(lit) => {
-            let text = lit.to_string();
-            text.strip_prefix('"')
-                .and_then(|s| s.strip_suffix('"'))
-                .map(str::to_owned)
-        }
-        TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Punct(_) => None,
-    })
+    let mut tokens = stream.into_iter();
+    let TokenTree::Literal(lit) = tokens.next()? else {
+        return None;
+    };
+    if tokens.next().is_some() {
+        return None;
+    }
+    string_literal(&lit.to_string())
 }
 
-fn include_literals(source: &str) -> Result<Vec<String>, proc_macro2::LexError> {
-    fn walk(stream: TokenStream, out: &mut Vec<String>) {
+fn include_literals(source: &str) -> Result<(Vec<String>, bool), proc_macro2::LexError> {
+    fn walk(stream: TokenStream, out: &mut Vec<String>, unresolvable: &mut bool) {
         let mut tokens = stream.into_iter();
         while let Some(tree) = tokens.next() {
             match tree {
@@ -105,22 +106,21 @@ fn include_literals(source: &str) -> Result<Vec<String>, proc_macro2::LexError> 
                         && p.as_char() == '!'
                         && let Some(TokenTree::Group(group)) = tokens.next()
                     {
-                        if group.delimiter() == Delimiter::Parenthesis
-                            && let Some(path) = include_path(group.stream())
-                        {
-                            out.push(path);
+                        match include_path(group.stream()) {
+                            Some(path) => out.push(path),
+                            None => *unresolvable = true,
                         }
-                        walk(group.stream(), out);
                     }
                 }
-                TokenTree::Group(group) => walk(group.stream(), out),
+                TokenTree::Group(group) => walk(group.stream(), out, unresolvable),
                 TokenTree::Ident(_) | TokenTree::Punct(_) | TokenTree::Literal(_) => {}
             }
         }
     }
     let mut out = Vec::new();
-    walk(source.parse()?, &mut out);
-    Ok(out)
+    let mut unresolvable = false;
+    walk(source.parse()?, &mut out, &mut unresolvable);
+    Ok((out, unresolvable))
 }
 
 pub(crate) fn compiled_in_mismatches(
@@ -128,34 +128,39 @@ pub(crate) fn compiled_in_mismatches(
     members: &Members,
 ) -> Result<Vec<String>, String> {
     let mut found = BTreeSet::new();
+    let mut failures = Vec::new();
     for f in files {
-        let literals = include_literals(&f.source)
+        let (literals, unresolvable) = include_literals(&f.source)
             .map_err(|e| format!("{}: does not tokenise as Rust: {e}", f.path))?;
+        if unresolvable {
+            failures.push(format!(
+                "{}: include_str! argument is not a string literal; the compiled-in check cannot resolve it",
+                f.path
+            ));
+        }
         let dir = Path::new(&f.path).parent().unwrap_or(Path::new(""));
         let Some(member) = members.get(&f.krate) else {
             continue;
         };
-        let prefix = format!("{}/", member.dir);
         for lit in literals {
             let target = crate::docs::join(dir, &lit)
                 .to_string_lossy()
                 .replace('\\', "/");
-            if target == member.dir || target.starts_with(&prefix) {
-                continue;
+            let inside = target
+                .strip_prefix(&member.dir)
+                .is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+            if is_docs_file(&target) || !inside {
+                found.insert((target, f.krate.clone()));
             }
-            found.insert((target, f.krate.clone()));
         }
     }
     let listed: BTreeSet<(String, String)> = COMPILED_IN
         .iter()
         .map(|(path, krate)| ((*path).to_owned(), (*krate).to_owned()))
         .collect();
-    let mut failures: Vec<String> = found
-        .difference(&listed)
-        .map(|(path, krate)| {
-            format!("{path}: {krate} compiles it in, but the compiled-in list does not list it")
-        })
-        .collect();
+    failures.extend(found.difference(&listed).map(|(path, krate)| {
+        format!("{path}: {krate} compiles it in, but the compiled-in list does not list it")
+    }));
     failures.extend(
         listed.difference(&found).map(|(path, krate)| {
             format!("{path}: listed for {krate}, but no crate compiles it in")
@@ -200,20 +205,32 @@ pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeS
 }
 
 pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
+    classify_with(files, members, COMPILED_IN)
+}
+
+fn classify_with(files: &[String], members: &Members, listed: &[(&str, &str)]) -> Selection {
     if files.iter().any(|f| runs_all(f)) {
         return Selection::All(members.keys().cloned().collect());
     }
-    if files.iter().all(|f| is_docs_file(f) && !is_compiled_in(f)) {
+    let is_listed = |path: &str| listed.iter().any(|(p, _)| *p == path);
+    if files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
         return Selection::Docs;
     }
     let compiled: BTreeSet<String> = files
         .iter()
-        .flat_map(|f| compiled_in(f))
+        .flat_map(|f| {
+            listed
+                .iter()
+                .filter_map(move |(p, krate)| (*p == f.as_str()).then_some(*krate))
+        })
         .filter(|name| members.contains_key(*name))
         .map(str::to_owned)
         .collect();
+    // Docs files do not own a crate; listed files run their crate without
+    // dependents (`docs/ci.md`, "Selection").
     let touched = files
         .iter()
+        .filter(|f| !is_docs_file(f) && !is_listed(f))
         .filter_map(|f| owner(f, members))
         .map(str::to_owned)
         .collect();
