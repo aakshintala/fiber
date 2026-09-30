@@ -168,9 +168,8 @@ Every tool call is sent with a result, because every provider refuses a
 request that has a call without one. A call with no `tool_call_completed`,
 which only a crash can leave (`docs/events.md`, "Resume"), is sent with a
 fixed result: that it never ran when the log shows no `tool_call_started`, or
-that its outcome is unknown when it does. Whether such a call may be run
-again is
-[Revisit: may a tool that never finished be re-run after a crash?](https://github.com/aakshintala/fiber/issues/40).
+that its outcome is unknown when it does. Fiber never runs such a call
+again; the model may make it again (`docs/events.md`, "Resume").
 
 The reasoning state a provider returns with a reply, such as Anthropic's
 signed thinking blocks, OpenAI's encrypted reasoning and Gemini's thought

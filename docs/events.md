@@ -1117,7 +1117,7 @@ What the reader can tell about work that was in flight, from the log alone:
 | What the log shows | What it means |
 |---|---|
 | `tool_call_requested`, no `tool_call_started` | provably never ran; safe to run or discard |
-| `tool_call_started`, no `tool_call_completed` | uncertain; never blindly re-run |
+| `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown |
 | `tool_call_completed` | ran, with its outcome |
 | `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, unless a `rewound` lists the job |
 | `turn_started`, no `turn_completed` | the turn was cut short; render what was logged and say so, unless a `fiber_exited` with `suspended_on` follows, in which case the turn resumes with the request raised again |
@@ -1128,6 +1128,13 @@ What the reader can tell about work that was in flight, from the log alone:
 On open, Fiber writes that `job_completed` and does not touch any process. A
 crash does not kill a child in its own process group, so Fiber cannot know
 whether the job finished or still runs, and the status is not `cancelled`.
+
+Fiber re-runs no call a crash left without a result, even one that only reads.
+The turn it belonged to ended with the crash, so a re-run would answer the
+earlier call with a later result, and a call that only reads, such as a search
+across a large repository, can still be slow. The model is sent that the outcome
+is unknown (`docs/loop.md`, "What the model is sent") and may make the call
+again.
 
 Partial assistant text from an interrupted response is gone, because deltas are
 ephemeral. The log does not pay to store text a completion would supersede.

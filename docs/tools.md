@@ -1172,8 +1172,6 @@ Claude Code's opt-in automatic mode starts deferring tools.
 
 ## Not settled here
 
-- Whether a call that started but never finished may be re-run after a crash:
-  [Revisit: may a tool that never finished be re-run after a crash?](https://github.com/aakshintala/fiber/issues/40)
 - Each tool's own design: the tickets indexed in
   [Epic: tools](https://github.com/aakshintala/fiber/issues/59).
 - Delegates are `docs/delegates.md`, which lists what it leaves open.
