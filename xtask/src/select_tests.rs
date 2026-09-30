@@ -669,6 +669,34 @@ fn include_bytes_yields_its_target() {
 }
 
 #[test]
+fn a_trailing_comma_on_an_include_is_accepted() {
+    for extra in [
+        r#"include_str!("../../../README.md",);"#,
+        r#"include_bytes!("../../../README.md",);"#,
+    ] {
+        let source = format!("{}{extra}", listed_includes());
+        let files = [contract_src(&source)];
+        assert_eq!(
+            compiled_in_mismatches(&files, &members()).unwrap(),
+            ["README.md: contract compiles it in, but the compiled-in list does not list it"],
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn an_include_with_tokens_after_the_literal_fails() {
+    let source = format!(r#"{}include_str!("a.md", "b");"#, listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: include_str! argument is not a string literal; the compiled-in check cannot resolve it"
+        ]
+    );
+}
+
+#[test]
 fn an_include_str_in_a_comment_is_ignored() {
     let source = format!(
         "{}// include_str!(\"../../../README.md\");",

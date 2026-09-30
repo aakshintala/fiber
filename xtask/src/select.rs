@@ -90,8 +90,13 @@ fn include_path(stream: TokenStream) -> Option<String> {
     let TokenTree::Literal(lit) = tokens.next()? else {
         return None;
     };
-    if tokens.next().is_some() {
-        return None;
+    if let Some(tree) = tokens.next() {
+        let TokenTree::Punct(p) = tree else {
+            return None;
+        };
+        if p.as_char() != ',' || tokens.next().is_some() {
+            return None;
+        }
     }
     string_literal(&lit.to_string())
 }
