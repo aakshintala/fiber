@@ -63,8 +63,10 @@ pub struct ReasoningCompleted {
     pub provider_item: Option<Value>,
 }
 
-/// `tool_call_requested`: the model finished emitting the call.
+/// `tool_call_requested`: the model finished emitting the call. A line with
+/// `repaired` or `repairs` but not both fails to read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "ToolCallRequestedLine")]
 pub struct ToolCallRequested {
     /// The tool's name as the model called it.
     pub name: String,
@@ -74,6 +76,70 @@ pub struct ToolCallRequested {
     /// The provider's own id for the call; absent when the reply carried none.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub provider_id: Option<ProviderCallId>,
+    /// The repair, absent when nothing was repaired.
+    #[serde(flatten, skip_serializing_if = "Option::is_none")]
+    pub repair: Option<ArgumentRepair>,
+}
+
+/// The arguments after repair and the fixes that made them.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ArgumentRepair {
+    /// The arguments after repair (`docs/tools.md`, "Before a call runs").
+    pub repaired: Map<String, Value>,
+    /// One entry per fix.
+    pub repairs: Vec<Repair>,
+}
+
+/// `tool_call_requested` as a line carries it, before `repaired` and
+/// `repairs` are checked to come together.
+#[derive(Deserialize)]
+struct ToolCallRequestedLine {
+    name: String,
+    arguments: Value,
+    provider_id: Option<ProviderCallId>,
+    repaired: Option<Map<String, Value>>,
+    repairs: Option<Vec<Repair>>,
+}
+
+impl TryFrom<ToolCallRequestedLine> for ToolCallRequested {
+    type Error = &'static str;
+
+    fn try_from(line: ToolCallRequestedLine) -> Result<Self, Self::Error> {
+        let repair = match (line.repaired, line.repairs) {
+            (Some(repaired), Some(repairs)) => Some(ArgumentRepair { repaired, repairs }),
+            (None, None) => None,
+            _ => return Err("`repaired` and `repairs` come together or not at all"),
+        };
+        Ok(Self {
+            name: line.name,
+            arguments: line.arguments,
+            provider_id: line.provider_id,
+            repair,
+        })
+    }
+}
+
+/// One fix made to a tool call's arguments.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Repair {
+    /// A JSON Pointer into `arguments`.
+    pub path: String,
+    /// What was done there.
+    pub fix: RepairFix,
+}
+
+/// How an argument was repaired.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RepairFix {
+    /// A `null` sent for an optional property was dropped.
+    NullDropped,
+    /// A string became the number the schema wants.
+    StringToNumber,
+    /// A string became the boolean the schema wants.
+    StringToBoolean,
+    /// A string holding JSON became the value it holds.
+    StringParsed,
 }
 
 /// `tool_call_started`: execution began.
