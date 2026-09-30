@@ -237,3 +237,6 @@ Only what no tool can:
 - no function with one caller whose body only passes its arguments on to
   another function, and no Fiber-defined trait with one implementation
   other than the three seams (`docs/architecture.md`)
+- no code that a standard-library feature, a lint or a crate listed in
+  `docs/dependencies.md` already covers. A replacement that adds lines, memory
+  or behaviour is not a simplification
