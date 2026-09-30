@@ -130,13 +130,18 @@ fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
         .collect();
     let rx = relay(watcher);
     let mut got = Vec::new();
+    let mut ephemeral = 0;
     while got.len() < durable.len() {
         let line = next(&rx).unwrap();
         if line.is_durable() {
             got.push(line);
+        } else {
+            ephemeral += 1;
         }
     }
     assert_eq!(got, durable);
+    // The queue is bounded: the ephemeral lines it had no room for are gone.
+    assert!(ephemeral < durable.len(), "{ephemeral} ephemeral lines");
     // Once caught up, lines arrive as they are written.
     let live = log.append(&delta("live"), None, None).unwrap();
     assert_eq!(next(&rx), Some(live));
