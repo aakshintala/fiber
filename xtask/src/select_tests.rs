@@ -1,5 +1,7 @@
 use super::*;
 
+use crate::rules::RustFile;
+
 fn members() -> Members {
     let member = |dir: &str, deps: &[&str]| Member {
         dir: dir.to_owned(),
@@ -44,6 +46,11 @@ fn manifests_toolchain_and_workflows_run_everything() {
         "crates/log/Cargo.toml",
         "rust-toolchain.toml",
         ".github/workflows/ci.yml",
+        "scripts/check",
+        "clippy.toml",
+        "deny.toml",
+        ".cargo/config.toml",
+        ".config/nextest.toml",
     ] {
         let selection = classify(&strings(&["docs/ci.md", trigger]), &members());
         assert_eq!(selection, Selection::All(everything.clone()), "{trigger}");
@@ -100,9 +107,88 @@ fn the_innermost_crate_owns_a_file() {
 #[test]
 fn code_outside_every_crate_runs_no_crate() {
     assert_eq!(
-        classify(&strings(&["scripts/check"]), &members()),
+        classify(&strings(&["LICENSE"]), &members()),
         Selection::Crates(vec![])
     );
+}
+
+#[test]
+fn a_compiled_in_doc_runs_its_crate_alone() {
+    for path in ["docs/events.md", "docs/errors.md", "docs/invocation.md"] {
+        let selection = classify(&strings(&[path]), &members());
+        assert_eq!(
+            selection,
+            Selection::Crates(strings(&["contract"])),
+            "{path}"
+        );
+        assert_eq!(selection.mode(), "crates", "{path}");
+    }
+}
+
+#[test]
+fn readme_alone_runs_the_docs_job() {
+    assert_eq!(
+        classify(&strings(&["README.md"]), &members()),
+        Selection::Docs
+    );
+}
+
+#[test]
+fn a_crate_prompt_runs_the_docs_job() {
+    assert_eq!(
+        classify(&strings(&["crates/loop/prompt/system.md"]), &members()),
+        Selection::Docs
+    );
+}
+
+#[test]
+fn scripts_check_alone_runs_everything() {
+    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    let selection = classify(&strings(&["scripts/check"]), &members());
+    assert_eq!(selection, Selection::All(everything));
+    assert_eq!(selection.mode(), "all");
+}
+
+#[test]
+fn clippy_toml_runs_everything() {
+    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    assert_eq!(
+        classify(&strings(&["clippy.toml"]), &members()),
+        Selection::All(everything)
+    );
+}
+
+#[test]
+fn nextest_toml_runs_everything() {
+    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    assert_eq!(
+        classify(&strings(&[".config/nextest.toml"]), &members()),
+        Selection::All(everything)
+    );
+}
+
+#[test]
+fn a_compiled_in_doc_unions_with_a_crate_change() {
+    let selection = classify(
+        &strings(&["docs/events.md", "crates/log/src/lib.rs"]),
+        &members(),
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["contract", "log", "loop"]))
+    );
+}
+
+#[test]
+fn uncompiled_docs_in_a_mixed_diff_do_not_add_crates() {
+    for extra in ["crates/contract/README.md", "crates/loop/prompt/system.md"] {
+        let selection = classify(&strings(&["docs/events.md", extra]), &members());
+        assert_eq!(
+            selection,
+            Selection::Crates(strings(&["contract"])),
+            "{extra}"
+        );
+    }
 }
 
 #[test]
@@ -443,5 +529,182 @@ fn dependents_follow_a_chain_of_any_length() {
     assert_eq!(
         selected.into_iter().collect::<Vec<_>>(),
         strings(&["log", "loop", "tui", "zed"])
+    );
+}
+
+fn contract_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "contract".to_owned(),
+        path: "crates/contract/src/lib.rs".to_owned(),
+        rel: "src/lib.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn listed_includes() -> String {
+    COMPILED_IN
+        .iter()
+        .map(|(path, _)| format!("include_str!(\"../../../{path}\");\n"))
+        .collect()
+}
+
+#[test]
+fn a_listed_include_passes() {
+    let files = [contract_src(&listed_includes())];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_unlisted_outside_include_fails() {
+    let source = format!("{}include_str!(\"../../../README.md\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        ["README.md: contract compiles it in, but the compiled-in list does not list it"]
+    );
+}
+
+#[test]
+fn an_unlisted_non_docs_outside_include_fails() {
+    let source = format!("{}include_str!(\"../../../LICENSE\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        ["LICENSE: contract compiles it in, but the compiled-in list does not list it"]
+    );
+}
+
+#[test]
+fn an_unlisted_markdown_inside_the_crate_dir_fails() {
+    let source = format!(
+        "{}include_str!(\"../prompt/system.md\");",
+        listed_includes()
+    );
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        [
+            "crates/contract/prompt/system.md: contract compiles it in, but the compiled-in list does not list it"
+        ]
+    );
+}
+
+#[test]
+fn a_listed_markdown_inside_the_crate_dir_runs_that_crate_alone() {
+    let mut listed = COMPILED_IN.to_vec();
+    listed.push(("crates/contract/prompt/system.md", "contract"));
+    let selection = classify_with(
+        &strings(&["crates/contract/prompt/system.md"]),
+        &members(),
+        &listed,
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["contract"])));
+    assert_eq!(selection.mode(), "crates");
+}
+
+#[test]
+fn a_non_docs_include_inside_the_crate_dir_is_unlisted() {
+    let source = format!("{}include_str!(\"owned.bin\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_raw_string_include_is_resolved() {
+    for extra in [
+        r#"include_str!(r"../../../README.md");"#,
+        r##"include_str!(r#"../../../README.md"#);"##,
+    ] {
+        let source = format!("{}{extra}", listed_includes());
+        let files = [contract_src(&source)];
+        assert_eq!(
+            compiled_in_mismatches(&files, &members()).unwrap(),
+            ["README.md: contract compiles it in, but the compiled-in list does not list it"],
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn an_unresolvable_include_argument_fails() {
+    let source = format!(
+        "{}include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../README.md\"));",
+        listed_includes()
+    );
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: include_str! argument is not a string literal; the compiled-in check cannot resolve it"
+        ]
+    );
+}
+
+#[test]
+fn another_macro_with_a_string_argument_yields_no_target() {
+    let source = format!("{}my_macro!(\"../x.md\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn include_bytes_yields_its_target() {
+    let source = format!("{}include_bytes!(\"../x.md\");", listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        [
+            "crates/contract/x.md: contract compiles it in, but the compiled-in list does not list it"
+        ]
+    );
+}
+
+#[test]
+fn a_trailing_comma_on_an_include_is_accepted() {
+    for extra in [
+        r#"include_str!("../../../README.md",);"#,
+        r#"include_bytes!("../../../README.md",);"#,
+    ] {
+        let source = format!("{}{extra}", listed_includes());
+        let files = [contract_src(&source)];
+        assert_eq!(
+            compiled_in_mismatches(&files, &members()).unwrap(),
+            ["README.md: contract compiles it in, but the compiled-in list does not list it"],
+            "{extra}"
+        );
+    }
+}
+
+#[test]
+fn an_include_with_tokens_after_the_literal_fails() {
+    let source = format!(r#"{}include_str!("a.md", "b");"#, listed_includes());
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        [
+            "crates/contract/src/lib.rs: include_str! argument is not a string literal; the compiled-in check cannot resolve it"
+        ]
+    );
+}
+
+#[test]
+fn an_include_str_in_a_comment_is_ignored() {
+    let source = format!(
+        "{}// include_str!(\"../../../README.md\");",
+        listed_includes()
+    );
+    let files = [contract_src(&source)];
+    assert_eq!(
+        compiled_in_mismatches(&files, &members()).unwrap(),
+        Vec::<String>::new()
     );
 }

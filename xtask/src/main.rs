@@ -14,7 +14,7 @@
 //! - `ticket`: the issue the pull request body on stdin resolves
 //! - `bug-filter FILE...`: the nextest filter, packages and test files among
 //!   FILE, with how each is declared, as tab-separated lines
-//! - `line-cap`, `unsafe-table`, `dependency-list`, `check-docs`: the checks
+//! - `line-cap`, `unsafe-table`, `compiled-in`, `dependency-list`, `check-docs`: the checks
 
 #![allow(
     clippy::print_stdout,
@@ -161,6 +161,14 @@ fn run(args: &[String]) -> Result<bool, String> {
             report(
                 "unsafe-table",
                 &rules::unsafe_mismatches(&files, &read("docs/code-quality.md")?)?,
+                "ok",
+            )
+        }
+        "compiled-in" => {
+            let members = workspace_members()?;
+            report(
+                "compiled-in",
+                &select::compiled_in_mismatches(&rust_files(&members)?, &members)?,
                 "ok",
             )
         }

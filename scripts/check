@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# The gate (docs/workflow.md, "The gate"). Runs the checks for the crates a
-# diff touches and every crate that depends on them, as docs/ci.md,
-# "Selection", chooses them.
+# The gate (docs/workflow.md, "The gate"). Runs the checks docs/ci.md,
+# "Selection", chooses for the diff.
 #
 # Usage: scripts/check [--base REV] [--platform-only | --shared-only]
 #
@@ -56,9 +55,10 @@ if [ "$scope" != platform ]; then
       echo "== cargo fmt --check"
       cargo fmt --check "${package_args[@]}"
     fi
-    echo "== file size, unsafe table and dependency list"
+    echo "== file size, unsafe table, compiled-in list and dependency list"
     cargo xtask line-cap
     cargo xtask unsafe-table
+    cargo xtask compiled-in
     cargo xtask dependency-list
   fi
 fi
