@@ -3,11 +3,23 @@
 #![allow(unused)]
 use std::hint::black_box;
 
+#[cfg(any(feature = "image", feature = "image-fir"))]
+mod image_timing;
+
 fn text(lines: usize) -> String {
     (0..lines).map(|i| format!("line {i}: the quick brown fox_{i} jumps over 42 lazy dogs\n")).collect()
 }
 
 fn main() {
+    #[cfg(any(feature = "image", feature = "image-fir"))]
+    {
+        if image_timing::handle_child_args() {
+            return;
+        }
+        if image_timing::run_if_timing() {
+            return;
+        }
+    }
     #[cfg(feature = "serde_json")]
     {
         #[derive(serde::Serialize, serde::Deserialize)]

@@ -359,3 +359,89 @@ downscaling a 9000×9000 image keeps the original width through the first pass
 and holds a large intermediate float buffer on top of the decoded pixels. The
 `image-parts` and `image-fir` paths resize in 8-bit buffers via
 `fast_image_resize` and do not build that two-pass `Rgba32F` pipeline.
+
+## Follow-up: how long a resize takes (macOS)
+
+Platform for every figure below: macOS 26.6.2 (build 25G83), Apple M3 Pro.
+These timings are macOS-only; Linux was not re-run. Release builds of
+`research/dependency-rss` with `--features image` or `--features image-fir`.
+In-process steps use `std::time::Instant`, two warm-up iterations then 20
+measured iterations; tables show median and p90 in milliseconds. Set
+`IMAGE_TIMING=1` to print timings (see `src/image_timing.rs`). Raw stdout:
+`raw/macos-followup/timing/`.
+
+Workload per step matches the resize research above: header is
+`ImageReader::open` → `with_guessed_format` → `into_dimensions`; decode is
+`load_from_memory`; resize fits inside 2000×2000 (Lanczos3, never enlarging);
+primary encode is JPEG quality 80 for a JPEG input and `PngEncoder::new` PNG
+otherwise; jpeg_fallback is JPEG quality 80 of the resized pixels (the PNG-over-
+1 MiB-base64 fallback). Base64 length is standard encoding size with no
+newlines. The 1 MiB base64 cap is 1,048,576 encoded bytes.
+
+Median milliseconds by step (`image` vs `image-fir`):
+
+| Fixture | Step | `image` med | `image` p90 | `image-fir` med | `image-fir` p90 |
+|---|---|---:|---:|---:|---:|
+| photo-4000x3000.jpg | header | 0.5 | 0.6 | 0.5 | 0.6 |
+| | decode | 50.8 | 55.3 | 54.3 | 71.3 |
+| | resize | 114.0 | 155.4 | 25.6 | 34.8 |
+| | encode (primary) | 24.7 | 27.1 | 24.4 | 33.2 |
+| | jpeg_fallback | 24.1 | 27.2 | 24.1 | 33.7 |
+| shot-4000x3000.png | header | 0.1 | 0.1 | 0.1 | 0.1 |
+| | decode | 7.7 | 10.1 | 7.5 | 8.2 |
+| | resize | 113.7 | 162.8 | 24.9 | 27.6 |
+| | encode (primary PNG) | 5.5 | 7.6 | 5.1 | 5.8 |
+| | jpeg_fallback | 24.1 | 31.2 | 24.2 | 26.4 |
+| flat-9000x9000.png | header | 0.1 | 0.1 | 0.1 | 0.1 |
+| | decode | 21.1 | 28.8 | 21.1 | 22.9 |
+| | resize | 602.8 | 686.2 | 154.2 | 163.9 |
+| | encode (primary PNG) | 2.0 | 2.2 | 1.9 | 2.1 |
+| | jpeg_fallback | 25.6 | 28.1 | 25.1 | 27.8 |
+| small.gif | decode | 0.5 | 0.5 | 0.6 | 0.9 |
+| small.webp | decode | 1.4 | 1.4 | 1.7 | 1.9 |
+
+(Header and resize are sub-millisecond for the small fixtures; full numbers are
+in the raw files.)
+
+Output size after fit (primary encode and jpeg_fallback; base64 length):
+
+| Fixture | `image` bytes / b64 | `image-fir` bytes / b64 | Over 1 MiB b64 (primary / jpeg_fb) |
+|---|---|---|---|
+| photo-4000x3000.jpg | 320,299 / 427,068 | 320,715 / 427,620 | no / no |
+| shot-4000x3000.png | 566,972 / 755,964 (PNG); fb 974,441 / 1,299,256 | 549,201 / 732,268 (PNG); fb 973,583 / 1,298,112 | no / yes (both backends) |
+| flat-9000x9000.png | 63,621 / 84,828 | 63,621 / 84,828 | no / no |
+| small.gif | 223,899 / 298,532 | 223,899 / 298,532 | no / no |
+| small.webp | 278,304 / 371,072 | 278,304 / 371,072 | no / no |
+
+For the 4000×3000 screenshot, the default PNG encoder (`PngEncoder::new`) stays
+under 1 MiB base64, but JPEG quality 80 of the same resized pixels is about
+1.30 MiB base64 on both paths. That is the case where a base64 cap would force
+the JPEG fallback even though the PNG fits.
+
+PNG compression on the fitted screenshot (`shot-4000x3000.png` → 2000×1500),
+`PngEncoder::new_with_quality` with `FilterType::Adaptive` (median ms, bytes,
+base64):
+
+| Compression | `image` med ms | bytes / b64 | `image-fir` med ms | bytes / b64 |
+|---|---:|---|---:|---|
+| Fast | 5.1 | 566,972 / 755,964 | 6.9 | 549,201 / 732,268 |
+| Default | 22.0 | 134,074 / 178,768 | 29.3 | 122,006 / 162,676 |
+| Best | 55.4 | 130,235 / 173,648 | 51.0 | 116,242 / 154,992 |
+
+Default or Best shrink the PNG well below 1 MiB base64 at the cost of tens of
+milliseconds more encode time. Fast matches the primary PNG encode above and
+keeps the large screenshot PNG.
+
+Process spawn (parent times `Command::new(current_exe)` through child exit,
+50 runs, median / p90 ms). No-op child: `IMAGE_CHILD=noop`. Fit child:
+`IMAGE_CHILD=fit` on `photo-4000x3000.jpg`, full pipeline, output to a temp
+file.
+
+| Child | `image` med / p90 | `image-fir` med / p90 |
+|---|---:|---:|
+| noop | 1.7 / 1.8 | 1.7 / 1.9 |
+| fit (photo) | 201.0 / 271.9 | 107.3 / 116.7 |
+
+A short-lived decoder child pays about 2 ms to start on this Mac; the photo
+fit adds about 100–200 ms depending on the resize backend, on top of that spawn
+overhead.
