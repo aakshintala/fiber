@@ -1,0 +1,38 @@
+dependency-rss v0.0.0 (/Users/aakshintala/work/fiber-worktrees/130-image/research/dependency-rss)
+fast_image_resize v6.1.0
+cfg-if v1.0.5
+document-features v0.2.12 (proc-macro)
+litrs v1.0.0
+num-traits v0.2.19
+thiserror v2.0.21
+thiserror-impl v2.0.21 (proc-macro)
+proc-macro2 v1.0.107
+unicode-ident v1.0.26
+quote v1.0.47
+proc-macro2 v1.0.107 (*)
+syn v3.0.6
+proc-macro2 v1.0.107 (*)
+quote v1.0.47 (*)
+unicode-ident v1.0.26
+gif v0.14.2
+weezl v0.1.12
+image-webp v0.2.4
+byteorder-lite v0.1.0
+quick-error v2.0.1
+jpeg-encoder v0.7.1
+png v0.18.1
+bitflags v2.13.2
+crc32fast v1.5.2
+cfg-if v1.0.5
+fdeflate v0.3.7
+simd-adler32 v0.3.10
+flate2 v1.1.10
+crc32fast v1.5.2 (*)
+miniz_oxide v0.9.1
+adler2 v2.0.1
+simd-adler32 v0.3.10
+miniz_oxide v0.8.9
+adler2 v2.0.1
+simd-adler32 v0.3.10
+zune-jpeg v0.5.15
+zune-core v0.5.3

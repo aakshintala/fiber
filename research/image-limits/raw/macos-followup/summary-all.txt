@@ -1,0 +1,4 @@
+image all_fixtures peak_kib=158128 over=157120 binary_bytes=1296496
+image-parts all_fixtures peak_kib=69104 over=68096 binary_bytes=3173408
+image-fir all_fixtures peak_kib=73360 over=72352 binary_bytes=3162592
+image-header all_fixtures peak_kib=4896 over=3888 binary_bytes=977312

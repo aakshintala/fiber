@@ -275,3 +275,87 @@ rejected larger images and did not downscale. pi's 4.5 MB base64 cap is under An
 None seen. One note for #190: `gemini-3.1-flash-lite` answered 1024x768 and
 500x500 for images of 8000x6000 and 9000x9000; those are guesses about the
 resized image, not errors.
+
+## Follow-up: where the image crate's memory goes (macOS)
+
+Platform for every figure below: macOS 26.6.2 (build 25G83), Apple M3 Pro
+(`Mac15,6`), Rust 1.98.1. Peak memory is the median of five runs of
+`/usr/bin/time -l` peak memory footprint under `script(1)`, minus the empty
+program, using `research/dependency-rss` (same fixtures and workload as above).
+Raw numbers: `raw/macos-followup/`.
+
+Probe features added for this pass:
+
+- `image-fir`: `image` 0.25.10 decodes and encodes (four codecs,
+  `default-features = false`); `fast_image_resize` 6.1.0 resizes with Lanczos3
+  convolution. Resize uses fast_image_resize's optional `image` feature
+  (`IntoImageView` / `IntoImageViewMut` on `DynamicImage`). Fit-inside-2000x2000
+  arithmetic matches `image-parts`.
+- `image-header`: `ImageReader::open` → `with_guessed_format` →
+  `into_dimensions` on all five fixtures (no pixel decode).
+
+Empty baseline on this machine: 1,008 KiB peak footprint (331 KiB stripped
+binary).
+
+All five fixtures in one process (peak is the costliest step), KiB over empty:
+
+| Feature | Peak over empty (KiB) | Stripped binary (KiB) | Unique crates |
+|---|---:|---:|---:|
+| `image` | 157,120 | 1,266 | 23 |
+| `image-parts` | 68,096 | 3,099 | 28 |
+| `image-fir` | 72,352 | 3,088 | 32 |
+| `image-header` | 3,888 | 954 | 23 |
+
+Per fixture (`IMAGE_ONLY` selects one file), KiB over empty:
+
+| Feature | photo-4000x3000.jpg | shot-4000x3000.png | flat-9000x9000.png |
+|---|---:|---:|---:|
+| `image` | 154,960 | 140,016 | 532,464 |
+| `image-parts` | 66,592 | 62,960 | 304,672 |
+| `image-fir` | 70,160 | 63,856 | 304,752 |
+
+`image-header` over empty (all five headers in one run, including
+`flat-9000x9000.png`): 3,888 KiB. Header-only output:
+`raw/macos-followup/image-header-output.txt`.
+
+On 12-megapixel photo and screenshot inputs, swapping `imageops::resize` for
+`fast_image_resize` (`image-fir`) drops peak by about 85,000 KiB and lands
+within a few thousand KiB of `image-parts`. On `flat-9000x9000.png`,
+`image-fir` and `image-parts` match within 80 KiB; `image` stays about
+228,000 KiB higher, so the extra cost there is not the resizer crate choice
+alone but how the `image` resize path allocates while scaling.
+
+### `image::Limits` defaults (image 0.25.10)
+
+From `src/io/limits.rs`:
+
+```rust
+        Limits {
+            max_image_width: None,
+            max_image_height: None,
+            max_alloc: Some(512 * 1024 * 1024),
+        }
+```
+
+(`Default for Limits`, lines 49–56.) `max_image_width` and `max_image_height`
+default to no limit; `max_alloc` defaults to 512 MiB.
+
+`load_from_memory` and `ImageReader::decode` both use these defaults:
+`ImageReader::new` sets `limits: Limits::default()` (`src/io/image_reader_type.rs`,
+lines 89–94). `load_from_memory` builds a reader and calls `decode()`
+(`src/images/dynimage.rs`, lines 1676–1679). `decode` clones that limit set,
+calls `limits.reserve(decoder.total_bytes())?`, then `decoder.set_limits(limits)`
+before `DynamicImage::from_decoder` (`src/io/image_reader_type.rs`, lines
+314–320).
+
+### Why `imageops::resize` costs more memory
+
+`DynamicImage::resize` calls `imageops::resize` (`src/images/dynimage.rs`, lines
+875–882, 892–898). For Lanczos3, `imageops::resize` runs a vertical pass into
+a full-width `Rgba32FImage` (32-bit float per channel), then a horizontal pass
+(`src/imageops/sample.rs`, lines 1008–1016). The vertical buffer is sized
+`width × new_height` in `f32` RGBA (`vertical_sample`, lines 506–507), so
+downscaling a 9000×9000 image keeps the original width through the first pass
+and holds a large intermediate float buffer on top of the decoded pixels. The
+`image-parts` and `image-fir` paths resize in 8-bit buffers via
+`fast_image_resize` and do not build that two-pass `Rgba32F` pipeline.
