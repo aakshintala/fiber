@@ -71,6 +71,10 @@ codes! {
     InvalidArguments,
     /// The provider rejected the request for any other reason.
     InvalidRequest,
+    /// A filesystem failure; the message names the path.
+    IoFailed,
+    /// A log line that cannot be encoded, or does not parse.
+    LogCorrupt,
     /// A command line Fiber could not read.
     Malformed,
     /// A cancelled call the server may still act on.
@@ -146,7 +150,7 @@ codes! {
     Unreachable,
     /// A file tool was given a directory, device or file it cannot handle.
     UnsupportedFile,
-    /// Fiber was called wrongly; exits 2.
+    /// The invocation or its environment is wrong; exits 2.
     Usage,
 }
 

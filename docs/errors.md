@@ -65,8 +65,10 @@ prints the sentence on stderr only.
 
 | Code | When | Exit |
 |---|---|---|
-| `usage` | a bad flag, two prompt sources, no prompt with stdin on a terminal, `fiber` without a tty | 2 |
+| `usage` | the invocation or its environment is wrong: a bad flag, two prompt sources, no prompt with stdin on a terminal, `fiber` without a tty, an empty or relative `FIBER_HOME` | 2 |
 | `config_invalid` | invalid JSON or a value of the wrong type in a configuration file (`docs/configuration.md`) | 1 |
+| `io_failed` | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
+| `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model (`docs/model-routing.md`, "Choosing the model") | 1 |
 | `credential_missing` | the session model's credential cannot be found | 1 |
 | `session_not_found` | a resume names no session | 1 |
@@ -191,6 +193,8 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
 | `invalid_arguments` | tool call | the arguments failed the tool's schema or checks |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
+| `io_failed` | exit | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
+| `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
 | `mcp_server_unapproved` | exit | a repository's MCP server is not approved |
@@ -223,7 +227,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
-| `usage` | exit | Fiber was called wrongly; exits 2 |
+| `usage` | exit | the invocation or its environment is wrong; exits 2 |
 
 Notices, for a failure outside any action:
 
@@ -242,7 +246,7 @@ are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here
 
-- What a session does when a log write fails, such as a full disk, and which
-  code `fiber serve` exits with then.
+- What a session does when a log write fails, such as a full disk. The code is
+  `io_failed`.
 - Rate-limit, overload, quota, billing and refusal bodies were not reached by
   the probe; their matches rest on protocol documentation until one is seen.
