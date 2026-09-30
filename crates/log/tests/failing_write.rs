@@ -6,6 +6,7 @@
     clippy::unwrap_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::expect_used,
     reason = "test code may unwrap, panic and index (docs/code-quality.md, \"Lints\"), helpers outside a #[test] included"
 )]
 
@@ -14,6 +15,9 @@ mod common;
 use std::fs;
 use std::path::Path;
 use std::process::Command;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use common::*;
 use contract::ErrorCode;
@@ -30,10 +34,17 @@ fn child_writing_past_a_file_size_limit() {
     };
     let log = Log::open(Path::new(&sessions), id("s_1")).unwrap();
     let mut watcher = log.watch();
+    // The watcher falls far behind before the failure.
+    let written: Vec<_> = (0..STEPS)
+        .map(|_| {
+            log.append(&delta("x"), None, None).unwrap();
+            log.append(&empty("step_started"), None, None).unwrap()
+        })
+        .collect();
 
     let big = event(
         "session_named",
-        json!({"name": "n".repeat(64 * 1024), "by": "person"}),
+        json!({"name": "n".repeat(4 * 1024 * 1024), "by": "person"}),
     );
     let first = log.append(&big, None, None).unwrap_err();
     assert!(matches!(first, Error::Io { .. }), "{first:?}");
@@ -49,11 +60,36 @@ fn child_writing_past_a_file_size_limit() {
     assert_eq!(later.code(), ErrorCode::IoFailed);
     assert!(log.append(&delta("x"), None, None).is_err());
 
-    // A watcher is told, rather than left waiting for a line it will never
-    // get.
-    let ended = watcher.recv().unwrap_err();
+    // The lagging watcher first gets every durable line that was written,
+    // then the failure, rather than waiting for a line it will never get.
+    let mut durable = Vec::new();
+    let ended = loop {
+        match watcher.recv() {
+            Ok(Some(line)) if line.is_durable() => durable.push(line),
+            Ok(Some(_)) => {}
+            Ok(None) => panic!("the watcher ended without the failure"),
+            Err(e) => break e,
+        }
+    };
+    assert_eq!(durable, written);
     assert!(matches!(ended, Error::Poisoned { .. }), "{ended:?}");
+
+    // A watcher made after the failure gets it at once.
+    let mut late = log.watch();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(late.recv().map(|l| l.is_some()).map_err(|e| e.code()))
+            .unwrap();
+    });
+    let got = rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("a watcher of a stopped log to return at once");
+    assert_eq!(got, Err(ErrorCode::IoFailed));
 }
+
+/// How many durable lines the child writes before its write fails: far more
+/// than a watcher's queue holds.
+const STEPS: usize = 3000;
 
 #[test]
 fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {
@@ -64,10 +100,11 @@ fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {
     let path = tmp.session(&id("s_1")).join("events.jsonl");
     let before = fs::read(&path).unwrap();
 
-    // 16 blocks is at least 8 KiB, whatever the shell's block size.
+    // 2,048 blocks is at least 1 MiB, whatever the shell's block size: room
+    // for the small lines, not for the big one.
     let status = Command::new("/bin/sh")
         .arg("-c")
-        .arg(r#"trap '' XFSZ; ulimit -f 16; exec "$0" "$@""#)
+        .arg(r#"trap '' XFSZ; ulimit -f 2048; exec "$0" "$@""#)
         .arg(std::env::current_exe().unwrap())
         .args([
             "--exact",
@@ -85,9 +122,11 @@ fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {
     assert!(torn.starts_with(&before));
 
     let dir = tmp.session(&id("s_1"));
-    assert_eq!(read(&dir).unwrap(), std::slice::from_ref(&first));
+    let complete = read(&dir).unwrap();
+    assert_eq!(complete.len(), 1 + STEPS);
+    assert_eq!(complete[0], first);
     let log = Log::open(tmp.path(), id("s_1")).unwrap();
     let next = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(next.seq.map(|s| s.0), Some(1));
-    assert_eq!(read(&dir).unwrap(), [first, next]);
+    assert_eq!(next.seq.map(|s| s.0), Some(1 + STEPS as u64));
+    assert_eq!(read(&dir).unwrap().len(), 2 + STEPS);
 }

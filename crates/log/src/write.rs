@@ -6,14 +6,14 @@ use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use contract::events::{Class, Event};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
-use crate::read::{Feed, Watcher, complete_len, watcher};
+use crate::read::{Queue, Watcher, complete_len};
 use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 
 /// A session's log, open for writing. Only one exists per session at a time,
@@ -37,7 +37,7 @@ struct Inner {
     /// The `seq` the next durable line gets.
     next: u64,
     fsyncs: u64,
-    feeds: Vec<Feed>,
+    watchers: Vec<Weak<Queue>>,
     /// Why the log stopped, once a write or fsync failed.
     failed: Option<String>,
 }
@@ -143,16 +143,29 @@ impl Log {
             }
             Class::Ephemeral => {}
         }
-        inner.feeds.retain_mut(|feed| feed.push(&line));
+        inner.watchers.retain(|w| match w.upgrade() {
+            Some(queue) => {
+                queue.push(&line);
+                true
+            }
+            None => false,
+        });
         Ok(line)
     }
 
-    /// A watcher that receives every event appended from now on.
+    /// A watcher that receives every event appended from now on. On a log
+    /// stopped by a failed write, one that returns the failure at once.
     pub fn watch(&self) -> Watcher {
         let mut inner = self.lock();
-        let (feed, watcher) = watcher(inner.dir.clone(), inner.next);
-        inner.feeds.push(feed);
-        watcher
+        let queue = Arc::new(Queue::default());
+        if let Some(cause) = &inner.failed {
+            queue.fail(&inner.session_id.0, cause);
+        }
+        // Forget watchers already dropped, so attaching and leaving while
+        // idle keeps nothing.
+        inner.watchers.retain(|w| w.strong_count() > 0);
+        inner.watchers.push(Arc::downgrade(&queue));
+        Watcher::new(queue, inner.dir.clone(), inner.next)
     }
 
     /// How many fsyncs this log has made, counted where they are made
@@ -174,6 +187,14 @@ impl From<Inner> for Log {
     }
 }
 
+impl Drop for Log {
+    fn drop(&mut self) {
+        for queue in self.lock().watchers.iter().filter_map(Weak::upgrade) {
+            queue.close();
+        }
+    }
+}
+
 impl Inner {
     fn new(session_id: SessionId, dir: PathBuf, events: File, lock: Lock, next: u64) -> Self {
         Self {
@@ -183,7 +204,7 @@ impl Inner {
             _lock: lock,
             next,
             fsyncs: 0,
-            feeds: Vec::new(),
+            watchers: Vec::new(),
             failed: None,
         }
     }
@@ -212,8 +233,8 @@ impl Inner {
     /// Stops the log after `error`, and ends every watcher with it.
     fn stop(&mut self, error: &Error) {
         let cause = error.to_string();
-        for feed in self.feeds.drain(..) {
-            feed.fail(&self.session_id.0, &cause);
+        for queue in self.watchers.drain(..).filter_map(|w| w.upgrade()) {
+            queue.fail(&self.session_id.0, &cause);
         }
         self.failed = Some(cause);
     }
@@ -379,3 +400,7 @@ fn now_ms() -> u64 {
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }
+
+#[cfg(test)]
+#[path = "write_tests.rs"]
+mod tests;
