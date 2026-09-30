@@ -34,3 +34,9 @@ fn any_other_kind_is_rejected() {
     let line = doc_example().replace("fiber_exited", "turn_started");
     assert!(serde_json::from_str::<PreSessionExit>(&line).is_err());
 }
+
+#[test]
+fn a_built_line_matches_the_doc_example() {
+    let example: PreSessionExit = serde_json::from_str(doc_example()).unwrap();
+    assert_eq!(PreSessionExit::new(1, example.error.clone()), example);
+}
