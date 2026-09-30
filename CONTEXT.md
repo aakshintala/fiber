@@ -14,6 +14,13 @@ The whole piece of work, from the first input to the last, surviving Fiber being
 closed and reopened. A headless one-shot review started by another harness is a
 session like any other.
 
+**Process**:
+One run of the Fiber binary, from launch to exit. It opens zero or more sessions
+over its life: none when it fails at startup, and two after a rewind.
+In each session it opens, `fiber_started` opens its boundary, and `fiber_exited`
+or `rewound` closes it.
+_Avoid_: run, instance
+
 **Turn**:
 One round of the loop: input arrives, Fiber works, Fiber yields and waits.
 _Avoid_: exchange, round
@@ -342,18 +349,6 @@ ends as a test.
 _Avoid_: driver (a driver sends commands to a session), harness, rig (rig is a
 reference library, and pi-rig the owner's pi extension)
 
-## Deliberately unnamed
-
-**One Fiber process, from launch to exit.** The archived Zig tree called this a
-`run` and set sessions above it. Fiber does not name it: resume, event ordering
-and the headless slot are all expressed in terms of sessions, and a session's
-processes never overlap, so nothing has to tell two of them apart. Name it when
-a decision needs it.
-
-The session log records the boundary without naming the unit: `fiber_started`
-and `fiber_exited`. A start with no matching exit is how a resumed session knows
-the previous process died rather than finished.
-
 ## Reading pi's source
 
 pi is Fiber's reference for provider and wire behaviour, not for these nouns, and
@@ -365,4 +360,4 @@ the two vocabularies collide. When reading pi:
 | Input arrives, Fiber works, Fiber yields | **turn** | agent run (`agent_start` … `agent_settled`) |
 | One round-trip to the model | **step** | **turn** (`turn_start` / `turn_end`) |
 | One message, reasoning block or tool call | **action** | message (`message_start` / `message_update`) |
-| One process, launch to exit | *(unnamed)* | *(unnamed)* |
+| One process, launch to exit | **process** | *(unnamed)* |
