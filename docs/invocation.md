@@ -104,9 +104,11 @@ Fiber says no to a newer client's key instead of ignoring it.
 
 `content` is content parts (`docs/events.md`, "Content parts"). A client sends
 an image part as `type`, `data`, the image's bytes in base64, and `mime_type`,
-and nothing else: a remote client cannot write into the session directory, and
-Fiber reads the size from the image. Fiber writes the image to `artifacts/`
-and logs the part with its `path`, `mime_type`, `width` and `height`.
+and nothing else: a remote client cannot write into the session directory.
+Fiber processes the image (`docs/model-routing.md`, "Image limits") and writes
+the processed file to `artifacts/`, then logs the part with its `path`,
+`mime_type`, `width` and `height`. An image that cannot be read, or is over
+50 megapixels, is rejected `invalid_arguments`, naming the image.
 
 | Command | `args` |
 |---|---|
@@ -369,6 +371,12 @@ the rationale and the rejected layouts are
   with, as a delegate on any other harness is (`docs/delegates.md`). Each
   session starts its own MCP servers and process extensions, so nothing is
   shared between sessions (`docs/mcp.md`, `docs/extensions.md`).
+- **An image child is a short-lived process, one per image.** The session
+  starts it by running `fiber` again with an internal command, not a door,
+  so the child always matches its parent's version. The session process
+  runs no image code; the child reads the header too
+  (`docs/model-routing.md`, "Image limits"). Spawning a child that does
+  nothing takes 1.7 ms (macOS).
 - **The terminal is its own process.** `fiber` starts a `fiber serve` session
   and is its client zero: commands down the pipe, events back up it. It draws
   what arrives and has no path to state the stream does not carry. It opens a

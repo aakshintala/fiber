@@ -132,7 +132,11 @@ learns whether the server stopped, and the call is never `cancelled`
 A result goes through the tool contract in `docs/tools.md`:
 
 - text goes to `content`
-- an image goes to `content` as an image part, written to `artifacts/`
+- an image is processed once (`docs/model-routing.md`, "Image limits") and
+  goes to `content` as an image part, written to `artifacts/`
+- an image that cannot be read, or is over 50 megapixels, ends the call
+  `failed` with code `unsupported_file` and the decoder's message (or the
+  pixel count)
 - the 16 KiB cap applies, and a cut result keeps its full bytes in an artifact
 - a result the server marks as an error ends `failed` with code `tool_error`
 

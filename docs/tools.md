@@ -92,8 +92,9 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   defined is `handoff`, a handoff note: the loop restarts the model's context
   from it at the step boundary (`docs/handoff.md`). Any tool may set it; the
   loop acts on the field, never on which tool set it.
-- Images are written to the session's `artifacts/` (see `docs/state.md`) and
-  referenced by path, never inlined as base64 in the log.
+- Images are written to the session's `artifacts/` (see `docs/state.md`) as
+  the processed file (`docs/model-routing.md`, "Image limits") and referenced
+  by path, never inlined as base64 in the log.
 - The loop reads `status`, `error.code`, `control` and the declared effects,
   never `content` or `details`. A tool's prose cannot steer control flow.
 - A `failed` status is sent to the provider as that protocol's error flag on
@@ -193,15 +194,19 @@ path's directory, ending in `/`.
   the shell, such as `cut -c` or `dd`.
 - An `offset` past the end of the file fails with `invalid_arguments` and
   gives the file's line count.
-- A PNG, JPEG, GIF or WebP file comes back as an image part. The provider
-  module resizes it to the provider's limit. For a model that cannot take
-  images, the image is left out and the result says so.
+- A PNG, JPEG, GIF or WebP file is processed once and comes back as an
+  image part (`docs/model-routing.md`, "Image limits"). An image that cannot
+  be read, or is over 50 megapixels, fails with `unsupported_file` and the
+  decoder's message (or the pixel count). A CMYK JPEG decodes and is
+  accepted. For a model that cannot take images, the image is left out and
+  the result says so.
 - A PDF comes back as a PDF part. One of more than 10 pages needs `pages`,
   and a request takes at most 20 pages; these are Claude Code's numbers. The
   provider module sends the PDF natively where its protocol accepts a PDF in a
-  tool result, and otherwise sends the pages rendered as images. Rendering uses
-  poppler's `pdftoppm`; when it is not installed, the call fails with
-  `tool_error` and a message naming the package.
+  tool result, and otherwise sends the pages rendered as images, which go
+  through the same limits (`docs/model-routing.md`, "Image limits").
+  Rendering uses poppler's `pdftoppm`; when it is not installed, the call
+  fails with `tool_error` and a message naming the package.
   `anthropic-messages` takes a `document` block inside `tool_result`,
   `openai-responses` an `input_file` in the `function_call_output` array, and
   `google-generative-ai` an `inlineData` part in `functionResponse.parts`.
@@ -749,7 +754,10 @@ backend.
   are.
 - A PDF, or a PNG, JPEG, GIF or WebP image, is saved to the session's
   `artifacts/` and the result gives its path. The model reads it with `read`,
-  which already handles both ("File tools").
+  which already handles both ("File tools"). An image is processed once when
+  it arrives (`docs/model-routing.md`, "Image limits"). An image that cannot
+  be read, or is over 50 megapixels, fails with `unsupported_file` and the
+  decoder's message (or the pixel count).
 - Any other content type fails with `unsupported_file`, giving its type and
   size.
 - The cap is the 16 KiB default ("Bounded results"). A cut keeps the start of

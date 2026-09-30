@@ -21,6 +21,12 @@ In each session it opens, `fiber_started` opens its boundary, and `fiber_exited`
 or `rewound` closes it.
 _Avoid_: run, instance
 
+**Image child**:
+A short-lived process that processes one image for a session. The session
+starts it by running `fiber` again with an internal command, not a door.
+It is not a delegate and not a job.
+_Avoid_: helper, sidecar, decoder process
+
 **Turn**:
 One round of the loop: input arrives, Fiber works, Fiber yields and waits.
 _Avoid_: exchange, round

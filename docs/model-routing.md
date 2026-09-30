@@ -244,9 +244,42 @@ quota".
 
 ## Image limits
 
-`read` returns an image part (`docs/tools.md`, "read") and the provider module
-keeps it inside the limits below. The table is what each vendor documents. The
-sources are `platform.claude.com/docs/en/build-with-claude/vision`,
+Every image is processed once, when it enters the session: an image from
+`read`, from `web_fetch`, in an MCP tool result, or pasted in a `prompt` or
+`steer` command. The processed file is what is written to the session's
+`artifacts/`, what the log's `image` part names (path, mime_type, width and
+height of the stored file), and what every request sends. A resume sends the
+same bytes. The provider module does not resize.
+
+The image child does the work (`docs/invocation.md`, "Processes"). It reads
+the header. An image over 50 megapixels (width × height > 50,000,000) is
+refused without decoding. A GIF always becomes PNG (first frame). A PNG,
+JPEG or WebP within the cap is stored byte for byte, not decoded. Otherwise
+it is fitted.
+
+One cap for every protocol: longest side 2000 px, and at most 1 MB
+(1,048,576 bytes) as base64. Every image in context is resent as base64 on
+every request (Fiber keeps no vendor-side state), so one 4.5 MB image would
+outweigh a 600k-token text context in bytes. 2000 px fits Anthropic's
+2000 px per-image rule for requests with more than 20 images,
+Bedrock/Vertex's 5 MB, and OpenAI's 30,000-patch limit (2000×2000 is 3,969
+patches). A 2000 px screenshot PNG is about 170 KB of base64 at Default
+compression; a 2000 px photo JPEG at quality 80 is about 430 to 670 KB of
+base64.
+
+Fitting keeps the aspect ratio, never enlarges, and uses Lanczos3. A JPEG
+input is re-encoded as JPEG at quality 80; any other input as PNG at
+`image`'s Default compression level. If the result is still over 1 MB of
+base64, JPEG at quality 80 is tried and kept if it fits; if neither fits,
+the longest side is cut to three quarters and both are tried again, until
+one fits.
+
+There is no limit on the total image bytes in one request. A request over a
+vendor's request limit (Gemini documents 20 MB inline, Anthropic 32 MB)
+fails as the vendor returns it.
+
+The table is what each vendor documents. The sources are
+`platform.claude.com/docs/en/build-with-claude/vision`,
 `developers.openai.com/api/docs/guides/images-vision` and
 `ai.google.dev/gemini-api/docs/image-understanding`.
 

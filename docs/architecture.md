@@ -201,6 +201,10 @@ A session process runs one session. A delegate is a child `fiber serve`
 process of its parent, and its parent is its client zero
 (`docs/delegates.md`).
 
+An image child is a short-lived process, one per image: `fiber` run again
+with an internal command, not a door (`docs/invocation.md`, "Processes").
+The session process runs no image code.
+
 The terminal runs in a separate process (`docs/invocation.md`,
 "Processes") with two threads of its own: terminal input, which owns the
 keyboard, and terminal render, which owns the screen. Neither is in the
