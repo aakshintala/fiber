@@ -288,9 +288,11 @@ reason. The person's answer ends the run of consecutive blocks. Escalating every
 send a person every call under load, and a person answering a stream of
 questions stops reading them.
 
-**A reviewer that fails is a block, never an allow.** An unreachable provider,
-a timeout, an unparseable verdict, a missing credential: each escalates to a
-human, and blocks where no answer is possible ("Headless"). There is no
+**A reviewer that fails is a block, never an allow.** A verdict that cannot
+be read, after the argument repair in `docs/tools.md` ("Before a call runs"),
+is asked for once more with the error attached. An unreachable provider,
+a timeout, a verdict still unreadable on that second ask, a missing
+credential: each escalates to a human, and blocks where no answer is possible ("Headless"). There is no
 path on this page where an error results in an action running.
 
 ## Remembering a decision
