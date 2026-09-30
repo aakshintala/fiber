@@ -12,8 +12,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use action::{
-    Answer, AskStep, AssistantMessageCompleted, CallStatus, Control, DecidedBy, Decision,
-    Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
+    Answer, ArgumentRepair, AskStep, AssistantMessageCompleted, CallStatus, Control, DecidedBy,
+    Decision, Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
     InteractionResolved, MessageOutcome, ModeChanged, ModeChangedBy, PermissionRequested,
     PermissionResolved, Progress, ReasoningCompleted, Repair, RepairFix, ResolvedBy, ReviewerRef,
     RuleOffer, RuleScope, StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,

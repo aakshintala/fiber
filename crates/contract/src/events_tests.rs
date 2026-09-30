@@ -614,6 +614,21 @@ fn a_permission_request_carries_only_the_keys_its_step_defines() {
 }
 
 #[test]
+fn repaired_and_repairs_come_together_or_not_at_all() {
+    let base = || json!({"name": "read", "arguments": {"limit": "5"}});
+    let repaired = json!({"limit": 5});
+    let repairs = json!([{"path": "/limit", "fix": "string_to_number"}]);
+    for (key, value) in [("repaired", &repaired), ("repairs", &repairs)] {
+        let mut payload = base();
+        payload[key] = value.clone();
+        assert!(
+            read("tool_call_requested", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
 fn an_interaction_request_carries_only_the_keys_its_kind_defines() {
     let options = json!([{"label": "a"}]);
     let fields = json!([{"header": "h", "question": "q", "options": []}]);
