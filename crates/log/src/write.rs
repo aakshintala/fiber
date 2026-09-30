@@ -90,11 +90,9 @@ impl Log {
         // ponytail: reads the whole log to find its tail; resume folds the
         // whole log anyway (`docs/events.md`, "Resume").
         let bytes = fs::read(&path).map_err(io_at(&path))?;
-        let complete = complete_len(&bytes);
-        if complete < bytes.len() {
-            let len = u64::try_from(complete).unwrap_or(u64::MAX);
-            events.set_len(len).map_err(io_at(&path))?;
-        }
+        // A no-op unless the tail is torn.
+        let complete = u64::try_from(complete_len(&bytes)).unwrap_or(u64::MAX);
+        events.set_len(complete).map_err(io_at(&path))?;
         let next = match crate::read(&dir)?.last() {
             Some(line) => line.seq.map_or(0, |s| s.0 + 1),
             None => 0,

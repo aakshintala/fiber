@@ -17,6 +17,10 @@ use log::{Log, read};
 use proptest::prelude::*;
 
 proptest! {
+    // Few cases, since each makes a session; enough to cut each kind of line
+    // at each kind of byte.
+    #![proptest_config(ProptestConfig::with_cases(64))]
+
     /// A session cut off at any byte, as a power cut can leave it, reopens
     /// with every complete line intact and carries on from the next `seq`.
     #[test]

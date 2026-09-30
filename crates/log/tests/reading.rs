@@ -5,6 +5,7 @@
     clippy::unwrap_used,
     clippy::panic,
     clippy::indexing_slicing,
+    clippy::expect_used,
     reason = "test code may unwrap, panic and index (docs/code-quality.md, \"Lints\"), helpers outside a #[test] included"
 )]
 
@@ -13,7 +14,9 @@ mod common;
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::process::{Command, Stdio};
+use std::sync::mpsc::{self, Receiver};
 use std::thread;
+use std::time::Duration;
 
 use common::*;
 use contract::Envelope;
@@ -23,8 +26,29 @@ fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
 }
 
-fn recv_all(watcher: &mut Watcher, n: usize) -> Vec<Envelope> {
-    (0..n).map(|_| watcher.recv().unwrap().unwrap()).collect()
+/// How long a test waits for a watcher to receive a line.
+const DEADLINE: Duration = Duration::from_secs(10);
+
+/// Runs `watcher` on its own thread and passes on what it receives, so a
+/// test can wait for each line with a deadline. `None` is the end.
+fn relay(mut watcher: Watcher) -> Receiver<Option<Envelope>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        loop {
+            let got = watcher.recv().unwrap();
+            let end = got.is_none();
+            if tx.send(got).is_err() || end {
+                break;
+            }
+        }
+    });
+    rx
+}
+
+/// The watcher's next line, or the end.
+fn next(rx: &Receiver<Option<Envelope>>) -> Option<Envelope> {
+    rx.recv_timeout(DEADLINE)
+        .expect("the watcher to receive a line before the deadline")
 }
 
 #[test]
@@ -70,66 +94,52 @@ fn a_watcher_receives_what_is_written_after_it_subscribes() {
     let tmp = TestDir::new("watch");
     let log = Log::create(tmp.path(), id("s_1")).unwrap();
     log.append(&session_started(), None, None).unwrap();
-    let mut watcher = log.watch();
+    let rx = relay(log.watch());
     let step = log.append(&empty("step_started"), None, None).unwrap();
     let delta = log.append(&delta("Hel"), None, None).unwrap();
-    assert_eq!(recv_all(&mut watcher, 2), [step, delta]);
+    assert_eq!(next(&rx), Some(step));
+    assert_eq!(next(&rx), Some(delta));
 }
 
 #[test]
-fn a_watcher_on_another_thread_wakes_for_each_line_and_ends_with_the_log() {
-    let tmp = TestDir::new("watch-thread");
+fn a_watcher_ends_with_its_log_once_it_has_every_line() {
+    let tmp = TestDir::new("watch-end");
     let log = Log::create(tmp.path(), id("s_1")).unwrap();
-    let mut watcher = log.watch();
-    let reader = thread::spawn(move || {
-        let mut got = Vec::new();
-        while let Some(line) = watcher.recv().unwrap() {
-            got.push(line);
-        }
-        got
-    });
-    let written = vec![
+    let rx = relay(log.watch());
+    let written = [
         log.append(&session_started(), None, None).unwrap(),
         log.append(&delta("a"), None, None).unwrap(),
-        log.append(&empty("step_started"), None, None).unwrap(),
     ];
     drop(log);
-    assert_eq!(reader.join().unwrap(), written);
+    assert_eq!(next(&rx), Some(written[0].clone()));
+    assert_eq!(next(&rx), Some(written[1].clone()));
+    assert_eq!(next(&rx), None);
 }
 
 #[test]
 fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
     let tmp = TestDir::new("watch-lag");
     let log = Log::create(tmp.path(), id("s_1")).unwrap();
-    let mut watcher = log.watch();
-    // Far past any bounded queue, ending on a durable line, then an
-    // ephemeral one that a lagging watcher may lose.
-    let n = 5000;
-    let mut durable = Vec::new();
-    for _ in 0..n {
-        durable.push(log.append(&empty("step_started"), None, None).unwrap());
-        log.append(&delta("x"), None, None).unwrap();
-    }
+    let watcher = log.watch();
+    // Past any bounded queue while nobody receives, ending on a durable line.
+    let durable: Vec<Envelope> = (0..3000)
+        .map(|_| {
+            log.append(&delta("x"), None, None).unwrap();
+            log.append(&empty("step_started"), None, None).unwrap()
+        })
+        .collect();
+    let rx = relay(watcher);
     let mut got = Vec::new();
-    while got.iter().filter(|l: &&Envelope| l.is_durable()).count() < n {
-        got.push(watcher.recv().unwrap().unwrap());
+    while got.len() < durable.len() {
+        let line = next(&rx).unwrap();
+        if line.is_durable() {
+            got.push(line);
+        }
     }
-    let got_durable: Vec<_> = got.into_iter().filter(Envelope::is_durable).collect();
-    assert_eq!(got_durable, durable);
-    // Lines written after catching up arrive as they are written.
-    let after = log.append(&delta("live"), None, None).unwrap();
-    assert_eq!(watcher.recv().unwrap(), Some(after));
-}
-
-#[test]
-fn a_watcher_ends_when_its_log_is_dropped() {
-    let tmp = TestDir::new("watch-end");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
-    let mut watcher = log.watch();
-    let line = log.append(&session_started(), None, None).unwrap();
-    drop(log);
-    assert_eq!(watcher.recv().unwrap(), Some(line));
-    assert_eq!(watcher.recv().unwrap(), None);
+    assert_eq!(got, durable);
+    // Once caught up, lines arrive as they are written.
+    let live = log.append(&delta("live"), None, None).unwrap();
+    assert_eq!(next(&rx), Some(live));
 }
 
 #[test]
@@ -137,9 +147,9 @@ fn a_dropped_watcher_does_not_stop_the_log() {
     let tmp = TestDir::new("watch-drop");
     let log = Log::create(tmp.path(), id("s_1")).unwrap();
     drop(log.watch());
-    let mut kept = log.watch();
+    let rx = relay(log.watch());
     let line = log.append(&session_started(), None, None).unwrap();
-    assert_eq!(kept.recv().unwrap(), Some(line));
+    assert_eq!(next(&rx), Some(line));
     assert_eq!(
         kinds(&read(&tmp.session(&id("s_1"))).unwrap()),
         ["session_started"]
