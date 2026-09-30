@@ -91,8 +91,16 @@ fn a_reference_with_no_definition_fails() {
 #[test]
 fn brackets_that_are_not_a_reference_are_ignored() {
     assert_eq!(
-        check("[a][b\nc] x][[y] [z][ ]\n\n[z]: target.md\n"),
+        check("x][[y] [z][ ] [shortcut]\n\n[z]: target.md\n"),
         Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_reference_label_may_break_across_lines() {
+    assert_eq!(
+        check("[a][b\nc] [d][e\nf]\n\n[e f]: target.md\n"),
+        ["docs/source.md:1: reference [b c]: no definition"]
     );
 }
 

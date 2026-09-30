@@ -1,48 +1,109 @@
 //! The docs check (`docs/ci.md`, "The docs check"): relative Markdown links
 //! and anchors that do not resolve, section citations naming a heading the
 //! file does not have, and backticked repository paths that do not exist.
+//! pulldown-cmark reads the Markdown; the citation grammar is Fiber's own.
 
+use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Component, Path, PathBuf};
 
+use pulldown_cmark::{BrokenLink, Event, LinkType, Options, Parser, Tag, TagEnd};
+
 const CHECKED: [&str; 3] = ["CONTEXT.md", "AGENTS.md", "README.md"];
 const PATH_ROOTS: [&str; 5] = ["docs/", "crates/", "scripts/", "research/", ".github/"];
 
-/// `markdown` with fenced code blocks blanked, line numbers kept.
-pub(crate) fn prose(markdown: &str) -> String {
-    let mut fenced = false;
-    let lines: Vec<&str> = markdown
-        .split('\n')
-        .map(|line| {
-            let trimmed = line.trim_start();
-            if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-                fenced = !fenced;
-                ""
-            } else if fenced {
-                ""
-            } else {
-                line
-            }
-        })
-        .collect();
-    lines.join("\n")
+/// What the checks need from one Markdown file. Offsets are into its source.
+#[derive(Debug, Default)]
+struct Parsed {
+    /// Each heading as written, without its `#` marks, and as rendered text.
+    headings: Vec<(String, String)>,
+    /// Inline link and image destinations, and reference definitions.
+    links: Vec<(usize, String)>,
+    /// Full and collapsed references whose label has no definition.
+    broken: Vec<(usize, String)>,
+    /// Inline code spans: where each starts and ends, and its text.
+    code: Vec<(usize, usize, String)>,
 }
 
-/// The text of every heading outside fenced code.
+fn parse(markdown: &str) -> Parsed {
+    let broken = RefCell::new(Vec::new());
+    // A shortcut `[x]` with no definition is plain text, not a link.
+    let callback = |link: BrokenLink<'_>| {
+        if matches!(link.link_type, LinkType::Reference | LinkType::Collapsed) {
+            let label = link
+                .reference
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .to_lowercase();
+            broken.borrow_mut().push((link.span.start, label));
+        }
+        None
+    };
+    let parser = Parser::new_with_broken_link_callback(markdown, Options::empty(), Some(callback))
+        .into_offset_iter();
+    let mut parsed = Parsed {
+        links: parser
+            .reference_definitions()
+            .iter()
+            .map(|(_, d)| (d.span.start, d.dest.to_string()))
+            .collect(),
+        ..Parsed::default()
+    };
+    let mut heading: Option<(String, String)> = None;
+    for (event, range) in parser {
+        if let Event::Start(Tag::Heading { .. }) = &event {
+            let source = markdown
+                .get(range.clone())
+                .and_then(|s| s.lines().next())
+                .unwrap_or_default();
+            let written = source
+                .trim()
+                .trim_start_matches('#')
+                .trim()
+                .trim_end_matches('#')
+                .trim_end();
+            heading = Some((written.to_owned(), String::new()));
+        } else if let Event::End(TagEnd::Heading(_)) = &event {
+            parsed.headings.extend(heading.take());
+        } else if let Event::Start(
+            Tag::Link {
+                link_type: LinkType::Inline,
+                dest_url,
+                ..
+            }
+            | Tag::Image {
+                link_type: LinkType::Inline,
+                dest_url,
+                ..
+            },
+        ) = &event
+        {
+            parsed.links.push((range.start, dest_url.to_string()));
+        } else if let Event::Code(text) = &event {
+            parsed.code.push((range.start, range.end, text.to_string()));
+        }
+        if let (Some((_, rendered)), Event::Text(text) | Event::Code(text)) =
+            (heading.as_mut(), &event)
+        {
+            rendered.push_str(text);
+        }
+    }
+    parsed.broken = broken.into_inner();
+    parsed
+}
+
+/// Every heading as written, which is what a citation quotes.
 pub(crate) fn headings(markdown: &str) -> Vec<String> {
-    prose(markdown)
-        .lines()
-        .filter_map(|line| {
-            let hashes = line.chars().take_while(|c| *c == '#').count();
-            let rest = line.get(hashes..)?;
-            ((1..=6).contains(&hashes) && rest.starts_with([' ', '\t']))
-                .then(|| rest.trim().trim_end_matches('#').trim_end().to_owned())
-        })
+    parse(markdown)
+        .headings
+        .into_iter()
+        .map(|(written, _)| written)
         .collect()
 }
 
-/// GitHub's anchor for a heading.
+/// GitHub's anchor for a heading's rendered text.
 pub(crate) fn slug(heading: &str) -> String {
     heading
         .to_lowercase()
@@ -54,10 +115,11 @@ pub(crate) fn slug(heading: &str) -> String {
 
 pub(crate) fn anchors(markdown: &str) -> BTreeSet<String> {
     let mut seen: BTreeMap<String, usize> = BTreeMap::new();
-    headings(markdown)
+    parse(markdown)
+        .headings
         .iter()
-        .map(|heading| {
-            let base = slug(heading);
+        .map(|(_, rendered)| {
+            let base = slug(rendered);
             let count = seen.entry(base.clone()).or_insert(0);
             let anchor = if *count == 0 {
                 base
@@ -68,23 +130,6 @@ pub(crate) fn anchors(markdown: &str) -> BTreeSet<String> {
             anchor
         })
         .collect()
-}
-
-/// Inline code spans: (offset of the opening backtick, content). A span
-/// whose content `accept` rejects is not consumed, so its closing backtick
-/// can open the next one.
-fn code_spans(text: &str, accept: impl Fn(&str) -> bool) -> Vec<(usize, &str)> {
-    let mut ticks = text.match_indices('`').map(|(i, _)| i).peekable();
-    let mut spans = Vec::new();
-    while let Some(open) = ticks.next() {
-        let Some(&close) = ticks.peek() else { break };
-        let content = text.get(open + 1..close).unwrap_or_default();
-        if accept(content) {
-            spans.push((open, content));
-            ticks.next();
-        }
-    }
-    spans
 }
 
 /// The quoted heading after a cited file: `, "Heading"`, whitespace (line
@@ -104,81 +149,6 @@ fn cited_heading(after: &str) -> Option<String> {
             .collect::<Vec<_>>()
             .join(" "),
     )
-}
-
-/// Inline link targets: (offset, target) for each `](target)`.
-fn inline_links(text: &str) -> Vec<(usize, &str)> {
-    text.match_indices("](")
-        .filter_map(|(i, _)| {
-            let rest = text.get(i + 2..)?;
-            let end = rest.find(|c: char| c == ')' || c.is_whitespace())?;
-            Some((i, rest.get(..end)?))
-        })
-        .filter(|(_, target)| !target.is_empty())
-        .collect()
-}
-
-fn normalise_label(label: &str) -> String {
-    label
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-        .to_lowercase()
-}
-
-/// Reference definitions, `[label]: target` at the start of a line, with
-/// the target on that line or the next: (offset, normalised label, target).
-/// Every inline, full, collapsed and shortcut reference to a label goes
-/// through its definition, so checking the definitions checks them all.
-fn reference_definitions(text: &str) -> Vec<(usize, String, &str)> {
-    let mut lines = Vec::new();
-    let mut offset = 0;
-    for line in text.split('\n') {
-        lines.push((offset, line));
-        offset += line.len() + 1;
-    }
-    let mut found = Vec::new();
-    for (k, (offset, line)) in lines.iter().enumerate() {
-        let body = line.trim_start_matches(' ');
-        let indent = line.len() - body.len();
-        if let Some(rest) = body.strip_prefix('[')
-            && indent <= 3
-            && let Some((label, after)) = rest.split_once("]:")
-            && let Some(target) = after.split_whitespace().next().or_else(|| {
-                lines
-                    .get(k + 1)
-                    .and_then(|(_, next)| next.split_whitespace().next())
-            })
-        {
-            found.push((
-                offset + indent,
-                normalise_label(label),
-                target.trim_start_matches('<').trim_end_matches('>'),
-            ));
-        }
-    }
-    found
-}
-
-/// Full and collapsed reference links, `[text][label]` and `[text][]`:
-/// (offset, normalised label).
-fn reference_uses(text: &str) -> Vec<(usize, String)> {
-    text.match_indices("][")
-        .filter_map(|(i, _)| {
-            let label = text.get(i + 2..)?;
-            let end = label.find(']')?;
-            let label = label.get(..end)?;
-            if label.contains('\n') || label.contains('[') {
-                return None;
-            }
-            if !label.trim().is_empty() {
-                return Some((i, normalise_label(label)));
-            }
-            let before = text.get(..i)?;
-            let open = before.rfind('[')?;
-            Some((i, normalise_label(before.get(open + 1..)?)))
-        })
-        .collect()
 }
 
 fn is_external(target: &str) -> bool {
@@ -213,33 +183,26 @@ fn line_of(text: &str, offset: usize) -> usize {
         + 1
 }
 
-/// Failures in the Markdown file at `path`, relative to `root`.
+/// Failures in the Markdown file at `path`, relative to `root`, in source
+/// order.
 pub(crate) fn check_file(root: &Path, path: &str) -> Result<Vec<String>, String> {
     let read = |p: &Path| fs::read_to_string(p).map_err(|e| format!("{}: {e}", p.display()));
     let file = root.join(path);
     let dir = file.parent().unwrap_or(root).to_path_buf();
-    let text = prose(&read(&file)?);
+    let text = read(&file)?;
+    let parsed = parse(&text);
     let mut failures = Vec::new();
     let mut fail = |offset: usize, message: String| {
-        failures.push(format!("{path}:{}: {message}", line_of(&text, offset)))
+        failures.push((
+            offset,
+            format!("{path}:{}: {message}", line_of(&text, offset)),
+        ));
     };
 
-    let definitions = reference_definitions(&text);
-    let labels: BTreeSet<&str> = definitions
-        .iter()
-        .map(|(_, label, _)| label.as_str())
-        .collect();
-    for (offset, label) in reference_uses(&text) {
-        if !labels.contains(label.as_str()) {
-            fail(offset, format!("reference [{label}]: no definition"));
-        }
+    for (offset, label) in &parsed.broken {
+        fail(*offset, format!("reference [{label}]: no definition"));
     }
-    let links = inline_links(&text).into_iter().chain(
-        definitions
-            .iter()
-            .map(|(offset, _, target)| (*offset, *target)),
-    );
-    for (offset, target) in links {
+    for (offset, target) in &parsed.links {
         if is_external(target) {
             continue;
         }
@@ -250,45 +213,45 @@ pub(crate) fn check_file(root: &Path, path: &str) -> Result<Vec<String>, String>
             join(&dir, file_part)
         };
         if !resolved.exists() {
-            fail(offset, format!("link to {target}: no such file"));
+            fail(*offset, format!("link to {target}: no such file"));
         } else if !anchor.is_empty()
             && resolved.extension().is_some_and(|e| e == "md")
             && !anchors(&read(&resolved)?).contains(anchor)
         {
-            fail(offset, format!("link to {target}: no such anchor"));
+            fail(*offset, format!("link to {target}: no such anchor"));
         }
     }
 
-    let md_span = |s: &str| s.ends_with(".md") && !s.contains(char::is_whitespace);
-    for (offset, cited) in code_spans(&text, md_span) {
-        let after = text.get(offset + cited.len() + 2..).unwrap_or_default();
-        let Some(heading) = cited_heading(after) else {
-            continue;
-        };
-        let target = [root.join(cited), join(&dir, cited)]
-            .into_iter()
-            .find(|c| c.is_file());
-        match target {
-            None => fail(offset, format!("citation of {cited}: no such file")),
-            Some(target) if !headings(&read(&target)?).contains(&heading) => {
-                fail(
-                    offset,
-                    format!("citation of {cited}, \"{heading}\": no such heading"),
-                );
+    for (start, end, cited) in &parsed.code {
+        let is_markdown_file = cited.ends_with(".md") && !cited.contains(char::is_whitespace);
+        if is_markdown_file
+            && let Some(heading) = cited_heading(text.get(*end..).unwrap_or_default())
+        {
+            let target = [root.join(cited), join(&dir, cited)]
+                .into_iter()
+                .find(|c| c.is_file());
+            match target {
+                None => fail(*start, format!("citation of {cited}: no such file")),
+                Some(target) if !headings(&read(&target)?).contains(&heading) => {
+                    fail(
+                        *start,
+                        format!("citation of {cited}, \"{heading}\": no such heading"),
+                    );
+                }
+                Some(_) => {}
             }
-            Some(_) => {}
         }
-    }
-
-    let repo_path = |s: &str| PATH_ROOTS.iter().any(|r| s.starts_with(r));
-    for (offset, cited) in code_spans(&text, repo_path) {
         let placeholder =
             cited.contains(|c: char| matches!(c, '<' | '>' | '*' | '{' | '}') || c.is_whitespace());
-        if !placeholder && !root.join(cited).exists() {
-            fail(offset, format!("path {cited}: does not exist"));
+        if PATH_ROOTS.iter().any(|r| cited.starts_with(r))
+            && !placeholder
+            && !root.join(cited).exists()
+        {
+            fail(*start, format!("path {cited}: does not exist"));
         }
     }
-    Ok(failures)
+    failures.sort_by_key(|(offset, _)| *offset);
+    Ok(failures.into_iter().map(|(_, line)| line).collect())
 }
 
 /// The files the docs check covers, relative to `root`.
