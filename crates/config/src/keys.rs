@@ -126,6 +126,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("tools.*.deferred", Bool, YES, None),
     key("web_search.backend", Str, NO, None),
     key("shell.read_only.*.flags", StrList, NO, None),
+    key("budget.usd", Number, NO, None),
     key("quota.notice_at", Number, YES, Some("80")),
     key("mcp.servers.*.command", Str, YES, None),
     key("mcp.servers.*.args", StrList, YES, None),

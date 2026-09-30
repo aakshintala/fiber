@@ -19,9 +19,15 @@ pub struct UsageRecorded {
     /// Hosted web searches, where the provider reports them.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_searches: Option<u64>,
-    /// In US dollars; `null` when unknown.
+    /// In US dollars: the vendor's own figure where it reports one, otherwise
+    /// the model's declared prices applied to `tokens`; `null` when neither
+    /// exists.
     #[serde(deserialize_with = "crate::shapes::nullable")]
     pub cost: Option<f64>,
+    /// `true` when a subscription login covered the call, so `cost` is an
+    /// API-price estimate, not money billed. Absent means billed per token.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub subscription: Option<bool>,
     /// The extension whose `host.model` made the call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,

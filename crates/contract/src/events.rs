@@ -30,7 +30,7 @@ pub use host::{
     ExtensionExec, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset, ExtensionUi,
     FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified,
     McpServerFailed, McpServerReady, OnFork, ReloadFailure, Reloaded, ReloadedServers,
-    ServerFailure, ToolInfo, ToolSource, ToolState, Ui, Usage,
+    ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
 };
 pub use session::{
     Clients, ContextAdded, FiberExited, FiberStarted, FinalMessage, InputItem, NamedBy, Parent,

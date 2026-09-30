@@ -170,6 +170,7 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             LIST,
             false,
         ),
+        (&["budget", "usd"], json!(5.0), json!("5"), NUMBER, false),
         (
             &["quota", "notice_at"],
             json!(90),
