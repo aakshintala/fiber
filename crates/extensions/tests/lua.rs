@@ -15,7 +15,7 @@ use extensions::{Error, LuaExtension};
 
 /// How long a test waits for one call before failing. Far past every timeout
 /// the fixture declares, so it fires only when a callback is never stopped.
-const WAIT: Duration = Duration::from_secs(30);
+const WAIT: Duration = Duration::from_secs(10);
 
 fn fixture() -> Arc<LuaExtension> {
     Arc::new(LuaExtension::new("fixture", fakes::lua_fixture()))

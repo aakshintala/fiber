@@ -194,7 +194,9 @@ impl Vm {
             source,
         })?;
         let lua = Lua::new_with(
-            StdLib::TABLE | StdLib::STRING | StdLib::MATH | StdLib::UTF8 | StdLib::COROUTINE,
+            // table, string, math, utf8 and coroutine: Lua's safe set, which
+            // leaves out debug, less its I/O and module loader.
+            StdLib::ALL_SAFE & !StdLib::IO & !StdLib::OS & !StdLib::PACKAGE,
             LuaOptions::default(),
         )
         .map_err(lua_error)?;

@@ -76,8 +76,9 @@ fiber.command("count", {
   end,
 })
 
+-- The timeout stops it only if the memory cap does not.
 fiber.command("grow", {
-  timeout = 60000,
+  timeout = 5000,
   run = function()
     local t = {}
     while true do t[#t + 1] = string.rep("x", 1024) end
