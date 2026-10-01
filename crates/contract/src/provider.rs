@@ -5,7 +5,9 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::events::{ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use crate::events::{
+    CacheLifetime, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+};
 use crate::shapes::{Failure, Tokens};
 use crate::{ActionId, GenerationId};
 
@@ -41,8 +43,24 @@ pub struct ModelRequest {
     /// The reasoning effort, where the model takes one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub effort: Option<String>,
+    /// The tool choice, as `preamble_built` records it. It does not change
+    /// during a session (`docs/prompt-cache.md`, "Tools").
+    pub tool_choice: String,
+    /// The cache lifetime, sent only where the protocol offers a choice
+    /// (`docs/prompt-cache.md`, "Cache lifetime").
+    pub cache_lifetime: CacheLifetime,
+    /// The cache key for providers that route by key: the root session's id,
+    /// or for the reviewer the reviewed session's id plus `reviewer`
+    /// (`docs/prompt-cache.md`, "Cache markers and keys" and "Rules for other
+    /// areas"). The caller builds it.
+    pub cache_key: String,
     /// The conversation, in log order.
     pub conversation: Vec<Input>,
+    /// The index into `conversation` where the previous request in this
+    /// session ended; `None` on the first request. Anthropic puts its second
+    /// cache marker there (`docs/prompt-cache.md`, "Cache markers and keys").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_end: Option<usize>,
 }
 
 /// One tool as the model sees it.
@@ -54,6 +72,12 @@ pub struct ToolDefinition {
     pub description: String,
     /// Its arguments' JSON Schema.
     pub input_schema: Value,
+    /// Whether it is declared with `defer_loading`, outside the cached
+    /// prefix (`docs/prompt-cache.md`, "Deferred tools"). Set only for a model
+    /// whose provider data says deferral works (`docs/model-routing.md`,
+    /// "What a provider extension declares").
+    #[serde(default)]
+    pub deferred: bool,
 }
 
 /// One piece of the conversation, rendered from the log's durable events.
