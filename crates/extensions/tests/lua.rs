@@ -218,3 +218,20 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
     );
     assert!(message.contains("memory cap"), "{message}");
 }
+
+#[test]
+fn a_module_exactly_the_memory_cap_is_read() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(&dir.join("init.lua"), "local m = require(\"big\")\n");
+    let big = std::fs::File::create(dir.join("big.lua")).unwrap();
+    big.set_len(u64::try_from(extensions::MEMORY_CAP).unwrap())
+        .unwrap();
+
+    // Read and compiled: its zero bytes are not Lua.
+    let err = call(&Arc::new(LuaExtension::new("ext", dir)), "x", "").unwrap_err();
+    let Error::Lua { message, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert!(message.starts_with("init.lua:1: big.lua:"), "{message}");
+}
