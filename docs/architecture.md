@@ -15,11 +15,11 @@ what are `docs/invocation.md`.
 
 Everything that touches a running session is one of three things.
 
-- **Watcher** — reads events, cannot reply. The terminal's rendering, the
-  non-interactive door's stdout, a future GUI, a log shipper. A watcher may be
+- **Watcher** — reads events, cannot reply. The terminal's rendering,
+  `fiber ask`'s stdout, a future GUI, a log shipper. A watcher may be
   absent, slow, or added later, and nothing about the session changes.
-- **Driver** — sends commands in. The terminal's input handling, and stdin on
-  the non-interactive door. A driver may only send commands Fiber defines.
+- **Driver** — sends commands in. The terminal's input handling, a GUI, a
+  parent session driving its delegate. A driver may only send commands Fiber defines.
 - **Participant** — is asked during a turn and may refuse or change what
   happens. Tools, providers and extension hooks. A participant's answer
   changes the turn.
@@ -37,10 +37,10 @@ participants (`docs/extensions.md`).
 **The terminal is a watcher and a driver, never a participant.** When the loop
 needs an answer from a human it emits a request and waits for a reply
 command. The terminal is one possible answerer; a calling harness is another,
-answering identically. This follows from `docs/events.md`: the TUI "reads the
-same event stream from the session's socket (`docs/invocation.md`,
-"Processes"), so it holds no private path to state; anything it renders exists
-in this contract, as an ephemeral event where it is display-only."
+answering identically. The TUI reads the same event stream as every other
+client, through the hub (`docs/invocation.md`, "Processes"), so it holds no
+private path to state; anything it renders exists in this contract, as an
+ephemeral event where it is display-only.
 
 ## The modules
 
@@ -52,9 +52,9 @@ in this contract, as an ephemeral event where it is display-only."
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
 | `tools` | Runs tool calls: shell, file edits, search. Reached only through the tool seam. |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
-| `tui` | Draws the terminal, in its own process, as a client of a session over its pipe or socket. Watches events, sends commands, knows nothing else. |
+| `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
-| `doors` | The non-interactive front door: argv or stdin in, JSON lines out. Which doors exist and what a driver may send them is `docs/invocation.md`; this page only fixes that a door sits beside the TUI with no privilege the TUI lacks. |
+| `doors` | `fiber ask` (argv or stdin in, JSON lines out), the hub, and the internal session command they and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -189,17 +189,16 @@ Fiber uses blocking threads and no async runtime.
 | loop | the turn: what happens next, and every durable event | the session |
 | one per client | that client's connection: its commands in, its events out | the connection |
 | one per running tool call | that call's subprocess and its output | the call |
-| signals | the process's SIGTERM, SIGINT and SIGHUP; it starts a shutdown (`docs/invocation.md`, "Shutdown") | the process |
+| signals | the process's SIGTERM, SIGINT and SIGHUP, and end of file on a delegate's lifeline; it starts a shutdown (`docs/invocation.md`, "Shutdown") | the process |
 
-A client is a reader and a writer, and every client is the same code. Client
-zero is the process's own stdin and stdout; every connection to the session's
-socket is another. A closed pipe and a closed socket look the same to the
-thread reading them, so one rule covers a client leaving. `fiber ask` spends
-its stdin on the prompt, so its client zero only writes, which is a watcher.
+A client is a reader and a writer on the session's socket, and every client
+is the same code. `fiber ask`'s stdout is not a client: it only receives, so
+it is a watcher, and `ask` spends its stdin on the prompt.
 
-A session process runs one session. A delegate is a child `fiber serve`
-process of its parent, and its parent is its client zero
-(`docs/delegates.md`).
+A session process runs one session. A Fiber delegate is a child process of
+its parent, and its parent is an ordinary client over its socket. The
+delegate's stdin is a lifeline its parent never writes to; end of file on it
+starts a shutdown (`docs/delegates.md`).
 
 An image child is a short-lived process, one per image: `fiber` run again
 with an internal command, not a door (`docs/invocation.md`, "Processes").
@@ -229,6 +228,9 @@ The loop drains the queue **at step boundaries** — between one round-trip to
 the model and the next. It does not drain it while a model response is
 streaming, and it does not need to: cancellation does not travel through the
 queue, and a steering message applies at the next step boundary anyway.
+A budget reached by a delegate's spend is acted on outside the queue too: the
+thread reading that delegate stops the running delegates at once
+(`docs/loop.md`, "Spending budget").
 
 ### Streaming
 
@@ -309,12 +311,13 @@ the next model call. It is a durable event, so the log shows exactly what the
 turn received. A message that a turn ends before applying becomes the next
 turn's input rather than being dropped.
 
-### Both front doors
+### Every door
 
-The threading is identical on both doors, as map premise 6 requires. The
-terminal is a client of a `fiber serve` session, so every session process is
-the same program: a thread per client, and the loop, the inbox, the streaming,
-the cancellation and the tool-call scheduling as above.
+The threading is identical whoever started the session, as map premise 6
+requires. The hub, `fiber ask` and a parent all run the internal session
+command, so every session process is the same program: a thread per client,
+and the loop, the inbox, the streaming, the cancellation and the tool-call
+scheduling as above.
 A door has no privilege the terminal lacks, and neither has a path to state
 that the other does not.
 
