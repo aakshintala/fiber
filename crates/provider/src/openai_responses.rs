@@ -114,20 +114,14 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let tools: Vec<Value> = tools
         .into_iter()
         .map(|tool| {
-            let mut definition = json!({
+            // ponytail: deferred tools are sent in full until tool search is built (docs/tools.md "Tool search"); see #326
+            json!({
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
                 "strict": strict::fits(&tool.input_schema),
-            });
-            // `docs/prompt-cache.md`, "Deferred tools".
-            if tool.deferred
-                && let Some(definition) = definition.as_object_mut()
-            {
-                definition.insert("defer_loading".into(), json!(true));
-            }
-            definition
+            })
         })
         .collect();
     let mut body = Map::new();

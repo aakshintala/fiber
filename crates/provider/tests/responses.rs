@@ -436,23 +436,17 @@ fn strict_is_sent_per_tool_and_true_only_for_a_schema_in_the_strict_subset() {
 }
 
 #[test]
-fn a_deferred_tool_is_declared_with_defer_loading() {
-    let server = ProviderServer::start([Response::stream(stream(&[completed(
-        "completed",
-        json!({}),
-    )]))])
-    .unwrap();
-    let mut request = request();
-    request.tools[0].deferred = true;
-    run(Box::new(
-        Responses::new(endpoint(&server)).request(&request),
-    ))
-    .0
-    .unwrap();
-    let tools = sent_body(&server, 0)["tools"].clone();
-    assert_eq!(tools[0].get("defer_loading"), None);
-    assert_eq!(tools[1]["name"], "get_weather");
-    assert_eq!(tools[1]["defer_loading"], true);
+fn a_deferred_tool_is_sent_in_full() {
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply()]).unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let mut deferred = request();
+    deferred.tools[0].deferred = true;
+    for request in [request(), deferred] {
+        run(Box::new(responses.request(&request))).0.unwrap();
+    }
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1]);
 }
 
 #[test]
