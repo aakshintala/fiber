@@ -10,6 +10,10 @@ config = { path = "../config" }
 contract = { path = "../contract" }
 serde_json.workspace = true
 thiserror.workspace = true
+mlua.workspace = true
+
+[dev-dependencies]
+fakes = { path = "../fakes" }
 
 [lints]
 workspace = true
