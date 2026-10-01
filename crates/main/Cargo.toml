@@ -1,0 +1,27 @@
+[package]
+name = "main"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "fiber"
+path = "src/main.rs"
+
+[dependencies]
+config = { path = "../config" }
+contract = { path = "../contract" }
+doors = { path = "../doors" }
+extensions = { path = "../extensions" }
+log = { path = "../log" }
+loop = { path = "../loop" }
+provider = { path = "../provider" }
+serde_json.workspace = true
+
+[dev-dependencies]
+fakes = { path = "../fakes" }
+rustix.workspace = true
+
+[lints]
+workspace = true
