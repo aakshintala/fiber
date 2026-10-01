@@ -1,6 +1,6 @@
-//! One turn without tools, through the loop's public API, against the fake
-//! provider server (`docs/loop.md`: "Starting a turn", "One step", "Ending a
-//! turn", "What the model is sent").
+//! One turn without tools, through the loop's public API, against a scripted
+//! provider on the provider seam (`docs/loop.md`: "Starting a turn", "One
+//! step", "Ending a turn", "What the model is sent").
 
 #![allow(
     clippy::unwrap_used,
@@ -12,21 +12,35 @@
 
 mod support;
 
-use contract::Seq;
-use contract::events::{CacheLifetime, TurnOutcome};
-use contract::provider::Input;
-use fakes::Response;
+use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, TurnOutcome};
+use contract::provider::{Delta, Input, ReplyAction};
+use contract::shapes::Failure;
+use contract::{ActionId, ErrorCode, Seq};
+use fakes::{Scripted, reply};
+use r#loop::rebuild;
 use serde_json::{Value, json};
 
-use support::{MODEL, Session, kinds, message, reasoning_item, reasoning_reply, text_reply};
+use support::{MODEL, Session, kinds, message, reasoning_item, reasoning_reply, tool_call_reply};
 
-fn body(session: &Session, n: usize) -> Value {
-    serde_json::from_slice(&session.server.requests()[n].body).unwrap()
+fn user(text: &str) -> Input {
+    Input::User { text: text.into() }
+}
+
+fn assistant(text: &str) -> Input {
+    Input::Assistant { text: text.into() }
+}
+
+/// The durable kinds of `lines`, in order.
+fn durable(lines: &[contract::Envelope]) -> Vec<&str> {
+    kinds(lines)
+        .into_iter()
+        .filter(|k| !k.ends_with("_delta"))
+        .collect()
 }
 
 #[test]
 fn messages_waiting_together_start_one_turn_in_arrival_order() {
-    let mut session = Session::new(vec![text_reply("Done.")], None);
+    let mut session = Session::new(vec![Scripted::text("Done.")], None);
     for text in ["one", "two", "three"] {
         session.inbox.send(message(text)).unwrap();
     }
@@ -54,20 +68,18 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
         .collect();
     assert_eq!(input, ["one", "two", "three"]);
     assert_eq!(lines[1].payload["input"][0]["command_id"], "c_one");
+    let requests = session.requests();
+    assert_eq!(requests.len(), 1);
     assert_eq!(
-        body(&session, 0)["input"],
-        json!([
-            {"role": "user", "content": "one"},
-            {"role": "user", "content": "two"},
-            {"role": "user", "content": "three"},
-        ])
+        requests[0].conversation,
+        [user("one"), user("two"), user("three")]
     );
-    assert_eq!(session.server.requests().len(), 1);
+    assert_eq!(requests[0].system_prompt, "You are terse.");
 }
 
 #[test]
 fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
-    let mut session = Session::new(vec![text_reply("Hello there.")], None);
+    let mut session = Session::new(vec![Scripted::text("Hello there.")], None);
     session.inbox.send(message("hi")).unwrap();
     session.turn();
     let lines = session.lines();
@@ -99,8 +111,8 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(usage.action_id.as_ref(), Some(&action));
     assert_eq!(usage.payload["model"], MODEL);
-    assert_eq!(usage.payload["generation_id"], "resp_1");
-    assert_eq!(usage.payload["tokens"]["input"], 6);
+    assert_eq!(usage.payload["generation_id"], "gen_1");
+    assert_eq!(usage.payload["tokens"]["input"], 10);
     assert_eq!(usage.payload["cost"], Value::Null);
     assert_eq!(lines.last().unwrap().payload["outcome"], "completed");
 
@@ -114,18 +126,14 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
 #[test]
 fn a_message_sent_during_the_final_reply_continues_the_turn() {
     let mut session = Session::new(
-        vec![text_reply("First."), text_reply("Second.")],
+        vec![Scripted::text("First."), Scripted::text("Second.")],
         Some(message("also this")),
     );
     session.inbox.send(message("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    let durable: Vec<&str> = kinds(&lines)
-        .into_iter()
-        .filter(|k| !k.ends_with("_delta"))
-        .collect();
     assert_eq!(
-        durable,
+        durable(&lines),
         [
             "session_started",
             "turn_started",
@@ -146,12 +154,8 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
     assert_eq!(steering.payload["command_id"], "c_also this");
     assert_eq!(steering.payload["source"], "driver");
     assert_eq!(
-        body(&session, 1)["input"],
-        json!([
-            {"role": "user", "content": "hi"},
-            {"role": "assistant", "content": "First."},
-            {"role": "user", "content": "also this"},
-        ])
+        session.requests()[1].conversation,
+        [user("hi"), assistant("First."), user("also this")]
     );
 }
 
@@ -160,7 +164,10 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
     // The second message arrives while the first reply streams; the reply
     // calls a tool, so the next step's drain applies it.
     let mut session = Session::new(
-        vec![support::tool_call_reply(), text_reply("Done.")],
+        vec![
+            tool_call_reply("", &["get_weather"]),
+            Scripted::text("Done."),
+        ],
         Some(message("steer")),
     );
     session.inbox.send(message("hi")).unwrap();
@@ -179,59 +186,130 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
 fn two_fsyncs_per_model_request() {
     let mut session = Session::new(
         vec![
-            text_reply("First."),
-            text_reply("Second."),
-            text_reply("Third."),
+            Scripted::text("First."),
+            Scripted::text("Second."),
+            Scripted::text("Third."),
         ],
         Some(message("more")),
     );
     session.inbox.send(message("hi")).unwrap();
     let before = session.log.fsyncs();
     session.turn();
-    assert_eq!(session.server.requests().len(), 2);
+    assert_eq!(session.requests().len(), 2);
     assert_eq!(session.log.fsyncs() - before, 4);
 
     session.inbox.send(message("again")).unwrap();
     let before = session.log.fsyncs();
     session.turn();
-    assert_eq!(session.server.requests().len(), 3);
+    assert_eq!(session.requests().len(), 3);
     assert_eq!(session.log.fsyncs() - before, 2);
 }
 
 #[test]
 fn the_conversation_is_kept_in_memory_not_reread_from_the_log() {
-    let mut session = Session::new(vec![text_reply("First."), text_reply("Second.")], None);
+    let mut session = Session::new(
+        vec![Scripted::text("First."), Scripted::text("Second.")],
+        None,
+    );
     session.inbox.send(message("one")).unwrap();
     session.turn();
     // The log's file is gone; only memory can supply the first turn.
     std::fs::remove_file(session.dir.join("events.jsonl")).unwrap();
     session.inbox.send(message("two")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let requests = session.requests();
     assert_eq!(
-        body(&session, 1)["input"],
-        json!([
-            {"role": "user", "content": "one"},
-            {"role": "assistant", "content": "First."},
-            {"role": "user", "content": "two"},
-        ])
+        requests[1].conversation,
+        [user("one"), assistant("First."), user("two")]
     );
     // The second request starts where the first ended, and both carry the
     // session's own id as the cache key and the preamble's settings.
-    let requests = session.requests.lock().unwrap().clone();
     assert_eq!(requests[0].previous_end, None);
     assert_eq!(requests[1].previous_end, Some(1));
     for request in &requests {
         assert_eq!(request.cache_key, "s_test");
         assert_eq!(request.tool_choice, "auto");
         assert_eq!(request.cache_lifetime, CacheLifetime::OneHour);
+        assert_eq!(request.tools, []);
     }
-    assert_eq!(body(&session, 1)["prompt_cache_key"], "s_test");
+}
+
+#[test]
+fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
+    let mut session = Session::new(
+        vec![
+            reasoning_reply("Think.", "Hi."),
+            tool_call_reply("Checking.", &["get_weather", "get_time"]),
+            Scripted::text("Done."),
+        ],
+        Some(message("steer")),
+    );
+    session.inbox.send(message("one")).unwrap();
+    session.turn();
+    session.inbox.send(message("two")).unwrap();
+    session.turn();
+    let lines = log::read(&session.dir).unwrap();
+    // The log up to the last request is what that request was built from.
+    let last = lines
+        .iter()
+        .rposition(|l| l.kind == "assistant_message_started")
+        .unwrap();
+    let sent = session.requests().pop().unwrap().conversation;
+    assert_eq!(rebuild(&lines[..last], MODEL).unwrap(), sent);
+
+    // In log order: the calls come before the message's text completes,
+    // and their results after it.
+    let call = |n: usize| {
+        let Input::ToolCall { action_id, call } = &sent[n] else {
+            panic!("{:?}", sent[n]);
+        };
+        (action_id.clone(), call.name.clone())
+    };
+    let result = |n: usize| {
+        let Input::ToolResult { action_id, text } = &sent[n] else {
+            panic!("{:?}", sent[n]);
+        };
+        assert!(text.contains("No tool is named"), "{text}");
+        action_id.clone()
+    };
+    assert_eq!(sent[0], user("one"));
+    assert!(matches!(sent[1], Input::Reasoning { .. }));
+    assert_eq!(sent[2], assistant("Hi."));
+    assert_eq!(sent[3], user("steer"));
+    let (first, first_name) = call(4);
+    let (second, second_name) = call(5);
+    assert_eq!(
+        (first_name.as_str(), second_name.as_str()),
+        ("get_weather", "get_time")
+    );
+    assert_eq!(sent[6], assistant("Checking."));
+    assert_eq!(result(7), first);
+    assert_eq!(result(8), second);
+    assert_eq!(sent[9], assistant("Done."));
+    assert_eq!(sent[10], user("two"));
+    assert_eq!(sent.len(), 11);
+}
+
+#[test]
+fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    session.inbox.send(message("one")).unwrap();
+    session.turn();
+    let mut lines = session.lines();
+    assert_eq!(
+        rebuild(&lines, MODEL).unwrap(),
+        [user("one"), assistant("Hi.")]
+    );
+    let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
+    lines[turn].payload.insert("input".into(), json!(3));
+    let error = rebuild(&lines, MODEL).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::LogCorrupt);
 }
 
 #[test]
 fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     let mut session = Session::new(
-        vec![reasoning_reply("Think.", "Hi."), text_reply("Again.")],
+        vec![reasoning_reply("Think.", "Hi."), Scripted::text("Again.")],
         None,
     );
     session.inbox.send(message("one")).unwrap();
@@ -255,53 +333,87 @@ fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
 
     session.inbox.send(message("two")).unwrap();
     session.turn();
-    let sent = session.requests.lock().unwrap()[1].conversation.clone();
     assert_eq!(
-        sent[1],
+        session.requests()[1].conversation[1],
         Input::Reasoning {
             model: MODEL.into(),
             text: "Think.".into(),
             provider_item: Some(reasoning_item("Think.")),
         }
     );
-    // Sent back unchanged to the model that produced it.
-    assert_eq!(body(&session, 1)["input"][1], reasoning_item("Think."));
 }
 
 #[test]
-fn reasoning_with_no_readable_text_still_opens_its_action() {
-    let item = json!({"type": "reasoning", "id": "rs_2", "encrypted_content": "x", "summary": []});
-    let mut session = Session::new(
-        vec![support::stream(&[
-            json!({"type": "response.output_item.done", "item": item}),
-            json!({"type": "response.completed", "response": {"id": "r", "status": "completed", "usage": {}}}),
-        ])],
-        None,
-    );
+fn each_reasoning_action_keeps_the_id_it_was_first_seen_with() {
+    let reasoning = |text: &str| {
+        ReplyAction::Reasoning(ReasoningCompleted {
+            text: text.into(),
+            provider_item: Some(reasoning_item(text)),
+        })
+    };
+    let fragment = |text: &str| Delta::Reasoning(TextDelta { text: text.into() });
+    let mut end = reply("Done.");
+    // An item with no readable text streams nothing; the two readable ones
+    // stream with text between them.
+    end.actions = vec![reasoning(""), reasoning("First."), reasoning("Second.")];
+    let script = Scripted {
+        deltas: vec![
+            fragment("Fir"),
+            fragment("st."),
+            Delta::Text(TextDelta {
+                text: "Done.".into(),
+            }),
+            fragment("Second."),
+        ],
+        end: Ok(end),
+    };
+    let mut session = Session::new(vec![script], None);
     session.inbox.send(message("one")).unwrap();
     session.turn();
     let lines = session.lines();
-    let started = lines
+    let ids = |kind: &str| -> Vec<ActionId> {
+        lines
+            .iter()
+            .filter(|l| l.kind == kind)
+            .map(|l| l.action_id.clone().unwrap())
+            .collect()
+    };
+    let started = ids("reasoning_started");
+    let deltas = ids("reasoning_delta");
+    let completed = ids("reasoning_completed");
+    assert_eq!(started.len(), 3);
+    // Streamed: the first readable action, then the second.
+    assert_eq!(
+        deltas,
+        [started[0].clone(), started[0].clone(), started[1].clone()]
+    );
+    // Completed in reply order: the unreadable one opened last.
+    assert_eq!(
+        completed,
+        [started[2].clone(), started[0].clone(), started[1].clone()]
+    );
+    let texts: Vec<&str> = lines
         .iter()
-        .position(|l| l.kind == "reasoning_started")
-        .unwrap();
-    assert_eq!(lines[started + 1].kind, "reasoning_completed");
-    assert_eq!(lines[started + 1].action_id, lines[started].action_id);
-    assert_eq!(lines[started + 1].payload["provider_item"], item);
+        .filter(|l| l.kind == "reasoning_completed")
+        .map(|l| l.payload["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["", "First.", "Second."]);
 }
 
 #[test]
 fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
-    let mut session = Session::new(vec![support::tool_call_reply(), text_reply("Sorry.")], None);
+    let mut session = Session::new(
+        vec![
+            tool_call_reply("", &["get_weather"]),
+            Scripted::text("Sorry."),
+        ],
+        None,
+    );
     session.inbox.send(message("weather?")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    let durable: Vec<&str> = kinds(&lines)
-        .into_iter()
-        .filter(|k| !k.ends_with("_delta"))
-        .collect();
     assert_eq!(
-        durable,
+        durable(&lines),
         [
             "session_started",
             "turn_started",
@@ -337,18 +449,30 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
     assert_eq!(completed.action_id, requested.action_id);
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "unknown_tool");
-    let input = &body(&session, 1)["input"];
-    assert_eq!(input[1]["type"], "function_call");
-    assert_eq!(input[2]["type"], "function_call_output");
-    assert_eq!(input[2]["output"], completed.payload["content"][0]["text"]);
+    let sent = &session.requests()[1].conversation;
+    assert!(matches!(&sent[1], Input::ToolCall { call, .. } if call.name == "get_weather"));
+    assert_eq!(sent[2], assistant(""));
+    assert_eq!(
+        sent[3],
+        Input::ToolResult {
+            action_id: requested.action_id.clone().unwrap(),
+            text: completed.payload["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .into(),
+        }
+    );
 }
 
 #[test]
 fn a_failed_model_call_fails_the_turn_with_its_code() {
-    let mut session = Session::new(
-        vec![Response::status(400, r#"{"error":{"message":"bad"}}"#)],
-        None,
-    );
+    let failure = Failure {
+        code: ErrorCode::ConnectionFailed,
+        message: "The connection to the provider failed.".into(),
+        retry_after: None,
+        provider: None,
+    };
+    let mut session = Session::new(vec![Scripted::failed(failure)], None);
     session.inbox.send(message("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
@@ -367,15 +491,19 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     assert_eq!(call["outcome"], "failed");
     assert_eq!(call["attempt"], 1);
     assert_eq!(call["text"], "");
-    let code = call["error"]["code"].clone();
-    assert_ne!(code, Value::Null);
+    assert_eq!(call["error"]["code"], "connection_failed");
     assert_eq!(lines[5].payload["outcome"], "failed");
     assert_eq!(lines[5].payload["error"], call["error"]);
+    // A failed call sends nothing to the model.
+    assert_eq!(
+        rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap(),
+        [user("hi")]
+    );
 }
 
 #[test]
 fn the_loop_runs_turns_until_every_sender_is_gone() {
-    let mut session = Session::new(vec![text_reply("Hi."), text_reply("Bye.")], None);
+    let mut session = Session::new(vec![Scripted::text("Hi."), Scripted::text("Bye.")], None);
     session.inbox.send(message("hi")).unwrap();
     session.inbox.send(message("and")).unwrap();
     let looped = session.looped.take().unwrap();
@@ -391,5 +519,5 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
     drop(session.inbox);
     assert!(finished.recv_timeout(support::DEADLINE).unwrap());
     ran.join().unwrap();
-    assert_eq!(session.server.requests().len(), 2);
+    assert_eq!(session.provider.requests().len(), 2);
 }

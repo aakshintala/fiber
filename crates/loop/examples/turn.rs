@@ -1,12 +1,12 @@
 //! The `turn` jig (`docs/testing.md`, "Jigs"): runs one turn against the
-//! fake provider server and prints its events, one JSON line each, ephemeral
-//! ones included.
+//! scripted fake provider and prints its events, one JSON line each,
+//! ephemeral ones included.
 //!
-//! `cargo run -p loop --example turn -- [--prompt TEXT] [STREAM...]`
+//! `cargo run -p loop --example turn -- [--prompt TEXT] [--tool NAME]...`
 //!
-//! Each STREAM is a response body in the `openai-responses` wire format, a
-//! recorded stream (`.sse`) or a scripted one, served one per model request
-//! in order. With none, the fake provider replies with reasoning and text.
+//! The fake provider replies with reasoning and text. Each `--tool NAME`
+//! makes its first reply call that tool instead; no tool is registered, so
+//! the call fails `unknown_tool` and the turn takes another step.
 
 #![allow(
     clippy::print_stdout,
@@ -19,37 +19,29 @@ mod support;
 
 use std::process::ExitCode;
 
-use fakes::Response;
-
 fn main() -> ExitCode {
     let mut prompt = "Say hello.".to_owned();
-    let mut script = Vec::new();
+    let mut tools = Vec::new();
     let mut args = std::env::args().skip(1);
     while let Some(arg) = args.next() {
-        if arg == "--prompt" {
-            match args.next() {
-                Some(text) => prompt = text,
-                None => {
-                    eprintln!("usage: turn [--prompt TEXT] [STREAM...]");
-                    return ExitCode::from(2);
-                }
-            }
-            continue;
-        }
-        match std::fs::read(&arg) {
-            Ok(bytes) => script.push(Response::stream(bytes)),
-            Err(e) => {
-                eprintln!("turn: {arg}: {e}");
-                return ExitCode::FAILURE;
+        match (arg.as_str(), args.next()) {
+            ("--prompt", Some(text)) => prompt = text,
+            ("--tool", Some(name)) => tools.push(name),
+            _ => {
+                eprintln!("usage: turn [--prompt TEXT] [--tool NAME]...");
+                return ExitCode::from(2);
             }
         }
     }
-    if script.is_empty() {
-        script.push(support::reasoning_reply(
-            "The person wants a greeting.",
-            "Hello.",
-        ));
+    let mut script = Vec::new();
+    if !tools.is_empty() {
+        let names: Vec<&str> = tools.iter().map(String::as_str).collect();
+        script.push(support::tool_call_reply("Let me check.", &names));
     }
+    script.push(support::reasoning_reply(
+        "The person wants a greeting.",
+        "Hello.",
+    ));
     let mut session = support::Session::new(script, None);
     if session.inbox.send(support::message(&prompt)).is_err() {
         return ExitCode::FAILURE;

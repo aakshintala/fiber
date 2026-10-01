@@ -10,14 +10,11 @@ publish.workspace = true
 [dependencies]
 contract = { path = "../contract" }
 log = { path = "../log" }
+serde_json.workspace = true
 thiserror.workspace = true
 
-# A test plugs the real `openai-responses` protocol into the provider seam
-# against the fake provider server, as `main` plugs it in for a session.
 [dev-dependencies]
 fakes = { path = "../fakes" }
-provider = { path = "../provider" }
-serde_json.workspace = true
 
 # The jig (docs/testing.md, "Jigs").
 [[example]]

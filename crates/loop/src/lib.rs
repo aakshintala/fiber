@@ -7,30 +7,26 @@
 //! reply on its own thread (`docs/architecture.md`, "One inbox" and
 //! "Streaming").
 
+use std::collections::VecDeque;
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    AssistantMessageCompleted, CacheLifetime, CallStatus, Empty, Event, InputItem, MessageOutcome,
-    SessionStarted, SteeringApplied, ToolCallCompleted, TurnCompleted, TurnOutcome, TurnStarted,
-    UsageRecorded,
+    AssistantMessageCompleted, CacheLifetime, CallStatus, Class, Empty, Event, InputItem,
+    MessageOutcome, SessionStarted, SteeringApplied, ToolCallCompleted, TurnCompleted, TurnOutcome,
+    TurnStarted, UsageRecorded,
 };
+use contract::inbox::Message;
 use contract::provider::{CallError, Delta, Input, ModelRequest, Provider, Reply, ReplyAction};
-use contract::shapes::{ContentPart, Failure, Sender};
+use contract::shapes::{ContentPart, Failure};
 use contract::{ActionId, ErrorCode, TurnId};
 use log::Log;
 
-/// A message for the loop: a driver's, an extension's or another session's.
-/// While the loop is idle it starts a turn; while a turn runs it steers it.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Message {
-    /// The message.
-    pub content: Vec<ContentPart>,
-    /// Where it came from.
-    pub sender: Sender,
-}
+mod conversation;
+
+pub use conversation::rebuild;
 
 /// What stops the loop.
 #[derive(Debug, thiserror::Error)]
@@ -38,6 +34,9 @@ pub enum Error {
     /// The session log refused a write, so the turn cannot be recorded.
     #[error(transparent)]
     Log(#[from] log::Error),
+    /// A durable line's payload does not read as its kind.
+    #[error("a log line does not read as its kind: {0}")]
+    Unreadable(serde_json::Error),
 }
 
 impl Error {
@@ -46,6 +45,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Log(e) => e.code(),
+            Self::Unreadable(_) => ErrorCode::LogCorrupt,
         }
     }
 }
@@ -91,6 +91,7 @@ impl Loop {
             None,
             None,
         )?;
+        // `session_started` renders nothing into the conversation.
         Ok(Self {
             log,
             provider,
@@ -138,7 +139,6 @@ impl Loop {
             &turn,
             None,
         )?;
-        self.conversation.extend(input.iter().map(user));
         let completed = loop {
             match self.step(&turn)? {
                 Step::Next => {}
@@ -175,7 +175,6 @@ impl Loop {
                 turn,
                 None,
             )?;
-            self.conversation.push(user(&message));
         }
         let request = ModelRequest {
             system_prompt: self.system_prompt.clone(),
@@ -218,41 +217,56 @@ impl Loop {
     }
 
     /// Sends `request` and streams the reply, emitting each fragment as an
-    /// ephemeral event under `message`. Readable reasoning opens a reasoning
-    /// action at its first fragment, which is returned with the reply.
+    /// ephemeral event as it arrives: text and tool-call arguments under
+    /// `message`, reasoning under its own action, opened with
+    /// `reasoning_started` at its first fragment. Returns the reasoning
+    /// actions opened, in order, with the reply.
     fn stream(
-        &self,
+        &mut self,
         request: &ModelRequest,
         turn: &TurnId,
         message: &ActionId,
-    ) -> Result<(Result<Reply, CallError>, Option<ActionId>), Error> {
-        let mut reasoning: Option<ActionId> = None;
+    ) -> Result<(Result<Reply, CallError>, VecDeque<ActionId>), Error> {
+        let Self {
+            log,
+            provider,
+            model,
+            conversation,
+            ..
+        } = self;
+        let mut emit = |event: &Event, action: &ActionId| {
+            write(log, conversation, model, event, turn, Some(action))
+        };
+        // ponytail: a reasoning fragment does not say which reasoning item it
+        // belongs to, so a run of reasoning fragments with nothing between is
+        // taken as one action. Two readable items back to back would share an
+        // id; exact once `Delta::Reasoning` carries the item's index, as
+        // `tool_call_arguments_delta` does.
+        let mut opened: VecDeque<ActionId> = VecDeque::new();
+        let mut in_reasoning = false;
         let mut failed = None;
-        let call = self.provider.call(request);
+        let call = provider.call(request);
         let reply = call.run(&mut |delta| {
             let written = match delta {
                 Delta::Text(text) => {
-                    self.append(&Event::AssistantMessageDelta(text), turn, Some(message))
+                    in_reasoning = false;
+                    emit(&Event::AssistantMessageDelta(text), message)
                 }
-                Delta::ToolCallArguments(arguments) => self.append(
-                    &Event::ToolCallArgumentsDelta(arguments),
-                    turn,
-                    Some(message),
-                ),
+                Delta::ToolCallArguments(arguments) => {
+                    in_reasoning = false;
+                    emit(&Event::ToolCallArgumentsDelta(arguments), message)
+                }
                 Delta::Reasoning(text) => {
-                    let opened = match &reasoning {
-                        Some(id) => Ok(id.clone()),
-                        None => {
+                    let id = match opened.back() {
+                        Some(id) if in_reasoning => Ok(id.clone()),
+                        _ => {
                             let id = ActionId(mint("a_"));
-                            self.append(&Event::ReasoningStarted(Empty {}), turn, Some(&id))
-                                .map(|()| id)
+                            opened.push_back(id.clone());
+                            emit(&Event::ReasoningStarted(Empty {}), &id).map(|()| id)
                         }
                     };
-                    opened.and_then(|id| {
-                        let written = self.append(&Event::ReasoningDelta(text), turn, Some(&id));
-                        reasoning = Some(id);
-                        written
-                    })
+                    in_reasoning = true;
+                    id.and_then(|id| emit(&Event::ReasoningDelta(text), &id))
                 }
             };
             if let Err(e) = written {
@@ -261,29 +275,31 @@ impl Loop {
         });
         match failed {
             Some(e) => Err(e),
-            None => Ok((reply, reasoning)),
+            None => Ok((reply, opened)),
         }
     }
 
-    /// Writes a reply's actions, its usage and its completion, and adds them
-    /// to the conversation. A tool call ends the step with a next one.
+    /// Writes a reply's actions, its usage and its completion. A reasoning
+    /// action with readable text takes the next action `opened` while it
+    /// streamed; any other opens now. A tool call ends the step with a next
+    /// one.
     fn record(
         &mut self,
         reply: Reply,
-        mut streamed: Option<ActionId>,
+        mut opened: VecDeque<ActionId>,
         turn: &TurnId,
         message: &ActionId,
     ) -> Result<Step, Error> {
         let mut calls = Vec::new();
-        let mut reasoning = Vec::new();
         for action in reply.actions {
             match action {
                 ReplyAction::Reasoning(completed) => {
-                    // ponytail: a reasoning fragment does not say which item
-                    // it belongs to, so every streamed fragment goes under the
-                    // first reasoning action; an item index on the delta if a
-                    // provider streams two readable items in one reply.
-                    let id = match streamed.take() {
+                    let streamed = if completed.text.is_empty() {
+                        None
+                    } else {
+                        opened.pop_front()
+                    };
+                    let id = match streamed {
                         Some(id) => id,
                         None => {
                             let id = ActionId(mint("a_"));
@@ -291,21 +307,13 @@ impl Loop {
                             id
                         }
                     };
-                    self.append(
-                        &Event::ReasoningCompleted(completed.clone()),
-                        turn,
-                        Some(&id),
-                    )?;
-                    reasoning.push(Input::Reasoning {
-                        model: self.model.clone(),
-                        text: completed.text,
-                        provider_item: completed.provider_item,
-                    });
+                    self.append(&Event::ReasoningCompleted(completed), turn, Some(&id))?;
                 }
                 ReplyAction::ToolCall(call) => {
                     let id = ActionId(mint("a_"));
-                    self.append(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
-                    calls.push((id, call));
+                    let name = call.name.clone();
+                    self.append(&Event::ToolCallRequested(call), turn, Some(&id))?;
+                    calls.push((id, name));
                 }
             }
         }
@@ -328,26 +336,20 @@ impl Loop {
         self.append(
             &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                 outcome: MessageOutcome::Completed,
-                text: reply.text.clone(),
+                text: reply.text,
                 error: None,
                 attempt: None,
             }),
             turn,
             Some(message),
         )?;
-        self.conversation.extend(reasoning);
-        self.conversation
-            .push(Input::Assistant { text: reply.text });
         if calls.is_empty() {
             return Ok(Step::Replied);
         }
         // No tool is registered, so every call fails `unknown_tool`
         // (`docs/loop.md`, "Tool calls that do not run").
-        for (id, call) in calls {
-            let text = format!(
-                "No tool is named `{}`. Call only the tools you were given.",
-                call.name
-            );
+        for (id, name) in calls {
+            let text = format!("No tool is named `{name}`. Call only the tools you were given.");
             self.append(
                 &Event::ToolCallCompleted(ToolCallCompleted {
                     status: CallStatus::Failed,
@@ -359,7 +361,7 @@ impl Loop {
                         provider: None,
                     }),
                     process: None,
-                    content: vec![ContentPart::Text { text: text.clone() }],
+                    content: vec![ContentPart::Text { text }],
                     details: None,
                     artifact: None,
                     changes: None,
@@ -369,23 +371,44 @@ impl Loop {
                 turn,
                 Some(&id),
             )?;
-            self.conversation.push(Input::ToolCall {
-                action_id: id.clone(),
-                call,
-            });
-            self.conversation.push(Input::ToolResult {
-                action_id: id,
-                text,
-            });
         }
         Ok(Step::Next)
     }
 
-    fn append(&self, event: &Event, turn: &TurnId, action: Option<&ActionId>) -> Result<(), Error> {
-        self.log
-            .append(event, Some(turn.clone()), action.cloned())?;
-        Ok(())
+    /// Writes `event` and renders it into the conversation.
+    fn append(
+        &mut self,
+        event: &Event,
+        turn: &TurnId,
+        action: Option<&ActionId>,
+    ) -> Result<(), Error> {
+        write(
+            &self.log,
+            &mut self.conversation,
+            &self.model,
+            event,
+            turn,
+            action,
+        )
     }
+}
+
+/// Writes `event` to `log` and renders it into `conversation`: the one path
+/// every event the loop emits takes, so the conversation is the log's
+/// rendering (`docs/loop.md`, "What the model is sent").
+fn write(
+    log: &Log,
+    conversation: &mut Vec<Input>,
+    model: &str,
+    event: &Event,
+    turn: &TurnId,
+    action: Option<&ActionId>,
+) -> Result<(), Error> {
+    log.append(event, Some(turn.clone()), action.cloned())?;
+    if event.class() == Class::Durable {
+        conversation::render(conversation, event, action, model);
+    }
+    Ok(())
 }
 
 /// How a step ended.
@@ -406,20 +429,6 @@ fn ended(outcome: TurnOutcome, error: Option<Failure>) -> TurnCompleted {
         error,
         questions: None,
     }
-}
-
-/// A message as the model reads it. Only text reaches it yet.
-fn user(message: &Message) -> Input {
-    let text = message
-        .content
-        .iter()
-        .filter_map(|part| match part {
-            ContentPart::Text { text } => Some(text.as_str()),
-            ContentPart::Image { .. } | ContentPart::Unknown => None,
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-    Input::User { text }
 }
 
 /// A new id from random bytes (`docs/events.md`, "Identity and ordering").

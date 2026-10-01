@@ -125,6 +125,7 @@ dependencies = [
 name = "fakes"
 version = "0.0.0"
 dependencies = [
+ "contract",
  "serde_json",
 ]
 
@@ -286,7 +287,6 @@ dependencies = [
  "contract",
  "fakes",
  "log 0.0.0",
- "provider",
  "serde_json",
  "thiserror",
 ]

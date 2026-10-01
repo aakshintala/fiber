@@ -6,7 +6,10 @@ license.workspace = true
 publish.workspace = true
 
 # Of Fiber's crates, `fakes` may depend only on `contract`
-# (docs/architecture.md, "The call rules"). The provider server needs only std.
+# (docs/architecture.md, "The call rules"). The provider server needs only std;
+# the scripted provider implements contract's provider seam.
+[dependencies]
+contract = { path = "../contract" }
 
 [dev-dependencies]
 serde_json.workspace = true
