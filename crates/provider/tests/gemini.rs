@@ -448,6 +448,25 @@ fn tool_choice_and_effort_map_to_geminis_own_values() {
 }
 
 #[test]
+fn an_extra_body_field_replaces_fibers_own_except_generation_config() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let declared = Endpoint {
+        extra_body: json!({"toolConfig": {"retrievalConfig": {}}})
+            .as_object()
+            .unwrap()
+            .clone(),
+        ..endpoint(&server)
+    };
+    run(Box::new(Gemini::new(declared).request(&request())))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["toolConfig"],
+        json!({"retrievalConfig": {}})
+    );
+}
+
+#[test]
 fn max_output_tokens_is_the_models_limit_and_never_exceeds_it() {
     let script: Vec<Response> = (0..3).map(|_| completed_reply()).collect();
     let server = ProviderServer::start(script).unwrap();
@@ -799,17 +818,24 @@ fn a_failed_status_reads_retry_after_or_retry_info_and_the_providers_words() {
         Response::status(429, exhausted("37s")).header("retry-after", "7"),
         Response::status(503, "{}"),
         Response::status(400, bad_key),
+        Response::status(
+            400,
+            json!({"error": {"code": 400, "message": "Bad.", "status": "INVALID_ARGUMENT",
+                "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    "reason": "SOMETHING_ELSE"}]}})
+            .to_string(),
+        ),
     ])
     .unwrap();
     let gemini = Gemini::new(endpoint(&server));
-    let failures: Vec<_> = (0..5)
+    let failures: Vec<_> = (0..6)
         .map(|_| match run(Box::new(gemini.request(&request()))).0 {
             Err(CallError::Failed { failure, .. }) => failure,
             other => panic!("{other:?}"),
         })
         .collect();
     let retry: Vec<Option<f64>> = failures.iter().map(|f| f.retry_after).collect();
-    assert_eq!(retry, [Some(37.0), Some(1.5), Some(7.0), None, None]);
+    assert_eq!(retry, [Some(37.0), Some(1.5), Some(7.0), None, None, None]);
     let codes: Vec<ErrorCode> = failures.iter().map(|f| f.code.clone()).collect();
     assert_eq!(
         codes,
@@ -819,6 +845,7 @@ fn a_failed_status_reads_retry_after_or_retry_info_and_the_providers_words() {
             ErrorCode::RateLimited,
             ErrorCode::ProviderUnavailable,
             ErrorCode::AuthenticationFailed,
+            ErrorCode::InvalidRequest,
         ]
     );
     assert_eq!(
