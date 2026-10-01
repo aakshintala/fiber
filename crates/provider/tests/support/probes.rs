@@ -1,7 +1,7 @@
 //! Reads a probe recording from `research/*-probe/raw/` as the responses it
 //! holds. Shared by the provider tests and the `decode` jig.
 //!
-//! The probes saved their exchanges in five shapes:
+//! The probes saved their exchanges in six shapes:
 //!
 //! - a `.sse` file: the response stream's bytes
 //! - a wrapper with the stream's bytes in `raw_sse`, or in `body` beside a
@@ -11,6 +11,9 @@
 //! - a non-streamed response object in `response` (`openai-responses-probe`);
 //!   its stream is rebuilt as one `response.output_item.done` per output
 //!   item, then `response.completed`
+//! - a non-streamed Gemini `GenerateContentResponse` as text in `body`,
+//!   beside a `status` (`google-generative-ai-probe`); a stream sends the
+//!   same object as each event, so it is rebuilt as one `data:` event
 //! - a non-streamed Anthropic Message object in `body`, beside a `status`
 //!   (`anthropic-messages-probe`); its stream is rebuilt as one
 //!   `content_block_start` and `content_block_stop` per content block, then
@@ -88,6 +91,9 @@ fn response(wrapper: &Value) -> Option<Recorded> {
         return Some(Recorded::Stream(raw.clone().into_bytes()));
     }
     if let Some(Value::String(body)) = wrapper.get("body") {
+        if let (200, Ok(object @ Value::Object(_))) = (status, serde_json::from_str(body)) {
+            return Some(Recorded::Stream(format!("data: {object}\n\n").into_bytes()));
+        }
         let body = body.clone().into_bytes();
         return Some(if status == 200 {
             Recorded::Stream(body)

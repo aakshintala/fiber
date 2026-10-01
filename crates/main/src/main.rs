@@ -23,6 +23,7 @@ use extensions::Providers;
 use log::Log;
 use r#loop::Loop;
 use provider::anthropic_messages::Messages;
+use provider::google_generative_ai::Gemini;
 use provider::openai_responses::Responses;
 use provider::{Compat, Endpoint};
 use serde_json::Value;
@@ -244,7 +245,8 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
             )
         }
         Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
-        Protocol::OpenaiCompletions | Protocol::GoogleGenerativeAi | Protocol::BedrockConverse => {
+        Protocol::GoogleGenerativeAi => Arc::new(Gemini::new(endpoint)),
+        Protocol::OpenaiCompletions | Protocol::BedrockConverse => {
             // ponytail: docs/errors.md has no code for a protocol this Fiber
             // does not speak yet; `extension_missing` stands in.
             return Err(failure(

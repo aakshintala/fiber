@@ -8,6 +8,7 @@
 
 pub mod anthropic_messages;
 mod error;
+pub mod google_generative_ai;
 mod http;
 pub mod openai_responses;
 mod sse;
