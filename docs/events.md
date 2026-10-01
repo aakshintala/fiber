@@ -721,7 +721,9 @@ late is a second `usage_recorded` with the same `generation_id`, replacing the
 first. A parent writes a copy of each `usage_recorded` it receives from a
 delegate, with the same payload and `origin_session_id` added, so a session's
 log holds its whole tree's spend. The fold counts one line per
-`generation_id`, the latest, so a copy of a copy is still one call. Consumers
+`generation_id`, the latest, so a copy of a copy is still one call. A late correction
+in a delegate's log is copied like any other line, so in the parent's log too
+the correction comes after the copy it replaces, and the latest wins in both. Consumers
 sum; resume rebuilds the ledger by folding. No pending queue,
 no watermarks, no reconciliation file.
 
