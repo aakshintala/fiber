@@ -10,7 +10,6 @@
     reason = "test helpers; a failure is the test's"
 )]
 
-use std::collections::BTreeMap;
 use std::fs;
 use std::io::{self, Write};
 use std::os::unix::fs::PermissionsExt;
@@ -20,13 +19,11 @@ use std::process::Command;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-use contract::events::{
-    AssistantMessageCompleted, Empty, Event, InputItem, MessageOutcome, TurnCompleted, TurnOutcome,
-    TurnStarted, UsageRecorded,
-};
-use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens};
-use contract::{ActionId, CommandId, ErrorCode, GenerationId, TurnId};
-use doors::{Session, exit_before_session, failure, project, prompt};
+use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
+use contract::shapes::{ContentPart, Failure, Origin};
+use contract::{ErrorCode, SessionId, TurnId};
+use doors::{Session, exit_before_session, failure, mint, project, prompt};
+use log::Log;
 use serde_json::Value;
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -167,36 +164,47 @@ fn the_project_is_gits_shared_directory_or_the_launch_directory() {
     assert_eq!(project(&repo.join("docs")), common);
 }
 
-fn sessions(temp: &Temp) -> PathBuf {
-    temp.0.join("h/projects/p/sessions")
+/// A session's log and the door side opened on it, in `home` under `temp`.
+fn open(temp: &Temp, home: &str, out: &Shared) -> (Arc<Log>, PathBuf, Result<Session, Failure>) {
+    let home = temp.0.join(home);
+    let sessions = home.join("projects/p/sessions");
+    let id = SessionId(mint("s_"));
+    let dir = sessions.join(&id.0);
+    let log = Arc::new(Log::create(&sessions, id).unwrap());
+    let session = Session::open(&home, &dir, log.watch(), Box::new(out.clone()));
+    (log, dir, session)
 }
 
-fn start(temp: &Temp, out: &Shared) -> Session {
-    Session::start(&temp.0.join("h"), &sessions(temp), Box::new(out.clone())).unwrap()
+fn socket(dir: &Path) -> PathBuf {
+    let home = dir.ancestors().nth(4).unwrap();
+    home.join("run").join(dir.file_name().unwrap())
 }
 
-fn socket(temp: &Temp, id: &str) -> PathBuf {
-    temp.0.join("h/run").join(id)
+fn started() -> Event {
+    Event::FiberStarted(FiberStarted {
+        version: "0.0.0".into(),
+        resumed: false,
+    })
 }
 
 #[test]
 fn a_session_binds_its_socket_and_one_that_never_got_a_prompt_leaves_nothing() {
     let temp = Temp::new();
     let out = Shared::default();
-    let session = start(&temp, &out);
-    let dir = only_session(&sessions(&temp));
-    let id = dir.file_name().unwrap().to_str().unwrap().to_owned();
-    let path = socket(&temp, &id);
+    let (log, dir, session) = open(&temp, "h", &out);
+    let session = session.unwrap();
+    let path = socket(&dir);
     UnixStream::connect(&path).expect("the session's socket accepts a connection");
     let mode = fs::metadata(&path).unwrap().permissions().mode();
     assert_eq!(mode & 0o777, 0o600);
-    let run = fs::metadata(temp.0.join("h/run"))
-        .unwrap()
-        .permissions()
-        .mode();
-    assert_eq!(run & 0o777, 0o700);
+    let run = path.parent().unwrap();
+    assert_eq!(
+        fs::metadata(run).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    log.append(&started(), None, None).unwrap();
 
-    assert_eq!(session.exit(Ok(())), 0);
+    session.close(log);
 
     assert!(!path.exists(), "the socket is unlinked on exit");
     assert!(
@@ -204,193 +212,62 @@ fn a_session_binds_its_socket_and_one_that_never_got_a_prompt_leaves_nothing() {
         "a session with no turn deletes its directory"
     );
     let lines = out.lines();
-    let kinds: Vec<&str> = lines.iter().map(|l| l["kind"].as_str().unwrap()).collect();
-    assert_eq!(kinds, ["fiber_started", "fiber_exited"]);
-    assert_eq!(lines[0]["session_id"], id.as_str());
-    assert_eq!(lines[0]["payload"]["resumed"], false);
-    assert_eq!(lines[1]["payload"]["exit_code"], 0);
-    assert_eq!(lines[1]["payload"]["usage"]["cost"], 0.0);
-}
-
-fn only_session(sessions: &Path) -> PathBuf {
-    let dirs: Vec<PathBuf> = fs::read_dir(sessions)
-        .unwrap()
-        .map(|e| e.unwrap().path())
-        .collect();
-    assert_eq!(dirs.len(), 1);
-    dirs[0].clone()
-}
-
-fn usage(output: u64, cost: Option<f64>, subscription: Option<bool>) -> Event {
-    Event::UsageRecorded(UsageRecorded {
-        generation_id: GenerationId("g".into()),
-        model: "fake/m".into(),
-        tokens: Tokens {
-            input: 10,
-            cache_read: 4,
-            cache_write: BTreeMap::from([("1h".to_owned(), 2)]),
-            output,
-        },
-        web_searches: None,
-        cost,
-        subscription,
-        extension: None,
-        origin_session_id: None,
-    })
-}
-
-fn message(text: &str) -> Event {
-    Event::AssistantMessageCompleted(AssistantMessageCompleted {
-        outcome: MessageOutcome::Completed,
-        text: text.into(),
-        error: None,
-        attempt: None,
-    })
-}
-
-fn turn_started() -> Event {
-    Event::TurnStarted(TurnStarted {
-        input: vec![InputItem::Message {
-            content: vec![ContentPart::Text { text: "hi".into() }],
-            sender: Sender {
-                origin: Origin::Driver,
-                command_id: CommandId("c_1".into()),
-            },
-            changed_by: None,
-        }],
-    })
-}
-
-fn turn_completed(outcome: TurnOutcome, error: Option<Failure>) -> Event {
-    Event::TurnCompleted(TurnCompleted {
-        outcome,
-        error,
-        questions: None,
-    })
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_started");
 }
 
 #[test]
-fn fiber_exited_carries_the_final_message_and_the_usage_and_stdout_is_the_log() {
+fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let temp = Temp::new();
     let out = Shared::default();
-    let session = start(&temp, &out);
-    let log = session.log();
-    let turn = || Some(TurnId("t_1".into()));
-    let action = |id: &str| Some(ActionId(id.into()));
-    log.append(&turn_started(), turn(), None).unwrap();
-    log.append(&Event::StepStarted(Empty {}), turn(), None)
-        .unwrap();
-    log.append(&usage(3, Some(0.5), None), turn(), action("a_1"))
-        .unwrap();
-    log.append(&message("Let me check."), turn(), action("a_1"))
-        .unwrap();
-    log.append(&usage(5, Some(0.25), None), turn(), action("a_2"))
-        .unwrap();
-    log.append(&usage(7, None, None), turn(), action("a_2"))
-        .unwrap();
-    log.append(&usage(1, Some(2.0), Some(true)), turn(), action("a_2"))
-        .unwrap();
-    log.append(&message("Hello."), turn(), action("a_2"))
-        .unwrap();
-    log.append(&turn_completed(TurnOutcome::Completed, None), turn(), None)
-        .unwrap();
-    drop(log);
-    let dir = only_session(&sessions(&temp));
+    let (log, dir, session) = open(&temp, "h", &out);
+    let session = session.unwrap();
+    log.append(&started(), None, None).unwrap();
+    let failed = failure(ErrorCode::IoFailed, "disk full");
 
-    assert_eq!(session.exit(Ok(())), 0);
+    let ran = session.ask("hi".into(), |inbox| {
+        let message = inbox.recv().unwrap();
+        assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
+        assert!(matches!(message.sender.origin, Origin::Driver));
+        assert!(message.sender.command_id.0.starts_with("c_"));
+        assert!(inbox.recv().is_err(), "no more prompts come");
+        log.append(
+            &Event::TurnStarted(TurnStarted {
+                input: vec![InputItem::Message {
+                    content: message.content,
+                    sender: message.sender,
+                    changed_by: None,
+                }],
+            }),
+            Some(TurnId("t_1".into())),
+            None,
+        )
+        .unwrap();
+        Err(failed.clone())
+    });
+    assert_eq!(ran, Err(failed));
+    session.close(log);
 
-    let lines = out.lines();
-    let exited = &lines.last().unwrap()["payload"];
-    assert_eq!(exited["exit_code"], 0);
-    assert_eq!(exited["text"], "Hello.");
-    assert_eq!(exited["final_action_id"], "a_2");
-    assert_eq!(exited.get("error"), None);
-    let usage = &exited["usage"];
-    assert_eq!(usage["tokens"]["output"], 16);
-    assert_eq!(usage["tokens"]["input"], 40);
-    assert_eq!(usage["tokens"]["cache_read"], 16);
-    assert_eq!(usage["tokens"]["cache_write"]["1h"], 8);
-    assert_eq!(usage["cost"], 0.75);
-    assert_eq!(usage["subscription_cost"], 2.0);
-
-    // The directory stays, and stdout holds the log's lines byte for byte.
+    assert!(
+        dir.is_dir(),
+        "a session that got a prompt keeps its directory"
+    );
+    assert!(!socket(&dir).exists());
     let log = fs::read_to_string(dir.join("events.jsonl")).unwrap();
     let printed = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
     assert_eq!(printed, log);
 }
 
 #[test]
-fn a_failed_turn_or_a_failed_run_exits_1_with_its_error() {
+fn a_fiber_home_too_long_for_a_socket_is_a_usage_error_and_leaves_no_session() {
     let temp = Temp::new();
-    let out = Shared::default();
-    let session = start(&temp, &out);
-    let log = session.log();
-    let turn = || Some(TurnId("t_1".into()));
-    let cause = failure(ErrorCode::ProviderUnavailable, "down");
-    log.append(&turn_started(), turn(), None).unwrap();
-    log.append(&message("Earlier."), turn(), Some(ActionId("a_1".into())))
-        .unwrap();
-    log.append(
-        &turn_completed(TurnOutcome::Failed, Some(cause.clone())),
-        turn(),
-        None,
-    )
-    .unwrap();
-    drop(log);
+    let (_log, dir, session) = open(&temp, &"h".repeat(110), &Shared::default());
 
-    assert_eq!(session.exit(Ok(())), 1);
-    let exited = &out.lines().last().unwrap()["payload"].clone();
-    assert_eq!(exited["exit_code"], 1);
-    assert_eq!(exited["error"], serde_json::to_value(&cause).unwrap());
-    assert_eq!(exited.get("text"), None);
-    // No billed call: the cost is 0, not null.
-    assert_eq!(exited["usage"]["cost"], 0.0);
-
-    let out = Shared::default();
-    let session = start(&temp, &out);
-    session
-        .log()
-        .append(&turn_started(), Some(TurnId("t_1".into())), None)
-        .unwrap();
-    let broke = failure(ErrorCode::IoFailed, "disk full");
-
-    assert_eq!(session.exit(Err(broke.clone())), 1);
-    let exited = &out.lines().last().unwrap()["payload"].clone();
-    assert_eq!(exited["error"], serde_json::to_value(&broke).unwrap());
-}
-
-#[test]
-fn a_billed_call_with_no_known_cost_makes_the_cost_null() {
-    let temp = Temp::new();
-    let out = Shared::default();
-    let session = start(&temp, &out);
-    let log = session.log();
-    log.append(&turn_started(), Some(TurnId("t_1".into())), None)
-        .unwrap();
-    log.append(&usage(1, None, None), Some(TurnId("t_1".into())), None)
-        .unwrap();
-    drop(log);
-
-    assert_eq!(session.exit(Ok(())), 0);
-    assert_eq!(
-        out.lines().last().unwrap()["payload"]["usage"]["cost"],
-        Value::Null
-    );
-}
-
-#[test]
-fn a_fiber_home_too_long_for_a_socket_is_a_usage_error_and_leaves_nothing() {
-    let temp = Temp::new();
-    let home = temp.0.join("h".repeat(110));
-    let sessions = home.join("projects/p/sessions");
-
-    let error = Session::start(&home, &sessions, Box::new(Shared::default()))
-        .err()
-        .unwrap();
+    let error = session.err().unwrap();
 
     assert_eq!(error.code, ErrorCode::Usage);
     assert!(error.message.contains("FIBER_HOME"));
-    assert!(!home.exists());
+    assert!(!dir.exists());
 }
 
 #[test]
@@ -399,12 +276,10 @@ fn a_socket_path_at_the_platforms_limit_binds() {
     let temp = Temp::new();
     // `<home>/run/` and an 18-byte session id.
     let pad = max - "/run/".len() - 18 - temp.0.as_os_str().len() - 1;
-    let home = temp.0.join("h".repeat(pad));
-    let sessions = home.join("projects/p/sessions");
+    let (log, dir, session) = open(&temp, &"h".repeat(pad), &Shared::default());
 
-    let session = Session::start(&home, &sessions, Box::new(Shared::default())).unwrap();
-    let dir = only_session(&sessions);
-    let id = dir.file_name().unwrap().to_str().unwrap();
-    assert_eq!(home.join("run").join(id).as_os_str().len(), max);
-    assert_eq!(session.exit(Ok(())), 0);
+    let session = session.unwrap();
+
+    assert_eq!(socket(&dir).as_os_str().len(), max);
+    session.close(log);
 }

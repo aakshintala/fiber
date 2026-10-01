@@ -10,8 +10,11 @@
     reason = "test helpers; a failure is the test's"
 )]
 
+use std::ffi::OsStr;
 use std::fs;
 use std::io::Write;
+use std::os::fd::OwnedFd;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
@@ -21,6 +24,7 @@ use std::thread;
 use std::time::Duration;
 
 use fakes::{ProviderServer, Response};
+use rustix::pty;
 use serde_json::{Value, json};
 
 /// How long one `fiber` run may take.
@@ -75,6 +79,20 @@ impl Setup {
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
     /// `FIBER_HOME` set to `home`.
     fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> Run {
+        self.run(home, args, Stdio::piped(), stdin)
+    }
+
+    /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
+    fn fiber_on_terminal(&self, args: &[&str]) -> Run {
+        let terminal = Terminal::open();
+        let home = self.home();
+        self.run(home.to_str().unwrap(), args, terminal.stdin(), None)
+    }
+
+    /// Runs `fiber` in its own process group, waits for it under
+    /// [`DEADLINE`], and asserts that nothing it started is left in the
+    /// group, after a timeout too (`docs/testing.md`, "Running tests").
+    fn run(&self, home: &str, args: &[&str], stdin: Stdio, text: Option<&str>) -> Run {
         let mut child = Command::new(env!("CARGO_BIN_EXE_fiber"))
             .args(args)
             .current_dir(self.root.join("w"))
@@ -83,27 +101,38 @@ impl Setup {
             .env("HOME", &self.root)
             .env("FIBER_HOME", home)
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
-            .stdin(Stdio::piped())
+            .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .process_group(0)
             .spawn()
             .unwrap();
         let group = child.id();
-        let mut pipe = child.stdin.take().unwrap();
-        if let Some(text) = stdin {
+        // Taking the pipe closes it once written.
+        if let Some(mut pipe) = child.stdin.take()
+            && let Some(text) = text
+        {
             pipe.write_all(text.as_bytes()).unwrap();
         }
-        drop(pipe);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = finished
-            .recv_timeout(DEADLINE)
-            .unwrap_or_else(|_| {
+        let output = match finished.recv_timeout(DEADLINE) {
+            Ok(output) => output.unwrap(),
+            Err(_) => {
                 kill_group(group);
-                panic!("waited {DEADLINE:?} for `fiber {}` to exit", args.join(" "))
-            })
-            .unwrap();
+                // Reaps the killed child, so the check below sees the group
+                // as the kill left it.
+                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                assert!(
+                    !group_alive(group),
+                    "`fiber` left a process in its group behind"
+                );
+                panic!(
+                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    args.join(" ")
+                );
+            }
+        };
         assert!(
             !group_alive(group),
             "`fiber` left a process in its group behind"
@@ -135,6 +164,36 @@ fn group_alive(group: u32) -> bool {
         .status()
         .unwrap()
         .success()
+}
+
+/// A pseudo-terminal, opened through rustix's safe calls. The main side
+/// stays open while the run uses the terminal side.
+struct Terminal {
+    _main: OwnedFd,
+    terminal: fs::File,
+}
+
+impl Terminal {
+    fn open() -> Self {
+        let main = pty::openpt(pty::OpenptFlags::RDWR | pty::OpenptFlags::NOCTTY).unwrap();
+        pty::grantpt(&main).unwrap();
+        pty::unlockpt(&main).unwrap();
+        let name = pty::ptsname(&main, Vec::new()).unwrap();
+        let path = PathBuf::from(OsStr::from_bytes(name.as_bytes()));
+        let terminal = fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(path)
+            .unwrap();
+        Self {
+            _main: main,
+            terminal,
+        }
+    }
+
+    fn stdin(&self) -> Stdio {
+        Stdio::from(self.terminal.try_clone().unwrap())
+    }
 }
 
 fn kill_group(group: u32) {
@@ -409,4 +468,29 @@ fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
         // Not `fiber ask`, so no event line.
         assert!(run.lines.is_empty());
     }
+}
+
+#[test]
+fn no_prompt_with_stdin_on_a_terminal_is_a_usage_error() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber_on_terminal(&["ask"]);
+
+    assert_pre_session(&run, 2, "usage");
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_prompt_argument_with_stdin_on_a_terminal_runs_without_reading_it() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber_on_terminal(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(turn_input(&run), "hi");
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
 }

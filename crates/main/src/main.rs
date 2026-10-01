@@ -10,18 +10,17 @@
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::mpsc;
 
 use config::{Config, Protocol, Sources};
-use contract::inbox::Message;
 use contract::provider::Provider;
-use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{CommandId, ErrorCode};
+use contract::shapes::Failure;
+use contract::{ErrorCode, SessionId};
 use doors::{Session, failure};
 use extensions::Providers;
+use log::Log;
 use r#loop::Loop;
 use provider::openai_responses::Responses;
 use provider::{Compat, Endpoint};
@@ -86,35 +85,39 @@ fn ask(args: &[String]) -> i32 {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
-    let session = match Session::start(&parts.home, &parts.sessions, Box::new(io::stdout())) {
+    let id = SessionId(doors::mint("s_"));
+    let dir = parts.sessions.join(&id.0);
+    let log = match Log::create(&parts.sessions, id) {
+        Ok(log) => Arc::new(log),
+        Err(e) => return ask_failed(failed(e.code(), e)),
+    };
+    let session = match Session::open(&parts.home, &dir, log.watch(), Box::new(io::stdout())) {
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
-    let (inbox, waiting) = mpsc::channel();
-    let message = Message {
-        content: vec![ContentPart::Text { text: prompt }],
-        sender: Sender {
-            origin: Origin::Driver,
-            command_id: CommandId(doors::mint("c_")),
-        },
-    };
-    // The receiver lives until the loop stops, so the send cannot fail.
-    inbox.send(message).unwrap_or(());
-    // No more prompts: the loop stops once the turn ends.
-    drop(inbox);
-    let ran = Loop::start(
-        session.log(),
-        parts.provider,
-        parts.model,
-        // ponytail: an empty system prompt until the system prompt is built
-        // (`docs/system-prompt.md`).
-        String::new(),
-        waiting,
-        parts.workspace.to_string_lossy().into_owned(),
-    )
-    .and_then(Loop::run)
-    .map_err(|e| failed(e.code(), e));
-    session.exit(ran)
+    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION")) {
+        session.close(log);
+        return ask_failed(failed(e.code(), e));
+    }
+    let ran = session.ask(prompt, |inbox| {
+        Loop::start(
+            Arc::clone(&log),
+            parts.provider,
+            parts.model,
+            // ponytail: an empty system prompt until the system prompt is
+            // built (`docs/system-prompt.md`).
+            String::new(),
+            inbox,
+            parts.workspace.to_string_lossy().into_owned(),
+        )
+        .and_then(Loop::run)
+        .map_err(|e| failed(e.code(), e))
+    });
+    // A `fiber_exited` that cannot be written leaves a log that reads as a
+    // process that died, which it then is.
+    let code = r#loop::fiber_exited(&log, &dir, ran).unwrap_or(1);
+    session.close(log);
+    code
 }
 
 /// Fiber home, configuration, the chosen model, its credential and its
@@ -123,8 +126,13 @@ fn parts() -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-    let project = doors::project(&workspace);
-    let key = project.to_string_lossy().replace('/', "-");
+    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
+    // `projects/<key>/sessions`: the project's key names its parent.
+    let key = sessions
+        .parent()
+        .and_then(Path::file_name)
+        .map(|key| key.to_string_lossy().into_owned())
+        .unwrap_or_default();
     let config = Config::load(Sources {
         home: home.clone(),
         workspace: workspace.clone(),
@@ -175,7 +183,7 @@ fn parts() -> Result<Parts, Failure> {
         }
     };
     Ok(Parts {
-        sessions: log::sessions_dir(&home, &project),
+        sessions,
         home,
         workspace,
         provider,

@@ -312,6 +312,7 @@ dependencies = [
  "log 0.0.0",
  "loop",
  "provider",
+ "rustix",
  "serde_json",
 ]
 

@@ -21,6 +21,7 @@ serde_json.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
+rustix.workspace = true
 
 [lints]
 workspace = true
