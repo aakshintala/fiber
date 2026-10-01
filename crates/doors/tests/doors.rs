@@ -1,0 +1,285 @@
+//! The doors crate through its public API: the prompt rules, the line a
+//! process prints before any session exists, the project's identity, and a
+//! session process's boundary.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use std::fs;
+use std::io::{self, Write};
+use std::os::unix::fs::PermissionsExt;
+use std::os::unix::net::UnixStream;
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
+use contract::shapes::{ContentPart, Failure, Origin};
+use contract::{ErrorCode, SessionId, TurnId};
+use doors::{Session, exit_before_session, failure, mint, project, prompt};
+use log::Log;
+use serde_json::Value;
+
+static NEXT: AtomicUsize = AtomicUsize::new(0);
+
+/// A temporary directory, removed on drop, with a short name: a session's
+/// socket path must fit in 103 bytes on macOS.
+struct Temp(PathBuf);
+
+impl Temp {
+    fn new() -> Self {
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let dir = std::env::temp_dir().join(format!("fd{}-{n}", std::process::id()));
+        fs::remove_dir_all(&dir).unwrap_or(());
+        fs::create_dir_all(&dir).unwrap();
+        Self(dir)
+    }
+}
+
+impl Drop for Temp {
+    fn drop(&mut self) {
+        fs::remove_dir_all(&self.0).unwrap_or(());
+    }
+}
+
+/// A writer the test reads back after the session is done with it.
+#[derive(Clone, Default)]
+struct Shared(Arc<Mutex<Vec<u8>>>);
+
+impl Write for Shared {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+impl Shared {
+    fn lines(&self) -> Vec<Value> {
+        String::from_utf8(self.0.lock().unwrap().clone())
+            .unwrap()
+            .lines()
+            .map(|l| serde_json::from_str(l).unwrap())
+            .collect()
+    }
+}
+
+/// A reader that fails the test if read: stdin on a terminal is never read.
+struct Untouched;
+
+impl io::Read for Untouched {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        panic!("stdin on a terminal was read");
+    }
+}
+
+fn code(result: Result<String, Failure>) -> ErrorCode {
+    result.unwrap_err().code
+}
+
+#[test]
+fn the_prompt_is_the_argument_or_stdin_and_never_both_or_neither() {
+    assert_eq!(
+        prompt(Some("hi".into()), &mut Untouched, true).unwrap(),
+        "hi"
+    );
+    assert_eq!(
+        prompt(Some("hi".into()), &mut &b""[..], false).unwrap(),
+        "hi"
+    );
+    assert_eq!(
+        prompt(None, &mut &b"brief\n"[..], false).unwrap(),
+        "brief\n"
+    );
+    assert_eq!(
+        code(prompt(Some("hi".into()), &mut &b"brief"[..], false)),
+        ErrorCode::Usage
+    );
+    assert_eq!(code(prompt(None, &mut Untouched, true)), ErrorCode::Usage);
+    assert_eq!(
+        code(prompt(None, &mut &b" \n"[..], false)),
+        ErrorCode::Usage
+    );
+    assert_eq!(
+        code(prompt(Some(" ".into()), &mut Untouched, true)),
+        ErrorCode::Usage
+    );
+    assert_eq!(
+        code(prompt(None, &mut &[0xff, 0xfe][..], false)),
+        ErrorCode::Usage
+    );
+}
+
+#[test]
+fn a_failure_before_any_session_prints_one_line_with_no_session_and_one_sentence() {
+    for (failure, exit) in [
+        (failure(ErrorCode::Usage, "No prompt."), 2),
+        (failure(ErrorCode::NoModel, "No model was chosen."), 1),
+    ] {
+        let (mut out, mut err) = (Vec::new(), Vec::new());
+        let message = failure.message.clone();
+        let error = serde_json::to_value(&failure).unwrap();
+
+        assert_eq!(exit_before_session(failure, &mut out, &mut err), exit);
+
+        let line: Value = serde_json::from_slice(&out).unwrap();
+        assert_eq!(line["kind"], "fiber_exited");
+        assert_eq!(line.get("session_id"), None);
+        assert_eq!(line["payload"]["exit_code"], exit);
+        assert_eq!(line["payload"]["error"], error);
+        assert!(out.ends_with(b"}\n"));
+        assert_eq!(
+            String::from_utf8(err).unwrap(),
+            format!("fiber: {message}\n")
+        );
+    }
+}
+
+#[test]
+fn the_project_is_gits_shared_directory_or_the_launch_directory() {
+    let temp = Temp::new();
+    let plain = temp.0.join("plain");
+    fs::create_dir_all(&plain).unwrap();
+    assert_eq!(project(&plain), fs::canonicalize(&plain).unwrap());
+
+    let repo = temp.0.join("repo");
+    fs::create_dir_all(repo.join("docs")).unwrap();
+    let init = Command::new("git")
+        .arg("init")
+        .arg("-q")
+        .arg(&repo)
+        .status();
+    assert!(init.unwrap().success());
+    let common = fs::canonicalize(repo.join(".git")).unwrap();
+    assert_eq!(project(&repo), common);
+    assert_eq!(project(&repo.join("docs")), common);
+}
+
+/// A session's log and the door side opened on it, in `home` under `temp`.
+fn open(temp: &Temp, home: &str, out: &Shared) -> (Arc<Log>, PathBuf, Result<Session, Failure>) {
+    let home = temp.0.join(home);
+    let sessions = home.join("projects/p/sessions");
+    let id = SessionId(mint("s_"));
+    let dir = sessions.join(&id.0);
+    let log = Arc::new(Log::create(&sessions, id).unwrap());
+    let session = Session::open(&home, &dir, log.watch(), Box::new(out.clone()));
+    (log, dir, session)
+}
+
+fn socket(dir: &Path) -> PathBuf {
+    let home = dir.ancestors().nth(4).unwrap();
+    home.join("run").join(dir.file_name().unwrap())
+}
+
+fn started() -> Event {
+    Event::FiberStarted(FiberStarted {
+        version: "0.0.0".into(),
+        resumed: false,
+    })
+}
+
+#[test]
+fn a_session_binds_its_socket_and_one_that_never_got_a_prompt_leaves_nothing() {
+    let temp = Temp::new();
+    let out = Shared::default();
+    let (log, dir, session) = open(&temp, "h", &out);
+    let session = session.unwrap();
+    let path = socket(&dir);
+    UnixStream::connect(&path).expect("the session's socket accepts a connection");
+    let mode = fs::metadata(&path).unwrap().permissions().mode();
+    assert_eq!(mode & 0o777, 0o600);
+    let run = path.parent().unwrap();
+    assert_eq!(
+        fs::metadata(run).unwrap().permissions().mode() & 0o777,
+        0o700
+    );
+    log.append(&started(), None, None).unwrap();
+
+    session.close(log);
+
+    assert!(!path.exists(), "the socket is unlinked on exit");
+    assert!(
+        !dir.exists(),
+        "a session with no turn deletes its directory"
+    );
+    let lines = out.lines();
+    assert_eq!(lines.len(), 1);
+    assert_eq!(lines[0]["kind"], "fiber_started");
+}
+
+#[test]
+fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
+    let temp = Temp::new();
+    let out = Shared::default();
+    let (log, dir, session) = open(&temp, "h", &out);
+    let session = session.unwrap();
+    log.append(&started(), None, None).unwrap();
+    let failed = failure(ErrorCode::IoFailed, "disk full");
+
+    let ran = session.ask("hi".into(), |inbox| {
+        let message = inbox.recv().unwrap();
+        assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
+        assert!(matches!(message.sender.origin, Origin::Driver));
+        assert!(message.sender.command_id.0.starts_with("c_"));
+        assert!(inbox.recv().is_err(), "no more prompts come");
+        log.append(
+            &Event::TurnStarted(TurnStarted {
+                input: vec![InputItem::Message {
+                    content: message.content,
+                    sender: message.sender,
+                    changed_by: None,
+                }],
+            }),
+            Some(TurnId("t_1".into())),
+            None,
+        )
+        .unwrap();
+        Err(failed.clone())
+    });
+    assert_eq!(ran, Err(failed));
+    session.close(log);
+
+    assert!(
+        dir.is_dir(),
+        "a session that got a prompt keeps its directory"
+    );
+    assert!(!socket(&dir).exists());
+    let log = fs::read_to_string(dir.join("events.jsonl")).unwrap();
+    let printed = String::from_utf8(out.0.lock().unwrap().clone()).unwrap();
+    assert_eq!(printed, log);
+}
+
+#[test]
+fn a_fiber_home_too_long_for_a_socket_is_a_usage_error_and_leaves_no_session() {
+    let temp = Temp::new();
+    let (_log, dir, session) = open(&temp, &"h".repeat(110), &Shared::default());
+
+    let error = session.err().unwrap();
+
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(error.message.contains("FIBER_HOME"));
+    assert!(!dir.exists());
+}
+
+#[test]
+fn a_socket_path_at_the_platforms_limit_binds() {
+    let max = if cfg!(target_os = "macos") { 103 } else { 107 };
+    let temp = Temp::new();
+    // `<home>/run/` and an 18-byte session id.
+    let pad = max - "/run/".len() - 18 - temp.0.as_os_str().len() - 1;
+    let (log, dir, session) = open(&temp, &"h".repeat(pad), &Shared::default());
+
+    let session = session.unwrap();
+
+    assert_eq!(socket(&dir).as_os_str().len(), max);
+    session.close(log);
+}

@@ -29,9 +29,11 @@ use log::Log;
 
 mod calls;
 mod conversation;
+mod process;
 mod schema;
 
 pub use conversation::rebuild;
+pub use process::{fiber_exited, fiber_started};
 
 /// What stops the loop.
 #[derive(Debug, thiserror::Error)]
