@@ -66,9 +66,8 @@ const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/events.md", "contract"),
     ("docs/invocation.md", "contract"),
 ];
-/// `docs/ci.md`: one shard per 25 mutants, at most 6.
-const MUTANTS_PER_SHARD: u64 = 25;
-const MAX_SHARDS: u64 = 6;
+/// `docs/ci.md`: mutation testing runs as 6 shards.
+const MUTANT_SHARDS: u64 = 6;
 
 fn is_docs_file(path: &str) -> bool {
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
@@ -244,10 +243,6 @@ fn classify_with(files: &[String], members: &Members, listed: &[(&str, &str)]) -
     Selection::Crates(selected.into_iter().collect())
 }
 
-pub(crate) fn shard_count(mutants: u64) -> u64 {
-    mutants.div_ceil(MUTANTS_PER_SHARD).min(MAX_SHARDS)
-}
-
 /// Which CI jobs run, by the job ids in `.github/workflows/ci.yml`, and how
 /// many mutant shards.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -256,12 +251,11 @@ pub(crate) struct Plan {
     pub(crate) shards: u64,
 }
 
-pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool, mutants: u64) -> Plan {
+pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool) -> Plan {
     let pr = event == "pull_request";
     let code = mode != "docs";
-    let shards = if pr && code { shard_count(mutants) } else { 0 };
+    let shards = if pr && code { MUTANT_SHARDS } else { 0 };
     let jobs = BTreeMap::from([
-        ("docs", pr),
         ("lint", pr && code),
         // The backstop on `main` compiles the whole workspace on every push.
         ("test", !pr || !packages.is_empty()),

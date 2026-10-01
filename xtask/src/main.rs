@@ -7,7 +7,7 @@
 //!
 //! - `select --base REV`: what a diff from the merge base with REV runs,
 //!   uncommitted and untracked files included, as `key=value` lines
-//! - `plan --mode M --packages "A B" --event E --bug true|false --mutants N`:
+//! - `plan --mode M --packages "A B" --event E --bug true|false`:
 //!   which CI jobs run, as `key=value` lines
 //! - `verdict`: reads `NEEDS` and `JOBS` from the environment and passes only
 //!   if every selected job passed and every other job was skipped
@@ -75,16 +75,12 @@ fn run(args: &[String]) -> Result<bool, String> {
                 .split_whitespace()
                 .map(str::to_owned)
                 .collect();
-            let mutants = flag(rest, "--mutants")?
-                .parse()
-                .map_err(|e| format!("--mutants: {e}"))?;
             let bug = flag(rest, "--bug")? == "true";
             let plan = select::plan(
                 &flag(rest, "--mode")?,
                 &packages,
                 &flag(rest, "--event")?,
                 bug,
-                mutants,
             );
             let shards: Vec<u64> = (0..plan.shards).collect();
             println!(
