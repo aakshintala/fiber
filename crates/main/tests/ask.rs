@@ -406,5 +406,7 @@ fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
 
         assert_eq!(run.code, Some(2));
         assert!(run.stderr.contains("fiber ask"), "stderr: {}", run.stderr);
+        // Not `fiber ask`, so no event line.
+        assert!(run.lines.is_empty());
     }
 }
