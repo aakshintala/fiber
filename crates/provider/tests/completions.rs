@@ -920,3 +920,135 @@ fn a_connection_closed_before_any_response_fails_the_call() {
     };
     assert_eq!(failure.code, ErrorCode::ConnectionFailed);
 }
+
+#[test]
+fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content() {
+    let call = |id: &str| Input::ToolCall {
+        action_id: ActionId(id.into()),
+        call: ToolCallRequested {
+            name: "get_weather".into(),
+            arguments: json!({"city": id}),
+            provider_id: None,
+            repair: None,
+        },
+    };
+    let result = |id: &str| Input::ToolResult {
+        action_id: ActionId(id.into()),
+        text: "ok".into(),
+    };
+    let reasoning = Input::Reasoning {
+        model: "openrouter/z-ai/glm-5.3-flash".into(),
+        text: "hm".into(),
+        provider_item: Some(json!({"reasoning_content": "hm"})),
+    };
+    let mut conversation = request().conversation;
+    conversation.extend([call("a"), call("b"), result("a"), result("b"), reasoning]);
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(
+        endpoint(&server),
+        &ModelRequest {
+            conversation,
+            ..request()
+        },
+    );
+    let messages = sent_body(&server, 0)["messages"].clone();
+    let ids: Vec<&str> = messages[2]["tool_calls"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["a", "b"]);
+    assert_eq!(messages[2].get("content"), None);
+    assert_eq!(
+        messages[5],
+        json!({"role": "assistant", "content": "", "reasoning_content": "hm"})
+    );
+}
+
+#[test]
+fn reasoning_in_its_own_field_is_kept_under_that_field() {
+    let (reply, deltas) = decoded(&stream(&[
+        chunk(json!({"reasoning_content": "Think"}), None),
+        chunk(
+            json!({"reasoning_content": "ing.", "content": "Done."}),
+            Some("stop"),
+        ),
+    ]));
+    assert_eq!(
+        reply.unwrap().actions,
+        [ReplyAction::Reasoning(ReasoningCompleted {
+            text: "Thinking.".into(),
+            provider_item: Some(json!({"reasoning_content": "Thinking."})),
+        })]
+    );
+    assert_eq!(
+        deltas[0],
+        Delta::Reasoning(TextDelta {
+            text: "Think".into()
+        })
+    );
+}
+
+#[test]
+fn reasoning_details_merge_by_index_and_type() {
+    let details = |entries: Value| chunk(json!({"reasoning_details": entries}), None);
+    let (reply, deltas) = decoded(&stream(&[
+        details(json!([{"type": "reasoning.text", "index": 0, "text": "a"},
+            {"type": "reasoning.encrypted", "index": 0, "data": "x"}])),
+        details(json!([{"type": "reasoning.text", "index": 0, "text": "b", "signature": "sig"}])),
+        details(json!([{"type": "reasoning.text", "index": 0, "signature": null}])),
+        chunk(json!({}), Some("stop")),
+    ]));
+    let ReplyAction::Reasoning(reasoning) = &reply.unwrap().actions[0] else {
+        panic!("expected reasoning");
+    };
+    assert_eq!(
+        reasoning.provider_item,
+        Some(json!({"reasoning_details": [
+            {"type": "reasoning.text", "index": 0, "text": "ab", "signature": "sig"},
+            {"type": "reasoning.encrypted", "index": 0, "data": "x"},
+        ]}))
+    );
+    assert_eq!(reasoning.text, "ab");
+    assert_eq!(deltas.len(), 2);
+}
+
+#[test]
+fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
+    let calls = |calls: Value| chunk(json!({"tool_calls": calls}), None);
+    let (reply, deltas) = decoded(&stream(&[
+        calls(
+            json!([{"id": "c1", "function": {"name": "get_weather", "arguments": "{\"city\":"}}]),
+        ),
+        calls(json!([{"function": {"arguments": "\"Paris\"}"}}])),
+        calls(json!([{"id": "c2", "function": {"name": "f", "arguments": "{}"}}])),
+        chunk(json!({}), Some("tool_calls")),
+    ]));
+    let actions = reply.unwrap().actions;
+    assert_eq!(
+        actions,
+        [
+            ReplyAction::ToolCall(ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: Some(ProviderCallId("c1".into())),
+                repair: None,
+            }),
+            ReplyAction::ToolCall(ToolCallRequested {
+                name: "f".into(),
+                arguments: json!({}),
+                provider_id: Some(ProviderCallId("c2".into())),
+                repair: None,
+            }),
+        ]
+    );
+    let indices: Vec<u32> = deltas
+        .iter()
+        .map(|d| match d {
+            Delta::ToolCallArguments(a) => a.index,
+            Delta::Text(_) | Delta::Reasoning(_) => panic!("{d:?}"),
+        })
+        .collect();
+    assert_eq!(indices, [0, 0, 1]);
+}

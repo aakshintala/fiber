@@ -258,14 +258,14 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         ));
         system = Some(0);
     }
-    // Each conversation input's message, `None` for an input that adds
-    // nothing.
-    let mut positions: Vec<Option<usize>> = Vec::with_capacity(request.conversation.len());
+    // How many messages there are after each conversation input: the last
+    // of them holds that input, or the nearest earlier one when the input
+    // added nothing.
+    let mut ends: Vec<usize> = Vec::with_capacity(request.conversation.len());
     for input in &request.conversation {
-        let at = match input {
+        match input {
             Input::User { text } => {
                 out.push(message(json!({"role": "user", "content": text})));
-                Some(out.len() - 1)
             }
             Input::ToolResult { action_id, text } => {
                 out.push(message(json!({
@@ -273,14 +273,12 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     "tool_call_id": call_id(action_id),
                     "content": text,
                 })));
-                Some(out.len() - 1)
             }
-            Input::Assistant { text } if text.is_empty() => None,
+            Input::Assistant { text } if text.is_empty() => {}
             Input::Assistant { text } => {
                 let mut m = take_assistant(&mut out, &["content"]);
                 m.insert("content".into(), json!(text));
                 out.push(m);
-                Some(out.len() - 1)
             }
             // Reasoning goes back unchanged, only to the model that produced
             // it, and never as plain text.
@@ -293,9 +291,8 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 let mut m = take_assistant(&mut out, &keys);
                 m.extend(fields.clone());
                 out.push(m);
-                Some(out.len() - 1)
             }
-            Input::Reasoning { .. } => None,
+            Input::Reasoning { .. } => {}
             Input::ToolCall { action_id, call } => {
                 let mut m = take_assistant(&mut out, &[]);
                 let call = json!({
@@ -310,10 +307,9 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     }
                 }
                 out.push(m);
-                Some(out.len() - 1)
             }
-        };
-        positions.push(at);
+        }
+        ends.push(out.len());
     }
     // An assistant message with neither text nor tool calls, only reasoning,
     // still needs its `content`.
@@ -327,17 +323,14 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     }
 
     if endpoint.compat.cache_control {
-        // The last message the previous request ended on: the nearest input
-        // before `previous_end` that produced one.
-        let previous_end = request.previous_end.and_then(|end| {
-            (0..end)
-                .rev()
-                .find_map(|i| positions.get(i).copied().flatten())
-        });
+        // The message the previous request ended on.
+        let previous_end = request
+            .previous_end
+            .and_then(|end| ends.get(end.checked_sub(1)?)?.checked_sub(1));
         let last = out.len().checked_sub(1);
-        let mut marked: Vec<usize> = [system, previous_end, last].into_iter().flatten().collect();
-        marked.dedup();
-        for at in marked {
+        // A message named twice is marked once: its content is no longer
+        // a string the second time.
+        for at in [system, previous_end, last].into_iter().flatten() {
             if let Some(m) = out.get_mut(at) {
                 mark(m, &request.cache_lifetime);
             }
@@ -464,14 +457,12 @@ impl Decoder {
         // failure (`research/provider-errors`, "How an error arrives after
         // HTTP 200").
         if let Some(error) = chunk.get("error").filter(|e| e.is_object()) {
-            let code =
-                ["/metadata/provider_code", "/code"]
-                    .iter()
-                    .find_map(|p| match error.pointer(p) {
-                        Some(Value::String(code)) => Some(code.clone()),
-                        Some(Value::Number(code)) => Some(code.to_string()),
-                        _ => None,
-                    });
+            // OpenRouter's `code` repeats the HTTP status as a number; the
+            // upstream's own code is in `metadata`.
+            let code = ["/metadata/provider_code", "/code"]
+                .iter()
+                .find_map(|p| error.pointer(p).and_then(Value::as_str))
+                .map(str::to_owned);
             return Err(Error::ReplyFailed {
                 code,
                 message: str_at(error, "message").to_owned(),
