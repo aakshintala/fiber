@@ -287,8 +287,10 @@ shell also one that goes on with a space: `npm test` matches
 with no primary argument, such as an MCP tool, returns an empty subject, and
 its rule matches the tool by name. A call a rule cannot safely match, such as
 a shell command with more than one part, returns no subject, and no rule or
-session grant matches it, a deny or an ask included
-([#188](https://github.com/aakshintala/fiber/issues/188)).
+session grant matches it, a deny or an ask included. A shell rule matches a
+command's text, not what it does: a deny on `rm -rf ~/` misses `rm -fr ~`,
+and a command of more than one part, or one the classifier cannot read
+plainly, always reaches the reviewer, which judges what it does.
 
 Approving `npm test -- --watch` can remember the subject, or the prefix
 `npm test`; the terminal offers the prefix, and shows it. The widening is an explicit, separate choice at the moment
