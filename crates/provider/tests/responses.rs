@@ -537,13 +537,29 @@ fn a_stream_ending_response_failed_drops_what_it_streamed() {
             json!({"type": "response.failed", "response": {"id": "resp_1", "status": "failed", "error": error}}),
         ])
     };
-    let server = ProviderServer::start([Response::stream(failed(
-        json!({"code": "server_error", "message": "The model crashed."}),
-    ))])
+    let crashed = || failed(json!({"code": "server_error", "message": "The model crashed."}));
+    let server = ProviderServer::start([
+        Response::stream(crashed()),
+        Response::stream(crashed()).header("x-should-retry", "false"),
+    ])
     .unwrap();
-    let (result, deltas) = run(&Responses::new(endpoint(&server)).request(&request()));
-    let Err(CallError::Failed { failure, .. }) = result else {
+    let responses = Responses::new(endpoint(&server));
+    let (result, deltas) = run(&responses.request(&request()));
+    let Err(CallError::Failed {
+        failure,
+        should_retry: None,
+    }) = result
+    else {
         panic!("{result:?}");
+    };
+    // The 200 response's header governs the failure its stream reports.
+    let (vetoed, _) = run(&responses.request(&request()));
+    let Err(CallError::Failed {
+        should_retry: Some(false),
+        ..
+    }) = vetoed
+    else {
+        panic!("{vetoed:?}");
     };
     assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
     let said = failure.provider.unwrap();

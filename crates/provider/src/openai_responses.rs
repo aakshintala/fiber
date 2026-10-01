@@ -76,22 +76,27 @@ pub struct Call {
 impl Call {
     /// Sends the request and returns the reply's bytes, unread.
     pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        http::post(&self.url, &self.headers, &self.body, &self.cancel)
+        http::post(&self.url, &self.headers, &self.body, &self.cancel).map(|(body, _)| body)
     }
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let reply = self
-            .open()
-            .and_then(|stream| decode(BufReader::new(stream), sink));
+        let (reply, should_retry) =
+            match http::post(&self.url, &self.headers, &self.body, &self.cancel) {
+                Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
+                Err(e) => {
+                    let should_retry = e.should_retry();
+                    (Err(e), should_retry)
+                }
+            };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
         }
         reply.map_err(|e| CallError::Failed {
             failure: e.failure(&self.provider),
-            should_retry: e.should_retry(),
+            should_retry,
         })
     }
 

@@ -63,14 +63,15 @@ impl Cancel {
     }
 }
 
-/// POSTs `body` to `url` and returns the response body to read, or the
-/// failure a non-2xx status reports.
+/// POSTs `body` to `url` and returns the response body to read with the
+/// response's `x-should-retry` header, which also governs a failure the
+/// body reports later; or the failure a non-2xx status reports.
 pub(crate) fn post(
     url: &str,
     headers: &[(String, String)],
     body: &[u8],
     cancel: &Arc<Cancel>,
-) -> Result<impl Read + use<>, Error> {
+) -> Result<(impl Read + use<>, Option<bool>), Error> {
     // A call cancelled before it starts never resolves or connects.
     if cancel.is_cancelled() {
         return Err(Error::Connection("the call was cancelled".into()));
@@ -95,17 +96,17 @@ pub(crate) fn post(
     let response = request
         .send(body)
         .map_err(|e| Error::Connection(e.to_string()))?;
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .and_then(|v| v.to_str().ok())
+            .map(|v| v.trim().to_ascii_lowercase())
+    };
+    let should_retry = header("x-should-retry").and_then(|v| v.parse::<bool>().ok());
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        let header = |name: &str| {
-            response
-                .headers()
-                .get(name)
-                .and_then(|v| v.to_str().ok())
-                .map(|v| v.trim().to_ascii_lowercase())
-        };
         let retry_after = header("retry-after").and_then(|v| v.parse::<f64>().ok());
-        let should_retry = header("x-should-retry").and_then(|v| v.parse::<bool>().ok());
         let body = response.into_body().read_to_string().unwrap_or_default();
         return Err(Error::Status {
             status,
@@ -114,7 +115,7 @@ pub(crate) fn post(
             should_retry,
         });
     }
-    Ok(response.into_body().into_reader())
+    Ok((response.into_body().into_reader(), should_retry))
 }
 
 /// The connector that opens the socket and keeps a handle to it.
