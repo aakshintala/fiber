@@ -1,0 +1,42 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_6abe177f9c2ea0ce5d474850","object":"response","created_at":1790842751,"status":"in_progress","parallel_tool_calls":true,"temperature":1,"top_p":1,"background":false,"truncation":"disabled","top_logprobs":0,"model":"muse-spark-1.3-contributor","error":null,"incomplete_details":null,"output":[],"instructions":null,"tool_choice":"auto","tools":[{"type":"function","name":"get_weather","description":"Weather for a city.","strict":true,"parameters":{"additionalProperties":false,"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}],"reasoning":{"effort":"high"}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_6abe177f9c2ea0ce5d474850","object":"response","created_at":1790842751,"status":"in_progress","parallel_tool_calls":true,"temperature":1,"top_p":1,"background":false,"truncation":"disabled","top_logprobs":0,"model":"muse-spark-1.3-contributor","error":null,"incomplete_details":null,"output":[],"instructions":null,"tool_choice":"auto","tools":[{"type":"function","name":"get_weather","description":"Weather for a city.","strict":true,"parameters":{"additionalProperties":false,"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}],"reasoning":{"effort":"high"}}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_6abe177f9c2ea0ce5d474850:rs_01a0f68bc9da73f38aa375dae4d331b2","type":"reasoning","status":"in_progress","summary":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"rs_6abe177f9c2ea0ce5d474850:rs_01a0f68bc9da73f38aa375dae4d331b2","type":"reasoning","status":"completed","encrypted_content":"Q-PaDgGm5SCPr3UOWLRX9xvLsCzpVOhKPMMC68EKfEv5g9mEtAMAwJWsIXEen-xA4Ja8vg7DJFY4553PMmUYSVsL5ERTqi3KoVWaXA61I9POlOL7OwpUHoag-ThZ8VlwBJL7ElR0RT9uPZyZetSnzvcBvihhJ9CR4oUkit8C1Y2rhr1YalQIUeGsFLc6-idX1E8J6TSdzQKif0s8KZGJes9HVw4IvZFKDh1SwriGNCNr9FKrs1_d_Ks6gQzrxqQuxjysp66ek-UUkndspsE7DKP0cspTLX_iCqEkL4O9c4jG9YtrTXfgg_RyPW3RxSMMJ61tRin9Icy-_FnWt0-B5caT7vmMTyw4P7eEO-UtTbztU0JQpubBKRIcp_TTHaNlQ_qVDh93XLwzJoNbwvncGEYG6w3YOs4fkTpSoPe44MDMcT9HXheVQ8OOHtfWD2DLr2DqVO-nDYgg03WMhVPyXRQup2A1QcSVqp21LTmfKOf0dideV-og1JnLrR4hgKxVQoocdo1ZUdFVXI1eQZ3-V08mE4VJwHH8v19ksx8b_BbDpvtKoYlf1xB52gIGuaNRLbgpOFIhgyKH1xMlHx6fqSBfAiaLQXT1IORLR4IFhS1D3izPNZ2FhN-TgoiqqI1z2p8bqBlKkC2GYLcK_EewfC5GdPklOojgSKmZzjpJxo5KUNPQUkNCHIMueIZKHNOjrfYByzgXPtDmsznHLEI2Sl5cUBYs_T-RrM2-fekcqj009KLpu5eJUNYMHdbDnNmCsgxbu1_RoNwyQKRVmKWuyPpUIgEX5qDSzqlszLBk0yiRhDpyzAAJTD6Gtd8Gc3EmJ7X5c_750UI1hAVBSe-66dCCBjEAnmZNbWV11j-x1rzLQvQQxcR0szneq5RmogKdlTL7gH9OnvrdRLdmWwKe41jHX_Al_Cpa0zmsijACLkcIcpZ0mhe7Tzg4vQ7qp014Ob5XVHT2p0BKJzLEbq2GNbEFRFP1yoDL6j40lZ5C-xsl4RjcCHE9Xj8JU0mcJmkVXDESv3_b_PCFVYCKWkGVQZOvbqldynrNwGP-nrLvbls5MwH1_rWEKlsNI6rIL-VFRAPtw5Pzr2btAb8QPQQvQhKv1yro2EkI5bUfkkZJdm3R-CjYt_x7uZ5kRhLbi6cjHmOuBEiXNx9_lG4Gn9hGfJRHNmRac-tgmQjC_D9H-S8WpNlbSRjM5IhH4X9dAfgmka1UjCsj594JO1b5qPN98aMqPQjrw8bYR9i_QfHjkVDre28W8aQwLIoIXlJzJuPMOnaqrW-7dvJY89pukjDwoUhMJlV6c9Col5BwVudsnBuwWWPKU01FqgxC3b4AdAq44NCac1xJShG2HvHDvz_hKkuucu3m3LT6oORB2mhE9aFU33OlJch1kg6OsTpFrSwpZlmSrASM2oM14m-76g","summary":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":4,"output_index":1,"item":{"id":"msg_01a0f68bcf38715981e37ab4a27b8c81","type":"message","status":"in_progress","role":"assistant","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":5,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","part":{"type":"output_text","text":"","annotations":[],"logprobs":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":6,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","delta":"The weather in Paris","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":7,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","delta":" is ","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":8,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","delta":"18°C","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":9,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","delta":" and","logprobs":[]}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":10,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","delta":" clear.","logprobs":[]}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":11,"output_index":1,"content_index":0,"item_id":"msg_01a0f68bcf38715981e37ab4a27b8c81","part":{"type":"output_text","text":"The weather in Paris is 18°C and clear.","annotations":[],"logprobs":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":12,"output_index":1,"item":{"id":"msg_01a0f68bcf38715981e37ab4a27b8c81","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The weather in Paris is 18°C and clear.","annotations":[],"logprobs":[]}]}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":13,"response":{"id":"resp_6abe177f9c2ea0ce5d474850","object":"response","created_at":1790842751,"completed_at":1790842753,"status":"completed","parallel_tool_calls":true,"temperature":1,"top_p":1,"background":false,"truncation":"disabled","top_logprobs":0,"model":"muse-spark-1.3-contributor","error":null,"incomplete_details":null,"output":[{"id":"rs_6abe177f9c2ea0ce5d474850:rs_01a0f68bc9da73f38aa375dae4d331b2","type":"reasoning","status":"completed","encrypted_content":"Q-PaDgEDUvzMuK88fG1ukgPvHrM2Xy8gz0B-lAiWETfLbldbHj2SUn0gAPY0PCGVppqErPr0bhdVHPBW78fVSh1MtqKQixF4PGjypX22VuO4ztpvJegyWFmQJDVrvdHg4Z2Wobmc7N-4HPqqObqUwo70WZJUa9IhyTwECoUWTVTJXwYh1Jv52kmD_7Jv633wGc6sJ1NlHoJjGaTt3_a2W-RNxSoSFBebUMlhK5NcgwWKK8o1n9hf0JTF56PMwPOauPhd4j6I9QR5oeEzdo5MXU-N0PFNW-p6VvHS5dFYEZgxgpbYdeAkHtTmwPunXvTltcAdq3og0KJ_Ez6koGnDPiR9f5lepwaUFr1SNkX9q2VXshIoben5fE92DqKEhAEt-Iuv_vmAjHhP_wYVkdSrkk_oCaP-Q6BBI5AAI9tI1agqHt-sTLpVWh-N_LKZs8Qtg186uGbax30EmsmLT7q1GEUdvf-VyXmU7h0_AkZa4WHgnbQRSwtmX0-s_a0iIzWE0tPzDsszQ3GCm0KSjnL9Ekt4LwlZ98HMcWng6c-UcyyVXOVDCVuRaRjb_RcBSJa-MdyEbcJnW-4byC1cFP3BYSpTLUbVNda1yBIOUcOUfPpjpn7N_MgIF5Oy6KK2uupuWEom3bWgon7m7PjL3ef7xZx-Jf5Q91msaQZv3o6sct_14h3N4CWig1hI_ZOqZNL3XVTP2gPH0WAiLtXm-auIPbE1pk_Cq_aQfGpVxHbRGa_OgX-t8vNPKXRZsWwAMB9jPV-WZDB5dHLYsMk1L4Kd0ChAOfNKg4JwnhS1Syp9VP7hTiX9Qb5Rx26_GGDpYQaqv5SV-1SI8xVWCYBA4W_UR1Pxz-Tpl7IlzP64eJlaLQsxvNIUdQsGelDTmTkh49TKQzZNBLLK2ZyWa9AWxDOQ5FOLEfH2XaW-q1CDps4gFraNANs8gJnfTXhl69JYj3F51y7A76UHg7W1n9-n4eSiBJirVSU2Z4Glaabx4LwSi4Wlz1E3Gn7EuWBoQy1Od0TMOvKEKD_UfTRixrqUQAaZ2pVyqiiehpCSATSJ1D_wXVNV03vVNZJhhpMOSO7eAGP9rHgjD-bt7ZFQ9OxKWUQsA1TJtK4bdCzLYoyMFfgaiJxKCA2HsQBBjJOrsBCKbkUM7cljcEHWP9iFzO2UA1ps4Bi5Wpb2Cc8NYX852CaFUxXSNTl7fh0meY-GOsfF_MTncJBj-uN95K0DxPDaz_KCUx6DiLwgtfBSU80Ko-uOYH1-dvc3LN5cE3SrctuqucyGt7QsvZXPybNq1LkI-80rQypzg-fJhU8IQE0uAIxa-0wHAwkJM6FxuPiGHazG8LgyrZUiUj0RM8yLh4UMYsqJHbiqOj6LdKlOGHGGYIhEE37PKmA-iR-bYJH7tu4NJmvz9I7TdMN95wU9mjUNuw","summary":[]},{"id":"msg_01a0f68bcf38715981e37ab4a27b8c81","type":"message","status":"completed","role":"assistant","content":[{"type":"output_text","text":"The weather in Paris is 18°C and clear.","annotations":[],"logprobs":[]}]}],"usage":{"input_tokens":616,"output_tokens":159,"total_tokens":775,"input_tokens_details":{"cached_tokens":497},"output_tokens_details":{"reasoning_tokens":138}},"instructions":null,"tool_choice":"auto","tools":[{"type":"function","name":"get_weather","description":"Weather for a city.","strict":true,"parameters":{"additionalProperties":false,"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}],"reasoning":{"effort":"high"}}}
+

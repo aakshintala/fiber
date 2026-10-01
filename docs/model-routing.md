@@ -22,7 +22,7 @@ Protocols are native Rust in the `provider` module. There are five:
 | `anthropic-messages` | Anthropic, OpenCode, OpenRouter, Databricks, muse, AWS Bedrock (Claude), Google Vertex (Claude), Azure (Foundry Claude) |
 | `openai-completions` | OpenCode, OpenRouter, Databricks, muse, Azure |
 | `openai-responses` | OpenAI, ChatGPT/codex, OpenCode, Databricks, muse, Azure |
-| `google-generative-ai` | the Gemini API, Google Vertex (Gemini), OpenCode Zen's Gemini models |
+| `google-generative-ai` | the Gemini API, Google Vertex (Gemini), OpenCode (Zen's Gemini models) |
 | `bedrock-converse` | AWS Bedrock (models other than Claude) |
 
 AWS event-stream framing is a per-model flag, not a protocol. `anthropic-messages`
@@ -73,7 +73,7 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 | Gemini API | `google-generative-ai` | key |
 | ChatGPT/codex | `openai-responses`, with its flags | subscription login |
 | OpenRouter | `anthropic-messages`, `openai-completions` | key |
-| OpenCode | `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai` | key |
+| OpenCode (Go and Zen) | `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai` | key, one for Go and Zen |
 | Databricks | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | muse (the Meta Model API) | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | AWS Bedrock | `anthropic-messages` for Claude and `bedrock-converse` for other models, both with AWS framing | Bedrock API key, or SigV4 through `sign()` |
@@ -137,6 +137,30 @@ in September 2026.
 Fiber targets Gemini 3 and later on `google-generative-ai`. How Gemini 2.x
 models treat function-call ids and images in `functionResponse.parts` is not
 measured, and is settled when Fiber adds them.
+
+### OpenCode wire facts
+
+Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
+
+- One `opencode` provider covers OpenCode Go and OpenCode Zen. The same key
+  works on both. Go is a subscription at `https://opencode.ai/zen/go`, and its
+  models declare `"subscription": true` beside their prices ("Cost"). Zen is
+  billed per token at `https://opencode.ai/zen`, and its models carry prices
+  only. Each model names its own base URL.
+- Both serve `openai-responses` at `/v1/responses`, `openai-completions` at
+  `/v1/chat/completions` and `anthropic-messages` at `/v1/messages`. Zen also
+  serves `google-generative-ai` for its Gemini models.
+- A model speaks one protocol. `muse-spark-1.3-contributor` on Go answered on
+  `/v1/responses`, and on the other two it answered 400 with
+  `ModelProtocolUnsupported`. Each model declares its protocol.
+- Go and Zen list different models: `GET /zen/go/v1/models` listed 30 and
+  `GET /zen/v1/models` listed 18, with ids only, no prices or protocols. A Go
+  model sent to Zen's URL answered 400 "Model is unavailable".
+- No response carries a cost, and nothing marks a call as subscription. Go's
+  spend shows only as quota (`docs/tools.md`, "Provider quota").
+- Requests carry `x-opencode-session` (`docs/prompt-cache.md`, "Cache
+  markers and keys"). Cloudflare answers 403 "error code: 1010" to Python's
+  default `User-Agent`, so the probe sent its own.
 
 ## What a provider extension declares
 
