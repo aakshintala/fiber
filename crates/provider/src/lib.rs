@@ -9,6 +9,7 @@
 pub mod anthropic_messages;
 mod error;
 mod http;
+pub mod openai_completions;
 pub mod openai_responses;
 mod sse;
 mod strict;
@@ -56,4 +57,14 @@ impl Endpoint {
 pub struct Compat {
     /// `store`, sent when declared; absent, the request has no `store` key.
     pub store: Option<bool>,
+    /// `openai-completions`: the output limit goes in `max_tokens`, not
+    /// `max_completion_tokens`. OpenAI's `gpt-6-luna` rejects `max_tokens`
+    /// (`docs/model-routing.md`, "openai-completions facts").
+    pub max_tokens: bool,
+    /// `openai-completions`: the effort goes in `reasoning: {effort}`, as
+    /// OpenRouter takes it, not in `reasoning_effort`.
+    pub reasoning_object: bool,
+    /// `openai-completions`: the model takes Anthropic's `cache_control`
+    /// markers on content parts, as OpenRouter passes them to Anthropic.
+    pub cache_control: bool,
 }
