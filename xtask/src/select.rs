@@ -8,16 +8,29 @@ use proc_macro2::{TokenStream, TokenTree};
 
 use crate::rules::RustFile;
 
-/// A workspace member: its directory relative to the workspace root, and
-/// the members it depends on.
+/// A workspace member: its directory relative to the workspace root, its
+/// version, and the members it depends on.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Member {
     pub(crate) dir: String,
+    pub(crate) version: String,
     pub(crate) deps: Vec<String>,
     pub(crate) library: bool,
 }
 
 pub(crate) type Members = BTreeMap<String, Member>;
+
+/// `name` as a package ID spec that names exactly one package: cargo
+/// resolves a bare name against every crate in the dependency graph, not
+/// just workspace members, so a workspace crate that shares a name with one
+/// of its dependencies' dependencies (`docs/ci.md`, "Selection") makes `-p
+/// name` ambiguous. `name@version` always picks the workspace member.
+pub(crate) fn spec(name: &str, members: &Members) -> String {
+    match members.get(name) {
+        Some(member) => format!("{name}@{}", member.version),
+        None => name.to_owned(),
+    }
+}
 
 /// What a diff runs.
 #[derive(Debug, Clone, PartialEq, Eq)]

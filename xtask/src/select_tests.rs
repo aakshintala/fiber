@@ -5,6 +5,7 @@ use crate::rules::RustFile;
 fn members() -> Members {
     let member = |dir: &str, deps: &[&str]| Member {
         dir: dir.to_owned(),
+        version: "0.0.0".to_owned(),
         deps: deps.iter().map(|d| (*d).to_owned()).collect(),
         library: true,
     };
@@ -22,6 +23,19 @@ fn members() -> Members {
 
 fn strings(items: &[&str]) -> Vec<String> {
     items.iter().map(|s| (*s).to_owned()).collect()
+}
+
+#[test]
+fn a_bare_name_is_ambiguous_once_a_dependency_shares_it() {
+    // `members()` has a workspace crate named `log` (`crates/log`), like
+    // Fiber's own `log` crate. Once any crate depends on `ureq`, which pulls
+    // in the crates.io `log` 0.4.x, `cargo -p log` fails with "specification
+    // 'log' is ambiguous". `spec` must print something that still names
+    // exactly one package: the bare name alone never does, no matter which
+    // dependency a crate later gains.
+    let spec = spec("log", &members());
+    assert_ne!(spec, "log");
+    assert_eq!(spec, "log@0.0.0");
 }
 
 #[test]
@@ -492,6 +506,7 @@ fn dependents_follow_a_chain_of_any_length() {
     let mut members = members();
     let chained = |dep: &str| Member {
         dir: format!("crates/{dep}-user"),
+        version: "0.0.0".to_owned(),
         deps: vec![dep.to_owned()],
         library: true,
     };
