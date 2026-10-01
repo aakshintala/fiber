@@ -4,12 +4,18 @@
 //! created on first use, with the stripped standard library, a `require`
 //! held to the extension's directory, a deadline armed on every coroutine and
 //! a memory cap.
+//!
+//! The deadline has two guards. The instruction hook stops Lua code at the
+//! deadline and leaves the VM usable. Code the hook never sees, such as a
+//! `__gc` finalizer (Lua turns hooks off there) or a long C call such as a
+//! backtracking `string.find`, is caught by the caller instead: it stops
+//! waiting a grace period past the deadline and abandons the VM.
 
 use std::cell::Cell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Mutex, PoisonError};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -18,19 +24,23 @@ use mlua::{Function, HookTriggers, Lua, LuaOptions, StdLib, Table, Thread, VmSta
 use crate::Error;
 
 /// Each Lua extension's memory cap. Past it, an allocation is a Lua error in
-/// that extension's VM.
-// ponytail: one cap for every extension; docs/extensions.md calls it optional
-// and per extension, and names no size or setting yet.
+/// that extension's VM, and a file larger than it is not read.
+// ponytail: one cap for every extension until #331 settles its size and
+// setting; docs/extensions.md calls it optional and per extension.
 pub const MEMORY_CAP: usize = 64 << 20;
 
 /// The script Fiber runs when it creates the VM.
-// ponytail: docs/configuration.md's manifest names no Lua entry script.
+// ponytail: docs/configuration.md's manifest names no Lua entry script; #331.
 const ENTRY: &str = "init.lua";
 
-/// How long the entry script may run. It is not a callback, so it declares
-/// no timeout of its own.
-// ponytail: no doc names this bound yet.
+/// How long reading, compiling and running the entry script may take. It is
+/// not a callback, so it declares no timeout of its own.
+// ponytail: no doc names this bound; #331.
 const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long past a deadline the caller waits before it abandons the VM.
+// ponytail: picked, not measured; #331.
+const GRACE: Duration = Duration::from_secs(1);
 
 /// Instructions between two looks at the clock while a deadline is ahead.
 const CHECK_EVERY: u32 = 1000;
@@ -39,6 +49,7 @@ const CHECK_EVERY: u32 = 1000;
 /// `coroutine.create`, `require`, and `fiber.command`, which fills the table
 /// the prelude returns. Lua's own `wrap` is a
 /// separate C function that would make an unarmed coroutine.
+// ponytail: `timeout` is in milliseconds until #331 names its unit.
 const PRELUDE: &str = r#"
 local create, load_module = ...
 local commands = {}
@@ -89,7 +100,16 @@ return commands
 pub struct LuaExtension {
     name: String,
     dir: PathBuf,
-    inbox: Mutex<Option<Sender<Job>>>,
+    state: Mutex<State>,
+}
+
+enum State {
+    /// Never called: no VM, no thread.
+    Idle,
+    /// The thread's inbox.
+    Running(Sender<Job>),
+    /// The VM was abandoned or its thread is gone; it takes no more calls.
+    Stopped,
 }
 
 impl LuaExtension {
@@ -98,43 +118,78 @@ impl LuaExtension {
         Self {
             name: name.into(),
             dir: dir.into(),
-            inbox: Mutex::new(None),
+            state: Mutex::new(State::Idle),
         }
     }
 
-    /// Whether the extension's VM and thread exist.
+    /// Whether the extension's VM and thread exist and take calls.
     pub fn is_running(&self) -> bool {
-        self.lock().is_some()
+        matches!(*self.lock(), State::Running(_))
     }
 
     /// Runs the command `command` the extension registered with
     /// `fiber.command`, passing `text`, and returns what its `run` returned.
-    /// The first call creates the VM and runs the entry script.
+    /// The first call creates the VM and runs the entry script. Calls run
+    /// one at a time, in the order they take the extension's lock.
     pub fn command(&self, command: &str, text: &str) -> Result<String, Error> {
-        let inbox = {
-            let mut inbox = self.lock();
-            match inbox.as_ref() {
-                Some(sender) => sender.clone(),
-                None => inbox.insert(self.start()?).clone(),
+        let mut state = self.lock();
+        let inbox = match &*state {
+            State::Running(inbox) => inbox.clone(),
+            State::Idle => {
+                let inbox = self.start()?;
+                *state = State::Running(inbox.clone());
+                inbox
             }
+            State::Stopped => return Err(self.stopped()),
         };
-        let (reply, answer) = mpsc::channel();
+        let (reply, answers) = mpsc::channel();
         let job = Job {
             command: command.to_owned(),
             text: text.to_owned(),
             reply,
         };
-        let stopped = || Error::Stopped {
-            extension: self.name.clone(),
-        };
-        inbox.send(job).map_err(|_| stopped())?;
-        answer.recv().map_err(|_| stopped())?
+        if inbox.send(job).is_err() {
+            *state = State::Stopped;
+            return Err(self.stopped());
+        }
+        // The thread is idle, since calls hold the lock, so it names its
+        // first deadline at once.
+        let mut until = Instant::now().checked_add(GRACE);
+        loop {
+            let answer = match until {
+                Some(at) => answers.recv_timeout(at.saturating_duration_since(Instant::now())),
+                None => answers.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            };
+            match answer {
+                Ok(Reply::Deadline(at)) => until = at.and_then(|at| at.checked_add(GRACE)),
+                Ok(Reply::Done(result)) => return result,
+                Err(RecvTimeoutError::Timeout) => {
+                    // ponytail: the abandoned thread is leaked, still running,
+                    // until the process exits; Rust cannot stop a thread.
+                    *state = State::Stopped;
+                    return Err(Error::Abandoned {
+                        extension: self.name.clone(),
+                        callback: command.to_owned(),
+                    });
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    *state = State::Stopped;
+                    return Err(self.stopped());
+                }
+            }
+        }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, Option<Sender<Job>>> {
+    fn stopped(&self) -> Error {
+        Error::Stopped {
+            extension: self.name.clone(),
+        }
+    }
+
+    fn lock(&self) -> MutexGuard<'_, State> {
         // A panic aborts the process (`docs/code-quality.md`, "Panics"), so
         // no holder can leave the lock poisoned.
-        self.inbox.lock().unwrap_or_else(PoisonError::into_inner)
+        self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
 
     fn start(&self) -> Result<Sender<Job>, Error> {
@@ -154,7 +209,15 @@ impl LuaExtension {
 struct Job {
     command: String,
     text: String,
-    reply: Sender<Result<String, Error>>,
+    reply: Sender<Reply>,
+}
+
+/// What the extension's thread tells the caller about one job.
+enum Reply {
+    /// Lua is about to run until this deadline; none is past the end of time.
+    Deadline(Option<Instant>),
+    /// The job's result.
+    Done(Result<String, Error>),
 }
 
 /// The extension's thread: creates the VM on the first job and serves the
@@ -163,12 +226,17 @@ struct Job {
 fn serve(name: &str, dir: &Path, inbox: &Receiver<Job>) {
     let mut vm = None;
     for job in inbox {
+        let notify = |at| {
+            if job.reply.send(Reply::Deadline(at)).is_err() {
+                // The caller stopped waiting; the job runs all the same.
+            }
+        };
         let result = match &vm {
             Some(vm) => Ok(vm),
-            None => Vm::load(name, dir).map(|loaded| &*vm.insert(loaded)),
+            None => Vm::load(name, dir, &notify).map(|loaded| &*vm.insert(loaded)),
         }
-        .and_then(|vm| vm.command(&job.command, &job.text));
-        if job.reply.send(result).is_err() {
+        .and_then(|vm| vm.command(&job.command, &job.text, &notify));
+        if job.reply.send(Reply::Done(result)).is_err() {
             // The caller stopped waiting; the next job is served all the same.
         }
     }
@@ -183,7 +251,9 @@ struct Vm {
 }
 
 impl Vm {
-    fn load(name: &str, dir: &Path) -> Result<Self, Error> {
+    /// Creates the VM and runs the entry script. Its clock starts before the
+    /// script is read.
+    fn load(name: &str, dir: &Path, notify: &dyn Fn(Option<Instant>)) -> Result<Self, Error> {
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),
             message,
@@ -197,7 +267,9 @@ impl Vm {
             // table, string, math, utf8 and coroutine: Lua's safe set, which
             // leaves out debug, less its I/O and module loader.
             StdLib::ALL_SAFE & !StdLib::IO & !StdLib::OS & !StdLib::PACKAGE,
-            LuaOptions::default(),
+            // A host function's panic is never a Lua error a `pcall` can
+            // catch (`docs/code-quality.md`, "Panics").
+            LuaOptions::new().catch_rust_panics(false),
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(MEMORY_CAP).map_err(lua_error)?;
@@ -210,16 +282,22 @@ impl Vm {
             commands,
         };
 
+        notify(vm.deadline.start(LOAD_TIMEOUT));
         let entry = match load_file(&vm.lua, &dir, ENTRY) {
             Ok(Ok(entry)) => entry,
             Ok(Err(message)) => return Err(fail(message)),
             Err(e) => return Err(lua_error(e)),
         };
-        vm.run(entry, ENTRY, LOAD_TIMEOUT, "")?;
+        vm.resume(entry, ENTRY, LOAD_TIMEOUT, "")?;
         Ok(vm)
     }
 
-    fn command(&self, command: &str, text: &str) -> Result<String, Error> {
+    fn command(
+        &self,
+        command: &str,
+        text: &str,
+        notify: &dyn Fn(Option<Instant>),
+    ) -> Result<String, Error> {
         let fail = |e: mlua::Error| self.error(&e);
         let Some(spec) = self.commands.get::<Option<Table>>(command).map_err(fail)? else {
             return Err(Error::UnknownCommand {
@@ -227,9 +305,10 @@ impl Vm {
                 command: command.to_owned(),
             });
         };
-        let timeout_ms = spec.get::<u64>("timeout").map_err(fail)?;
+        let timeout = Duration::from_millis(spec.get::<u64>("timeout").map_err(fail)?);
         let run = spec.get::<Function>("run").map_err(fail)?;
-        self.run(run, command, Duration::from_millis(timeout_ms), text)
+        notify(self.deadline.start(timeout));
+        self.resume(run, command, timeout, text)
     }
 
     fn error(&self, e: &mlua::Error) -> Error {
@@ -239,10 +318,10 @@ impl Vm {
         }
     }
 
-    /// Runs `f` as a coroutine armed with the deadline `timeout` from now.
-    /// A callback that ends past its deadline, by an error or by catching
-    /// one, has timed out.
-    fn run(
+    /// Runs `f` as a coroutine armed with the deadline already started. A
+    /// callback that ends past its deadline, by an error or by catching one,
+    /// has timed out.
+    fn resume(
         &self,
         f: Function,
         callback: &str,
@@ -250,7 +329,6 @@ impl Vm {
         text: &str,
     ) -> Result<String, Error> {
         let fail = |e: mlua::Error| self.error(&e);
-        self.deadline.start(timeout);
         let thread = self.lua.create_thread(f).map_err(fail)?;
         self.deadline.arm(&thread).map_err(fail)?;
         let result = thread.resume::<Option<String>>(text);
@@ -292,7 +370,8 @@ fn install(lua: &Lua, deadline: &Deadline, dir: PathBuf) -> mlua::Result<Table> 
 
 /// Reads `file` under `dir` and compiles it, named by its path in `dir` so an
 /// error names the file and line. The inner error is the reason it cannot be
-/// loaded, for Lua to raise at the caller's line.
+/// loaded, for Lua to raise at the caller's line. A file larger than the
+/// memory cap is not read.
 fn load_file(lua: &Lua, dir: &Path, file: &str) -> mlua::Result<Result<Function, String>> {
     let path = match dir.join(file).canonicalize() {
         Ok(path) if path.starts_with(dir) => path,
@@ -303,7 +382,18 @@ fn load_file(lua: &Lua, dir: &Path, file: &str) -> mlua::Result<Result<Function,
         }
         Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
     };
-    let source = match std::fs::read(&path) {
+    let too_big = |len: u64| usize::try_from(len).map_or(true, |len| len > MEMORY_CAP);
+    let source = match std::fs::metadata(&path) {
+        Ok(meta) if too_big(meta.len()) => {
+            return Ok(Err(format!(
+                "`{file}` is {} bytes, more than the extension's memory cap of {MEMORY_CAP}",
+                meta.len()
+            )));
+        }
+        Ok(_) => std::fs::read(&path),
+        Err(e) => Err(e),
+    };
+    let source = match source {
         Ok(source) => source,
         Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
     };
@@ -344,8 +434,11 @@ fn message(e: &mlua::Error) -> String {
 struct Deadline(Rc<Cell<Option<Instant>>>);
 
 impl Deadline {
-    fn start(&self, timeout: Duration) {
-        self.0.set(Instant::now().checked_add(timeout));
+    /// Starts the clock and returns the deadline.
+    fn start(&self, timeout: Duration) -> Option<Instant> {
+        let at = Instant::now().checked_add(timeout);
+        self.0.set(at);
+        at
     }
 
     fn passed(&self) -> bool {
@@ -383,3 +476,7 @@ impl Deadline {
 fn timed_out() -> mlua::Error {
     mlua::Error::RuntimeError("the callback passed its timeout".to_owned())
 }
+
+#[cfg(test)]
+#[path = "lua_tests.rs"]
+mod tests;

@@ -168,3 +168,53 @@ fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
         assert_eq!(call(&ext, "echo", "alive").unwrap(), "alive");
     }
 }
+
+#[test]
+fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
+    for command in ["spin_gc", "spin_find"] {
+        let ext = fixture();
+        let err = call(&ext, command, "").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+        let Error::Abandoned { callback, .. } = &err else {
+            panic!("{command}: {err:?}")
+        };
+        assert_eq!(callback, command);
+        assert!(!ext.is_running());
+        let err = call(&ext, "echo", "").unwrap_err();
+        assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
+        // The rest of the session goes on: another extension still runs.
+        assert_eq!(call(&fixture(), "echo", "on").unwrap(), "on");
+    }
+}
+
+#[test]
+fn a_lua_error_releases_the_extensions_lock() {
+    let ext = fixture();
+    assert!(matches!(call(&ext, "fail", ""), Err(Error::Lua { .. })));
+    // A second thread takes the lock the failed call held.
+    let other = Arc::clone(&ext);
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send(other.is_running()));
+    assert_eq!(rx.recv_timeout(WAIT), Ok(true));
+    assert_eq!(call(&ext, "echo", "free").unwrap(), "free");
+}
+
+#[test]
+fn a_module_larger_than_the_memory_cap_is_not_read() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(&dir.join("init.lua"), "local m = require(\"big\")\n");
+    let big = std::fs::File::create(dir.join("big.lua")).unwrap();
+    big.set_len(u64::try_from(extensions::MEMORY_CAP).unwrap() + 1)
+        .unwrap();
+
+    let err = call(&Arc::new(LuaExtension::new("ext", dir)), "x", "").unwrap_err();
+    let Error::Lua { message, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert!(
+        message.starts_with("init.lua:1: `big.lua` is "),
+        "{message}"
+    );
+    assert!(message.contains("memory cap"), "{message}");
+}

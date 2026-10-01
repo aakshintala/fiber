@@ -133,8 +133,20 @@ pub enum Error {
         /// The command asked for.
         command: String,
     },
-    /// The extension's thread is gone.
-    #[error("`{extension}` stopped.")]
+    /// A callback the runtime could not stop at its timeout, such as a loop
+    /// in a `__gc` finalizer or a long C call. Its VM is abandoned.
+    #[error(
+        "`{extension}`: `{callback}` could not be stopped at its timeout, so the extension is stopped for the rest of the session."
+    )]
+    Abandoned {
+        /// The extension.
+        extension: String,
+        /// The command that was called.
+        callback: String,
+    },
+    /// The extension was stopped, or its thread is gone, and takes no more
+    /// calls.
+    #[error("`{extension}` is stopped and takes no more calls.")]
     Stopped {
         /// The extension.
         extension: String,
@@ -159,9 +171,10 @@ impl Error {
             // ponytail: docs/errors.md has no code for a model reference that
             // names no model or several; `no_model` stands in, its message
             // listing the matches, until the owner names one.
-            Self::Lua { .. } | Self::Timeout { .. } | Self::Stopped { .. } => {
-                ErrorCode::ExtensionFailed
-            }
+            Self::Lua { .. }
+            | Self::Timeout { .. }
+            | Self::Abandoned { .. }
+            | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. } | Self::Ambiguous { .. } | Self::NoModel => {
                 ErrorCode::NoModel

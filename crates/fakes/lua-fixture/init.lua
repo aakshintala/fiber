@@ -67,6 +67,24 @@ fiber.command("spin_nested", {
   end,
 })
 
+-- Lua runs a __gc finalizer with hooks off, so only the caller's deadline
+-- stops this loop.
+fiber.command("spin_gc", {
+  timeout = 50,
+  run = function()
+    setmetatable({}, { __gc = function() while true do end end })
+    collectgarbage()
+  end,
+})
+
+-- A backtracking match is one long C call, with no instruction to hook.
+fiber.command("spin_find", {
+  timeout = 50,
+  run = function()
+    return tostring(string.find(string.rep("a", 100000), "a*a*a*a*b"))
+  end,
+})
+
 -- A generator: coroutine.wrap still yields values as Lua's does.
 fiber.command("count", {
   timeout = 1000,
