@@ -134,6 +134,10 @@ The Gemini API answers HTTP 404 "no longer available to new users" for
 `gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
 in September 2026.
 
+Fiber targets Gemini 3 and later on `google-generative-ai`. How Gemini 2.x
+models treat function-call ids and images in `functionResponse.parts` is not
+measured, and is settled when Fiber adds them.
+
 ## What a provider extension declares
 
 Most of a provider is data. For the provider:
