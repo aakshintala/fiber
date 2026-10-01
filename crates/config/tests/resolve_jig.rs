@@ -56,7 +56,7 @@ fn it_prints_the_merged_configuration_and_the_notices() {
     assert_eq!(merged["retry"]["attempts"], json!(9));
     assert_eq!(merged["cache"]["lifetime"], json!("5m"));
     assert_eq!(merged["tui"]["hover"], json!(true));
-    assert_eq!(merged["permissions"]["mode"], json!("auto"));
+    assert_eq!(merged["session"]["idle_exit_ms"], json!(1_800_000));
     assert_eq!(
         stderr,
         format!(

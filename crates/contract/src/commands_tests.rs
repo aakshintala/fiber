@@ -164,6 +164,17 @@ fn a_key_the_command_does_not_take_is_refused() {
 }
 
 #[test]
+fn subscribe_args_that_do_not_fit_are_invalid_arguments() {
+    // docs/invocation.md, "The command line": a missing key, a key of the
+    // wrong type or a key the command does not take is invalid_arguments.
+    assert!(parse(r#"{"id":"c","command":"subscribe","args":{}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"subscribe","args":{"level":"partial"}}"#).is_err());
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","extra":true}}"#).is_err()
+    );
+}
+
+#[test]
 fn an_unknown_command_is_refused() {
     assert!(parse(r#"{"id":"c","command":"teleport"}"#).is_err());
 }

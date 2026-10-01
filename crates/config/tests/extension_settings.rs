@@ -133,10 +133,10 @@ fn another_extension_s_run_settings_are_not_this_one_s() {
 #[test]
 fn a_run_flag_for_an_extension_s_own_key_is_configuration_not_a_setting() {
     let setup = Setup::new();
-    let config = setup.load(&["extensions.acme.version=v1.0.0"]).unwrap();
+    let config = setup.load(&["extensions.acme.enabled=false"]).unwrap();
     assert_eq!(
-        config.get("extensions.acme.version", None),
-        Some((json!("v1.0.0"), config::Source::Run))
+        config.get("extensions.acme.enabled", None),
+        Some((json!(false), config::Source::Run))
     );
     assert_eq!(config.extension_settings("acme", &[]).unwrap().0, json!({}));
 }

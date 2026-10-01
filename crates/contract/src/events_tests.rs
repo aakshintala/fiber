@@ -270,6 +270,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
         ),
         (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "waiting",
+            "waiting": {"request_id": "r", "kind": "question", "summary": "which file?"},
+            "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+        ),
+        (
             "context_added",
             json!({"text": "t", "extension": "e", "hook": "turn_start"}),
         ),
