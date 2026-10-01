@@ -1109,12 +1109,13 @@ Every driver command is answered with exactly one of these, echoing its id
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `command_id` | string | yes | the command's id |
-| `result` | object | no | on `rewind`, `tools` and a `shell` sent with `send` false, as below; absent for every other command |
+| `result` | object | no | on `rewind`, `tools`, `history` and a `shell` sent with `send` false, as below; absent for every other command |
 
 | Command | `result` keys |
 |---|---|
 | `rewind` | `new_session_id` (string), the session that continues this one |
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
+| `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
 
 #### `command_rejected`
