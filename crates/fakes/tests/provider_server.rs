@@ -13,7 +13,6 @@ use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
 use std::time::Duration;
 
-use contract::ErrorCode;
 use fakes::{ProviderServer, Request, Response};
 
 /// The deadline on every connect, write and read: a stall fails naming the
@@ -233,14 +232,4 @@ fn it_records_a_chunked_body_decoded() {
     assert_eq!(reply.body, b"ok");
     let body = String::from_utf8(server.requests()[0].body.clone()).unwrap();
     assert_eq!(body, r#"{"model":"m","n":1}"#);
-}
-
-#[test]
-fn a_failure_to_start_maps_to_io_failed() {
-    let bind = fakes::Error::Bind(std::io::Error::other("address in use"));
-    let spawn = fakes::Error::Spawn(std::io::Error::other("no threads"));
-
-    assert_eq!(bind.code(), ErrorCode::IoFailed);
-    assert_eq!(spawn.code(), ErrorCode::IoFailed);
-    assert!(bind.to_string().contains("address in use"));
 }

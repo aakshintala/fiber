@@ -8,8 +8,6 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
-use crate::Error;
-
 /// Header names whose values are credentials, lowercase. Their values are
 /// masked before a request is recorded, as is a `key` query parameter, which
 /// Google's API also accepts (`docs/model-routing.md`).
@@ -109,9 +107,9 @@ pub struct ProviderServer {
 impl ProviderServer {
     /// Listens on a free port on 127.0.0.1 and serves `script` in order. The
     /// port accepts connections when this returns.
-    pub fn start(script: impl IntoIterator<Item = Response>) -> Result<Self, Error> {
-        let listener = TcpListener::bind("127.0.0.1:0").map_err(Error::Bind)?;
-        let addr = listener.local_addr().map_err(Error::Bind)?;
+    pub fn start(script: impl IntoIterator<Item = Response>) -> io::Result<Self> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let addr = listener.local_addr()?;
         let state = Arc::new(Mutex::new(State {
             script: script.into_iter().collect(),
             ..State::default()
@@ -119,8 +117,7 @@ impl ProviderServer {
         let shared = Arc::clone(&state);
         let accept = thread::Builder::new()
             .name("fake-provider".to_owned())
-            .spawn(move || accept_loop(&listener, &shared))
-            .map_err(Error::Spawn)?;
+            .spawn(move || accept_loop(&listener, &shared))?;
         Ok(Self {
             addr,
             state,
