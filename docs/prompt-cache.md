@@ -205,10 +205,14 @@ A cache entry also expires after its lifetime with no request.
 - Hooks: no hook rewrites a message the model has already been sent. Every
   hook point changes content before it is logged (`docs/extensions.md`,
   "Hooks").
-- The reviewer has its own cache. Its prompt is fixed instructions, then the
-  person's messages and the tool calls in log order, then the call under review.
-  Where a provider routes by key, its key is the reviewed session's own id plus
-  `reviewer`, a delegate's included.
+- The reviewer has its own cache. Its request is the shared instructions, then
+  the person's messages and the tool calls in log order, then the call under
+  review with its declared effects, then the stage's instruction. Both stages
+  send byte-identical bytes up to the stage instruction, so every reviewer
+  pass of either stage extends one cache chain as the session grows. A call
+  must render identically when it later appears in history, because the chain
+  depends on it. Where a provider routes by key, its key is the reviewed
+  session's own id plus `reviewer`, a delegate's included.
 - The system prompt holds only what is fixed for the session. What it holds
   and what feeds it is `docs/system-prompt.md`.
 
