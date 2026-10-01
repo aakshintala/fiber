@@ -542,8 +542,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   `rg --pre <cmd>` and `find -exec` run programs, `find -delete` deletes,
   `sort -o` writes. The list and its flag rules are part of building the
   shell tool.
-- A call declared `reads` takes the permission fast path and runs in
-  `readonly` mode.
+- A call declared `reads` takes the permission fast path.
 - A command of one part, with nothing the classifier cannot read plainly,
   has the command as its subject. The prefix offered is its first word, and
   the second word too when it is a plain word, starting with no `-` and
@@ -554,8 +553,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - The credential deny (`docs/permissions.md`, "Credentials") sees paths
   only for commands the recogniser understands. A command it does not
   understand, such as `python -c` opening a file, declares no paths, so
-  the deny cannot see it; in `auto` it is still reviewed, and in
-  `yolo` nothing stops it. Fiber does not confine the shell
+  the deny cannot see it; it is still reviewed. Fiber does not confine the shell
   (`docs/permissions.md`, "Confinement").
 - The read-only list is trusted. A command on it that writes after all, or
   an entry in `shell.read_only` that is wrong, writes without review. An
@@ -635,8 +633,8 @@ The kinds are `docs/events.md`.
   a restart. A shutdown stops every job (`docs/invocation.md`, "Shutdown"); a
   crash stops none, and the jobs keep running unwatched.
 - When a session is about to end with jobs still running — a non-interactive
-  run whose model has given its final answer, `close` or stdin EOF on
-  `fiber serve`, or a delegate finishing its task — Fiber wakes the model
+  run whose model has given its final answer, `close`, the idle delay
+  passing, or a delegate finishing its task — Fiber wakes the model
   once with a notice listing the running jobs, telling it to stop the ones it
   does not need and that the rest will be waited for. Whatever is still
   running after that is waited for, whatever its kind, and each completion
@@ -680,20 +678,20 @@ by resuming the session.
   ("Size budget in CI").
 - A call that breaks these rules fails with `invalid_arguments`, as any call
   does ("Before a call runs").
-- The tool declares no effect. It never reaches a reviewer and runs in
-  `readonly` (`docs/permissions.md`, "Fast paths").
+- The tool declares no effect, so it never reaches a reviewer
+  (`docs/permissions.md`, "Fast paths").
 - It is declared in every session, including `fiber ask` sessions, forks and
   other delegates, so the tool set never differs between them.
 
 ### When a person can answer
 
-This is a session driven by the terminal or a `fiber serve` client.
+This is a session the hub started, which any client may answer.
 
 - One call raises one `form` interaction, with one field per question: select,
   multi-select or text input. One `reply` answers the whole form.
-- It has no timeout. It lives like a pending approval: when the last client
-  leaves, the session exits on it with `suspended_on`, and resuming raises it
-  again (`docs/invocation.md`, "Lifecycle").
+- It has no timeout. It lives like a pending approval: when
+  `session.idle_exit` passes, the session exits on it with `suspended_on`,
+  and resuming raises it again (`docs/invocation.md`, "Lifecycle").
 - The request and its answer are `interaction_requested` and
   `interaction_resolved` (`docs/events.md`, "Interactions").
 
@@ -718,8 +716,8 @@ has been sent `close`.
 A child's question goes to its parent, never straight to the person. The
 parent wrote the child's brief and can usually answer, and the person is never
 interrupted by a session they did not start. An approval is different: no
-model may answer one, so it is relayed to the person (`docs/permissions.md`,
-"Delegates").
+model may answer one, so a delegate's escalation is a block
+(`docs/permissions.md`, "Delegates").
 
 ### The result
 
@@ -840,11 +838,10 @@ backend.
 ### Effects
 
 - Both tools declare `network`.
-- A search never reaches a reviewer or a person, in any mode, `readonly`
-  included. A query reaches only the search service.
+- A search never reaches a reviewer or a person. A query reaches only the
+  search service.
 - A fetch to a known host takes the same fast path. Any other fetch is
-  reviewed, and in `readonly` it asks the person (`docs/permissions.md`,
-  "Fast paths").
+  reviewed (`docs/permissions.md`, "Fast paths").
 - A host is known in a session when it was named in one of the person's
   messages or an instruction file, appeared in a search result in the
   session, or was the host of a fetch a reviewer or a person allowed in the
@@ -872,8 +869,7 @@ first prompt.
 - A name the person set with the `name` command pins it. While pinned, the
   call fails with `name_pinned` and the message "the person named this
   session". Clearing the person's name unpins it.
-- The tool declares no effect, never reaches a reviewer, and runs in
-  `readonly`.
+- The tool declares no effect and never reaches a reviewer.
 - It is declared in every session, so the tool set never differs between
   sessions. Its definition counts toward the built-in budget ("Size budget in
   CI").
@@ -935,14 +931,11 @@ with the sender's id and name.
 
 **A session message is not the person's voice.** The target's reviewer never
 reads one as the person's instructions (`docs/permissions.md`, "The
-reviewer"). It is a request from another session, and the target acts on it
-under its own mode.
+reviewer"). It is a request from another session, and the target's own reviewer
+judges what it does about it.
 
 **Sending declares `writes`, not reversible.** It changes what another session
-does. So a `readonly` root session asks to leave `readonly` first, a
-`readonly` delegate's send is refused (`docs/permissions.md`, "Leaving
-readonly"), and in `auto` the reviewer judges the send. Without it, a
-`readonly` session could ask a `yolo` peer to make the change for it.
+does, so the sender's reviewer judges the send.
 
 **Nothing limits how many messages sessions exchange.** Two sessions can
 wake each other indefinitely while no person watches. An extension can refuse
@@ -1101,8 +1094,8 @@ its tools are deferred, change only when the preamble is built.
 ### What is deferred by default
 
 - Every tool declares whether it is deferred by default. Configuration can
-  override that for any tool (`docs/configuration.md`), and an MCP server can be marked eager
-  (`docs/mcp.md`).
+  override that for any tool (`docs/configuration.md`), and an MCP server can be marked
+  `declare_in_full` (`docs/mcp.md`).
 - MCP tools and `mcp_resources` are deferred by default. Every other built-in
   is declared in full.
 - A built-in is deferred by default only when it is used in under about 2% of
