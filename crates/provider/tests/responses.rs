@@ -1,0 +1,912 @@
+//! `openai-responses` through the provider crate's public API: the probe
+//! recordings decoded, requests on the fake provider server, and
+//! cancellation from another thread.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    clippy::indexing_slicing,
+    clippy::print_stdout,
+    reason = "test code, helpers included"
+)]
+
+#[path = "support/probes.rs"]
+mod probes;
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::net::TcpListener;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::{Duration, Instant};
+
+use contract::events::{ReasoningCompleted, TextDelta, ToolCallRequested};
+use contract::provider::{
+    CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
+};
+use contract::{ActionId, ErrorCode, ProviderCallId};
+use fakes::{ProviderServer, Response};
+use provider::openai_responses::{Responses, decode};
+use provider::{Compat, Endpoint};
+use serde_json::{Value, json};
+
+use probes::Recorded;
+
+const DEADLINE: Duration = Duration::from_secs(10);
+
+fn research(path: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../research")
+        .join(path)
+}
+
+fn decoded(bytes: &[u8]) -> (Result<Reply, provider::Error>, Vec<Delta>) {
+    let mut deltas = Vec::new();
+    let reply = decode(bytes, &mut |d| deltas.push(d));
+    (reply, deltas)
+}
+
+fn endpoint(server: &ProviderServer) -> Endpoint {
+    Endpoint {
+        provider: "opencode".into(),
+        model: "muse-spark-1.3-contributor".into(),
+        base_url: format!("{}/zen/go/v1", server.url()),
+        key: Some("sk-secret".into()),
+        ..Endpoint::default()
+    }
+}
+
+fn weather_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "get_weather".into(),
+        description: "Weather for a city.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"city": {"type": "string"}},
+            "required": ["city"],
+            "additionalProperties": false
+        }),
+    }
+}
+
+fn loose_tool() -> ToolDefinition {
+    // research/openai-responses-probe: outside the strict subset.
+    ToolDefinition {
+        name: "f".into(),
+        description: "Takes a and maybe b.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+            "required": ["a"]
+        }),
+    }
+}
+
+fn request() -> ModelRequest {
+    ModelRequest {
+        system_prompt: "You are terse.".into(),
+        tools: vec![weather_tool(), loose_tool()],
+        effort: Some("low".into()),
+        conversation: vec![Input::User {
+            text: "What is the weather in Paris? Use the tool.".into(),
+        }],
+    }
+}
+
+/// Runs `call` on its own thread, so a call that never returns fails the
+/// test at the deadline instead of hanging it.
+fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |d| deltas.push(d));
+        done.send((reply, deltas)).unwrap();
+    });
+    finished
+        .recv_timeout(DEADLINE)
+        .expect("waited for the call to return")
+}
+
+fn sent_body(server: &ProviderServer, n: usize) -> Value {
+    serde_json::from_slice(&server.requests()[n].body).unwrap()
+}
+
+/// A stream of `data:` events, one per JSON value.
+fn stream(events: &[Value]) -> Vec<u8> {
+    events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect::<String>()
+        .into_bytes()
+}
+
+fn completed(status: &str, extra: Value) -> Value {
+    let mut response = json!({
+        "id": "resp_1",
+        "status": status,
+        "usage": {"input_tokens": 10, "input_tokens_details": {"cached_tokens": 4}, "output_tokens": 3}
+    });
+    response
+        .as_object_mut()
+        .unwrap()
+        .extend(extra.as_object().unwrap().clone());
+    json!({"type": "response.completed", "response": response})
+}
+
+fn text_delta(text: &str) -> Value {
+    json!({"type": "response.output_text.delta", "delta": text})
+}
+
+fn finished_call() -> Value {
+    json!({"type": "response.output_item.done", "item": {
+        "type": "function_call", "id": "fc_1", "call_id": "call_1",
+        "name": "get_weather", "arguments": "{\"city\":\"Paris\"}"
+    }})
+}
+
+fn error_code(result: Result<Reply, provider::Error>) -> (ErrorCode, String) {
+    let error = result.unwrap_err();
+    (error.code(), error.to_string())
+}
+
+// The facts a probe wrapper records beside its stream.
+struct Expected {
+    text: String,
+    calls: Vec<Value>,
+    reasoning: usize,
+    usage: Value,
+}
+
+fn expected(wrapper: &Value) -> Option<Expected> {
+    let (items, text, usage): (Vec<Value>, String, Value) =
+        if let Some(events) = wrapper.get("events") {
+            let items = events
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|e| e["event"] == "response.output_item.done")
+                .map(|e| e["data"]["item"].clone())
+                .collect();
+            (
+                items,
+                wrapper["text"].as_str().unwrap().to_owned(),
+                wrapper["usage"].clone(),
+            )
+        } else {
+            let response = wrapper.get("response")?;
+            let items = response["output"].as_array().unwrap().clone();
+            let text = items
+                .iter()
+                .filter(|i| i["type"] == "message")
+                .flat_map(|i| i["content"].as_array().unwrap().iter())
+                .filter_map(|p| p["text"].as_str())
+                .collect();
+            (items, text, response["usage"].clone())
+        };
+    Some(Expected {
+        text,
+        calls: items
+            .iter()
+            .filter(|i| i["type"] == "function_call")
+            .cloned()
+            .collect(),
+        reasoning: items.iter().filter(|i| i["type"] == "reasoning").count(),
+        usage,
+    })
+}
+
+#[test]
+fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
+    let mut files = vec![
+        research("opencode-probe/raw/go_stream_tools_0.sse"),
+        research("opencode-probe/raw/go_stream_tools_1.sse"),
+        research("openai-responses-probe/raw/probe.json"),
+        // Recorded with the `record` jig, from the request Fiber builds.
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings/opencode-go-tool-call.sse"),
+    ];
+    let mut codex: Vec<PathBuf> = std::fs::read_dir(research("codex-responses-probe/raw"))
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| p.extension().is_some_and(|e| e == "json"))
+        .collect();
+    codex.sort();
+    files.extend(codex);
+
+    let (mut streams, mut checked, mut statuses) = (0, 0, 0);
+    for file in &files {
+        for exchange in probes::read(file).unwrap() {
+            let label = &exchange.label;
+            let bytes = match exchange.response {
+                Recorded::Stream(bytes) => bytes,
+                Recorded::Status(..) => {
+                    statuses += 1;
+                    continue;
+                }
+            };
+            streams += 1;
+            let (reply, deltas) = decoded(&bytes);
+            let reply = reply.unwrap_or_else(|e| panic!("{label}: {e}"));
+            assert_eq!(reply.finish, Finish::Completed, "{label}");
+
+            // Text deltas add up to the reply's text, and each call's
+            // argument deltas to its arguments.
+            let text: String = deltas
+                .iter()
+                .filter_map(|d| match d {
+                    Delta::Text(t) => Some(t.text.as_str()),
+                    Delta::Reasoning(_) | Delta::ToolCallArguments(_) => None,
+                })
+                .collect();
+            let calls: Vec<&ToolCallRequested> = reply
+                .actions
+                .iter()
+                .filter_map(|a| match a {
+                    ReplyAction::ToolCall(c) => Some(c),
+                    ReplyAction::Reasoning(_) => None,
+                })
+                .collect();
+            let streamed = deltas
+                .iter()
+                .any(|d| matches!(d, Delta::Text(_) | Delta::ToolCallArguments(_)));
+            if streamed {
+                assert_eq!(text, reply.text, "{label}");
+                for (index, call) in calls.iter().enumerate() {
+                    let raw: String = deltas
+                        .iter()
+                        .filter_map(|d| match d {
+                            Delta::ToolCallArguments(a) if a.index as usize == index => {
+                                assert_eq!(a.name.as_deref(), Some(call.name.as_str()));
+                                Some(a.text.as_str())
+                            }
+                            Delta::Text(_) | Delta::Reasoning(_) | Delta::ToolCallArguments(_) => {
+                                None
+                            }
+                        })
+                        .collect();
+                    let parsed: Value = serde_json::from_str(&raw).unwrap();
+                    assert_eq!(parsed, call.arguments, "{label}: call {index}");
+                }
+            }
+
+            let Some(want) = expected(&exchange.wrapper) else {
+                continue;
+            };
+            checked += 1;
+            assert_eq!(reply.text, want.text, "{label}");
+            assert_eq!(calls.len(), want.calls.len(), "{label}");
+            for (call, item) in calls.iter().zip(&want.calls) {
+                assert_eq!(call.name, item["name"].as_str().unwrap(), "{label}");
+                assert_eq!(
+                    call.provider_id,
+                    Some(ProviderCallId(item["call_id"].as_str().unwrap().into())),
+                    "{label}"
+                );
+                let arguments: Value =
+                    serde_json::from_str(item["arguments"].as_str().unwrap()).unwrap();
+                assert_eq!(call.arguments, arguments, "{label}");
+            }
+            assert_eq!(reply.actions.len() - calls.len(), want.reasoning, "{label}");
+            let cached = want.usage["input_tokens_details"]["cached_tokens"]
+                .as_u64()
+                .unwrap();
+            assert_eq!(reply.tokens.cache_read, cached, "{label}");
+            assert_eq!(
+                reply.tokens.input,
+                want.usage["input_tokens"].as_u64().unwrap() - cached,
+                "{label}"
+            );
+            assert_eq!(
+                reply.tokens.output,
+                want.usage["output_tokens"].as_u64().unwrap(),
+                "{label}"
+            );
+        }
+    }
+    // 3 OpenCode streams, 12 OpenAI responses and 45 codex streams; the
+    // other 5 are HTTP 400s.
+    assert_eq!((streams, checked, statuses), (60, 57, 5));
+}
+
+#[test]
+fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
+    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
+    let (reply, deltas) = decoded(&bytes);
+    let reply = reply.unwrap();
+    assert_eq!(reply.text, "I'll check the weather in Paris for you.");
+    assert_eq!(reply.generation_id.0, "resp_6abe177dec230a748c9f42a9");
+    let [
+        ReplyAction::Reasoning(reasoning),
+        ReplyAction::ToolCall(call),
+    ] = reply.actions.as_slice()
+    else {
+        panic!("{:?}", reply.actions);
+    };
+    let item = reasoning.provider_item.as_ref().unwrap();
+    assert_eq!(item["type"], "reasoning");
+    assert!(item["encrypted_content"].as_str().unwrap().len() > 100);
+    assert_eq!(
+        call,
+        &ToolCallRequested {
+            name: "get_weather".into(),
+            arguments: json!({"city": "Paris"}),
+            provider_id: Some(ProviderCallId(
+                "call_01a0f68bc62570139103eeb490cad7a4".into()
+            )),
+            repair: None,
+        }
+    );
+    assert!(deltas.contains(&Delta::ToolCallArguments(
+        contract::events::ToolCallArgumentsDelta {
+            index: 0,
+            name: Some("get_weather".into()),
+            text: "{\"city\":\"Paris\"}".into(),
+        }
+    )));
+
+    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_1.sse")).unwrap();
+    let reply = decoded(&bytes).0.unwrap();
+    assert_eq!(reply.text, "The weather in Paris is 18°C and clear.");
+    assert_eq!(
+        (
+            reply.tokens.input,
+            reply.tokens.cache_read,
+            reply.tokens.output
+        ),
+        (119, 497, 159)
+    );
+    assert!(reply.tokens.cache_write.is_empty());
+}
+
+#[test]
+fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
+    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
+    let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
+    let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
+    let (reply, deltas) = run(provider.call(&request()));
+    let (want, want_deltas) = decoded(&bytes);
+    assert_eq!(reply.unwrap(), want.unwrap());
+    assert_eq!(deltas, want_deltas);
+
+    let sent = &server.requests()[0];
+    assert_eq!(sent.method, "POST");
+    assert_eq!(sent.path, "/zen/go/v1/responses");
+    assert_ne!(sent.header("authorization"), None);
+    assert!(!String::from_utf8_lossy(&sent.body).contains("sk-secret"));
+    assert!(sent.header("user-agent").unwrap().starts_with("fiber/"));
+    assert_eq!(sent.header("accept"), Some("text/event-stream"));
+}
+
+#[test]
+fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply(), reply()]).unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let mut reordered = request();
+    reordered.tools.reverse();
+    for request in [request(), request(), reordered] {
+        run(Box::new(responses.request(&request))).0.unwrap();
+    }
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies.len(), 3);
+    assert_eq!(bodies[0], bodies[1]);
+    assert_eq!(bodies[0], bodies[2], "tools are sent sorted by name");
+    let body = sent_body(&server, 0);
+    assert_eq!(body["model"], "muse-spark-1.3-contributor");
+    assert_eq!(body["instructions"], "You are terse.");
+    assert_eq!(body["stream"], true);
+    assert_eq!(body["reasoning"], json!({"effort": "low"}));
+    assert_eq!(
+        body["input"],
+        json!([{"role": "user", "content": "What is the weather in Paris? Use the tool."}])
+    );
+}
+
+#[test]
+fn strict_is_sent_per_tool_and_true_only_for_a_schema_in_the_strict_subset() {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request()),
+    ))
+    .0
+    .unwrap();
+    let tools = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(
+        tools,
+        json!([
+            {"type": "function", "name": "f", "description": "Takes a and maybe b.",
+             "parameters": loose_tool().input_schema, "strict": false},
+            {"type": "function", "name": "get_weather", "description": "Weather for a city.",
+             "parameters": weather_tool().input_schema, "strict": true},
+        ])
+    );
+}
+
+#[test]
+fn store_and_extra_fields_come_from_model_data_only() {
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply()]).unwrap();
+    // The same base URL with and without the flag: only the data decides.
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request()),
+    ))
+    .0
+    .unwrap();
+    let declared = Endpoint {
+        compat: Compat { store: Some(false) },
+        extra_body: json!({"service_tier": "priority"})
+            .as_object()
+            .unwrap()
+            .clone(),
+        ..endpoint(&server)
+    };
+    run(Box::new(Responses::new(declared).request(&request())))
+        .0
+        .unwrap();
+    let undeclared = sent_body(&server, 0);
+    assert_eq!(undeclared.get("store"), None);
+    assert_eq!(undeclared.get("service_tier"), None);
+    let body = sent_body(&server, 1);
+    assert_eq!(body["store"], false);
+    assert_eq!(body["service_tier"], "priority");
+}
+
+#[test]
+fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
+    let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
+    let reply = decoded(&bytes).0.unwrap();
+    let ReplyAction::Reasoning(ReasoningCompleted {
+        provider_item: Some(item),
+        ..
+    }) = &reply.actions[0]
+    else {
+        panic!("{:?}", reply.actions);
+    };
+    let ReplyAction::ToolCall(call) = &reply.actions[1] else {
+        panic!("{:?}", reply.actions);
+    };
+    let mut conversation = request().conversation;
+    conversation.extend([
+        Input::Reasoning {
+            model: "openai/gpt-6-luna".into(),
+            text: "another model's thoughts".into(),
+            provider_item: Some(json!({"type": "reasoning", "encrypted_content": "other"})),
+        },
+        Input::Reasoning {
+            model: "opencode/muse-spark-1.3-contributor".into(),
+            text: String::new(),
+            provider_item: Some(item.clone()),
+        },
+        Input::Assistant {
+            text: reply.text.clone(),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: call.clone(),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_2".into()),
+            call: ToolCallRequested {
+                provider_id: None,
+                arguments: Value::String("{not json".into()),
+                ..call.clone()
+            },
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_2".into()),
+            text: "bad arguments".into(),
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "18 C, clear".into(),
+        },
+    ]);
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let request = ModelRequest {
+        conversation,
+        ..request()
+    };
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(
+        body["input"],
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            item,
+            {"role": "assistant", "content": "I'll check the weather in Paris for you."},
+            {"type": "function_call", "call_id": "call_01a0f68bc62570139103eeb490cad7a4",
+             "name": "get_weather", "arguments": "{\"city\":\"Paris\"}"},
+            {"type": "function_call", "call_id": "a_2", "name": "get_weather",
+             "arguments": "{not json"},
+            {"type": "function_call_output", "call_id": "a_2", "output": "bad arguments"},
+            {"type": "function_call_output", "call_id": "call_01a0f68bc62570139103eeb490cad7a4",
+             "output": "18 C, clear"},
+        ])
+    );
+    let sent = String::from_utf8(server.requests()[0].body.clone()).unwrap();
+    assert!(!sent.contains("another model"));
+    assert!(!sent.contains("\"other\""));
+    assert!(sent.contains(item["encrypted_content"].as_str().unwrap()));
+}
+
+#[test]
+fn a_stream_ending_response_failed_drops_what_it_streamed() {
+    let failed = |error: Value| {
+        stream(&[
+            text_delta("Checking"),
+            finished_call(),
+            json!({"type": "response.failed", "response": {"id": "resp_1", "status": "failed", "error": error}}),
+        ])
+    };
+    let crashed = || failed(json!({"code": "server_error", "message": "The model crashed."}));
+    let server = ProviderServer::start([
+        Response::stream(crashed()),
+        Response::stream(crashed()).header("x-should-retry", "false"),
+    ])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let (result, deltas) = run(Box::new(responses.request(&request())));
+    let Err(CallError::Failed {
+        failure,
+        should_retry: None,
+    }) = result
+    else {
+        panic!("{result:?}");
+    };
+    // The 200 response's header governs the failure its stream reports.
+    let (vetoed, _) = run(Box::new(responses.request(&request())));
+    let Err(CallError::Failed {
+        should_retry: Some(false),
+        ..
+    }) = vetoed
+    else {
+        panic!("{vetoed:?}");
+    };
+    assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
+    let said = failure.provider.unwrap();
+    assert_eq!(
+        (said.name.as_str(), said.status, said.message.as_str()),
+        ("opencode", 200, "The model crashed.")
+    );
+    // It streamed, and kept none of it.
+    assert_eq!(
+        deltas,
+        [Delta::Text(TextDelta {
+            text: "Checking".into()
+        })]
+    );
+
+    let (code, _) = error_code(
+        decoded(&failed(
+            json!({"code": "rate_limit_exceeded", "message": ""}),
+        ))
+        .0,
+    );
+    assert_eq!(code, ErrorCode::RateLimited);
+    let overflow = json!({"code": "invalid_prompt", "message": "Your input exceeds the context window of this model."});
+    assert_eq!(
+        error_code(decoded(&failed(overflow)).0).0,
+        ErrorCode::ContextOverflow
+    );
+    let (code, _) = error_code(
+        decoded(&failed(
+            json!({"code": "vector_store_timeout", "message": ""}),
+        ))
+        .0,
+    );
+    assert_eq!(code, ErrorCode::StreamIncomplete);
+    let (code, _) = error_code(decoded(&failed(Value::Null)).0);
+    assert_eq!(code, ErrorCode::StreamIncomplete);
+}
+
+#[test]
+fn an_error_event_or_a_stream_cut_short_fails_the_call() {
+    let error = json!({"type": "error", "code": "server_error", "message": "boom"});
+    let (code, _) = error_code(decoded(&stream(&[text_delta("a"), error])).0);
+    assert_eq!(code, ErrorCode::ProviderUnavailable);
+    let (code, message) = error_code(decoded(&stream(&[text_delta("a"), finished_call()])).0);
+    assert_eq!(code, ErrorCode::StreamIncomplete);
+    assert!(message.contains("terminal event"), "{message}");
+    let (code, _) = error_code(decoded(b"data: {not json}\n\n").0);
+    assert_eq!(code, ErrorCode::StreamIncomplete);
+}
+
+#[test]
+fn each_terminal_status_maps_as_the_docs_say_and_an_unknown_one_fails() {
+    let end = |status: &str, extra: Value| decoded(&stream(&[completed(status, extra)])).0;
+    assert_eq!(
+        end("completed", json!({})).unwrap().finish,
+        Finish::Completed
+    );
+    let cut = end(
+        "incomplete",
+        json!({"incomplete_details": {"reason": "max_output_tokens"}}),
+    );
+    assert_eq!(cut.unwrap().finish, Finish::OutputLimit);
+    let filtered = end(
+        "incomplete",
+        json!({"incomplete_details": {"reason": "content_filter"}}),
+    );
+    assert_eq!(error_code(filtered).0, ErrorCode::Refused);
+    for status in ["in_progress", "queued"] {
+        assert_eq!(
+            error_code(end(status, json!({}))).0,
+            ErrorCode::StreamIncomplete
+        );
+    }
+    let (code, message) = error_code(end("cancelled", json!({})));
+    assert_eq!(code, ErrorCode::StreamIncomplete);
+    assert!(message.contains("cancelled"), "{message}");
+    let (code, message) = error_code(end("paused", json!({})));
+    assert_eq!(code, ErrorCode::UnknownStopReason);
+    assert!(message.contains("paused"), "{message}");
+    let (code, message) = error_code(end(
+        "incomplete",
+        json!({"incomplete_details": {"reason": "tea_break"}}),
+    ));
+    assert_eq!(code, ErrorCode::UnknownStopReason);
+    assert!(message.contains("tea_break"), "{message}");
+}
+
+#[test]
+fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
+    let server = ProviderServer::start([
+        Response::status(429, r#"{"error":{"message":"Slow down."}}"#).header("retry-after", "7"),
+        Response::status(400, r#"{"detail":"Unsupported parameter: temperature"}"#),
+        Response::status(401, "nope"),
+        Response::status(503, "{}").header("x-should-retry", "false"),
+    ])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let mut failures = Vec::new();
+    let mut should_retry = Vec::new();
+    for _ in 0..4 {
+        let Err(CallError::Failed {
+            failure,
+            should_retry: header,
+        }) = run(Box::new(responses.request(&request()))).0
+        else {
+            panic!("expected a failure");
+        };
+        failures.push(failure);
+        should_retry.push(header);
+    }
+    assert_eq!(should_retry, [None, None, None, Some(false)]);
+    assert_eq!(failures[0].message, "opencode answered HTTP 429.");
+    assert_eq!(
+        failures[2].message,
+        "opencode rejected the credential (HTTP 401). Check the key it is configured \
+         with, or log in again with `fiber login opencode`."
+    );
+    assert_eq!(failures[0].code, ErrorCode::RateLimited);
+    assert_eq!(failures[0].retry_after, Some(7.0));
+    assert_eq!(failures[0].provider.as_ref().unwrap().message, "Slow down.");
+    assert_eq!(failures[1].code, ErrorCode::InvalidRequest);
+    assert_eq!(
+        failures[1].provider.as_ref().unwrap().message,
+        "Unsupported parameter: temperature"
+    );
+    assert_eq!(failures[2].code, ErrorCode::AuthenticationFailed);
+    assert_eq!(failures[3].code, ErrorCode::ProviderUnavailable);
+}
+
+#[test]
+fn a_call_cancelled_before_it_runs_returns_without_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://{}", listener.local_addr().unwrap()),
+        ..Endpoint::default()
+    };
+    let call = Responses::new(endpoint).request(&request());
+    call.cancel();
+    assert_eq!(run(Box::new(call)).0, Err(CallError::Cancelled));
+    let accepted = listener.accept().map(|_| ()).unwrap_err();
+    assert_eq!(
+        accepted.kind(),
+        std::io::ErrorKind::WouldBlock,
+        "nothing connected"
+    );
+}
+
+#[test]
+fn a_policy_refusal_fails_the_call_as_refused() {
+    let refusal = json!({"type": "response.output_item.done", "item": {
+        "type": "message", "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "I can't help with that."}]
+    }});
+    let (code, message) =
+        error_code(decoded(&stream(&[refusal, completed("completed", json!({}))])).0);
+    assert_eq!(code, ErrorCode::Refused);
+    assert!(message.contains("I can't help with that."), "{message}");
+}
+
+/// A server that answers one request with response headers and one text
+/// delta, then holds the socket open until `hold` is dropped.
+fn stalling_server() -> (String, mpsc::Sender<()>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (hold, held) = mpsc::channel::<()>();
+    thread::spawn(move || {
+        let (mut socket, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(socket.try_clone().unwrap());
+        let mut length = 0;
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                length = v.trim().parse().unwrap();
+            }
+        }
+        reader.read_exact(&mut vec![0; length]).unwrap();
+        let event = format!("data: {}\n\n", text_delta("Hel"));
+        write!(
+            socket,
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\n\
+             transfer-encoding: chunked\r\n\r\n{:x}\r\n{event}\r\n",
+            event.len()
+        )
+        .unwrap();
+        socket.flush().unwrap();
+        // Hold the socket open, sending nothing more.
+        held.recv().unwrap_err();
+    });
+    (url, hold)
+}
+
+#[test]
+fn cancelling_from_another_thread_ends_a_blocked_read() {
+    let (url, _hold) = stalling_server();
+    let endpoint = Endpoint {
+        base_url: url,
+        ..Endpoint::default()
+    };
+    let call: Arc<dyn ModelCall> = Arc::from(Responses::new(endpoint).call(&request()));
+    let (first, first_seen) = mpsc::channel();
+    let (done, finished) = mpsc::channel();
+    let runner = Arc::clone(&call);
+    thread::spawn(move || {
+        let result = runner.run(&mut |delta| first.send(delta).unwrap());
+        done.send((result, Instant::now())).unwrap();
+    });
+    let delta = first_seen
+        .recv_timeout(DEADLINE)
+        .expect("waited for the first delta");
+    assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
+
+    // The reader is now blocked waiting for the next bytes.
+    let cancelled_at = Instant::now();
+    call.cancel();
+    let (result, returned_at) = finished
+        .recv_timeout(DEADLINE)
+        .expect("waited for run to return after the cancel");
+    let elapsed = returned_at.duration_since(cancelled_at);
+    println!(
+        "cancel to blocked read returning: {} µs ({} {})",
+        elapsed.as_micros(),
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    );
+    assert_eq!(result, Err(CallError::Cancelled));
+}
+
+#[test]
+fn a_context_overflow_is_recognised_only_in_its_seen_shape() {
+    let window = "Your input exceeds the context window of this model.";
+    let body = |code: &str, message: &str| {
+        json!({"error": {"code": code, "message": message}}).to_string()
+    };
+    let server = ProviderServer::start([
+        Response::status(400, body("invalid_prompt", window)),
+        Response::status(400, body("invalid_prompt", "Your prompt was flagged.")),
+        Response::status(400, body("other_code", window)),
+    ])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let codes: Vec<ErrorCode> = (0..3)
+        .map(|_| match run(Box::new(responses.request(&request()))).0 {
+            Err(CallError::Failed { failure, .. }) => failure.code,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            ErrorCode::ContextOverflow,
+            ErrorCode::InvalidRequest,
+            ErrorCode::InvalidRequest
+        ]
+    );
+
+    let failed = |error: Value| {
+        stream(&[json!({"type": "response.failed",
+            "response": {"status": "failed", "error": error}})])
+    };
+    for error in [
+        json!({"code": "invalid_prompt", "message": "Your prompt was flagged."}),
+        json!({"code": "other_code", "message": window}),
+    ] {
+        assert_eq!(
+            error_code(decoded(&failed(error)).0).0,
+            ErrorCode::StreamIncomplete
+        );
+    }
+}
+
+#[test]
+fn a_connection_closed_before_any_response_fails_the_call() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    thread::spawn(move || {
+        // Accept, read the request, and close without answering.
+        let (socket, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
+            line.clear();
+        }
+    });
+    let endpoint = Endpoint {
+        base_url: url,
+        ..Endpoint::default()
+    };
+    let (result, _) = run(Responses::new(endpoint).call(&request()));
+    let Err(CallError::Failed { failure, .. }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(failure.code, ErrorCode::ConnectionFailed);
+}
+
+#[test]
+fn reasoning_deltas_stream_as_reasoning_and_an_empty_reply_text_is_not_sent() {
+    let (reply, deltas) = decoded(&stream(&[
+        json!({"type": "response.reasoning_summary_text.delta", "delta": "Think"}),
+        json!({"type": "response.reasoning_text.delta", "delta": "ing"}),
+        completed("completed", json!({})),
+    ]));
+    reply.unwrap();
+    assert_eq!(
+        deltas,
+        [
+            Delta::Reasoning(TextDelta {
+                text: "Think".into()
+            }),
+            Delta::Reasoning(TextDelta { text: "ing".into() }),
+        ]
+    );
+
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let mut request = request();
+    request.conversation.push(Input::Assistant {
+        text: String::new(),
+    });
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["input"],
+        json!([{"role": "user", "content": "What is the weather in Paris? Use the tool."}])
+    );
+}

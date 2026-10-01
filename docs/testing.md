@@ -109,9 +109,13 @@ tests come from two sources:
   keys by the `provider` crate's `record` jig ("Jigs") and checked in. They
   are replayed byte for byte against the provider crate's decoders. A recording keeps response bytes only,
   never request headers or keys. It is re-recorded when a vendor change is
-  suspected. The probe recordings in `research/*-probe/raw/` are JSON
-  wrappers around an exchange, with the response stream in `raw_sse`; a test
-  that replays one serves that field's bytes.
+  suspected. The probe recordings in `research/*-probe/raw/` do not
+  share one shape. Among them: the stream's bytes in a JSON wrapper's
+  `raw_sse` (`anthropic-messages-probe`) or `body` (`opencode-probe`), or in a
+  `.sse` file (`opencode-probe`); the stream as parsed `events`, each an event
+  name and its data (`codex-responses-probe`); or a non-streamed response
+  object (`openai-responses-probe`). A test serves the bytes where a probe
+  kept them, and otherwise rebuilds the stream from what the probe kept.
 - **Scripted streams.** Hand-written in the real wire format, for scenarios a
   recording cannot produce on demand, such as a tool call, then a 429, then
   text. A local fake server serves them to the binary and to cross-crate tests.
