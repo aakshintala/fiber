@@ -748,6 +748,35 @@ fn no_request_carries_more_than_four_cache_markers() {
 }
 
 #[test]
+fn past_four_markers_the_new_end_goes_before_the_previous_end() {
+    // Model data that replaces the system prompt with three marked blocks:
+    // with the previous end and the new end that is five, and the doc's
+    // order keeps the system prompt's and the previous end's.
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let marked = json!({"type": "text", "text": "s", "cache_control": {"type": "ephemeral"}});
+    let declared = Endpoint {
+        extra_body: json!({"system": [marked, marked, marked]})
+            .as_object()
+            .unwrap()
+            .clone(),
+        ..endpoint(&server)
+    };
+    let request = ModelRequest {
+        conversation: four_turn_conversation(),
+        previous_end: Some(2),
+        ..request()
+    };
+    run(Box::new(Messages::new(declared).request(&request)))
+        .0
+        .unwrap();
+    let body = sent_body(&server, 0);
+    assert_eq!(body["system"], json!([marked, marked, marked]));
+    let marker = json!({"type": "ephemeral"});
+    assert_eq!(body["messages"][1]["content"][0]["cache_control"], marker);
+    assert_eq!(body["messages"][2]["content"][1].get("cache_control"), None);
+}
+
+#[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
     let exchanges = probes::read(&research("anthropic-messages-probe/raw/stream.json")).unwrap();
     let exchange = exchanges
