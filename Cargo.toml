@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/config", "crates/contract", "crates/extensions", "crates/fakes", "crates/log", "crates/loop", "crates/provider", "xtask"]
+members = ["crates/config", "crates/contract", "crates/doors", "crates/extensions", "crates/fakes", "crates/log", "crates/loop", "crates/main", "crates/provider", "xtask"]
 resolver = "3"
 
 [workspace.package]
@@ -16,6 +16,7 @@ proptest = "1"
 proc-macro2 = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 mlua = { version = "0.12", features = ["lua54", "vendored"] }
+rustix = { version = "1", features = ["pty"] }
 
 # The lints in docs/code-quality.md, "Lints". Every crate inherits them with
 # `lints.workspace = true`.
