@@ -3,15 +3,26 @@
 
 #![allow(
     clippy::unwrap_used,
+    clippy::expect_used,
     clippy::indexing_slicing,
     reason = "test code may unwrap and index (docs/code-quality.md, \"Lints\"), helpers outside a #[test] included"
 )]
 
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::path::Path;
+use std::time::Duration;
 
+use contract::ErrorCode;
 use fakes::{ProviderServer, Request, Response};
+
+/// The deadline on every connect, write and read: a stall fails naming the
+/// operation instead of hanging until nextest kills the test.
+const DEADLINE: Duration = Duration::from_secs(10);
+
+fn addr(server: &ProviderServer) -> SocketAddr {
+    server.url().trim_start_matches("http://").parse().unwrap()
+}
 
 /// What a client read back: the status code, the response headers with
 /// lowercase names, and the body bytes.
@@ -22,17 +33,30 @@ struct Reply {
 }
 
 fn post(server: &ProviderServer, path: &str, headers: &[(&str, &str)], body: &[u8]) -> Reply {
-    let addr = server.url().trim_start_matches("http://").to_owned();
-    let mut stream = TcpStream::connect(addr).unwrap();
-    let mut head = format!("POST {path} HTTP/1.1\r\nHost: fake\r\n");
+    let mut request = format!("POST {path} HTTP/1.1\r\nHost: fake\r\n");
     for (name, value) in headers {
-        head.push_str(&format!("{name}: {value}\r\n"));
+        request.push_str(&format!("{name}: {value}\r\n"));
     }
-    head.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
-    stream.write_all(head.as_bytes()).unwrap();
-    stream.write_all(body).unwrap();
+    request.push_str(&format!("Content-Length: {}\r\n\r\n", body.len()));
+    let mut request = request.into_bytes();
+    request.extend_from_slice(body);
+    exchange(server, &request)
+}
+
+/// Sends `request` as written and reads the reply to the end of the
+/// connection, each step under `DEADLINE`.
+fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
+    let mut stream = TcpStream::connect_timeout(&addr(server), DEADLINE)
+        .expect("connecting to the fake provider within the deadline");
+    stream.set_write_timeout(Some(DEADLINE)).unwrap();
+    stream.set_read_timeout(Some(DEADLINE)).unwrap();
+    stream
+        .write_all(request)
+        .expect("writing the request to the fake provider within the deadline");
     let mut raw = Vec::new();
-    stream.read_to_end(&mut raw).unwrap();
+    stream
+        .read_to_end(&mut raw)
+        .expect("reading the fake provider's whole reply within the deadline");
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let head = String::from_utf8(raw[..split].to_vec()).unwrap();
     let mut lines = head.split("\r\n");
@@ -188,10 +212,35 @@ fn two_servers_run_side_by_side_on_their_own_ports() {
 #[test]
 fn dropping_the_server_closes_its_port() {
     let server = ProviderServer::start([]).unwrap();
-    let addr = server.url().trim_start_matches("http://").to_owned();
-    assert!(TcpStream::connect(&addr).is_ok());
+    let addr = addr(&server);
+    assert!(TcpStream::connect_timeout(&addr, DEADLINE).is_ok());
 
     drop(server);
 
-    assert!(TcpStream::connect(&addr).is_err());
+    assert!(TcpStream::connect_timeout(&addr, DEADLINE).is_err());
+}
+
+#[test]
+fn it_records_a_chunked_body_decoded() {
+    let server = ProviderServer::start([Response::stream("ok")]).unwrap();
+
+    let reply = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nHost: fake\r\nTransfer-Encoding: chunked\r\n\r\n\
+          8\r\n{\"model\"\r\nb;ext=1\r\n:\"m\",\"n\":1}\r\n0\r\nx-trailer: t\r\n\r\n",
+    );
+
+    assert_eq!(reply.body, b"ok");
+    let body = String::from_utf8(server.requests()[0].body.clone()).unwrap();
+    assert_eq!(body, r#"{"model":"m","n":1}"#);
+}
+
+#[test]
+fn a_failure_to_start_maps_to_io_failed() {
+    let bind = fakes::Error::Bind(std::io::Error::other("address in use"));
+    let spawn = fakes::Error::Spawn(std::io::Error::other("no threads"));
+
+    assert_eq!(bind.code(), ErrorCode::IoFailed);
+    assert_eq!(spawn.code(), ErrorCode::IoFailed);
+    assert!(bind.to_string().contains("address in use"));
 }

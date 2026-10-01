@@ -8,6 +8,8 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 
+use crate::Error;
+
 /// Header names whose values are credentials, lowercase. Their values are
 /// masked before a request is recorded, as is a `key` query parameter, which
 /// Google's API also accepts (`docs/model-routing.md`).
@@ -107,9 +109,9 @@ pub struct ProviderServer {
 impl ProviderServer {
     /// Listens on a free port on 127.0.0.1 and serves `script` in order. The
     /// port accepts connections when this returns.
-    pub fn start(script: impl IntoIterator<Item = Response>) -> io::Result<Self> {
-        let listener = TcpListener::bind("127.0.0.1:0")?;
-        let addr = listener.local_addr()?;
+    pub fn start(script: impl IntoIterator<Item = Response>) -> Result<Self, Error> {
+        let listener = TcpListener::bind("127.0.0.1:0").map_err(Error::Bind)?;
+        let addr = listener.local_addr().map_err(Error::Bind)?;
         let state = Arc::new(Mutex::new(State {
             script: script.into_iter().collect(),
             ..State::default()
@@ -117,7 +119,8 @@ impl ProviderServer {
         let shared = Arc::clone(&state);
         let accept = thread::Builder::new()
             .name("fake-provider".to_owned())
-            .spawn(move || accept_loop(&listener, &shared))?;
+            .spawn(move || accept_loop(&listener, &shared))
+            .map_err(Error::Spawn)?;
         Ok(Self {
             addr,
             state,
@@ -208,8 +211,6 @@ fn invalid(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what.to_owned())
 }
 
-// ponytail: bodies framed by Content-Length only; add chunked request bodies
-// when a client under test sends one.
 fn read_request(reader: &mut impl BufRead) -> io::Result<Request> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
@@ -241,19 +242,60 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<Request> {
         headers.push((name, value.to_owned()));
     }
 
-    let length = headers
+    let chunked = headers
         .iter()
-        .find(|(n, _)| n == "content-length")
-        .map_or(Ok(0), |(_, v)| v.parse::<usize>())
-        .map_err(|_| invalid("content-length is not a number"))?;
-    let mut body = vec![0; length];
-    reader.read_exact(&mut body)?;
+        // A request with any transfer coding ends in chunked (RFC 9112,
+        // section 6.1).
+        .any(|(n, _)| n == "transfer-encoding");
+    let body = if chunked {
+        read_chunked(reader)?
+    } else {
+        let length = headers
+            .iter()
+            .find(|(n, _)| n == "content-length")
+            .map_or(Ok(0), |(_, v)| v.parse::<usize>())
+            .map_err(|_| invalid("content-length is not a number"))?;
+        let mut body = vec![0; length];
+        reader.read_exact(&mut body)?;
+        body
+    };
     Ok(Request {
         method,
         path,
         headers,
         body,
     })
+}
+
+/// A chunked body (RFC 9112, section 7.1), decoded: each chunk's bytes in
+/// order, with chunk extensions and trailers dropped.
+fn read_chunked(reader: &mut impl BufRead) -> io::Result<Vec<u8>> {
+    let mut body = Vec::new();
+    let mut line = String::new();
+    loop {
+        line.clear();
+        reader.read_line(&mut line)?;
+        let size = line.split(';').next().unwrap_or("").trim();
+        let size = usize::from_str_radix(size, 16)
+            .map_err(|_| invalid("chunk size is not a hex number"))?;
+        if size == 0 {
+            break;
+        }
+        let mut chunk = vec![0; size];
+        reader.read_exact(&mut chunk)?;
+        body.extend(chunk);
+        line.clear();
+        reader.read_line(&mut line)?;
+    }
+    // Trailers, up to the blank line that ends the body. They are read so
+    // the client's bytes are all consumed before the connection closes.
+    loop {
+        line.clear();
+        reader.read_line(&mut line)?;
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            return Ok(body);
+        }
+    }
 }
 
 /// The request target with any `key` query parameter's value masked.
@@ -287,3 +329,7 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
     stream.write_all(&response.body)?;
     stream.flush()
 }
+
+#[cfg(test)]
+#[path = "provider_server_tests.rs"]
+mod tests;

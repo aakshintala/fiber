@@ -67,7 +67,9 @@ dependencies = [
 name = "fakes"
 version = "0.0.0"
 dependencies = [
+ "contract",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
