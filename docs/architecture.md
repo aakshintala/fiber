@@ -237,6 +237,12 @@ A budget reached by a delegate's spend is acted on outside the queue too: the
 thread reading that delegate stops the running delegates at once
 (`docs/loop.md`, "Spending budget").
 
+A driver command that writes no durable event is not queued either. The
+thread reading the client's connection handles it at once, even while a
+model response streams: `job_stop`, `shell` with `send` false, and `tools`.
+`job_stop` stops the job at once, and its `job_completed` is logged at the
+next step boundary. Every other command waits for the drain.
+
 ### Streaming
 
 The loop reads the model's response itself, on its own thread, blocking. There
