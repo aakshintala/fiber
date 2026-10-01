@@ -3,7 +3,6 @@
 //! connector that keeps a handle to each `TcpStream` it opens; shutting that
 //! handle down ends a read blocked inside ureq, under TLS too.
 
-use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -147,17 +146,10 @@ impl Connector<()> for KeepSocket {
 }
 
 /// A plain TCP transport over the kept socket.
+#[derive(Debug)]
 struct Socket {
     stream: TcpStream,
     buffers: LazyBuffers,
-}
-
-impl fmt::Debug for Socket {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Socket")
-            .field("peer", &self.stream.peer_addr().ok())
-            .finish()
-    }
 }
 
 impl Transport for Socket {
@@ -179,9 +171,12 @@ impl Transport for Socket {
         let input = self.buffers.input_append_buf();
         let read = self.stream.read(input)?;
         self.buffers.input_appended(read);
-        Ok(read > 0)
+        // No bytes is the peer closing: ureq reads `false` as no progress.
+        Ok(read != 0)
     }
 
+    // Only ureq's pool asks, to decide whether to reuse the connection, and
+    // each call has its own agent, so nothing is ever reused.
     fn is_open(&mut self) -> bool {
         true
     }

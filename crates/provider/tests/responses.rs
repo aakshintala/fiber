@@ -95,10 +95,18 @@ fn request() -> ModelRequest {
     }
 }
 
-fn run(call: &dyn ModelCall) -> (Result<Reply, CallError>, Vec<Delta>) {
-    let mut deltas = Vec::new();
-    let reply = call.run(&mut |d| deltas.push(d));
-    (reply, deltas)
+/// Runs `call` on its own thread, so a call that never returns fails the
+/// test at the deadline instead of hanging it.
+fn run(call: Box<dyn ModelCall>) -> (Result<Reply, CallError>, Vec<Delta>) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut deltas = Vec::new();
+        let reply = call.run(&mut |d| deltas.push(d));
+        done.send((reply, deltas)).unwrap();
+    });
+    finished
+        .recv_timeout(DEADLINE)
+        .expect("waited for the call to return")
 }
 
 fn sent_body(server: &ProviderServer, n: usize) -> Value {
@@ -356,7 +364,7 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
     let server = ProviderServer::start([Response::stream(bytes.clone())]).unwrap();
     let provider: Box<dyn Provider> = Box::new(Responses::new(endpoint(&server)));
-    let (reply, deltas) = run(provider.call(&request()).as_ref());
+    let (reply, deltas) = run(provider.call(&request()));
     let (want, want_deltas) = decoded(&bytes);
     assert_eq!(reply.unwrap(), want.unwrap());
     assert_eq!(deltas, want_deltas);
@@ -378,7 +386,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
     let mut reordered = request();
     reordered.tools.reverse();
     for request in [request(), request(), reordered] {
-        run(&responses.request(&request)).0.unwrap();
+        run(Box::new(responses.request(&request))).0.unwrap();
     }
     let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
     assert_eq!(bodies.len(), 3);
@@ -402,9 +410,11 @@ fn strict_is_sent_per_tool_and_true_only_for_a_schema_in_the_strict_subset() {
         json!({}),
     )]))])
     .unwrap();
-    run(&Responses::new(endpoint(&server)).request(&request()))
-        .0
-        .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request()),
+    ))
+    .0
+    .unwrap();
     let tools = sent_body(&server, 0)["tools"].clone();
     assert_eq!(
         tools,
@@ -422,9 +432,11 @@ fn store_and_extra_fields_come_from_model_data_only() {
     let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
     let server = ProviderServer::start([reply(), reply()]).unwrap();
     // The same base URL with and without the flag: only the data decides.
-    run(&Responses::new(endpoint(&server)).request(&request()))
-        .0
-        .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request()),
+    ))
+    .0
+    .unwrap();
     let declared = Endpoint {
         compat: Compat { store: Some(false) },
         extra_body: json!({"service_tier": "priority"})
@@ -433,7 +445,7 @@ fn store_and_extra_fields_come_from_model_data_only() {
             .clone(),
         ..endpoint(&server)
     };
-    run(&Responses::new(declared).request(&request()))
+    run(Box::new(Responses::new(declared).request(&request())))
         .0
         .unwrap();
     let undeclared = sent_body(&server, 0);
@@ -503,9 +515,11 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         conversation,
         ..request()
     };
-    run(&Responses::new(endpoint(&server)).request(&request))
-        .0
-        .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
     let body = sent_body(&server, 0);
     assert_eq!(
         body["input"],
@@ -544,7 +558,7 @@ fn a_stream_ending_response_failed_drops_what_it_streamed() {
     ])
     .unwrap();
     let responses = Responses::new(endpoint(&server));
-    let (result, deltas) = run(&responses.request(&request()));
+    let (result, deltas) = run(Box::new(responses.request(&request())));
     let Err(CallError::Failed {
         failure,
         should_retry: None,
@@ -553,7 +567,7 @@ fn a_stream_ending_response_failed_drops_what_it_streamed() {
         panic!("{result:?}");
     };
     // The 200 response's header governs the failure its stream reports.
-    let (vetoed, _) = run(&responses.request(&request()));
+    let (vetoed, _) = run(Box::new(responses.request(&request())));
     let Err(CallError::Failed {
         should_retry: Some(false),
         ..
@@ -663,7 +677,7 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
         let Err(CallError::Failed {
             failure,
             should_retry: header,
-        }) = run(&responses.request(&request())).0
+        }) = run(Box::new(responses.request(&request()))).0
         else {
             panic!("expected a failure");
         };
@@ -699,7 +713,7 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     };
     let call = Responses::new(endpoint).request(&request());
     call.cancel();
-    assert_eq!(run(&call).0, Err(CallError::Cancelled));
+    assert_eq!(run(Box::new(call)).0, Err(CallError::Cancelled));
     let accepted = listener.accept().map(|_| ()).unwrap_err();
     assert_eq!(
         accepted.kind(),
@@ -790,4 +804,109 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         std::env::consts::ARCH
     );
     assert_eq!(result, Err(CallError::Cancelled));
+}
+
+#[test]
+fn a_context_overflow_is_recognised_only_in_its_seen_shape() {
+    let window = "Your input exceeds the context window of this model.";
+    let body = |code: &str, message: &str| {
+        json!({"error": {"code": code, "message": message}}).to_string()
+    };
+    let server = ProviderServer::start([
+        Response::status(400, body("invalid_prompt", window)),
+        Response::status(400, body("invalid_prompt", "Your prompt was flagged.")),
+        Response::status(400, body("other_code", window)),
+    ])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let codes: Vec<ErrorCode> = (0..3)
+        .map(|_| match run(Box::new(responses.request(&request()))).0 {
+            Err(CallError::Failed { failure, .. }) => failure.code,
+            other => panic!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        codes,
+        [
+            ErrorCode::ContextOverflow,
+            ErrorCode::InvalidRequest,
+            ErrorCode::InvalidRequest
+        ]
+    );
+
+    let failed = |error: Value| {
+        stream(&[json!({"type": "response.failed",
+            "response": {"status": "failed", "error": error}})])
+    };
+    for error in [
+        json!({"code": "invalid_prompt", "message": "Your prompt was flagged."}),
+        json!({"code": "other_code", "message": window}),
+    ] {
+        assert_eq!(
+            error_code(decoded(&failed(error)).0).0,
+            ErrorCode::StreamIncomplete
+        );
+    }
+}
+
+#[test]
+fn a_connection_closed_before_any_response_fails_the_call() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    thread::spawn(move || {
+        // Accept, read the request, and close without answering.
+        let (socket, _) = listener.accept().unwrap();
+        let mut reader = BufReader::new(socket);
+        let mut line = String::new();
+        while reader.read_line(&mut line).unwrap() > 0 && line != "\r\n" {
+            line.clear();
+        }
+    });
+    let endpoint = Endpoint {
+        base_url: url,
+        ..Endpoint::default()
+    };
+    let (result, _) = run(Responses::new(endpoint).call(&request()));
+    let Err(CallError::Failed { failure, .. }) = result else {
+        panic!("{result:?}");
+    };
+    assert_eq!(failure.code, ErrorCode::ConnectionFailed);
+}
+
+#[test]
+fn reasoning_deltas_stream_as_reasoning_and_an_empty_reply_text_is_not_sent() {
+    let (reply, deltas) = decoded(&stream(&[
+        json!({"type": "response.reasoning_summary_text.delta", "delta": "Think"}),
+        json!({"type": "response.reasoning_text.delta", "delta": "ing"}),
+        completed("completed", json!({})),
+    ]));
+    reply.unwrap();
+    assert_eq!(
+        deltas,
+        [
+            Delta::Reasoning(TextDelta {
+                text: "Think".into()
+            }),
+            Delta::Reasoning(TextDelta { text: "ing".into() }),
+        ]
+    );
+
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let mut request = request();
+    request.conversation.push(Input::Assistant {
+        text: String::new(),
+    });
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["input"],
+        json!([{"role": "user", "content": "What is the weather in Paris? Use the tool."}])
+    );
 }
