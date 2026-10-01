@@ -1288,7 +1288,9 @@ rebuildable, and never the truth.
 
 One integer `schema_version` on every line, shared by durable and ephemeral,
 never negotiated at startup — a line read by a client of another Fiber build
-has to be readable on its own.
+has to be readable on its own. It stays `1` until the first release: before
+then there are no readers to break, so the rules below apply from that
+release on.
 
 - **Additive, no bump:** a new kind, a new optional field, a new value in an open
   set (`error.code`, denial `reason`, `notice.code`). Consumers skip unknown

@@ -174,9 +174,10 @@ error naming the variable.
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it
 exits, with its id, workspace, name and what it stopped on. A session
-appends whether or not a hub is running. The hub reads it at start, keeps the
-newest 100, and rewrites the file with them by rename when it passes about
-1,000 lines. It is a derived index, rebuildable from the logs, and never the
+appends whether or not a hub is running, and nothing rewrites it, so an
+append is never lost to a rewrite. The hub reads its tail at start and keeps
+the newest 100. It grows by about 200 bytes per exited session: 10,000
+sessions is about 2 MB. It is a derived index, rebuildable from the logs, and never the
 truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 **Prompt history.** Per project, `history.jsonl`: one JSON line per prompt,

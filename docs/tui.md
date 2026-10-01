@@ -34,9 +34,10 @@ commands".
 - **It is full screen only.** There is no scrollback mode. The mouse is a
   primary input, and every action also has a keyboard or slash-command path
   ("Keys").
-- **History is paged from the session log.** The terminal holds a window of
-  rendered history and reads the log again as the person scrolls ("History and
-  paging").
+- **History is paged from the session.** The terminal holds a window of
+  rendered history and asks the session for more with `history` as the person
+  scrolls ("History and paging"). It never reads a log from disk, so a local
+  and a remote terminal page the same way.
 
 An extension may change everything the terminal draws, through the slots in
 "Extension seams".
@@ -558,9 +559,9 @@ marked with OSC 8 or handled on click.
   path. Pasted text keeps its line breaks. The box grows to about a third of
   the screen, then scrolls.
 - ↑ in an empty box recalls earlier prompts: from this session, then the
-  project's earlier sessions, newest first. Ctrl+R searches them. They are
-  read from the logs, one session at a time as the person steps back, because
-  `docs/state.md` allows no history file. In a draft of several lines, ↑ moves
+  project's earlier sessions, newest first. Ctrl+R searches them. They come
+  from the project's prompt history (`docs/state.md`), read through the hub,
+  so a remote terminal recalls the same prompts. In a draft of several lines, ↑ moves
   the cursor until it reaches the first line.
 - A paste over about 10 lines shows as one token, "[Pasted text #1 · 312
   lines]", and the full text is sent. Clicking the token, or Ctrl+G with the
@@ -751,12 +752,14 @@ images off.
 
 ## History and paging
 
-The terminal holds a window of rendered history and reads the log again as the
-person scrolls, with range reads by `seq` over an offset table
-(`docs/events.md`, "Resume").
+The terminal holds a window of rendered history and asks the session for more
+as the person scrolls, with the `history` command, which reads by `seq` over
+the session's offset table (`docs/invocation.md`, "Driver commands";
+`docs/events.md`, "Resume").
 
-- **Opening is one streaming pass** over the log. It builds the offset table,
-  builds the panel's cards, and counts every row. No event is kept: each is
+- **Opening is one streaming pass** over the session's lines, as its `full`
+  subscription sends them. It builds the panel's cards, and counts every row,
+  keeping each row's `seq`. No event is kept: each is
   applied to the panel's folds and dropped.
 - **Pages are cut inside turns,** at `step_started`, about 64 lines each, and
   never inside a tool group, so each page renders on its own.
@@ -767,7 +770,7 @@ person scrolls, with range reads by `seq` over an offset table
   matches and the selection share.
 - **Pages load inside the frame** that needs them. There is no background
   loading.
-- **Search streams the log,** rendering each page to text and keeping only its
+- **Search streams the session's lines** with `history`, rendering each page to text and keeping only its
   matches. On a large session it does not run on every keystroke: it waits for
   a pause in typing, or runs off the frame thread.
 - **A selection's ends are row indices.** Copying reads the rows between them,

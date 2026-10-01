@@ -119,6 +119,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `background` | none |
 | `reload` | none |
 | `tools` | none |
+| `history` | `from_seq` (integer), `to_seq` (integer, optional) |
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `effort` (string, optional); `thinking` (string, optional) |
 | `name` | `text` (string); empty clears the name |
 | `handoff` | `instructions` (string, optional) |
@@ -142,6 +143,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
+| `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `model` | Switches model, effort or thinking at the next turn boundary. Takes a model reference and optional effort and thinking. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
@@ -289,6 +291,12 @@ takes twenty minutes; its caller's turn ending changes nothing.
 
 There is no detach command. A client leaves by closing its connection. How the
 terminal leaves, and how it stops one session, is `docs/tui.md`, "Quit".
+
+**A request re-raised on resume keeps its `request_id`.** A `reply` sent
+through the hub to a session that exited on a pending request makes the hub
+resume the session, then deliver the reply. A late reply still cannot
+authorise a different action, because a different action is a different
+request.
 
 **A pending approval or question does not keep a session alive past the idle
 delay.** When the delay passes with either pending, the session exits, and
