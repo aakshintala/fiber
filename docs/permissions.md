@@ -210,9 +210,9 @@ one session approve calls in another by messaging it.
 
 ### How it runs
 
-Two stages. The first asks for a single token: does this need thinking about.
-Only a call the first stage flags gets a second, reasoning pass. Most reviewed
-calls cost one token.
+Two stages. The first asks for a single token: `check`, meaning the call goes
+to the reasoning pass, or `allow`. Only a call answered `check` gets the
+reasoning pass. Most reviewed calls cost one token.
 
 The reviewer's model is chosen separately from the session's, because a
 review on every effectful action at the session model's price and latency is a
