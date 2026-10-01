@@ -347,7 +347,7 @@ in the input box during a turn is untouched until sent.
 Queued steering messages sit above the input box, one row each, from the
 `steering_queue` event, so every attached client sees and edits the same
 queue. ⌥↑ and ⌥↓ select a row and load it into the input box, Enter sends
-`steer_amend`, and ⌥X sends `steer_drop`. Each also has a mouse target.
+`steer_drop` then `steer`, and ⌥X sends `steer_drop`. Each also has a mouse target.
 
 ### Interrupts
 
