@@ -61,7 +61,7 @@ On a model that supports deferral, MCP tools are declared deferred by default:
 the model sees each tool's name and loads its full definition with
 `tool_search` when it needs it. On any other model every tool is declared in
 full; OpenAI's `allowed_tools` restricts calls but still sends each definition.
-A server can be marked eager, so its tools are always declared in full.
+A server can be marked `declare_in_full`, so its tools are always declared in full.
 
 Why deferral keeps the cache is `docs/prompt-cache.md`. Which models defer,
 `tool_search`, and which tools the model sees in general are
@@ -142,18 +142,42 @@ A result goes through the tool contract in `docs/tools.md`:
 
 ## Starting servers
 
-Every configured server starts when the session starts. The first request to the
-model waits until each server has listed its tools or reached its startup
-deadline. The deadline is 5 seconds by default, and configuration can change it
-per server. A person can type while servers connect.
+Settled by [MCP servers start on first call](https://github.com/aakshintala/fiber/issues/257).
 
-A server that misses its deadline, or fails to start, leaves its tools out for
-the whole session. The session log records which server and why, as the durable
-event `mcp_server_failed` (`docs/events.md`). Its `error.message` is Fiber's own
-sentence and says what to do, such as how to log in, so a person and a headless
-caller read the same advice. A server marked
-`required` makes that failure fatal instead: the session does not start, and a
-headless run exits with code 1 and error code `mcp_required_server_failed`.
+**A server starts on the first call to one of its tools.** The model sees its
+tools from the session's first request all the same: they are declared from
+the server's last tool list, cached in Fiber home at
+`cache/mcp/<server>.json` (`docs/state.md`). The cache is keyed by a hash of
+the server's declaration: its command, arguments, environment, or URL. The
+first call waits for the server to start and list its tools, up to its startup
+deadline. The deadline is 5 seconds by default, and configuration can change
+it per server.
+
+**Some servers start with the session:**
+
+- a server marked `required`. A `required` server that misses its deadline,
+  or fails to start, stops the session starting, and a headless run exits
+  with code 1 and error code `mcp_required_server_failed`.
+- a server with no cached list for its current declaration: the first time
+  it is used, and after its declaration changes. It starts to get the list,
+  and stays running.
+
+The first request to the model waits for these, and a person can type while
+they connect.
+
+**A server that fails to start** is recorded as the durable event
+`mcp_server_failed` (`docs/events.md`), whose `error.message` is Fiber's own
+sentence and says what to do, such as how to log in, so a person and a
+headless caller read the same advice. For a server started on a call, the
+call fails with that error and the server is treated as one that died ("When
+a server dies"). For a server started with the session for want of a cached
+list, its tools are left out for the whole session.
+
+**When a started server lists different tools from the cached list,** the
+session keeps the tools it declared, because a tool set that changes
+mid-session misses the whole prompt cache. The cache is updated, so the next
+session declares the new list. A call to a declared tool the server no longer
+has fails with `mcp_tool_removed`.
 
 The 5-second deadline:
 
@@ -193,10 +217,13 @@ a second client lacks.
 Reload:
 
 1. Re-reads configuration.
-2. Keeps unchanged, healthy servers connected.
+2. Keeps unchanged, healthy servers connected, and asks each for its tools
+   again.
 3. Restarts changed servers and servers that died.
-4. Reloads extensions (`docs/extensions.md`).
-5. Declares the new tool set.
+4. Starts every server not yet started this session, to get its tools.
+5. Updates each server's cached tool list.
+6. Reloads extensions (`docs/extensions.md`).
+7. Declares the new tool set.
 
 It costs one prompt-cache miss. The log records it as the durable event
 `reloaded` (`docs/events.md`).
@@ -266,7 +293,7 @@ Each server has:
 - `required`
 - a startup deadline
 - a call timeout
-- whether it is eager
+- whether its tools are declared in full (`declare_in_full`)
 - per-tool hint overrides
 - which tools are enabled and which are disabled
 
@@ -285,12 +312,14 @@ shared between sessions.
   between calls. Neither would be correct shared between sessions.
 - A server takes 43 to 93 MiB written in Node and about 1.2 MiB written in
   Rust (macOS arm64, `research/delegate-memory/README.md`, "MCP servers"),
-  once per session. Fiber assumes the heavy end: a delegate adds about
-  100 MiB with two Node servers.
+  once per session that calls it. Fiber assumes the heavy end: a delegate
+  that calls two Node servers adds about 100 MiB. A server a session never
+  calls costs it nothing, because servers start on their first call.
   A server that costs too much to run once per session is its author's to make
   smaller; Fiber does not share servers to hide the cost.
-- A delegate's first request waits for its own servers, as any session's does
-  ("Starting servers").
+- A delegate starts its own servers as any session does ("Starting
+  servers"). Servers are not moved into the hub: a hub restart would restart
+  them under running sessions, and the two above would be wrong shared.
 
 ## Not settled here
 

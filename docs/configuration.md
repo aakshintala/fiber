@@ -55,7 +55,8 @@ Fiber home, not the repository, so it covers every worktree of the project
 gitignored file in the working tree, as Claude Code uses, would be missing from
 every new worktree.
 
-`-c` works on every entry point: the terminal, `fiber ask` and `fiber serve`.
+`-c` works on both doors: `fiber ask`, and the terminal, which passes it to
+each session it asks the hub to start.
 The key is a dotted path and the value is JSON, or a bare string when it does
 not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
@@ -92,7 +93,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
-| `permissions.mode` | `auto` | no | The mode a new session starts in: `auto` or `yolo` (`docs/permissions.md`, "Modes"). |
+| `session.idle_exit` | 30 minutes | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | a small, fast model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
@@ -166,7 +167,7 @@ lists:
 | `required` | whether failing to start ends the session, default false |
 | `startup_timeout_ms` | the startup deadline, default 5000 |
 | `timeout_ms` | the call timeout |
-| `eager` | whether its tools are declared in full, default false |
+| `declare_in_full` | whether its tools are declared in full rather than deferred, default false |
 | `tools.enabled`, `tools.disabled` | lists of tool names |
 | `tools."<tool>".hints` | overrides of that tool's MCP hints |
 
