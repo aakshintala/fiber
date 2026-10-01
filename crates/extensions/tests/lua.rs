@@ -213,7 +213,7 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
         panic!("{err:?}")
     };
     assert!(
-        message.starts_with("init.lua:1: `big.lua` is "),
+        message.starts_with("init.lua:1: `big.lua` is larger than"),
         "{message}"
     );
     assert!(message.contains("memory cap"), "{message}");

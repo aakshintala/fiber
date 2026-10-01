@@ -12,6 +12,8 @@
 //! waiting a grace period past the deadline and abandons the VM.
 
 use std::cell::Cell;
+use std::fs::File;
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
@@ -220,24 +222,33 @@ enum Reply {
     Done(Result<String, Error>),
 }
 
+/// Sends a deadline to the caller before Lua runs. An error means the
+/// caller has stopped waiting and abandoned the VM, so nothing may run.
+type Notify<'a> = &'a dyn Fn(Option<Instant>) -> Result<(), Error>;
+
 /// The extension's thread: creates the VM on the first job and serves the
 /// inbox in order. A VM whose entry script failed is created again on the
-/// next job.
+/// next job. It quits as soon as a caller has stopped waiting: that caller
+/// abandoned the VM, so no entry script or callback may run after it.
 fn serve(name: &str, dir: &Path, inbox: &Receiver<Job>) {
     let mut vm = None;
     for job in inbox {
         let notify = |at| {
-            if job.reply.send(Reply::Deadline(at)).is_err() {
-                // The caller stopped waiting; the job runs all the same.
-            }
+            job.reply
+                .send(Reply::Deadline(at))
+                .map_err(|_| Error::Stopped {
+                    extension: name.to_owned(),
+                })
         };
         let result = match &vm {
             Some(vm) => Ok(vm),
             None => Vm::load(name, dir, &notify).map(|loaded| &*vm.insert(loaded)),
         }
         .and_then(|vm| vm.command(&job.command, &job.text, &notify));
-        if job.reply.send(Reply::Done(result)).is_err() {
-            // The caller stopped waiting; the next job is served all the same.
+        if matches!(result, Err(Error::Stopped { .. }))
+            || job.reply.send(Reply::Done(result)).is_err()
+        {
+            return;
         }
     }
 }
@@ -251,9 +262,11 @@ struct Vm {
 }
 
 impl Vm {
-    /// Creates the VM and runs the entry script. Its clock starts before the
-    /// script is read.
-    fn load(name: &str, dir: &Path, notify: &dyn Fn(Option<Instant>)) -> Result<Self, Error> {
+    /// Creates the VM and runs the entry script. Its clock starts before
+    /// anything else, so creating the VM and reading the script count.
+    fn load(name: &str, dir: &Path, notify: Notify<'_>) -> Result<Self, Error> {
+        let deadline = Deadline::default();
+        notify(deadline.start(LOAD_TIMEOUT))?;
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),
             message,
@@ -273,7 +286,6 @@ impl Vm {
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(MEMORY_CAP).map_err(lua_error)?;
-        let deadline = Deadline::default();
         let commands = install(&lua, &deadline, dir.clone()).map_err(lua_error)?;
         let vm = Self {
             lua,
@@ -282,7 +294,6 @@ impl Vm {
             commands,
         };
 
-        notify(vm.deadline.start(LOAD_TIMEOUT));
         let entry = match load_file(&vm.lua, &dir, ENTRY) {
             Ok(Ok(entry)) => entry,
             Ok(Err(message)) => return Err(fail(message)),
@@ -292,12 +303,7 @@ impl Vm {
         Ok(vm)
     }
 
-    fn command(
-        &self,
-        command: &str,
-        text: &str,
-        notify: &dyn Fn(Option<Instant>),
-    ) -> Result<String, Error> {
+    fn command(&self, command: &str, text: &str, notify: Notify<'_>) -> Result<String, Error> {
         let fail = |e: mlua::Error| self.error(&e);
         let Some(spec) = self.commands.get::<Option<Table>>(command).map_err(fail)? else {
             return Err(Error::UnknownCommand {
@@ -307,7 +313,7 @@ impl Vm {
         };
         let timeout = Duration::from_millis(spec.get::<u64>("timeout").map_err(fail)?);
         let run = spec.get::<Function>("run").map_err(fail)?;
-        notify(self.deadline.start(timeout));
+        notify(self.deadline.start(timeout))?;
         self.resume(run, command, timeout, text)
     }
 
@@ -382,21 +388,20 @@ fn load_file(lua: &Lua, dir: &Path, file: &str) -> mlua::Result<Result<Function,
         }
         Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
     };
-    let too_big = |len: u64| usize::try_from(len).map_or(true, |len| len > MEMORY_CAP);
-    let source = match std::fs::metadata(&path) {
-        Ok(meta) if too_big(meta.len()) => {
-            return Ok(Err(format!(
-                "`{file}` is {} bytes, more than the extension's memory cap of {MEMORY_CAP}",
-                meta.len()
-            )));
-        }
-        Ok(_) => std::fs::read(&path),
-        Err(e) => Err(e),
-    };
-    let source = match source {
-        Ok(source) => source,
-        Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
-    };
+    let mut source = Vec::new();
+    // One byte past the cap tells a file at the cap from one over it. The
+    // bound is on the read itself, so a file that grows cannot pass it.
+    let limit = u64::try_from(MEMORY_CAP)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    if let Err(e) = File::open(&path).and_then(|f| f.take(limit).read_to_end(&mut source)) {
+        return Ok(Err(format!("`{file}`: {e}")));
+    }
+    if source.len() > MEMORY_CAP {
+        return Ok(Err(format!(
+            "`{file}` is larger than the extension's memory cap of {MEMORY_CAP} bytes"
+        )));
+    }
     let name = path
         .strip_prefix(dir)
         .unwrap_or(&path)
