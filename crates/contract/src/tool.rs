@@ -73,7 +73,7 @@ pub struct Bound {
 impl Bound {
     /// A tool's bound unless it declares its own: the first 16 KiB.
     pub const DEFAULT: Self = Self {
-        start: 16 * 1024,
+        start: 16_384,
         end: 0,
     };
 }
