@@ -114,13 +114,20 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let tools: Vec<Value> = tools
         .into_iter()
         .map(|tool| {
-            json!({
+            let mut definition = json!({
                 "type": "function",
                 "name": tool.name,
                 "description": tool.description,
                 "parameters": tool.input_schema,
                 "strict": strict::fits(&tool.input_schema),
-            })
+            });
+            // `docs/prompt-cache.md`, "Deferred tools".
+            if tool.deferred
+                && let Some(definition) = definition.as_object_mut()
+            {
+                definition.insert("defer_loading".into(), json!(true));
+            }
+            definition
         })
         .collect();
     let mut body = Map::new();
@@ -128,6 +135,9 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     body.insert("instructions".into(), json!(request.system_prompt));
     body.insert("input".into(), Value::Array(input(endpoint, request)));
     body.insert("tools".into(), Value::Array(tools));
+    body.insert("tool_choice".into(), json!(request.tool_choice));
+    // OpenAI offers one cache lifetime, so `cache_lifetime` is not sent, and
+    // its cache has no markers (`docs/prompt-cache.md`, "Cache lifetime").
     body.insert("stream".into(), json!(true));
     // Fiber keeps no state at the vendor, so it asks for the encrypted
     // reasoning to send back (`docs/loop.md`, "What the model is sent").

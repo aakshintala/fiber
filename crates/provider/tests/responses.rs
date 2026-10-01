@@ -21,7 +21,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contract::events::{ReasoningCompleted, TextDelta, ToolCallRequested};
+use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
     ToolDefinition,
@@ -68,6 +68,7 @@ fn weather_tool() -> ToolDefinition {
             "required": ["city"],
             "additionalProperties": false
         }),
+        deferred: false,
     }
 }
 
@@ -81,6 +82,7 @@ fn loose_tool() -> ToolDefinition {
             "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
             "required": ["a"]
         }),
+        deferred: false,
     }
 }
 
@@ -89,9 +91,12 @@ fn request() -> ModelRequest {
         system_prompt: "You are terse.".into(),
         tools: vec![weather_tool(), loose_tool()],
         effort: Some("low".into()),
+        tool_choice: "auto".into(),
+        cache_lifetime: CacheLifetime::OneHour,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
+        previous_end: None,
     }
 }
 
@@ -397,6 +402,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
     assert_eq!(body["instructions"], "You are terse.");
     assert_eq!(body["stream"], true);
     assert_eq!(body["reasoning"], json!({"effort": "low"}));
+    assert_eq!(body["tool_choice"], "auto");
     assert_eq!(
         body["input"],
         json!([{"role": "user", "content": "What is the weather in Paris? Use the tool."}])
@@ -425,6 +431,26 @@ fn strict_is_sent_per_tool_and_true_only_for_a_schema_in_the_strict_subset() {
              "parameters": weather_tool().input_schema, "strict": true},
         ])
     );
+}
+
+#[test]
+fn a_deferred_tool_is_declared_with_defer_loading() {
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let mut request = request();
+    request.tools[0].deferred = true;
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    let tools = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(tools[0].get("defer_loading"), None);
+    assert_eq!(tools[1]["name"], "get_weather");
+    assert_eq!(tools[1]["defer_loading"], true);
 }
 
 #[test]
