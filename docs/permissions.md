@@ -100,13 +100,17 @@ else, because a rule that can be widened by a later layer is not a deny.
 Three classes of call never reach a reviewer or a person:
 
 - every call whose only effect is `reads`, or that declares no effect,
-- a `writes` call whose paths all sit inside the **workspace**, and
+- a `writes` call whose paths all sit inside the **workspace**, none of them
+  under `.git/` or `.fiber/`, and
 - a web search, and a web fetch to a host known in the session
   (`docs/tools.md`, "Web fetch and web search"). A fetch to any other host
   is reviewed.
 
 Everything else — shell execution, other network calls, and any write outside the
-workspace — is reviewed. This is where nearly all of the cost is saved, and it
+workspace — is reviewed. A write under `.git/` or `.fiber/` is reviewed too: a hook or
+`.git/config` runs code on the next `git` command, which the reviewer judges
+as `git commit` without seeing the hook, and `.fiber/` holds the repository's
+configuration and MCP declarations. This is where nearly all of the cost is saved, and it
 is the line Claude Code draws: a fixed allowlist of state-free tools, plus
 "file writes and edits inside the project directory are allowed without a
 classifier call."
