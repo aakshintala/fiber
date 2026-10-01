@@ -25,8 +25,10 @@ use contract::{ActionId, ErrorCode, TurnId};
 use log::Log;
 
 mod conversation;
+mod process;
 
 pub use conversation::rebuild;
+pub use process::{fiber_exited, fiber_started};
 
 /// What stops the loop.
 #[derive(Debug, thiserror::Error)]
