@@ -300,7 +300,6 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::ToolCallRequested(_)
         | Event::PermissionRequested(_)
         | Event::PermissionResolved(_)
-        | Event::ModeChanged(_)
         | Event::InteractionRequested(_)
         | Event::InteractionResolved(_)
         | Event::QuotaNoticed(_)
@@ -315,6 +314,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::McpServerFailed(_)
         | Event::McpServerReady(_)
         | Event::Reloaded(_)
+        | Event::ExtensionsLoaded(_)
         | Event::ExtensionStateSet(_)
         | Event::ExtensionStateUnset(_)
         | Event::JobStarted(_)
@@ -326,6 +326,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         // Ephemeral: never written.
         Event::SteeringQueue(_)
         | Event::Clients(_)
+        | Event::SessionStatus(_)
         | Event::AssistantMessageDelta(_)
         | Event::ToolCallArgumentsDelta(_)
         | Event::ReasoningDelta(_)

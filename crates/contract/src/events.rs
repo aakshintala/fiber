@@ -14,10 +14,10 @@ use serde_json::{Map, Value};
 pub use action::{
     Answer, ArgumentRepair, AskStep, AssistantMessageCompleted, CallStatus, Control, DecidedBy,
     Decision, Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
-    InteractionResolved, MessageOutcome, ModeChanged, ModeChangedBy, PermissionRequested,
-    PermissionResolved, Progress, ReasoningCompleted, Repair, RepairFix, ResolvedBy, ReviewerRef,
-    RuleOffer, RuleScope, StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
-    ToolCallRequested, ToolCallStarted,
+    InteractionResolved, MessageOutcome, PermissionRequested, PermissionResolved, Progress,
+    ReasoningCompleted, Repair, RepairFix, ResolvedBy, ReviewerRef, RuleOffer, RuleScope,
+    StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested,
+    ToolCallStarted,
 };
 pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,
@@ -28,14 +28,15 @@ pub use context::{
 pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
     ExtensionExec, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset, ExtensionUi,
-    FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted, JobsPendingNotified,
-    McpServerFailed, McpServerReady, OnFork, ReloadFailure, Reloaded, ReloadedServers,
-    ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
+    ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted,
+    JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady, OnFork, ReloadFailure,
+    Reloaded, ReloadedServers, ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
 };
 pub use session::{
     Clients, ContextAdded, FiberExited, FiberStarted, FinalMessage, InputItem, NamedBy, Parent,
-    QueuedMessage, Rewind, Rewound, SessionNamed, SessionStarted, ShellCommand, SteeringApplied,
-    SteeringQueue, TurnCompleted, TurnOutcome, TurnStarted,
+    QueuedMessage, Rewind, Rewound, SessionNamed, SessionStarted, SessionState, SessionStatus,
+    ShellCommand, SteeringApplied, SteeringQueue, TurnCompleted, TurnOutcome, TurnStarted, Waiting,
+    WaitingKind,
 };
 
 use crate::Envelope;
@@ -121,6 +122,7 @@ kinds! {
     ShellCommand(ShellCommand) = "shell_command", Durable;
     SessionNamed(SessionNamed) = "session_named", Durable;
     Clients(Clients) = "clients", Ephemeral;
+    SessionStatus(SessionStatus) = "session_status", Ephemeral;
     ContextAdded(ContextAdded) = "context_added", Durable;
     AssistantMessageStarted(Empty) = "assistant_message_started", Durable;
     AssistantMessageDelta(TextDelta) = "assistant_message_delta", Ephemeral;
@@ -135,7 +137,6 @@ kinds! {
     ToolCallCompleted(ToolCallCompleted) = "tool_call_completed", Durable;
     PermissionRequested(PermissionRequested) = "permission_requested", Durable;
     PermissionResolved(PermissionResolved) = "permission_resolved", Durable;
-    ModeChanged(ModeChanged) = "mode_changed", Durable;
     InteractionRequested(InteractionRequested) = "interaction_requested", Durable;
     InteractionResolved(InteractionResolved) = "interaction_resolved", Durable;
     UsageRecorded(UsageRecorded) = "usage_recorded", Durable;
@@ -153,6 +154,7 @@ kinds! {
     McpServerFailed(McpServerFailed) = "mcp_server_failed", Durable;
     McpServerReady(McpServerReady) = "mcp_server_ready", Durable;
     Reloaded(Reloaded) = "reloaded", Durable;
+    ExtensionsLoaded(ExtensionsLoaded) = "extensions_loaded", Durable;
     ExtensionStateSet(ExtensionStateSet) = "extension_state_set", Durable;
     ExtensionStateUnset(ExtensionStateUnset) = "extension_state_unset", Durable;
     ExtensionUi(ExtensionUi) = "extension_ui", Ephemeral;

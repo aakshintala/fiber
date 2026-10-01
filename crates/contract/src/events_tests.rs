@@ -185,7 +185,7 @@ fn samples() -> Vec<(&'static str, Value)> {
     vec![
         (
             "fiber_started",
-            json!({"version": "0.0.1", "resumed": false, "mode": "auto"}),
+            json!({"version": "0.0.1", "resumed": false}),
         ),
         (
             "fiber_exited",
@@ -241,6 +241,34 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         ("session_named", json!({"name": null, "by": "person"})),
         ("clients", json!({"count": 1})),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "parent": "s0", "model": "p/m",
+            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+        ),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "streaming", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+        ),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "tool", "tool": "shell", "since": 1, "spend": usage,
+            "delegates": 1, "jobs": 0}),
+        ),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "retrying", "since": 1, "spend": usage, "delegates": 0, "jobs": 1}),
+        ),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "waiting",
+            "waiting": {"request_id": "r", "kind": "approval", "summary": "run npm"},
+            "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+        ),
         (
             "context_added",
             json!({"text": "t", "extension": "e", "hook": "turn_start"}),
@@ -319,22 +347,12 @@ fn samples() -> Vec<(&'static str, Value)> {
             "standing_rule": {"scope": "global", "prefix": "npm"}}),
         ),
         (
-            "permission_requested",
-            json!({"request_id": "r", "effects": ["network"], "reversible": false,
-            "step": "readonly"}),
-        ),
-        (
             "permission_resolved",
             json!({"request_id": "r", "decision": "allow",
             "decided_by": "reviewer", "reason": "r", "feedback": "f",
             "grant": {"tool": "shell", "prefix": "npm"},
             "rule": {"tool": "shell", "prefix": "npm"},
             "reviewer": {"model": "p/m", "stage": 2}}),
-        ),
-        (
-            "mode_changed",
-            json!({"before": "readonly", "after": "yolo", "by": "request",
-            "request_id": "r"}),
         ),
         (
             "interaction_requested",
@@ -383,7 +401,8 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "usage_recorded",
             json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
-            "web_searches": 1, "cost": 0.25, "subscription": true, "extension": "e"}),
+            "web_searches": 1, "cost": 0.25, "subscription": true, "extension": "e",
+            "origin_session_id": "s0"}),
         ),
         (
             "quota_noticed",
@@ -452,6 +471,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             "failed": [{"server": "m", "reason": "died", "error": error}]}),
         ),
         (
+            "extensions_loaded",
+            json!({"extensions": [{"name": "e", "version": "0.1.0"}]}),
+        ),
+        (
             "extension_state_set",
             json!({"extension": "e", "key": "k", "value": [1],
             "on_fork": "at_point"}),
@@ -479,7 +502,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "delegate_started",
             json!({"job_id": "j", "delegate_session_id": "s2",
-            "harness": "fiber", "model": "p/m", "mode": "readonly", "workspace": "/w",
+            "harness": "fiber", "model": "p/m", "workspace": "/w",
             "worktree": {"path": "/t", "branch": "b"},
             "forked_from": {"session_id": "s", "seq": 3}}),
         ),
@@ -597,9 +620,8 @@ fn a_permission_request_carries_only_the_keys_its_step_defines() {
             "standing_ask",
             vec![("standing_rule", &standing), ("rule", &rule)],
         ),
+        ("readonly", vec![]),
         ("readonly", vec![("standing_rule", &standing)]),
-        ("readonly", vec![("escalation", &escalation)]),
-        ("readonly", vec![("rule", &rule)]),
         ("review", vec![("standing_rule", &standing)]),
     ];
     for (step, keys) in invalid {

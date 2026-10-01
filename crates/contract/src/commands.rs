@@ -7,7 +7,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::events::Decision;
-use crate::shapes::{Mode, True};
+use crate::shapes::True;
 use crate::{CommandId, JobId, RequestId, Seq, SessionId};
 
 /// One command line: one JSON object on the driver channel.
@@ -20,16 +20,14 @@ pub struct CommandLine {
     /// The command, as `command` and its `args`.
     #[serde(flatten)]
     pub command: Command,
-    /// On `steer` and `reply`, the delegate the command is for; absent means
-    /// the session this client drives.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<SessionId>,
 }
 
 /// A driver command, keyed by `command`, with its keys under `args`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum Command {
+    /// The first command on every connection.
+    Subscribe(SubscribeArgs),
     /// Starts a turn.
     Prompt(ContentArgs),
     /// Sends a steering message.
@@ -54,8 +52,6 @@ pub enum Command {
     Tools,
     /// Switches model, effort or thinking at the next turn boundary.
     Model(ModelArgs),
-    /// Switches the permission mode at the next turn boundary.
-    Mode(ModeArgs),
     /// Sets the session's name.
     Name(Name),
     /// Starts a handoff.
@@ -246,12 +242,23 @@ pub struct ModelArgs {
     pub thinking: Option<String>,
 }
 
-/// The `args` of `mode`.
+/// How much of the stream a connection receives (`docs/invocation.md`,
+/// "Driver commands", `subscribe`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscribeLevel {
+    /// The latest `session_status` and `extensions_loaded` only.
+    Summary,
+    /// The session's whole stream, folded from the log first.
+    Full,
+}
+
+/// The `args` of `subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ModeArgs {
-    /// The permission mode.
-    pub mode: Mode,
+pub struct SubscribeArgs {
+    /// `summary` or `full`.
+    pub level: SubscribeLevel,
 }
 
 /// The `args` of `name`.

@@ -2,7 +2,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::shapes::{ContentPart, Failure, Mode, Point, Process, Question, Sender, Usage};
+use crate::shapes::{ContentPart, Failure, Point, Process, Question, Sender, Usage};
 use crate::{ActionId, CommandId, JobId, RequestId, Seq, SessionId};
 
 /// `fiber_started`: the first line a process writes for a session.
@@ -12,8 +12,6 @@ pub struct FiberStarted {
     pub version: String,
     /// `false` for a new session, `true` for a resumed one.
     pub resumed: bool,
-    /// The permission mode this process opened the session in.
-    pub mode: Mode,
 }
 
 /// `fiber_exited`: the last line a process writes for a session.
@@ -232,11 +230,80 @@ pub struct SessionNamed {
     pub by: NamedBy,
 }
 
-/// `clients`: written whenever a client attaches or leaves.
+/// `clients`: written whenever a `full` connection attaches or leaves.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Clients {
-    /// The clients attached, the receiving client included.
+    /// The `full` connections attached, the receiving client included.
     pub count: u32,
+}
+
+/// What the session is doing, keyed by `state`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum SessionState {
+    /// A model reply is streaming.
+    Streaming,
+    /// A tool is running.
+    Tool {
+        /// The running tool's name.
+        tool: String,
+    },
+    /// A model call is waiting to retry.
+    Retrying,
+    /// Waiting on a person.
+    Waiting {
+        /// The pending approval or question.
+        waiting: Waiting,
+    },
+    /// Nothing is in flight.
+    Idle,
+}
+
+/// What a session is waiting on a person for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitingKind {
+    /// A permission request.
+    Approval,
+    /// An `ask_user` question.
+    Question,
+}
+
+/// The pending approval or question `session_status` names when `state` is
+/// `waiting`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Waiting {
+    /// The request a `reply` would name.
+    pub request_id: RequestId,
+    /// What it is waiting for.
+    pub kind: WaitingKind,
+    /// One line.
+    pub summary: String,
+}
+
+/// `session_status`: the session's own summary of itself.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct SessionStatus {
+    /// The session's name, or its first prompt when it has none.
+    pub name: String,
+    /// The workspace path.
+    pub workspace: String,
+    /// On a delegate, the parent's `session_id`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent: Option<SessionId>,
+    /// The model reference in use.
+    pub model: String,
+    /// What the session is doing, with the keys that state carries.
+    #[serde(flatten)]
+    pub state: SessionState,
+    /// When this state began, as `ts`.
+    pub since: u64,
+    /// The session's spend so far, delegates included.
+    pub spend: Usage,
+    /// Delegates running.
+    pub delegates: u32,
+    /// Jobs running, delegates excluded.
+    pub jobs: u32,
 }
 
 /// `context_added`: text a hook added to the conversation.

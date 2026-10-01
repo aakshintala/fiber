@@ -6,7 +6,7 @@ use serde_json::Value;
 
 use super::action::Progress;
 use super::context::Outcome;
-use crate::shapes::{Failure, Mode, Point, Process, Question, Usage, Worktree};
+use crate::shapes::{Failure, Point, Process, Question, Usage, Worktree};
 use crate::{CommandId, ErrorCode, JobId, SessionId};
 
 /// Why an MCP server failed.
@@ -77,6 +77,22 @@ pub struct ReloadFailure {
     pub reason: ServerFailure,
     /// The error.
     pub error: Failure,
+}
+
+/// `extensions_loaded`: the full set of extensions the session loaded.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionsLoaded {
+    /// One object per loaded extension.
+    pub extensions: Vec<LoadedExtension>,
+}
+
+/// One extension `extensions_loaded` lists.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LoadedExtension {
+    /// The extension's name.
+    pub name: String,
+    /// Its version.
+    pub version: String,
 }
 
 /// What a fork gets of an extension state key (`docs/events.md`,
@@ -195,8 +211,6 @@ pub struct DelegateStarted {
     pub harness: String,
     /// The model reference, with any role resolved.
     pub model: String,
-    /// The permission mode it starts in.
-    pub mode: Mode,
     /// The delegate's workspace.
     pub workspace: String,
     /// When isolated.
