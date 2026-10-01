@@ -2,9 +2,12 @@
 //! (`docs/extensions.md`). It holds only what a data-only provider needs:
 //! installing from a local path, reading each installed provider's data
 //! through `config`, and choosing the session's model from them
-//! (`docs/model-routing.md`, "Naming a model" and "Choosing the model").
+//! (`docs/model-routing.md`, "Naming a model" and "Choosing the model"). It
+//! also hosts the Lua runtime a Lua extension runs in (`docs/extensions.md`,
+//! "Lua extensions").
 
 mod install;
+mod lua;
 mod providers;
 
 use std::io;
@@ -14,6 +17,7 @@ use config::ConfigError;
 use contract::ErrorCode;
 
 pub use install::install;
+pub use lua::{LuaExtension, MEMORY_CAP};
 pub use providers::{Model, Providers};
 
 /// The extension API's major version this Fiber speaks
@@ -102,6 +106,39 @@ pub enum Error {
         /// Each match, as `provider/model`.
         matches: Vec<String>,
     },
+    /// A Lua extension's code failed: a Lua error, its memory cap, or its
+    /// entry script. Lua starts the message with the file and line.
+    #[error("`{extension}`: {message}")]
+    Lua {
+        /// The extension.
+        extension: String,
+        /// Lua's message.
+        message: String,
+    },
+    /// A callback ran past the timeout it declared, and was stopped.
+    #[error("`{extension}`: `{callback}` passed its {timeout_ms} ms timeout and was stopped.")]
+    Timeout {
+        /// The extension.
+        extension: String,
+        /// The callback: a command's name, or the entry script.
+        callback: String,
+        /// The timeout it declared.
+        timeout_ms: u64,
+    },
+    /// A command the extension never registered.
+    #[error("`{extension}` has no command `{command}`.")]
+    UnknownCommand {
+        /// The extension.
+        extension: String,
+        /// The command asked for.
+        command: String,
+    },
+    /// The extension's thread is gone.
+    #[error("`{extension}` stopped.")]
+    Stopped {
+        /// The extension.
+        extension: String,
+    },
     /// Neither a resumed session nor configuration chose a model.
     #[error("No model was chosen. Pass `--model provider/model`, or set `model` in configuration.")]
     NoModel,
@@ -122,6 +159,10 @@ impl Error {
             // ponytail: docs/errors.md has no code for a model reference that
             // names no model or several; `no_model` stands in, its message
             // listing the matches, until the owner names one.
+            Self::Lua { .. } | Self::Timeout { .. } | Self::Stopped { .. } => {
+                ErrorCode::ExtensionFailed
+            }
+            Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. } | Self::Ambiguous { .. } | Self::NoModel => {
                 ErrorCode::NoModel
             }

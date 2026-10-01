@@ -15,6 +15,7 @@ ureq = { version = "3", default-features = false, features = ["rustls", "platfor
 proptest = "1"
 proc-macro2 = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
+mlua = { version = "0.12", features = ["lua54", "vendored"] }
 
 # The lints in docs/code-quality.md, "Lints". Every crate inherits them with
 # `lints.workspace = true`.
