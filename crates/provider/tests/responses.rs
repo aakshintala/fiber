@@ -542,7 +542,7 @@ fn a_stream_ending_response_failed_drops_what_it_streamed() {
     ))])
     .unwrap();
     let (result, deltas) = run(&Responses::new(endpoint(&server)).request(&request()));
-    let Err(CallError::Failed(failure)) = result else {
+    let Err(CallError::Failed { failure, .. }) = result else {
         panic!("{result:?}");
     };
     assert_eq!(failure.code, ErrorCode::ProviderUnavailable);
@@ -618,8 +618,11 @@ fn each_terminal_status_maps_as_the_docs_say_and_an_unknown_one_fails() {
         );
     }
     let (code, message) = error_code(end("cancelled", json!({})));
-    assert_eq!(code, ErrorCode::UnknownStopReason);
+    assert_eq!(code, ErrorCode::StreamIncomplete);
     assert!(message.contains("cancelled"), "{message}");
+    let (code, message) = error_code(end("paused", json!({})));
+    assert_eq!(code, ErrorCode::UnknownStopReason);
+    assert!(message.contains("paused"), "{message}");
     let (code, message) = error_code(end(
         "incomplete",
         json!({"incomplete_details": {"reason": "tea_break"}}),
@@ -634,17 +637,30 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
         Response::status(429, r#"{"error":{"message":"Slow down."}}"#).header("retry-after", "7"),
         Response::status(400, r#"{"detail":"Unsupported parameter: temperature"}"#),
         Response::status(401, "nope"),
-        Response::status(503, "{}"),
+        Response::status(503, "{}").header("x-should-retry", "false"),
     ])
     .unwrap();
     let responses = Responses::new(endpoint(&server));
     let mut failures = Vec::new();
+    let mut should_retry = Vec::new();
     for _ in 0..4 {
-        let Err(CallError::Failed(failure)) = run(&responses.request(&request())).0 else {
+        let Err(CallError::Failed {
+            failure,
+            should_retry: header,
+        }) = run(&responses.request(&request())).0
+        else {
             panic!("expected a failure");
         };
         failures.push(failure);
+        should_retry.push(header);
     }
+    assert_eq!(should_retry, [None, None, None, Some(false)]);
+    assert_eq!(failures[0].message, "opencode answered HTTP 429.");
+    assert_eq!(
+        failures[2].message,
+        "opencode rejected the credential (HTTP 401). Check the key it is configured \
+         with, or log in again with `fiber login opencode`."
+    );
     assert_eq!(failures[0].code, ErrorCode::RateLimited);
     assert_eq!(failures[0].retry_after, Some(7.0));
     assert_eq!(failures[0].provider.as_ref().unwrap().message, "Slow down.");
@@ -658,12 +674,34 @@ fn a_status_other_than_2xx_fails_with_its_code_and_the_providers_words() {
 }
 
 #[test]
-fn a_call_cancelled_before_it_runs_sends_nothing() {
-    let server = ProviderServer::start(std::iter::empty()).unwrap();
-    let call = Responses::new(endpoint(&server)).request(&request());
+fn a_call_cancelled_before_it_runs_returns_without_connecting() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let endpoint = Endpoint {
+        base_url: format!("http://{}", listener.local_addr().unwrap()),
+        ..Endpoint::default()
+    };
+    let call = Responses::new(endpoint).request(&request());
     call.cancel();
     assert_eq!(run(&call).0, Err(CallError::Cancelled));
-    assert!(server.requests().is_empty());
+    let accepted = listener.accept().map(|_| ()).unwrap_err();
+    assert_eq!(
+        accepted.kind(),
+        std::io::ErrorKind::WouldBlock,
+        "nothing connected"
+    );
+}
+
+#[test]
+fn a_policy_refusal_fails_the_call_as_refused() {
+    let refusal = json!({"type": "response.output_item.done", "item": {
+        "type": "message", "role": "assistant",
+        "content": [{"type": "refusal", "refusal": "I can't help with that."}]
+    }});
+    let (code, message) =
+        error_code(decoded(&stream(&[refusal, completed("completed", json!({}))])).0);
+    assert_eq!(code, ErrorCode::Refused);
+    assert!(message.contains("I can't help with that."), "{message}");
 }
 
 /// A server that answers one request with response headers and one text

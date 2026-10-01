@@ -89,7 +89,10 @@ impl ModelCall for Call {
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
         }
-        reply.map_err(|e| CallError::Failed(e.failure(&self.provider)))
+        reply.map_err(|e| CallError::Failed {
+            failure: e.failure(&self.provider),
+            should_retry: e.should_retry(),
+        })
     }
 
     fn cancel(&self) {
@@ -214,6 +217,8 @@ pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply
 #[derive(Default)]
 struct Decoder {
     text: String,
+    /// What the model said when it refused on policy grounds.
+    refusal: Option<String>,
     actions: Vec<ReplyAction>,
     /// Each tool call's index within the message and its name, by item id.
     calls: BTreeMap<String, (u32, Option<String>)>,
@@ -234,7 +239,7 @@ impl Decoder {
                     self.call(str_at(item, "id"), item.get("name").and_then(Value::as_str));
                 }
             }
-            "response.output_text.delta" | "response.refusal.delta" => {
+            "response.output_text.delta" => {
                 sink(Delta::Text(TextDelta {
                     text: text("delta"),
                 }));
@@ -295,9 +300,14 @@ impl Decoder {
                 .collect()
         };
         match str_at(item, "type") {
-            "message" => self
-                .text
-                .push_str(&texts("content", &["output_text", "refusal"]).concat()),
+            "message" => {
+                self.text
+                    .push_str(&texts("content", &["output_text"]).concat());
+                let refusal = texts("content", &["refusal"]);
+                if !refusal.is_empty() {
+                    self.refusal = Some(refusal.concat());
+                }
+            }
             "reasoning" => {
                 let mut parts = texts("summary", &["summary_text"]);
                 parts.extend(texts("content", &["reasoning_text"]));
@@ -364,8 +374,18 @@ impl Decoder {
                     "its terminal event's status is `{status}`"
                 )));
             }
+            // The provider cancelled the response itself, not Fiber: a
+            // failure inside a 200 stream that no other code matches.
+            "cancelled" => {
+                return Err(Error::StreamIncomplete(
+                    "the provider cancelled the response".into(),
+                ));
+            }
             other => return Err(Error::UnknownStopReason(other.to_owned())),
         };
+        if let Some(refusal) = self.refusal.take() {
+            return Err(Error::Refused(format!("the model refused: {refusal}")));
+        }
         Ok(Reply {
             text: std::mem::take(&mut self.text),
             actions: std::mem::take(&mut self.actions),

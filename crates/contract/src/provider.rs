@@ -148,7 +148,14 @@ pub enum Finish {
 pub enum CallError {
     /// It failed (`docs/errors.md`, "A failed model call"). Nothing it
     /// streamed is kept.
-    Failed(Failure),
+    Failed {
+        /// The failure, as the failed assistant message records it.
+        failure: Failure,
+        /// The response's `x-should-retry` header, which overrides whether
+        /// the code is retried (`docs/model-routing.md`, "When a model call
+        /// fails"); `None` when the response carried none.
+        should_retry: Option<bool>,
+    },
     /// [`ModelCall::cancel`] ended it.
     Cancelled,
 }

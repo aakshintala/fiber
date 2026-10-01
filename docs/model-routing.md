@@ -159,7 +159,9 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
 - No response carries a cost, and nothing marks a call as subscription. Go's
   spend shows only as quota (`docs/tools.md`, "Provider quota").
 - Requests carry `x-opencode-session` (`docs/prompt-cache.md`, "Cache
-  markers and keys"). Cloudflare answers 403 "error code: 1010" to Python's
+  markers and keys"). Go refuses a request without it: HTTP 400 "Request is
+  missing x-opencode-session and cannot be routed efficiently", measured on
+  October 1, 2026. Cloudflare answers 403 "error code: 1010" to Python's
   default `User-Agent`, so the probe sent its own.
 
 ## What a provider extension declares

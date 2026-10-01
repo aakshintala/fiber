@@ -5,14 +5,15 @@ use contract::ErrorCode;
 use contract::shapes::{Failure, ProviderFailure};
 use serde_json::Value;
 
-/// A failed model call.
+/// A failed model call. Each message is a phrase that follows the
+/// provider's name, as [`Error::failure`] writes it.
 #[derive(Debug, Clone, PartialEq, thiserror::Error)]
 pub enum Error {
     /// The connection could not be made, or dropped.
-    #[error("Fiber could not reach the provider: {0}")]
+    #[error("could not be reached: {0}.")]
     Connection(String),
     /// The provider answered with a status other than 2xx.
-    #[error("The provider answered HTTP {status}.")]
+    #[error("answered HTTP {status}.")]
     Status {
         /// The HTTP status.
         status: u16,
@@ -20,14 +21,16 @@ pub enum Error {
         body: String,
         /// The seconds a `retry-after` header asked Fiber to wait.
         retry_after: Option<f64>,
+        /// The `x-should-retry` header, when the response carried one.
+        should_retry: Option<bool>,
     },
     /// The stream ended before its terminal event, or carried something
     /// Fiber could not read.
-    #[error("The reply stream ended early: {0}.")]
+    #[error("sent a reply stream that ended early: {0}.")]
     StreamIncomplete(String),
     /// The stream ended with a failure the provider reported in it, such as
     /// `response.failed`.
-    #[error("The provider failed the reply.")]
+    #[error("failed the reply.")]
     ReplyFailed {
         /// The provider's own code for the failure, when it sent one.
         code: Option<String>,
@@ -35,10 +38,10 @@ pub enum Error {
         message: String,
     },
     /// A stop reason the protocol does not map.
-    #[error("The reply ended with a stop reason Fiber does not know: `{0}`.")]
+    #[error("ended the reply with a stop reason Fiber does not know: `{0}`.")]
     UnknownStopReason(String),
     /// The provider declined to answer on policy grounds.
-    #[error("The provider declined to answer: {0}.")]
+    #[error("declined to answer: {0}.")]
     Refused(String),
 }
 
@@ -55,13 +58,28 @@ impl Error {
         }
     }
 
+    /// The `x-should-retry` header of the response that failed, when it
+    /// carried one.
+    pub fn should_retry(&self) -> Option<bool> {
+        match self {
+            Self::Status { should_retry, .. } => *should_retry,
+            Self::Connection(_)
+            | Self::StreamIncomplete(_)
+            | Self::ReplyFailed { .. }
+            | Self::UnknownStopReason(_)
+            | Self::Refused(_) => None,
+        }
+    }
+
     /// The failure as a failed model call records it, naming `provider`.
     pub fn failure(&self, provider: &str) -> Failure {
+        let code = self.code();
         let (retry_after, said) = match self {
             Self::Status {
                 status,
                 body,
                 retry_after,
+                ..
             } => (*retry_after, Some((*status, body_message(body)))),
             Self::ReplyFailed { message, .. } => (None, Some((200, message.clone()))),
             Self::Connection(_)
@@ -69,9 +87,18 @@ impl Error {
             | Self::UnknownStopReason(_)
             | Self::Refused(_) => (None, None),
         };
+        let message =
+            if let (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) = (self, &code) {
+                format!(
+                    "{provider} rejected the credential (HTTP {status}). Check the key it is \
+                 configured with, or log in again with `fiber login {provider}`."
+                )
+            } else {
+                format!("{provider} {self}")
+            };
         Failure {
-            code: self.code(),
-            message: self.to_string(),
+            code,
+            message,
             retry_after,
             provider: said.map(|(status, message)| ProviderFailure {
                 name: provider.to_owned(),

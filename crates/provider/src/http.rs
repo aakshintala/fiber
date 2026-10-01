@@ -71,6 +71,10 @@ pub(crate) fn post(
     body: &[u8],
     cancel: &Arc<Cancel>,
 ) -> Result<impl Read + use<>, Error> {
+    // A call cancelled before it starts never resolves or connects.
+    if cancel.is_cancelled() {
+        return Err(Error::Connection("the call was cancelled".into()));
+    }
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build();
@@ -93,16 +97,21 @@ pub(crate) fn post(
         .map_err(|e| Error::Connection(e.to_string()))?;
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        let retry_after = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.trim().parse::<f64>().ok());
+        let header = |name: &str| {
+            response
+                .headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.trim().to_ascii_lowercase())
+        };
+        let retry_after = header("retry-after").and_then(|v| v.parse::<f64>().ok());
+        let should_retry = header("x-should-retry").and_then(|v| v.parse::<bool>().ok());
         let body = response.into_body().read_to_string().unwrap_or_default();
         return Err(Error::Status {
             status,
             body,
             retry_after,
+            should_retry,
         });
     }
     Ok(response.into_body().into_reader())

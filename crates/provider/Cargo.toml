@@ -11,7 +11,7 @@ publish.workspace = true
 contract = { path = "../contract" }
 serde_json.workspace = true
 thiserror.workspace = true
-ureq = { version = "3", default-features = false, features = ["rustls", "platform-verifier"] }
+ureq.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
