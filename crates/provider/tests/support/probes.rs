@@ -1,7 +1,7 @@
 //! Reads a probe recording from `research/*-probe/raw/` as the responses it
 //! holds. Shared by the provider tests and the `decode` jig.
 //!
-//! The probes saved their exchanges in four shapes:
+//! The probes saved their exchanges in five shapes:
 //!
 //! - a `.sse` file: the response stream's bytes
 //! - a wrapper with the stream's bytes in `raw_sse`, or in `body` beside a
@@ -11,6 +11,10 @@
 //! - a non-streamed response object in `response` (`openai-responses-probe`);
 //!   its stream is rebuilt as one `response.output_item.done` per output
 //!   item, then `response.completed`
+//! - a non-streamed Anthropic Message object in `body`, beside a `status`
+//!   (`anthropic-messages-probe`); its stream is rebuilt as one
+//!   `content_block_start` and `content_block_stop` per content block, then
+//!   `message_delta` and `message_stop`
 //!
 //! A file holds one wrapper or a list of them.
 
@@ -91,6 +95,13 @@ fn response(wrapper: &Value) -> Option<Recorded> {
             Recorded::Status(status, body)
         });
     }
+    if let Some(body @ Value::Object(_)) = wrapper.get("body") {
+        return Some(if status == 200 {
+            Recorded::Stream(anthropic_message_stream(body))
+        } else {
+            Recorded::Status(status, body.to_string().into_bytes())
+        });
+    }
     if let Some(Value::Array(events)) = wrapper.get("events") {
         let mut stream = String::new();
         for event in events {
@@ -115,4 +126,34 @@ fn response(wrapper: &Value) -> Option<Recorded> {
     let completed = json!({"type": "response.completed", "response": response});
     stream.push_str(&format!("data: {completed}\n\n"));
     Some(Recorded::Stream(stream.into_bytes()))
+}
+
+/// Rebuilds a non-streamed Anthropic Message object as the stream it would
+/// have sent: one `content_block_start`/`content_block_stop` pair per
+/// content block, each block seeded with its own full content, then
+/// `message_delta` and `message_stop`.
+fn anthropic_message_stream(message: &Value) -> Vec<u8> {
+    let mut stream = String::new();
+    let start = json!({"type": "message_start", "message": {"id": message.get("id")}});
+    stream.push_str(&format!("data: {start}\n\n"));
+    for (index, block) in message
+        .get("content")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        let open = json!({"type": "content_block_start", "index": index, "content_block": block});
+        stream.push_str(&format!("data: {open}\n\n"));
+        let close = json!({"type": "content_block_stop", "index": index});
+        stream.push_str(&format!("data: {close}\n\n"));
+    }
+    let delta = json!({
+        "type": "message_delta",
+        "delta": {"stop_reason": message.get("stop_reason")},
+        "usage": message.get("usage"),
+    });
+    stream.push_str(&format!("data: {delta}\n\n"));
+    stream.push_str("data: {\"type\": \"message_stop\"}\n\n");
+    stream.into_bytes()
 }

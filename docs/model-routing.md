@@ -106,6 +106,8 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
   `caller` returned 200. An invalid `caller` returned 400.
 - More than 4 `cache_control` blocks across `tools`, `system` and `messages`
   returned 400.
+- More than 20 tools with `strict: true` returned 400, "The maximum number of
+  strict tools supported is 20" (measured October 1, 2026).
 
 ### Google Generative AI wire facts
 
