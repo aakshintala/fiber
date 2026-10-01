@@ -2,9 +2,12 @@
 //! merges their layers and answers questions about the result
 //! (`docs/configuration.md`). It is the only crate that reads configuration
 //! files (`docs/architecture.md`, "The call rules"). It also finds Fiber home
-//! (`docs/state.md`, "Override") and keeps secrets in `credentials/`.
+//! (`docs/state.md`, "Override"), keeps secrets in `credentials/`, finds a
+//! provider's key, and reads an extension's manifest and provider data.
 
+mod credential;
 mod error;
+mod extension;
 mod home;
 mod keys;
 mod path;
@@ -21,6 +24,9 @@ use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use error::ConfigError;
+pub use extension::{
+    Cost, Manifest, ModelData, Protocol, ProviderData, read_manifest, read_providers,
+};
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use secret::{CredentialSource, Secret, read_secret, store_secret};
 pub use write::{Scope, remove_extension_settings, set_global};
