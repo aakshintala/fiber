@@ -40,6 +40,10 @@ pub enum Error {
     /// A stop reason the protocol does not map.
     #[error("ended the reply with a stop reason Fiber does not know: `{0}`.")]
     UnknownStopReason(String),
+    /// The model ran out of context window: Anthropic's
+    /// `model_context_window_exceeded` stop reason.
+    #[error("ran out of the model's context window: {0}.")]
+    ContextOverflow(String),
     /// The provider declined to answer on policy grounds.
     #[error("declined to answer: {0}.")]
     Refused(String),
@@ -54,6 +58,7 @@ impl Error {
             Self::StreamIncomplete(_) => ErrorCode::StreamIncomplete,
             Self::ReplyFailed { code, message } => reply_failed_code(code.as_deref(), message),
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
+            Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
         }
     }
@@ -67,6 +72,7 @@ impl Error {
             | Self::StreamIncomplete(_)
             | Self::ReplyFailed { .. }
             | Self::UnknownStopReason(_)
+            | Self::ContextOverflow(_)
             | Self::Refused(_) => None,
         }
     }
@@ -85,6 +91,7 @@ impl Error {
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
+            | Self::ContextOverflow(_)
             | Self::Refused(_) => (None, None),
         };
         let message =

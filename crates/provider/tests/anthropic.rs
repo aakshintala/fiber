@@ -14,6 +14,7 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -26,6 +27,7 @@ use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
     ToolDefinition,
 };
+use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, ProviderCallId};
 use fakes::{ProviderServer, Response};
 use provider::Endpoint;
@@ -147,7 +149,33 @@ struct Expected {
     text: String,
     calls: Vec<Value>,
     reasoning: usize,
-    usage: Value,
+}
+
+/// The usage a recording holds: a non-streamed body's `usage`, or for a
+/// real stream (`raw_sse`), the input counts and cache-write split from
+/// `message_start` and the output count from the last `message_delta`.
+fn recorded_usage(wrapper: &Value) -> Value {
+    if let Some(usage) = wrapper.pointer("/body/usage") {
+        return usage.clone();
+    }
+    let events: Vec<Value> = wrapper["raw_sse"]
+        .as_str()
+        .unwrap()
+        .lines()
+        .filter_map(|line| line.strip_prefix("data: "))
+        .map(|data| serde_json::from_str(data).unwrap())
+        .collect();
+    let start = events
+        .iter()
+        .find(|e| e["type"] == "message_start")
+        .unwrap();
+    let delta = events
+        .iter()
+        .rfind(|e| e["type"] == "message_delta")
+        .unwrap();
+    let mut usage = start["message"]["usage"].clone();
+    usage["output_tokens"] = delta["usage"]["output_tokens"].clone();
+    usage
 }
 
 fn expected(wrapper: &Value) -> Option<Expected> {
@@ -166,7 +194,6 @@ fn expected(wrapper: &Value) -> Option<Expected> {
             .cloned()
             .collect(),
         reasoning: content.iter().filter(|b| b["type"] == "thinking").count(),
-        usage: Value::Object(body.get("usage")?.as_object()?.clone()),
     })
 }
 
@@ -179,7 +206,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
         .collect();
     files.sort();
 
-    let (mut streams, mut checked, mut statuses) = (0, 0, 0);
+    let (mut streams, mut checked, mut statuses, mut usages) = (0, 0, 0, 0);
     for file in &files {
         for exchange in probes::read(file).unwrap() {
             let label = &exchange.label;
@@ -238,6 +265,29 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 }
             }
 
+            let usage = recorded_usage(&exchange.wrapper);
+            let count = |key: &str| usage[key].as_u64().unwrap();
+            let split = |key: &str| usage["cache_creation"][key].as_u64().unwrap();
+            let cache_write: BTreeMap<String, u64> = [
+                ("5m", split("ephemeral_5m_input_tokens")),
+                ("1h", split("ephemeral_1h_input_tokens")),
+            ]
+            .into_iter()
+            .filter(|(_, n)| *n > 0)
+            .map(|(k, n)| (k.to_owned(), n))
+            .collect();
+            assert_eq!(
+                reply.tokens,
+                Tokens {
+                    input: count("input_tokens"),
+                    cache_read: count("cache_read_input_tokens"),
+                    cache_write,
+                    output: count("output_tokens"),
+                },
+                "{label}"
+            );
+            usages += 1;
+
             let Some(want) = expected(&exchange.wrapper) else {
                 continue;
             };
@@ -254,26 +304,11 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 assert_eq!(&call.arguments, &item["input"], "{label}");
             }
             assert_eq!(reply.actions.len() - calls.len(), want.reasoning, "{label}");
-            assert_eq!(
-                reply.tokens.input,
-                want.usage["input_tokens"].as_u64().unwrap(),
-                "{label}"
-            );
-            assert_eq!(
-                reply.tokens.cache_read,
-                want.usage["cache_read_input_tokens"].as_u64().unwrap(),
-                "{label}"
-            );
-            assert_eq!(
-                reply.tokens.output,
-                want.usage["output_tokens"].as_u64().unwrap(),
-                "{label}"
-            );
         }
     }
-    // 26 streams (16 non-streamed Message bodies, 10 real SSE recordings)
-    // and 8 HTTP error statuses.
-    assert_eq!((streams, checked, statuses), (26, 16, 8));
+    // 26 streams (16 non-streamed Message bodies, 10 real SSE recordings),
+    // every one's usage checked, and 8 HTTP error statuses.
+    assert_eq!((streams, checked, usages, statuses), (26, 16, 26, 8));
 }
 
 #[test]
@@ -515,7 +550,13 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
     assert_eq!(
         body["tools"],
         json!([{"name": "get_weather", "description": "Weather for a city.",
-            "input_schema": weather_tool().input_schema}])
+            "input_schema": weather_tool().input_schema, "strict": true}])
+    );
+    let reordered = sent_body(&server, 2);
+    assert_eq!(reordered["tools"][0]["name"], "aaa_tool");
+    assert_eq!(
+        reordered["tools"][0]["strict"], false,
+        "its schema does not fit the strict subset"
     );
     assert_eq!(body.get("thinking"), None);
     assert_eq!(body.get("output_config"), None);
@@ -550,16 +591,50 @@ fn tool_choice_names_a_tool_outside_anthropics_own_values() {
 }
 
 #[test]
-fn extra_body_fields_come_from_model_data_only() {
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let declared = Endpoint {
-        extra_body: json!({"max_tokens": 1024}).as_object().unwrap().clone(),
+fn max_tokens_is_the_models_limit_and_never_exceeds_it() {
+    let server =
+        ProviderServer::start([completed_reply(), completed_reply(), completed_reply()]).unwrap();
+    let limited = |extra: Value| Endpoint {
+        max_output_tokens: Some(64_000),
+        extra_body: extra.as_object().unwrap().clone(),
         ..endpoint(&server)
     };
-    run(Box::new(Messages::new(declared).request(&request())))
+    for extra in [
+        json!({}),
+        json!({"max_tokens": 1024}),
+        json!({"max_tokens": 200_000}),
+    ] {
+        run(Box::new(Messages::new(limited(extra)).request(&request())))
+            .0
+            .unwrap();
+    }
+    let sent: Vec<Value> = (0..3)
+        .map(|n| sent_body(&server, n)["max_tokens"].clone())
+        .collect();
+    assert_eq!(sent, [json!(64_000), json!(1024), json!(64_000)]);
+}
+
+#[test]
+fn past_twenty_strict_tools_the_rest_are_sent_not_strict() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = (0..22)
+        .map(|i| ToolDefinition {
+            name: format!("tool_{i:02}"),
+            ..weather_tool()
+        })
+        .collect();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
         .0
         .unwrap();
-    assert_eq!(sent_body(&server, 0)["max_tokens"], 1024);
+    let strict: Vec<bool> = sent_body(&server, 0)["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["strict"].as_bool().unwrap())
+        .collect();
+    assert_eq!(strict.iter().filter(|s| **s).count(), 20);
+    assert_eq!(&strict[20..], [false, false]);
 }
 
 /// Four turns: user, assistant tool call, tool result, user. `previous_end`
@@ -647,10 +722,29 @@ fn no_request_carries_more_than_four_cache_markers() {
         previous_end: Some(2),
         ..request()
     };
-    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+    // Model data that marks five tools of its own.
+    let marked: Vec<Value> = (0..5)
+        .map(|i| {
+            json!({"name": format!("t{i}"), "input_schema": {"type": "object"},
+            "cache_control": {"type": "ephemeral"}})
+        })
+        .collect();
+    let declared = Endpoint {
+        extra_body: json!({"tools": marked}).as_object().unwrap().clone(),
+        ..endpoint(&server)
+    };
+    run(Box::new(Messages::new(declared).request(&request)))
         .0
         .unwrap();
-    assert!(count_markers(&sent_body(&server, 0)) <= 4);
+    let body = sent_body(&server, 0);
+    assert_eq!(count_markers(&body), 4);
+    // Fiber's three, in the order the doc lists, then the first tool's.
+    let marker = json!({"type": "ephemeral"});
+    assert_eq!(body["system"][0]["cache_control"], marker);
+    assert_eq!(body["messages"][1]["content"][0]["cache_control"], marker);
+    assert_eq!(body["messages"][2]["content"][1]["cache_control"], marker);
+    assert_eq!(body["tools"][0]["cache_control"], marker);
+    assert_eq!(body["tools"][1].get("cache_control"), None);
 }
 
 #[test]
@@ -809,6 +903,26 @@ fn each_stop_reason_maps_as_the_docs_say_and_an_unknown_one_fails() {
         assert_eq!(end(reason).unwrap().finish, Finish::Completed, "{reason}");
     }
     assert_eq!(end("max_tokens").unwrap().finish, Finish::OutputLimit);
+    assert_eq!(
+        error_code(end("model_context_window_exceeded")).0,
+        ErrorCode::ContextOverflow
+    );
+    let (code, message) = error_code(end("refusal"));
+    assert_eq!(code, ErrorCode::Refused);
+    assert!(message.contains("refusal"), "{message}");
+    let (code, message) = error_code(
+        decoded(&stream(&[
+            started(),
+            json!({"type": "message_delta", "delta": {"stop_reason": "refusal",
+                "stop_details": {"type": "refusal", "category": "cyber",
+                "explanation": "This looks like malware."}}}),
+            json!({"type": "message_stop"}),
+        ]))
+        .0,
+    );
+    assert_eq!(code, ErrorCode::Refused);
+    assert!(message.contains("This looks like malware."), "{message}");
+    // No doc says what Fiber does with a paused hosted-tool loop.
     let (code, message) = error_code(end("pause_turn"));
     assert_eq!(code, ErrorCode::UnknownStopReason);
     assert!(message.contains("pause_turn"), "{message}");
@@ -1016,5 +1130,68 @@ fn an_empty_reply_text_is_not_sent() {
         json!([{"role": "user", "content": [
             {"type": "text", "text": "What is the weather in Paris? Use the tool.",
              "cache_control": {"type": "ephemeral"}}]}])
+    );
+}
+
+#[test]
+fn redacted_thinking_is_kept_and_sent_back_unchanged() {
+    let redacted = json!({"type": "redacted_thinking", "data": "EmwKAhgBEgy3va3pzix"});
+    let (reply, deltas) = decoded(&stream(&[
+        started(),
+        json!({"type": "content_block_start", "index": 0, "content_block": redacted}),
+        stopped(0),
+        finished("end_turn")[0].clone(),
+        finished("end_turn")[1].clone(),
+    ]));
+    assert_eq!(deltas, []);
+    let reply = reply.unwrap();
+    assert_eq!(
+        reply.actions,
+        [ReplyAction::Reasoning(ReasoningCompleted {
+            text: String::new(),
+            provider_item: Some(redacted.clone()),
+        })]
+    );
+
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.conversation.extend([
+        Input::Reasoning {
+            model: "anthropic/claude-sonnet-5-5".into(),
+            text: String::new(),
+            provider_item: Some(redacted.clone()),
+        },
+        Input::Assistant {
+            text: "Done.".into(),
+        },
+    ]);
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["messages"][1]["content"][0], redacted);
+}
+
+#[test]
+fn cache_writes_are_split_by_lifetime_from_message_start() {
+    let (reply, _) = decoded(&stream(&[
+        json!({"type": "message_start", "message": {"id": "msg_1", "usage": {
+            "input_tokens": 3, "cache_creation_input_tokens": 1500,
+            "cache_read_input_tokens": 0,
+            "cache_creation": {"ephemeral_5m_input_tokens": 500,
+                "ephemeral_1h_input_tokens": 1000},
+            "output_tokens": 1}}}),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {
+            "input_tokens": 3, "cache_creation_input_tokens": 1500,
+            "cache_read_input_tokens": 0, "output_tokens": 9}}),
+        json!({"type": "message_stop"}),
+    ]));
+    assert_eq!(
+        reply.unwrap().tokens,
+        Tokens {
+            input: 3,
+            cache_read: 0,
+            cache_write: BTreeMap::from([("1h".into(), 1000), ("5m".into(), 500)]),
+            output: 9,
+        }
     );
 }

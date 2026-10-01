@@ -23,6 +23,10 @@
 //!
 //! A schema outside the rule may still be one OpenAI accepts in strict mode;
 //! it is sent with `strict: false`, which OpenAI accepts for any schema.
+//!
+//! `anthropic-messages` uses the same rule: Anthropic's strict subset is
+//! wider (optional properties, `anyOf`, `$ref`), so a schema that fits here
+//! fits there too.
 
 use std::collections::BTreeSet;
 

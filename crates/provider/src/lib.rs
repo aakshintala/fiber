@@ -34,6 +34,10 @@ pub struct Endpoint {
     pub headers: Vec<(String, String)>,
     /// The compatibility flags the protocol reads.
     pub compat: Compat,
+    /// The model's output token limit, `max_output_tokens` in its data. A
+    /// request's own limit never exceeds it (`docs/errors.md`, "Output
+    /// tokens"); `None` when the data declares none.
+    pub max_output_tokens: Option<u64>,
     /// Extra request body fields, added last.
     pub extra_body: Map<String, Value>,
 }

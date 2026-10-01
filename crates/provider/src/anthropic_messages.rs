@@ -20,7 +20,7 @@ use contract::{ActionId, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
 use crate::http::{self, Cancel};
-use crate::{Endpoint, Error};
+use crate::{Endpoint, Error, strict};
 
 /// The wire version every request declares (`research/anthropic-messages-probe`).
 const ANTHROPIC_VERSION: &str = "2023-06-01";
@@ -116,24 +116,32 @@ impl ModelCall for Call {
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
 ///
-/// ponytail: `max_tokens`, which Anthropic requires on every call, is sent
-/// only when `endpoint.extra_body` carries it. The seam has no per-model
-/// output-token limit yet (`docs/errors.md`, "Output tokens"); a provider
-/// package sets `max_tokens` in its model data until it does.
-///
 /// ponytail: deferred tools are sent in full; `defer_loading` needs tool
 /// search, which is not built yet (`crates/provider/src/openai_responses.rs`,
 /// same note; #326).
 fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let mut tools: Vec<_> = request.tools.iter().collect();
     tools.sort_by(|a, b| a.name.cmp(&b.name));
+    // `strict` per tool (`docs/model-routing.md`, "Protocols and
+    // providers"). Anthropic's strict subset is wider than OpenAI's (it
+    // takes optional properties, `anyOf` and `$ref`), so a schema that fits
+    // `strict::fits` fits Anthropic's too. Anthropic refuses a request with
+    // more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:
+    // "The maximum number of strict tools supported is 20"), so past 20 the
+    // rest are sent `strict: false`, in name order.
+    let mut strict_left = MAX_STRICT_TOOLS;
     let tools: Vec<Value> = tools
         .into_iter()
         .map(|tool| {
+            let strict = strict_left > 0 && strict::fits(&tool.input_schema);
+            if strict {
+                strict_left -= 1;
+            }
             json!({
                 "name": tool.name,
                 "description": tool.description,
                 "input_schema": tool.input_schema,
+                "strict": strict,
             })
         })
         .collect();
@@ -158,7 +166,73 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert("output_config".into(), json!({"effort": effort}));
     }
     body.extend(endpoint.extra_body.clone());
-    Value::Object(body).to_string().into_bytes()
+    // Anthropic requires `max_tokens`. It is the model's limit, or the
+    // model data's own `max_tokens` when that is lower (`docs/errors.md`,
+    // "Output tokens").
+    if let Some(limit) = endpoint.max_output_tokens {
+        let max = body
+            .get("max_tokens")
+            .and_then(Value::as_u64)
+            .map_or(limit, |n| n.min(limit));
+        body.insert("max_tokens".into(), json!(max));
+    }
+    let mut body = Value::Object(body);
+    cap_markers(&mut body);
+    body.to_string().into_bytes()
+}
+
+/// The most tools Anthropic takes with `strict: true` in one request.
+const MAX_STRICT_TOOLS: usize = 20;
+
+/// The most cache markers Anthropic takes in one request
+/// (`docs/prompt-cache.md`, "Cache markers and keys").
+const MAX_MARKERS: usize = 4;
+
+/// Removes cache markers past [`MAX_MARKERS`], counted across `tools`,
+/// `system` and `messages` after `extra_body` is merged. The ones kept are
+/// in the order `docs/prompt-cache.md` lists: the system prompt's, then the
+/// previous end's (any marker in `messages` before the last block), then
+/// the new end's, then any others (on tools); within one rank, the earlier
+/// in the body first.
+fn cap_markers(body: &mut Value) {
+    let blocks = |value: Option<&Value>| -> Vec<usize> {
+        value
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .enumerate()
+            .filter(|(_, block)| block.get("cache_control").is_some())
+            .map(|(i, _)| i)
+            .collect()
+    };
+    // (rank, JSON pointer) for every marker.
+    let mut found: Vec<(u8, String)> = Vec::new();
+    for i in blocks(body.get("system")) {
+        found.push((0, format!("/system/{i}")));
+    }
+    let messages = body.get("messages").and_then(Value::as_array);
+    let count = messages.map_or(0, Vec::len);
+    for (m, message) in messages.into_iter().flatten().enumerate() {
+        let content = message.get("content");
+        let last = content.and_then(Value::as_array).map_or(0, Vec::len);
+        for b in blocks(content) {
+            let rank = if m + 1 == count && b + 1 == last {
+                2
+            } else {
+                1
+            };
+            found.push((rank, format!("/messages/{m}/content/{b}")));
+        }
+    }
+    for i in blocks(body.get("tools")) {
+        found.push((3, format!("/tools/{i}")));
+    }
+    found.sort_by_key(|(rank, _)| *rank);
+    for (_, pointer) in found.iter().skip(MAX_MARKERS) {
+        if let Some(block) = body.pointer_mut(pointer).and_then(Value::as_object_mut) {
+            block.remove("cache_control");
+        }
+    }
 }
 
 /// `tool_choice` on the wire: `auto`, `none` and `any` are Anthropic's own
@@ -223,71 +297,43 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         })
         .collect();
 
-    // Each conversation index's block, as (message, index within that
-    // message's blocks), skipped where the input produced no block.
-    let mut groups: Vec<(&'static str, Vec<Value>)> = Vec::new();
+    // The messages, and each conversation index's block as (message, index
+    // within that message's blocks), `None` where the input produced none.
+    // An input with no block starts no message, so a turn that was all
+    // drops leaves the messages either side of it as one.
+    let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
     let mut positions: Vec<Option<(usize, usize)>> = Vec::with_capacity(request.conversation.len());
     for input in &request.conversation {
-        let next_role = role_of(input);
-        if groups.last().map(|(role, _)| *role) != Some(next_role) {
-            groups.push((next_role, Vec::new()));
+        let Some(block) = block_of(input, &reference, &call_ids) else {
+            positions.push(None);
+            continue;
+        };
+        let role = role_of(input);
+        match out.last_mut() {
+            Some((last, blocks)) if *last == role => blocks.push(block),
+            _ => out.push((role, vec![block])),
         }
-        let last = groups.len() - 1;
-        #[allow(clippy::indexing_slicing, reason = "just pushed, so it is in bounds")]
-        let group = &mut groups[last];
-        match block_of(input, &reference, &call_ids) {
-            Some(block) => {
-                let block_index = group.1.len();
-                group.1.push(block);
-                positions.push(Some((last, block_index)));
-            }
-            None => positions.push(None),
-        }
+        let message = out.len() - 1;
+        positions.push(out.last().map(|(_, blocks)| (message, blocks.len() - 1)));
     }
-
-    // Groups that produced no block (a turn that was all drops) are left
-    // out; `final_message` maps a surviving group to its position in `out`.
-    let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    let mut final_message: Vec<Option<usize>> = Vec::with_capacity(groups.len());
-    for group in groups {
-        if group.1.is_empty() {
-            final_message.push(None);
-        } else {
-            final_message.push(Some(out.len()));
-            out.push(group);
-        }
-    }
-    let position = |conversation_index: usize| {
-        positions
-            .get(conversation_index)
-            .copied()
-            .flatten()
-            .and_then(|(group, block)| {
-                final_message
-                    .get(group)
-                    .copied()
-                    .flatten()
-                    .map(|m| (m, block))
-            })
-    };
 
     if let Some(previous_end) = request.previous_end {
         // The last block the previous request ended on: the nearest input at
         // or before `previous_end` that produced one, since the boundary
         // itself may land on a drop.
-        if let Some((message, block)) = (0..previous_end).rev().find_map(position) {
+        if let Some((message, block)) = (0..previous_end)
+            .rev()
+            .find_map(|i| positions.get(i).copied().flatten())
+        {
             #[allow(
                 clippy::indexing_slicing,
-                reason = "position() only returns in-range indices"
+                reason = "positions holds only in-range indices"
             )]
             mark(&mut out[message].1[block], &request.cache_lifetime);
         }
     }
-    if let Some((role, blocks)) = out.last_mut() {
-        let _ = role;
-        if let Some(last) = blocks.last_mut() {
-            mark(last, &request.cache_lifetime);
-        }
+    if let Some(last) = out.last_mut().and_then(|(_, blocks)| blocks.last_mut()) {
+        mark(last, &request.cache_lifetime);
     }
 
     out.into_iter()
@@ -376,6 +422,8 @@ enum Block {
         name: String,
         arguments: String,
     },
+    /// Reasoning Anthropic encrypted whole, kept exactly as it arrived.
+    Redacted(Value),
     /// A block kind Fiber does not act on, such as a hosted tool's.
     Other,
 }
@@ -390,7 +438,9 @@ struct Decoder {
     /// Each tool-use block's position among tool calls, by its index.
     call_order: BTreeMap<u64, u32>,
     stop_reason: Option<String>,
-    usage: Value,
+    /// The explanation a `refusal` stop carried.
+    refusal: Option<String>,
+    usage: Map<String, Value>,
 }
 
 impl Decoder {
@@ -403,6 +453,9 @@ impl Decoder {
         match str_at(event, "type") {
             "message_start" => {
                 self.id = str_at(&event["message"], "id").to_owned();
+                if let Some(Value::Object(usage)) = event.pointer("/message/usage") {
+                    self.usage.clone_from(usage);
+                }
             }
             "content_block_start" => self.start(event),
             "content_block_delta" => self.delta(event, sink),
@@ -412,7 +465,16 @@ impl Decoder {
                     .pointer("/delta/stop_reason")
                     .and_then(Value::as_str)
                     .map(str::to_owned);
-                self.usage = event.get("usage").cloned().unwrap_or(Value::Null);
+                self.refusal = event
+                    .pointer("/delta/stop_details/explanation")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                // The final counts, laid over `message_start`'s: only
+                // `message_start` splits cache writes by lifetime
+                // (`research/anthropic-messages-probe`, every stream).
+                if let Some(Value::Object(last)) = event.get("usage") {
+                    self.usage.extend(last.clone());
+                }
             }
             "message_stop" => return self.finish().map(Some),
             "error" => {
@@ -462,6 +524,7 @@ impl Decoder {
                     arguments: input.map_or_else(String::new, Value::to_string),
                 }
             }
+            "redacted_thinking" => Block::Redacted(block.clone()),
             _ => Block::Other,
         };
         self.blocks.insert(index(event), block);
@@ -541,6 +604,13 @@ impl Decoder {
                     repair: None,
                 }));
             }
+            Some(Block::Redacted(item)) => {
+                self.actions
+                    .push(ReplyAction::Reasoning(ReasoningCompleted {
+                        text: String::new(),
+                        provider_item: Some(item),
+                    }));
+            }
             Some(Block::Other) | None => {}
         }
     }
@@ -550,6 +620,21 @@ impl Decoder {
         let finish = match self.stop_reason.as_deref() {
             Some("end_turn" | "tool_use" | "stop_sequence") => Finish::Completed,
             Some("max_tokens") => Finish::OutputLimit,
+            Some("refusal") => {
+                return Err(Error::Refused(
+                    self.refusal
+                        .take()
+                        .unwrap_or_else(|| "the model stopped with `refusal`".into()),
+                ));
+            }
+            Some("model_context_window_exceeded") => {
+                return Err(Error::ContextOverflow(
+                    "the reply reached the end of the model's context window".into(),
+                ));
+            }
+            // ponytail: `pause_turn` (a hosted tool's loop paused) stays
+            // unknown: no doc says what Fiber does with it, and Fiber sends
+            // no hosted tool yet.
             Some(other) => return Err(Error::UnknownStopReason(other.to_owned())),
             None => {
                 return Err(Error::StreamIncomplete(
@@ -562,24 +647,33 @@ impl Decoder {
             actions: std::mem::take(&mut self.actions),
             finish,
             generation_id: GenerationId(std::mem::take(&mut self.id)),
-            tokens: tokens(&self.usage),
+            tokens: tokens(&Value::Object(std::mem::take(&mut self.usage))),
         })
     }
 }
 
 /// `usage` as `tokens`. Anthropic reports `input_tokens` already excluding
-/// cache reads and writes, unlike `openai-responses` (`docs/events.md`).
+/// cache reads and writes, unlike `openai-responses` (`docs/events.md`), and
+/// splits writes by lifetime in `cache_creation`.
 ///
-/// ponytail: `cache_write` is always empty, as `openai-responses` left it
-/// (`crates/provider/src/openai_responses.rs`, "Not done here"); no probed
-/// recording wrote to the cache.
+/// ponytail: a usage with `cache_creation_input_tokens` but no
+/// `cache_creation` split (no probed endpoint sent one) reports no write;
+/// attribute it to the request's lifetime if such an endpoint turns up.
 fn tokens(usage: &Value) -> Tokens {
-    let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
+    let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
+    let cache_write = [
+        ("5m", "/cache_creation/ephemeral_5m_input_tokens"),
+        ("1h", "/cache_creation/ephemeral_1h_input_tokens"),
+    ]
+    .into_iter()
+    .map(|(lifetime, pointer)| (lifetime.to_owned(), count(pointer)))
+    .filter(|(_, n)| *n > 0)
+    .collect();
     Tokens {
-        input: count("input_tokens"),
-        cache_read: count("cache_read_input_tokens"),
-        cache_write: BTreeMap::new(),
-        output: count("output_tokens"),
+        input: count("/input_tokens"),
+        cache_read: count("/cache_read_input_tokens"),
+        cache_write,
+        output: count("/output_tokens"),
     }
 }
 
