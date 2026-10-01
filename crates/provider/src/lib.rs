@@ -64,9 +64,16 @@ pub struct Compat {
     /// `openai-completions`: the effort goes in `reasoning: {effort}`, as
     /// OpenRouter takes it, not in `reasoning_effort`.
     pub reasoning_object: bool,
-    /// `openai-completions`: the model takes Anthropic's `cache_control`
-    /// markers on content parts, as OpenRouter passes them to Anthropic.
-    pub cache_control: bool,
+    /// `openai-completions`: the model is Anthropic's, reached through a
+    /// gateway such as OpenRouter. It takes Anthropic's `cache_control`
+    /// markers on content parts, which OpenRouter passes through
+    /// (`research/openai-completions-probe`), and Anthropic's strict-tool
+    /// limits apply.
+    pub anthropic: bool,
+    /// `openai-completions`: the body field that also carries the cache key,
+    /// such as OpenRouter's `session_id` (`docs/prompt-cache.md`, "Cache
+    /// markers and keys").
+    pub cache_key_field: Option<String>,
 }
 
 impl Compat {
@@ -78,7 +85,11 @@ impl Compat {
             store: flag("store"),
             max_tokens: flag("max_tokens").unwrap_or(false),
             reasoning_object: flag("reasoning_object").unwrap_or(false),
-            cache_control: flag("cache_control").unwrap_or(false),
+            anthropic: flag("anthropic").unwrap_or(false),
+            cache_key_field: data
+                .get("cache_key_field")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
         }
     }
 }

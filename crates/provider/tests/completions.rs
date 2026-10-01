@@ -538,7 +538,7 @@ fn four_turn_conversation() -> Vec<Input> {
 fn markers() -> Endpoint {
     Endpoint {
         compat: Compat {
-            cache_control: true,
+            anthropic: true,
             ..Compat::default()
         },
         ..Endpoint::default()
@@ -1056,18 +1056,178 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
 #[test]
 fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
     let data = json!({"store": false, "max_tokens": true, "reasoning_object": "yes",
-        "cache_control": true});
+        "anthropic": true, "cache_key_field": "session_id"});
     assert_eq!(
         Compat::from_data(data.as_object().unwrap()),
         Compat {
             store: Some(false),
             max_tokens: true,
             reasoning_object: false,
-            cache_control: true,
+            anthropic: true,
+            cache_key_field: Some("session_id".into()),
         }
     );
     assert_eq!(
         Compat::from_data(&serde_json::Map::new()),
         Compat::default()
     );
+}
+
+#[test]
+fn a_schema_property_named_cache_control_is_not_a_marker() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let schema = json!({
+        "type": "object",
+        "properties": {"cache_control": {"type": "string"}},
+        "required": ["cache_control"],
+        "additionalProperties": false
+    });
+    let request = ModelRequest {
+        tools: vec![ToolDefinition {
+            input_schema: schema.clone(),
+            ..weather_tool()
+        }],
+        conversation: four_turn_conversation(),
+        previous_end: Some(3),
+        ..request()
+    };
+    // Model data that marks a tool of its own: with Fiber's three, four.
+    let declared = Endpoint {
+        base_url: endpoint(&server).base_url,
+        extra_body: json!({"tools": [{"type": "function", "cache_control": {"type": "ephemeral"},
+            "function": {"name": "t", "parameters": schema}}]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        ..markers()
+    };
+    send(declared, &request);
+    let body = sent_body(&server, 0);
+    assert_eq!(body["tools"][0]["function"]["parameters"], schema);
+    assert!(body["tools"][0].get("cache_control").is_some());
+}
+
+#[test]
+fn an_anthropic_model_gets_anthropics_strict_limits() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let mut tools: Vec<ToolDefinition> = (0..21)
+        .map(|i| ToolDefinition {
+            name: format!("tool_{i:02}"),
+            ..weather_tool()
+        })
+        .collect();
+    tools.push(ToolDefinition {
+        name: "a_enum".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"pick": {"type": "string", "enum": [["x"]]}},
+            "required": ["pick"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    });
+    let request = ModelRequest { tools, ..request() };
+    let strict = |n: usize| -> Vec<bool> {
+        sent_body(&server, n)["tools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|t| t["function"]["strict"].as_bool().unwrap())
+            .collect()
+    };
+    send(
+        Endpoint {
+            base_url: endpoint(&server).base_url,
+            ..markers()
+        },
+        &request,
+    );
+    send(endpoint(&server), &request);
+    let anthropic = strict(0);
+    assert!(!anthropic[0], "an enum with an array value");
+    assert_eq!(anthropic.iter().filter(|s| **s).count(), 20);
+    assert!(!anthropic[21]);
+    assert!(strict(1).iter().all(|s| *s), "OpenAI's own limits only");
+}
+
+#[test]
+fn reasoning_details_without_an_index_are_kept_as_they_came() {
+    let details = |entries: Value| chunk(json!({"reasoning_details": entries}), None);
+    let first = json!({"type": "reasoning.encrypted", "id": "r1", "data": "x"});
+    let second = json!({"type": "reasoning.encrypted", "id": "r2", "data": "y"});
+    let (reply, _) = decoded(&stream(&[
+        details(json!([first])),
+        details(json!([second])),
+        details(json!([{"type": "reasoning.text", "index": 0, "id": "a", "text": "p"}])),
+        details(json!([{"type": "reasoning.text", "index": 0, "id": "b", "text": "q"}])),
+        chunk(json!({}), Some("stop")),
+    ]));
+    let ReplyAction::Reasoning(reasoning) = &reply.unwrap().actions[0] else {
+        panic!("expected reasoning");
+    };
+    assert_eq!(
+        reasoning.provider_item,
+        Some(json!({"reasoning_details": [first, second,
+            {"type": "reasoning.text", "index": 0, "id": "a", "text": "p"},
+            {"type": "reasoning.text", "index": 0, "id": "b", "text": "q"}]}))
+    );
+}
+
+#[test]
+fn a_declared_cache_key_field_carries_the_cache_key() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    send(
+        Endpoint {
+            compat: Compat {
+                cache_key_field: Some("session_id".into()),
+                ..Compat::default()
+            },
+            ..endpoint(&server)
+        },
+        &request(),
+    );
+    send(endpoint(&server), &request());
+    let body = sent_body(&server, 0);
+    assert_eq!(body["session_id"], "s_root");
+    assert_eq!(body["prompt_cache_key"], "s_root");
+    assert_eq!(sent_body(&server, 1).get("session_id"), None);
+}
+
+#[test]
+fn a_cache_write_counts_under_the_lifetime_of_the_markers_sent() {
+    let written = || {
+        Response::stream(stream(&[
+            chunk(json!({"content": "hi"}), Some("stop")),
+            json!({"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 1,
+                "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 8}}}),
+        ]))
+    };
+    let server = ProviderServer::start([written(), written(), written()]).unwrap();
+    let hour = ModelRequest {
+        cache_lifetime: CacheLifetime::OneHour,
+        ..request()
+    };
+    let base_url = endpoint(&server).base_url;
+    // Fiber's own markers, at the request's lifetime.
+    let ours = Endpoint {
+        base_url: base_url.clone(),
+        ..markers()
+    };
+    // Only a marker model data supplied, with no `ttl`: Anthropic's default.
+    let theirs = Endpoint {
+        extra_body: json!({"tools": [{"type": "function", "function": {"name": "t"},
+            "cache_control": {"type": "ephemeral"}}]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        ..endpoint(&server)
+    };
+    let mut keys = Vec::new();
+    for endpoint in [ours, theirs, endpoint(&server)] {
+        let reply = run(Box::new(Completions::new(endpoint).request(&hour)))
+            .0
+            .unwrap();
+        keys.push(reply.tokens.cache_write.into_keys().collect::<Vec<_>>());
+    }
+    assert_eq!(keys, [["1h"], ["5m"], ["1h"]]);
 }

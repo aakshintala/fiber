@@ -19,6 +19,7 @@ use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
+use crate::anthropic_messages::{MAX_MARKERS, MAX_STRICT_TOOLS, cache_control, complex_enum};
 use crate::http::{self, Cancel};
 use crate::{Endpoint, Error, sse, strict};
 
@@ -50,15 +51,16 @@ impl Completions {
             headers.push(("authorization".to_owned(), format!("Bearer {key}")));
         }
         headers.extend(endpoint.headers.iter().cloned());
+        let (body, lifetime) = body(endpoint, request);
         Call {
             url: format!(
                 "{}/chat/completions",
                 endpoint.base_url.trim_end_matches('/')
             ),
             headers,
-            body: body(endpoint, request),
+            body,
             provider: endpoint.provider.clone(),
-            lifetime: request.cache_lifetime,
+            lifetime,
             cancel: Arc::default(),
         }
     }
@@ -77,8 +79,8 @@ pub struct Call {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     provider: String,
-    /// The request's cache lifetime, which a reported cache write is
-    /// counted under.
+    /// The lifetime a reported cache write is counted under (see
+    /// [`write_lifetime`]).
     lifetime: CacheLifetime,
     cancel: Arc<Cancel>,
 }
@@ -111,33 +113,44 @@ impl ModelCall for Call {
     }
 }
 
-/// The most cache markers Anthropic takes in one request
-/// (`docs/prompt-cache.md`, "Cache markers and keys").
-const MAX_MARKERS: usize = 4;
-
-/// The request body. Its objects serialise with their keys sorted, because
-/// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
-/// "Bytes").
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
+/// The request body, and the lifetime its cache writes are counted under.
+/// Its objects serialise with their keys sorted, because serde_json's
+/// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
+fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime) {
     let mut tools: Vec<_> = request.tools.iter().collect();
     tools.sort_by(|a, b| a.name.cmp(&b.name));
+    let compat = &endpoint.compat;
+    // `strict` per tool (`docs/model-routing.md`, "Protocols and
+    // providers"). For an Anthropic model, Anthropic's limits apply too: no
+    // enum with an object or array value, and at most 20 strict tools
+    // (platform.claude.com/docs/en/build-with-claude/structured-outputs,
+    // "JSON Schema limitations"; `anthropic_messages`). OpenRouter forwards
+    // `strict` to Anthropic when the `structured-outputs-2025-11-13` beta
+    // header is sent, and strips it otherwise
+    // (openrouter.ai/docs/guides/routing/provider-selection, "Anthropic beta
+    // features").
     // ponytail: deferred tools are sent in full until tool search is built
     // (docs/tools.md "Tool search"); see #326.
+    let mut strict_left = MAX_STRICT_TOOLS;
     let tools: Vec<Value> = tools
         .into_iter()
         .map(|tool| {
+            let mut strict = strict::fits(&tool.input_schema);
+            if compat.anthropic {
+                strict = strict && strict_left > 0 && !complex_enum(&tool.input_schema);
+                strict_left -= usize::from(strict);
+            }
             json!({
                 "type": "function",
                 "function": {
                     "name": tool.name,
                     "description": tool.description,
                     "parameters": tool.input_schema,
-                    "strict": strict::fits(&tool.input_schema),
+                    "strict": strict,
                 },
             })
         })
         .collect();
-    let compat = &endpoint.compat;
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));
     body.insert("messages".into(), Value::Array(messages(endpoint, request)));
@@ -145,6 +158,11 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // route the cache by this key (`docs/prompt-cache.md`, "Cache markers
     // and keys"; `research/prompt-cache/README.md`).
     body.insert("prompt_cache_key".into(), json!(request.cache_key));
+    // OpenRouter takes `session_id` as a top-level body field
+    // (openrouter.ai/docs/guides/best-practices/prompt-caching).
+    if let Some(field) = &compat.cache_key_field {
+        body.insert(field.clone(), json!(request.cache_key));
+    }
     // OpenAI sends no usage without it (`docs/model-routing.md`,
     // "openai-completions facts").
     body.insert("stream".into(), json!(true));
@@ -180,28 +198,71 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert(field.into(), json!(max));
     }
     let mut body = Value::Object(body);
-    cap_markers(&mut body, &mut 0);
-    body.to_string().into_bytes()
+    let markers = cap_markers(&mut body);
+    let lifetime = write_lifetime(&markers, request.cache_lifetime);
+    (body.to_string().into_bytes(), lifetime)
+}
+
+/// Where a cache marker may sit: on a message's content part (the system
+/// prompt's included), and on a tool, at its top level or inside
+/// `function`, as OpenRouter accepts (`research/openai-completions-probe`).
+/// A `cache_control` key anywhere else, such as a schema property, is not a
+/// marker.
+fn marker_places(body: &Value) -> Vec<String> {
+    let list = |key: &str| body.get(key).and_then(Value::as_array).map_or(0, Vec::len);
+    let mut places = Vec::new();
+    for m in 0..list("messages") {
+        let parts = body
+            .pointer(&format!("/messages/{m}/content"))
+            .and_then(Value::as_array)
+            .map_or(0, Vec::len);
+        places.extend((0..parts).map(|p| format!("/messages/{m}/content/{p}")));
+    }
+    for t in 0..list("tools") {
+        places.push(format!("/tools/{t}"));
+        places.push(format!("/tools/{t}/function"));
+    }
+    places
 }
 
 /// Removes cache markers past [`MAX_MARKERS`], counted in body order:
 /// `messages` (the system prompt's, the previous end's, the new end's, as
-/// `docs/prompt-cache.md` orders them), then any in `tools` that model data
-/// added.
-fn cap_markers(value: &mut Value, kept: &mut usize) {
-    match value {
-        Value::Object(map) => {
-            if map.contains_key("cache_control") {
-                if *kept < MAX_MARKERS {
-                    *kept += 1;
-                } else {
-                    map.remove("cache_control");
-                }
-            }
-            map.values_mut().for_each(|v| cap_markers(v, kept));
+/// `docs/prompt-cache.md` orders them), then any on `tools` that model data
+/// added. Returns the markers kept.
+fn cap_markers(body: &mut Value) -> Vec<Value> {
+    let mut kept = Vec::new();
+    for place in marker_places(body) {
+        let Some(holder) = body.pointer_mut(&place).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        let Some(marker) = holder.get("cache_control") else {
+            continue;
+        };
+        if kept.len() < MAX_MARKERS {
+            kept.push(marker.clone());
+        } else {
+            holder.remove("cache_control");
         }
-        Value::Array(items) => items.iter_mut().for_each(|v| cap_markers(v, kept)),
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {}
+    }
+    kept
+}
+
+/// The lifetime a reported cache write is counted under. The vendor reports
+/// one `cache_write_tokens` total, so it is the lifetime of the markers the
+/// request sent: `1h` for a marker with `ttl: "1h"`, and Anthropic's default
+/// of 5 minutes for one without, such as a marker model data supplied
+/// (openrouter.ai/docs/guides/best-practices/prompt-caching: "By default,
+/// the cache expires after 5 minutes"). A request with no markers counts
+/// any write under its own cache lifetime.
+///
+/// ponytail: a request with markers of both lifetimes counts the whole
+/// write under the first marker's; split it if a vendor reports the two
+/// apart.
+fn write_lifetime(markers: &[Value], requested: CacheLifetime) -> CacheLifetime {
+    match markers.first() {
+        Some(marker) if marker.get("ttl") == Some(&json!("1h")) => CacheLifetime::OneHour,
+        Some(_) => CacheLifetime::FiveMinutes,
+        None => requested,
     }
 }
 
@@ -218,7 +279,7 @@ fn tool_choice(choice: &str) -> Value {
 /// An assistant's reasoning, text and tool calls fold into one message; each
 /// tool result is a `tool` message of its own.
 ///
-/// With [`crate::Compat::cache_control`], it carries the markers Anthropic
+/// With [`crate::Compat::anthropic`], it carries the markers Anthropic
 /// takes (`docs/prompt-cache.md`, "Cache markers and keys"): the end of the
 /// system prompt, the point where the previous request ended, and the new
 /// end.
@@ -322,7 +383,7 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         }
     }
 
-    if endpoint.compat.cache_control {
+    if endpoint.compat.anthropic {
         // The message the previous request ended on.
         let previous_end = request
             .previous_end
@@ -377,11 +438,7 @@ fn mark(message: &mut Map<String, Value>, lifetime: &CacheLifetime) {
     let Some(Value::String(text)) = message.get("content") else {
         return;
     };
-    let marker = match lifetime {
-        CacheLifetime::FiveMinutes => json!({"type": "ephemeral"}),
-        CacheLifetime::OneHour => json!({"type": "ephemeral", "ttl": "1h"}),
-    };
-    let part = json!([{"type": "text", "text": text, "cache_control": marker}]);
+    let part = json!([{"type": "text", "text": text, "cache_control": cache_control(lifetime)}]);
     message.insert("content".into(), part);
 }
 
@@ -397,7 +454,7 @@ fn arguments_text(arguments: &Value) -> String {
 
 /// Reads a reply stream, passing each fragment to `sink` as it arrives, and
 /// returns the reply once `[DONE]` arrives. A cache write is counted under
-/// `lifetime`, the request's. A stream that fails keeps nothing it
+/// `lifetime`. A stream that fails keeps nothing it
 /// streamed, finished tool calls included.
 pub fn decode(
     stream: impl BufRead,
@@ -537,15 +594,24 @@ impl Decoder {
         }
     }
 
-    /// Merges one streamed `reasoning_details` entry into the one of the
-    /// same `index` and `type`: its text pieces appended, its other fields
-    /// set.
+    /// Merges one streamed `reasoning_details` entry into the earlier one of
+    /// the same `index` and `type`: its text pieces appended, its other
+    /// fields set.
     fn detail(&mut self, entry: &Value) {
         let Value::Object(entry) = entry else {
             return;
         };
+        // An entry continues an earlier one only by a shared `index`, and
+        // never across distinct ids; one without an index is kept as it
+        // came (openrouter.ai/docs/guides/best-practices/reasoning-tokens,
+        // "Preserving reasoning").
+        let index = entry.get("index").filter(|i| !i.is_null());
+        let id = entry.get("id").filter(|i| !i.is_null());
         let same = |kept: &Value| {
-            kept.get("index") == entry.get("index") && kept.get("type") == entry.get("type")
+            index.is_some()
+                && kept.get("index") == index
+                && kept.get("type") == entry.get("type")
+                && (id.is_none() || kept.get("id").is_none_or(|k| Some(k) == id))
         };
         let Some(Value::Object(kept)) = self.details.iter_mut().find(|k| same(k)) else {
             self.details.push(Value::Object(entry.clone()));
@@ -677,7 +743,7 @@ impl Decoder {
 /// (`cached_tokens`) and OpenRouter's cache writes (`cache_write_tokens`)
 /// inside `prompt_tokens`, and `tokens.input` excludes both
 /// (`docs/model-routing.md`, "openai-completions facts"). The vendor does
-/// not say which lifetime a write was, so it is the request's.
+/// not say which lifetime a write was, so the caller says ([`write_lifetime`]).
 fn tokens(usage: &Value, lifetime: &CacheLifetime) -> Tokens {
     let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
     let read = count("/prompt_tokens_details/cached_tokens");
