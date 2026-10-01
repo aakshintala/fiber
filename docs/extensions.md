@@ -723,6 +723,12 @@ Each first-party provider extension also has a short name, so
 short names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`,
 `opencode`, `databricks`, `muse`, `bedrock`, `vertex` and `azure`.
 
+The first-party provider extensions live in Fiber's own repository, one
+directory each under `providers/`, so `muse` is
+`github.com/aakshintala/fiber/providers/muse`. They are versioned by Fiber's
+release tags, and CI tests them against the binary built from the same
+commit.
+
 Fiber fetches with the system `git`, so your SSH keys and credential helpers
 apply. If `git` is missing, the command fails with a stable error.
 

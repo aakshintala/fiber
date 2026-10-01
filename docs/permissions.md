@@ -214,12 +214,14 @@ Two stages. The first asks for a single token: does this need thinking about.
 Only a call the first stage flags gets a second, reasoning pass. Most reviewed
 calls cost one token.
 
-The reviewer is its own configured model selection, defaulting to something
-small and fast. How a model is named and routed is
-[Provider and model routing](https://github.com/aakshintala/fiber/issues/12);
-this page only fixes that the reviewer is selected separately from the
-session's model, because a review on every effectful action at the session
-model's price and latency is a cost nobody chose.
+The reviewer's model is chosen separately from the session's, because a
+review on every effectful action at the session model's price and latency is a
+cost nobody chose. It is `reviewer.model` when set (`docs/configuration.md`).
+Otherwise it is the reviewer model the session's provider names in its data
+(`docs/model-routing.md`, "What a provider extension declares"). When neither
+names one, every reviewed call escalates as `reviewer_failed` with the error
+`no_model`, and a `notice` with code `no_model` says to set `reviewer.model`.
+Fiber never reviews with the session's own model.
 
 ### Its verdict
 

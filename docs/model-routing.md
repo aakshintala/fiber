@@ -147,6 +147,8 @@ Most of a provider is data. For the provider:
   `credential()` function that returns a token
 - headers sent on every request
 - a `sign()` function, if every request must carry a signature
+- `reviewer_model`, optional: one of its models, small and fast, that reviews
+  calls when `reviewer.model` is unset (`docs/permissions.md`, "How it runs")
 
 For each model:
 
