@@ -37,22 +37,18 @@ none has a path to state another does not.
 
 ## Getting a prompt in
 
-`ask` takes its prompt three ways, and supplying two is an error rather than a
-precedence rule, because ambiguous input is a caller bug worth surfacing:
+`ask` takes its prompt as an argument or on stdin, and supplying both is an
+error rather than a precedence rule, because ambiguous input is a caller bug
+worth surfacing:
 
 ```sh
 fiber ask "review the diff on this branch"
-cat brief.md | fiber ask
-fiber ask --prompt-file brief.md
+fiber ask < brief.md
 ```
 
-`--prompt-file` is not redundant with argv. Linux caps a single argument at
-`MAX_ARG_STRLEN`, 32 pages — 131072 bytes — independently of `ARG_MAX`, and
-premise 9 makes Linux the platform that carries the usage weight. macOS is far
-looser: a 1 MiB argument passes on Darwin 25.6.0, where `ARG_MAX` is 1048576.
-A brief that runs fine on a Mac can fail with `E2BIG` on the machine that
-matters, so the flag exists to take the size cliff off the table. The Linux
-figure is documented, not measured here.
+A large prompt goes on stdin. Linux caps a single argument at
+`MAX_ARG_STRLEN`, 131072 bytes, so a long brief passed as an argument can
+fail with `E2BIG` on Linux after working on macOS; stdin has no cap.
 
 `fiber ask` with no prompt and stdin on a terminal is a usage error, not a
 silent drop into the TUI.
