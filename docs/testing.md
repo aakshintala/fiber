@@ -109,13 +109,19 @@ tests come from two sources:
   keys by the `provider` crate's `record` jig ("Jigs") and checked in. They
   are replayed byte for byte against the provider crate's decoders. A recording keeps response bytes only,
   never request headers or keys. It is re-recorded when a vendor change is
-  suspected.
+  suspected. The probe recordings in `research/*-probe/raw/` are JSON
+  wrappers around an exchange, with the response stream in `raw_sse`; a test
+  that replays one serves that field's bytes.
 - **Scripted streams.** Hand-written in the real wire format, for scenarios a
   recording cannot produce on demand, such as a tool call, then a 429, then
   text. A local fake server serves them to the binary and to cross-crate tests.
+  A script is a list of responses, each a status, headers and body bytes,
+  served one per request in order.
 
-The fake server also records every request it receives, and tests assert on
-it: the path, the headers with credentials masked, and the body bytes. This is
+The fake server binds a free local port and returns its address, which a
+test puts in a provider definition's base URL. It also records every request
+it receives, and tests assert on it: the path, the headers with credentials
+masked, and the body bytes. This is
 how a test proves the prompt-cache rule that "two requests built from the same
 inputs are the same bytes" (`docs/prompt-cache.md`), across turns, resume and
 fork.
@@ -178,7 +184,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `config` | `resolve` | Prints the merged configuration for a Fiber home and project. |
 | `provider` | `decode` | Runs a recorded stream through one protocol's decoder and prints what it produced. |
 | `provider` | `record` | Captures a live response as a recorded stream, with live keys, response bytes only. |
-| `fakes` | `provider-server` | Serves a scripted or recorded stream on a local port and prints each request it receives. |
+| `fakes` | `provider-server` | Serves a scripted or recorded stream on a free local port, prints that address, then prints each request it receives. |
 | `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
 | `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |
 | `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |

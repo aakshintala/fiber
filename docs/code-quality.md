@@ -141,7 +141,9 @@ out of memory, or a full disk leaves no file.
 Each library crate has its own error enum, built with `thiserror`. A
 function that crosses a crate boundary returns that enum, never a
 type-erased error such as `Box<dyn Error>`. A bounded set of failures is
-named case by case rather than widened into one catch-all case.
+named case by case rather than widened into one catch-all case. A crate
+that no release binary contains, such as `fakes`, may return std errors
+instead of its own enum.
 
 The crate that defines an enum maps each case to a stable code, with no
 wildcard arm. The codes and the mapping rule are `docs/errors.md`.
