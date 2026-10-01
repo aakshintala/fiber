@@ -1,0 +1,40 @@
+{
+  "name": "muse",
+  "credential": {
+    "env": "META_API_KEY"
+  },
+  "models": [
+    {
+      "id": "muse-spark-1.3-contributor",
+      "protocol": "openai-responses",
+      "base_url": "https://api.meta.ai/v1",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.1,
+        "output": 0.2,
+        "cache_read": 0.002
+      }
+    },
+    {
+      "id": "muse-spark-1.3",
+      "protocol": "openai-responses",
+      "base_url": "https://api.meta.ai/v1",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 1.25,
+        "output": 4.25,
+        "cache_read": 0.15
+      }
+    }
+  ]
+}

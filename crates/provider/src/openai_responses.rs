@@ -23,12 +23,25 @@ use crate::{Endpoint, Error, sse, strict};
 #[derive(Debug, Clone)]
 pub struct Responses {
     endpoint: Endpoint,
+    cache_key_header: Option<String>,
 }
 
 impl Responses {
     /// The protocol for one model of one provider.
     pub fn new(endpoint: Endpoint) -> Self {
-        Self { endpoint }
+        Self {
+            endpoint,
+            cache_key_header: None,
+        }
+    }
+
+    /// Also sends each request's cache key in the header `name`, for a
+    /// provider that routes by it, such as OpenCode's `x-opencode-session`
+    /// (`docs/prompt-cache.md`, "Cache markers and keys").
+    #[must_use]
+    pub fn cache_key_header(mut self, name: impl Into<String>) -> Self {
+        self.cache_key_header = Some(name.into());
+        self
     }
 
     /// Builds the call for `request`. Two calls built from the same inputs
@@ -47,6 +60,9 @@ impl Responses {
             headers.push(("authorization".to_owned(), format!("Bearer {key}")));
         }
         headers.extend(endpoint.headers.iter().cloned());
+        if let Some(name) = &self.cache_key_header {
+            headers.push((name.clone(), request.cache_key.clone()));
+        }
         Call {
             url: format!("{}/responses", endpoint.base_url.trim_end_matches('/')),
             headers,
@@ -423,3 +439,7 @@ fn tokens(usage: &Value) -> Tokens {
 fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
 }
+
+#[cfg(test)]
+#[path = "openai_responses_tests.rs"]
+mod tests;
