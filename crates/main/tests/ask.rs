@@ -7,7 +7,8 @@
     clippy::expect_used,
     clippy::panic,
     clippy::indexing_slicing,
-    reason = "test helpers; a failure is the test's"
+    clippy::print_stderr,
+    reason = "test helpers; a failure is the test's; a live test prints its outcome"
 )]
 
 use std::ffi::OsStr;
@@ -79,20 +80,58 @@ impl Setup {
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
     /// `FIBER_HOME` set to `home`.
     fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> Run {
-        self.run(home, args, Stdio::piped(), stdin)
+        self.run(home, args, Stdio::piped(), stdin, &[])
+    }
+
+    /// Runs `fiber` with `args` and the extra environment `env`.
+    fn fiber_with_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
+        let home = self.home();
+        self.run(home.to_str().unwrap(), args, Stdio::piped(), None, env)
+    }
+
+    /// Copies the first-party package `providers/<name>` with every base
+    /// URL's origin `origin` replaced by `url`, and returns the copy.
+    fn package(&self, name: &str, origin: &str, url: &str) -> PathBuf {
+        let from = package(name);
+        let to = self.root.join(format!("pkg-{name}"));
+        for file in [
+            "extension.json".to_owned(),
+            format!("providers/{name}.json"),
+        ] {
+            let text = fs::read_to_string(from.join(&file)).unwrap();
+            fs::create_dir_all(to.join(&file).parent().unwrap()).unwrap();
+            fs::write(to.join(&file), text.replace(origin, url)).unwrap();
+        }
+        to
     }
 
     /// Runs `fiber` with `args` and its stdin on a pseudo-terminal.
     fn fiber_on_terminal(&self, args: &[&str]) -> Run {
+        self.fiber_typing(args, "")
+    }
+
+    /// Runs `fiber` with `args`, its stdin on a pseudo-terminal where
+    /// `typed` was already typed.
+    fn fiber_typing(&self, args: &[&str], typed: &str) -> Run {
         let terminal = Terminal::open();
+        fs::File::from(terminal.main.try_clone().unwrap())
+            .write_all(typed.as_bytes())
+            .unwrap();
         let home = self.home();
-        self.run(home.to_str().unwrap(), args, terminal.stdin(), None)
+        self.run(home.to_str().unwrap(), args, terminal.stdin(), None, &[])
     }
 
     /// Runs `fiber` in its own process group, waits for it under
     /// [`DEADLINE`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
-    fn run(&self, home: &str, args: &[&str], stdin: Stdio, text: Option<&str>) -> Run {
+    fn run(
+        &self,
+        home: &str,
+        args: &[&str],
+        stdin: Stdio,
+        text: Option<&str>,
+        env: &[(&str, &str)],
+    ) -> Run {
         let mut child = Command::new(env!("CARGO_BIN_EXE_fiber"))
             .args(args)
             .current_dir(self.root.join("w"))
@@ -101,6 +140,7 @@ impl Setup {
             .env("HOME", &self.root)
             .env("FIBER_HOME", home)
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .envs(env.iter().copied())
             .stdin(stdin)
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -169,7 +209,7 @@ fn group_alive(group: u32) -> bool {
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
 /// stays open while the run uses the terminal side.
 struct Terminal {
-    _main: OwnedFd,
+    main: OwnedFd,
     terminal: fs::File,
 }
 
@@ -185,10 +225,7 @@ impl Terminal {
             .write(true)
             .open(path)
             .unwrap();
-        Self {
-            _main: main,
-            terminal,
-        }
+        Self { main, terminal }
     }
 
     fn stdin(&self) -> Stdio {
@@ -278,6 +315,21 @@ fn hello() -> Response {
     Response::stream(body)
 }
 
+/// The event kinds of a turn answered by [`hello`].
+const HELLO_KINDS: [&str; 11] = [
+    "fiber_started",
+    "session_started",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 /// The text of the first message in the session's `turn_started`.
 fn turn_input(run: &Run) -> &str {
     let started = run
@@ -299,22 +351,7 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
     let run = setup.fiber(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(
-        run.kinds(),
-        [
-            "fiber_started",
-            "session_started",
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-            "fiber_exited",
-        ]
-    );
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(run.lines[0]["payload"]["resumed"], false);
     assert_eq!(turn_input(&run), "hi");
     let exited = &run.last()["payload"];
@@ -424,6 +461,18 @@ fn two_prompts_or_none_is_a_usage_error() {
     assert_pre_session(&setup.fiber(&["ask", "a", "b"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "--model", "x"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "--verbose"], None), 2, "usage");
+    assert_pre_session(
+        &setup.fiber(&["ask", "x", "fake/m", "hi"], None),
+        2,
+        "usage",
+    );
+    let run = setup.fiber(&["ask", "--model"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert!(
+        run.stderr.contains("`--model` takes a model"),
+        "{}",
+        run.stderr
+    );
     assert!(server.requests().is_empty());
     assert!(!setup.home().join("projects").exists());
 }
@@ -493,4 +542,294 @@ fn a_prompt_argument_with_stdin_on_a_terminal_runs_without_reading_it() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(turn_input(&run), "hi");
     assert_eq!(run.last()["payload"]["text"], "Hello.");
+}
+
+/// A first-party provider package in the repository's `providers/`.
+fn package(name: &str) -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../providers")
+        .join(name)
+}
+
+/// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
+/// recorded tool call, then the probe's answer after the tool result.
+fn go_exchange() -> [Response; 2] {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let call = root.join("crates/provider/tests/recordings/opencode-go-tool-call.sse");
+    let answer = root.join("research/opencode-probe/raw/go_stream_tools_1.sse");
+    [
+        Response::stream(fs::read(call).unwrap()),
+        Response::stream(fs::read(answer).unwrap()),
+    ]
+}
+
+/// Installs the package at `path` with `fiber install`, stdin not a
+/// terminal, so it does not ask.
+fn install(setup: &Setup, path: &Path) {
+    let run = setup.fiber(&["install", path.to_str().unwrap()], None);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.stderr.contains("Install it?"), "{}", run.stderr);
+}
+
+#[test]
+fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
+    let setup = Setup::new();
+    let opencode = package("opencode");
+    let path = opencode.to_str().unwrap();
+    let installed = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+
+    let declined = setup.fiber_typing(&["install", path], "n\n");
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(!installed.exists());
+
+    let run = setup.fiber_typing(&["install", path], "y\n");
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.stderr,
+        format!(
+            "Install github.com/aakshintala/fiber/providers/opencode from {path}\n\
+             Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
+             Install it? [y/N] fiber: installed github.com/aakshintala/fiber/providers/opencode\n"
+        )
+    );
+    assert!(installed.join("providers/opencode.json").is_file());
+}
+
+/// Asserts a completed turn that answered the weather question.
+fn assert_weather(run: &Run) {
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let step = [
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+    ];
+    let mut kinds = vec!["fiber_started", "session_started", "turn_started"];
+    kinds.extend(step);
+    kinds.extend([
+        "tool_call_arguments_delta",
+        "reasoning_started",
+        "reasoning_completed",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_completed",
+    ]);
+    kinds.extend(step);
+    kinds.extend(["assistant_message_delta"; 4]);
+    kinds.extend([
+        "reasoning_started",
+        "reasoning_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), kinds);
+    let call = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "tool_call_requested")
+        .unwrap();
+    assert_eq!(call["payload"]["name"], "get_weather");
+    assert_eq!(
+        run.last()["payload"]["text"],
+        "The weather in Paris is 18°C and clear."
+    );
+}
+
+#[test]
+fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
+    let setup = Setup::new();
+    let server = ProviderServer::start(go_exchange()).unwrap();
+    install(
+        &setup,
+        &setup.package("opencode", "https://opencode.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "opencode/muse-spark-1.3-contributor",
+            "What is the weather in Paris?",
+        ],
+        &[("OPENCODE_API_KEY", "sk-test")],
+    );
+
+    assert_weather(&run);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.path, "/zen/go/v1/responses");
+        assert_eq!(request.header("x-opencode-session"), Some(run.session_id()));
+        assert!(request.header("user-agent").unwrap().starts_with("fiber/"));
+    }
+}
+
+/// Meta's own `openai-responses` stream for `muse-spark-1.3-contributor`,
+/// rebuilt from the lines the probe kept: reasoning, then
+/// `response.incomplete` at the probe's 16-token cap, with no text.
+fn muse_recording() -> Response {
+    let file = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../research/provider-errors/raw/muse-responses.ok-stream.json");
+    let probe: Value = serde_json::from_slice(&fs::read(file).unwrap()).unwrap();
+    let body: String = probe["stream"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|line| format!("{}\n", line[1].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+#[test]
+fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([muse_recording()]).unwrap();
+    install(
+        &setup,
+        &setup.package("muse", "https://api.meta.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "muse/muse-spark-1.3-contributor", "hi"],
+        &[("META_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 0);
+    assert_eq!(exited["text"], "");
+    assert_eq!(exited["usage"]["tokens"]["input"], 10);
+    assert_eq!(exited["usage"]["tokens"]["output"], 16);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    assert_eq!(requests[0].header("x-opencode-session"), None);
+    assert!(
+        requests[0]
+            .header("user-agent")
+            .unwrap()
+            .starts_with("fiber/")
+    );
+}
+
+#[test]
+fn a_zen_model_is_sent_to_zens_url() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("opencode", "https://opencode.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "opencode/muse-spark-1.3", "hi"],
+        &[("OPENCODE_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests[0].path, "/zen/v1/responses");
+    assert_eq!(
+        requests[0].header("x-opencode-session"),
+        Some(run.session_id())
+    );
+}
+
+#[test]
+fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
+    let [opencode] = config::read_providers(&package("opencode"))
+        .unwrap()
+        .try_into()
+        .unwrap();
+    let go = "https://opencode.ai/zen/go/v1";
+    let zen = "https://opencode.ai/zen/v1";
+    let (mut go_ids, mut zen_ids) = (Vec::new(), Vec::new());
+    for model in &opencode.models {
+        let on_go = model.base_url == go;
+        assert!(on_go || model.base_url == zen, "{}", model.id);
+        assert_eq!(model.subscription, on_go, "{}", model.id);
+        assert!(model.cost.is_some(), "{} declares its prices", model.id);
+        assert_eq!(model.compat["cache_key_header"], "x-opencode-session");
+        if on_go { &mut go_ids } else { &mut zen_ids }.push(&model.id);
+    }
+    assert!(go_ids.contains(&&"muse-spark-1.3-contributor".to_owned()));
+    assert!(!zen_ids.is_empty());
+    assert!(
+        go_ids.iter().all(|id| !zen_ids.contains(id)),
+        "a model reference names one base URL"
+    );
+}
+
+#[test]
+fn install_takes_one_path() {
+    let setup = Setup::new();
+    for args in [&["install"][..], &["install", "a", "b"][..]] {
+        let run = setup.fiber(args, None);
+        assert_eq!(run.code, Some(2));
+        assert!(
+            run.stderr.contains("fiber install <path>"),
+            "{}",
+            run.stderr
+        );
+    }
+    let run = setup.fiber(&["install", "/nonexistent"], None);
+    assert_eq!(run.code, Some(1));
+    assert!(!setup.home().join("extensions").exists());
+}
+
+/// A live turn with `muse-spark-1.3-contributor`, opt in by naming the key
+/// file in `var` (`docs/testing.md`, "Live calls and evals"). Prints the
+/// event kinds and the final text.
+fn live(var: &str, package_name: &str, key_env: &str) {
+    let Some(key_file) = std::env::var_os(var) else {
+        return;
+    };
+    let key = fs::read_to_string(key_file).unwrap();
+    let setup = Setup::new();
+    install(&setup, &package(package_name));
+
+    let model = format!("{package_name}/muse-spark-1.3-contributor");
+    let run = setup.fiber_with_env(
+        &["ask", "--model", &model, "Reply with one short sentence."],
+        &[(key_env, key.trim())],
+    );
+
+    eprintln!("kinds: {:?}", run.kinds());
+    eprintln!("text: {}", run.last()["payload"]["text"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(!run.last()["payload"]["text"].as_str().unwrap().is_empty());
+}
+
+#[test]
+fn live_opencode_go_completes_one_turn() {
+    live(
+        "FIBER_LIVE_OPENCODE_KEY_FILE",
+        "opencode",
+        "OPENCODE_API_KEY",
+    );
+}
+
+#[test]
+fn live_muse_completes_one_turn() {
+    live("FIBER_LIVE_MUSE_KEY_FILE", "muse", "META_API_KEY");
 }
