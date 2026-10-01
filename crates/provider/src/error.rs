@@ -40,6 +40,10 @@ pub enum Error {
     /// A stop reason the protocol does not map.
     #[error("ended the reply with a stop reason Fiber does not know: `{0}`.")]
     UnknownStopReason(String),
+    /// The model ran out of context window: Anthropic's
+    /// `model_context_window_exceeded` stop reason.
+    #[error("ran out of the model's context window: {0}.")]
+    ContextOverflow(String),
     /// The provider declined to answer on policy grounds.
     #[error("declined to answer: {0}.")]
     Refused(String),
@@ -54,6 +58,7 @@ impl Error {
             Self::StreamIncomplete(_) => ErrorCode::StreamIncomplete,
             Self::ReplyFailed { code, message } => reply_failed_code(code.as_deref(), message),
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
+            Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
         }
     }
@@ -67,6 +72,7 @@ impl Error {
             | Self::StreamIncomplete(_)
             | Self::ReplyFailed { .. }
             | Self::UnknownStopReason(_)
+            | Self::ContextOverflow(_)
             | Self::Refused(_) => None,
         }
     }
@@ -85,6 +91,7 @@ impl Error {
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
+            | Self::ContextOverflow(_)
             | Self::Refused(_) => (None, None),
         };
         let message =
@@ -128,17 +135,20 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
 /// a model call fails").
 fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
     match code {
-        Some("rate_limit_exceeded") => ErrorCode::RateLimited,
-        Some("server_error") => ErrorCode::ProviderUnavailable,
+        Some("rate_limit_exceeded" | "rate_limit_error") => ErrorCode::RateLimited,
+        Some("server_error" | "overloaded_error" | "api_error") => ErrorCode::ProviderUnavailable,
         _ if overflow(code, message) => ErrorCode::ContextOverflow,
         _ => ErrorCode::StreamIncomplete,
     }
 }
 
-/// The one overflow shape seen on `openai-responses` (`docs/errors.md`,
-/// "Recognising a context overflow").
+/// The overflow shapes seen on `openai-responses` and documented for
+/// `anthropic-messages` (`docs/errors.md`, "Recognising a context
+/// overflow"). The Anthropic phrase is unprobed: no probed request
+/// overflowed the context window.
 fn overflow(code: Option<&str>, message: &str) -> bool {
-    code == Some("invalid_prompt") && message.contains("exceeds the context window")
+    (code == Some("invalid_prompt") && message.contains("exceeds the context window"))
+        || message.contains("prompt is too long")
 }
 
 /// The provider's own code in an error body: `error.code`.

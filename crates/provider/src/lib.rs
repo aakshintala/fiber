@@ -6,6 +6,7 @@
 //! A protocol is native Rust here; a provider is data an extension declares,
 //! which arrives as an [`Endpoint`].
 
+pub mod anthropic_messages;
 mod error;
 mod http;
 pub mod openai_responses;
@@ -33,6 +34,10 @@ pub struct Endpoint {
     pub headers: Vec<(String, String)>,
     /// The compatibility flags the protocol reads.
     pub compat: Compat,
+    /// The model's output token limit, `max_output_tokens` in its data. A
+    /// request's own limit never exceeds it (`docs/errors.md`, "Output
+    /// tokens"); `None` when the data declares none.
+    pub max_output_tokens: Option<u64>,
     /// Extra request body fields, added last.
     pub extra_body: Map<String, Value>,
 }
