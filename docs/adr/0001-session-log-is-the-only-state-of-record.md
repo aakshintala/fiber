@@ -35,3 +35,11 @@ is `docs/events.md`; the rationale and the rejected alternatives are on
 - Totals that used to be stored — tokens, cost, attempt counts, history length —
   are computed, so a late correction is a new event that the fold absorbs
   rather than a reconciliation pass over two stores.
+- A parent's log holds a copy of each `usage_recorded` its delegates sent it,
+  naming the delegate in `origin_session_id`. The copy is the parent's own
+  record of what its tree spent, not a second record of the delegate's call:
+  the delegate's log remains the authority for the delegate, and a fold counts
+  one line per `generation_id`, so the copies never double count
+  (`docs/events.md`, `usage_recorded`).
+- `recent.jsonl` and the MCP tool-list cache in Fiber home are rebuildable
+  derived indexes, explicitly not the truth (`docs/state.md`).
