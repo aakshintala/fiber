@@ -10,7 +10,7 @@ The contract is `docs/permissions.md`.
 
 ## Context
 
-In `auto` mode a model decides whether a tool call may run. Two questions had
+A model, the reviewer, decides whether a tool call may run. Two questions had
 to be answered together, because each constrains the other: what the model is
 told about the call, and how the call is described in the first place.
 
