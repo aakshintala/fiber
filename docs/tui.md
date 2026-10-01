@@ -850,7 +850,7 @@ and returns a rectangle for each region it shows. A region it leaves out is not
 shown. A layout does its own narrow layout and shedding. The "Fiber needs
 40×10" floor stays the terminal's.
 
-The three draw-only slots decide how an approval, a question form or an
+The three draw-only slots decide how an approval, a question form or a
 server approval looks, never what it sends. An extension may restyle and
 reorder their choices. It cannot add, remove or relabel one, and its key
 handler never sees their keys. The choices, their keys and the `reply` they
