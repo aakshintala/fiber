@@ -191,44 +191,35 @@ const MAX_MARKERS: usize = 4;
 /// Removes cache markers past [`MAX_MARKERS`], counted across `tools`,
 /// `system` and `messages` after `extra_body` is merged. The ones kept are
 /// in the order `docs/prompt-cache.md` lists: the system prompt's, then the
-/// previous end's (any marker in `messages` before the last block), then
-/// the new end's, then any others (on tools); within one rank, the earlier
-/// in the body first.
+/// previous end's, then the new end's (the last block of all), which is
+/// body order through `system` and then `messages`; markers on tools come
+/// last.
 fn cap_markers(body: &mut Value) {
-    let blocks = |value: Option<&Value>| -> Vec<usize> {
-        value
+    let mut found: Vec<String> = Vec::new();
+    let mut marked = |pointer: String, blocks: Option<&Value>| {
+        for (i, block) in blocks
             .and_then(Value::as_array)
             .into_iter()
             .flatten()
             .enumerate()
-            .filter(|(_, block)| block.get("cache_control").is_some())
-            .map(|(i, _)| i)
-            .collect()
-    };
-    // (rank, JSON pointer) for every marker.
-    let mut found: Vec<(u8, String)> = Vec::new();
-    for i in blocks(body.get("system")) {
-        found.push((0, format!("/system/{i}")));
-    }
-    let messages = body.get("messages").and_then(Value::as_array);
-    let count = messages.map_or(0, Vec::len);
-    for (m, message) in messages.into_iter().flatten().enumerate() {
-        let content = message.get("content");
-        let last = content.and_then(Value::as_array).map_or(0, Vec::len);
-        for b in blocks(content) {
-            let rank = if m + 1 == count && b + 1 == last {
-                2
-            } else {
-                1
-            };
-            found.push((rank, format!("/messages/{m}/content/{b}")));
+        {
+            if block.get("cache_control").is_some() {
+                found.push(format!("{pointer}/{i}"));
+            }
         }
+    };
+    marked("/system".into(), body.get("system"));
+    for (m, message) in body
+        .get("messages")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .enumerate()
+    {
+        marked(format!("/messages/{m}/content"), message.get("content"));
     }
-    for i in blocks(body.get("tools")) {
-        found.push((3, format!("/tools/{i}")));
-    }
-    found.sort_by_key(|(rank, _)| *rank);
-    for (_, pointer) in found.iter().skip(MAX_MARKERS) {
+    marked("/tools".into(), body.get("tools"));
+    for pointer in found.iter().skip(MAX_MARKERS) {
         if let Some(block) = body.pointer_mut(pointer).and_then(Value::as_object_mut) {
             block.remove("cache_control");
         }
