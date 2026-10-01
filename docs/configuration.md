@@ -55,7 +55,8 @@ Fiber home, not the repository, so it covers every worktree of the project
 gitignored file in the working tree, as Claude Code uses, would be missing from
 every new worktree.
 
-`-c` works on every entry point: the terminal, `fiber ask` and `fiber serve`.
+`-c` works on both doors: `fiber ask`, and the terminal, which passes it to
+each session it asks the hub to start.
 The key is a dotted path and the value is JSON, or a bare string when it does
 not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
@@ -79,9 +80,10 @@ this one:
 
 - A repository cannot declare a provider or change a base URL
   (`docs/model-routing.md`, "Choosing the model").
-- A repository can declare MCP servers and extensions, but they load only after
-  a person approves them (`docs/mcp.md`, "A repository's servers";
-  `docs/extensions.md`, "Extensions a repository brings").
+- A repository can declare MCP servers, which start only after a person
+  approves them (`docs/mcp.md`, "A repository's servers"). It cannot declare
+  or enable an extension (`docs/extensions.md`, "Extensions in a
+  repository").
 
 ## Keys
 
@@ -92,7 +94,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
-| `permissions.mode` | `auto` | no | The mode a new session starts in: `auto` or `yolo` (`docs/permissions.md`, "Modes"). |
+| `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | a small, fast model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
@@ -111,7 +113,7 @@ set the key.
 | `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
-| `extensions."<name>".version` | none | yes, with approval | Declares an extension for the repository, to be fetched (`docs/extensions.md`, "Extensions a repository brings"). |
+| `extensions."<name>".enabled` | true | no | Whether an installed extension loads; `false` globally and `true` in a project's file scopes it to that project (`docs/extensions.md`, "Extensions in a repository"). |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
 | `extensions."<name>".commands."<command>"` | none | yes | A new name for one of the extension's commands, when two extensions clash. |
 | `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |
@@ -166,7 +168,7 @@ lists:
 | `required` | whether failing to start ends the session, default false |
 | `startup_timeout_ms` | the startup deadline, default 5000 |
 | `timeout_ms` | the call timeout |
-| `eager` | whether its tools are declared in full, default false |
+| `declare_in_full` | whether its tools are declared in full rather than deferred, default false |
 | `tools.enabled`, `tools.disabled` | lists of tool names |
 | `tools."<tool>".hints` | overrides of that tool's MCP hints |
 

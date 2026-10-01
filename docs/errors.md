@@ -48,20 +48,21 @@ caller gets back").
 
 - **`fiber ask`** runs one turn. If the turn failed, `fiber_exited.error` copies
   the turn's error and the process exits 1.
-- **`fiber serve`** runs many turns, and a driver has seen each one's
-  `turn_completed`. A failed turn does not fail the process. `serve` exits 1
-  with an `error` only when the process itself failed.
+- **A session the hub started** runs many turns, and its clients have seen
+  each one's `turn_completed`. A failed turn does not fail the process. It
+  exits 1 with an `error` only when the process itself failed.
 - **A signal** exits 129, 130 or 143 with no `error`; the exit code says what
   happened (`docs/invocation.md`, "Shutdown").
 
 ### Before a session exists
 
-A failure before `fiber_started` has no session and no log. `fiber ask` and
-`fiber serve` still print one `fiber_exited` line on stdout, carrying the exit
+A failure before `fiber_started` has no session and no log. `fiber ask`
+still prints one `fiber_exited` line on stdout, carrying the exit
 code and `error`, and one sentence on stderr. The line has no `session_id`, so
 filtering stdout by session still gives each session's log byte for byte, and
-`fiber ask … | tail -1` reads the verdict whatever happened. The terminal door
-prints the sentence on stderr only.
+`fiber ask … | tail -1` reads the verdict whatever happened. A session the
+hub started writes the same line, and the hub passes it to the client that
+asked for the session.
 
 | Code | When | Exit |
 |---|---|---|
@@ -73,8 +74,7 @@ prints the sentence on stderr only.
 | `credential_missing` | the session model's credential cannot be found | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
-| `extension_missing` | the repository declares an extension that is not installed, or the session model's provider is not installed | 1 |
-| `extension_unapproved` | the repository brings an extension nobody approved | 1 |
+| `extension_missing` | the session model's provider is not installed | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
 | `mcp_server_unapproved` | the repository declares an MCP server nobody approved | 1 |
@@ -187,9 +187,8 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_missing` | exit | no credential was found for the session's model |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
-| `extension_missing` | exit | a declared extension, or the session model's provider, is not installed |
+| `extension_missing` | exit | the session model's provider is not installed |
 | `extension_required_failed` | exit | a required extension failed to start |
-| `extension_unapproved` | exit | a repository's extension is not approved |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
@@ -242,7 +241,7 @@ Notices, for a failure outside any action:
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
-Driver command rejections (`malformed`, `busy`, `stale_request`, `not_step_boundary`,
+Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
 `closing`)
 are `docs/invocation.md`, "Driver commands".

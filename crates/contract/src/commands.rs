@@ -4,15 +4,16 @@
 //! read, so an older Fiber says no to a newer client's key instead of ignoring
 //! it.
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use crate::events::Decision;
-use crate::shapes::{Mode, True};
+use crate::shapes::True;
 use crate::{CommandId, JobId, RequestId, Seq, SessionId};
 
 /// One command line: one JSON object on the driver channel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandLine {
     /// Minted by the client from random bytes. Acknowledgements and events
     /// name the command by it, as `command_id`.
@@ -20,16 +21,47 @@ pub struct CommandLine {
     /// The command, as `command` and its `args`.
     #[serde(flatten)]
     pub command: Command,
-    /// On `steer` and `reply`, the delegate the command is for; absent means
-    /// the session this client drives.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub session_id: Option<SessionId>,
+}
+
+impl<'de> Deserialize<'de> for CommandLine {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        if let Some(args) = value.get("args")
+            && args.is_object()
+            && contains_null(args)
+        {
+            return Err(D::Error::custom("an optional key is absent, never null"));
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Line {
+            id: CommandId,
+            #[serde(flatten)]
+            command: Command,
+        }
+        let line = Line::deserialize(value).map_err(D::Error::custom)?;
+        Ok(Self {
+            id: line.id,
+            command: line.command,
+        })
+    }
+}
+
+fn contains_null(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Array(items) => items.iter().any(contains_null),
+        Value::Object(map) => map.values().any(contains_null),
+        Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
 }
 
 /// A driver command, keyed by `command`, with its keys under `args`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "command", content = "args", rename_all = "snake_case")]
 pub enum Command {
+    /// The first command on every connection.
+    Subscribe(SubscribeArgs),
     /// Starts a turn.
     Prompt(ContentArgs),
     /// Sends a steering message.
@@ -52,10 +84,10 @@ pub enum Command {
     Reload,
     /// Answers with every declared tool.
     Tools,
+    /// Answers with durable log lines in a seq range.
+    History(HistoryArgs),
     /// Switches model, effort or thinking at the next turn boundary.
     Model(ModelArgs),
-    /// Switches the permission mode at the next turn boundary.
-    Mode(ModeArgs),
     /// Sets the session's name.
     Name(Name),
     /// Starts a handoff.
@@ -232,6 +264,17 @@ pub struct JobStop {
     pub job_id: JobId,
 }
 
+/// The `args` of `history`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryArgs {
+    /// The first `seq` to return, inclusive.
+    pub from_seq: Seq,
+    /// The last `seq` to return, inclusive; absent means the latest line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_seq: Option<Seq>,
+}
+
 /// The `args` of `model`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -246,12 +289,23 @@ pub struct ModelArgs {
     pub thinking: Option<String>,
 }
 
-/// The `args` of `mode`.
+/// How much of the stream a connection receives (`docs/invocation.md`,
+/// "Driver commands", `subscribe`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SubscribeLevel {
+    /// The latest `session_status` and `extensions_loaded` only.
+    Summary,
+    /// The session's whole stream, folded from the log first.
+    Full,
+}
+
+/// The `args` of `subscribe`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct ModeArgs {
-    /// The permission mode.
-    pub mode: Mode,
+pub struct SubscribeArgs {
+    /// `summary` or `full`.
+    pub level: SubscribeLevel,
 }
 
 /// The `args` of `name`.

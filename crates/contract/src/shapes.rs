@@ -188,18 +188,6 @@ pub struct Sender {
     pub command_id: CommandId,
 }
 
-/// A permission mode (`docs/permissions.md`, "Modes").
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    /// `auto`.
-    Auto,
-    /// `readonly`.
-    Readonly,
-    /// `yolo`.
-    Yolo,
-}
-
 /// A point in a session's log that a fork or a rewind continues from.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Point {

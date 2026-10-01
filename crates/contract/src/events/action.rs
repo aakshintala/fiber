@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::shapes::{Choice, ContentPart, DeclaredEffects, Failure, Mode, Process, Question, True};
+use crate::shapes::{Choice, ContentPart, DeclaredEffects, Failure, Process, Question, True};
 use crate::{ActionId, ProviderCallId, RequestId};
 
 /// Text added since the last delta, on `assistant_message_delta` and
@@ -244,9 +244,7 @@ pub enum AskStep {
         /// The rule that asked.
         standing_rule: StandingRule,
     },
-    /// Step 4, `readonly`.
-    Readonly,
-    /// Step 9, review.
+    /// Step 7, review.
     Review {
         /// In `auto`, why the reviewer handed the call to a person.
         #[serde(skip_serializing_if = "Option::is_none")]
@@ -263,7 +261,6 @@ pub enum AskStep {
 #[serde(rename_all = "snake_case")]
 enum StepName {
     StandingAsk,
-    Readonly,
     Review,
 }
 
@@ -353,7 +350,6 @@ impl TryFrom<PermissionRequestedLine> for PermissionRequested {
             (StepName::StandingAsk, Some(standing_rule), None, None) => {
                 AskStep::StandingAsk { standing_rule }
             }
-            (StepName::Readonly, None, None, None) => AskStep::Readonly,
             (StepName::Review, None, escalation, rule) => AskStep::Review { escalation, rule },
             _ => return Err("a permission request carries only the keys its step defines"),
         };
@@ -389,8 +385,6 @@ pub enum DecidedBy {
     SessionGrant,
     /// The reviewer.
     Reviewer,
-    /// The permission mode.
-    Mode,
     /// The turn was cancelled while the request was pending.
     Cancel,
 }
@@ -440,32 +434,6 @@ pub struct PermissionResolved {
     /// When `decided_by` is `reviewer`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reviewer: Option<ReviewerRef>,
-}
-
-/// What changed a permission mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ModeChangedBy {
-    /// The `mode` command.
-    Command,
-    /// A yes to leaving `readonly`.
-    Request,
-    /// The parent session's change.
-    Parent,
-}
-
-/// `mode_changed`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ModeChanged {
-    /// The mode before.
-    pub before: Mode,
-    /// The mode after.
-    pub after: Mode,
-    /// What changed it.
-    pub by: ModeChangedBy,
-    /// With `by` `request`, the question answered.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub request_id: Option<RequestId>,
 }
 
 /// What an interaction asks, keyed by `kind`, with the keys that kind

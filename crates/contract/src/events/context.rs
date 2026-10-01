@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::shapes::{Failure, Tokens};
-use crate::{ActionId, ErrorCode, GenerationId};
+use crate::{ActionId, ErrorCode, GenerationId, SessionId};
 
 /// `usage_recorded`: one per model call, whatever started it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -31,6 +31,9 @@ pub struct UsageRecorded {
     /// The extension whose `host.model` made the call.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
+    /// On a copy, the session whose call it was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub origin_session_id: Option<SessionId>,
 }
 
 /// `quota_noticed`.

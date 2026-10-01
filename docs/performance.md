@@ -11,10 +11,12 @@ is `docs/dependencies.md`, "Measuring memory".
 
 ## What a budget covers
 
-A budget covers one process: a session (`fiber serve`) or the terminal. MCP
-servers, process extensions, shell commands, delegates and image children
-are processes of their own and are not counted. A delegate is a `fiber serve`
-and holds the same budgets as any session. The image child's memory is its
+A budget covers one process: a session or the terminal. MCP servers,
+process extensions, shell commands, delegates, image children and the hub
+are processes of their own and are not counted. A delegate is a session
+process and holds the same budgets as any session. The hub's own budgets,
+idle memory, idle CPU, threads and time to first response with N sessions,
+are not set yet ([Control center](https://github.com/aakshintala/fiber/issues/256)). The image child's memory is its
 own process's, not the session's. Peak over an empty program is 68,076 KiB
 on Linux x86_64, 67,604 KiB on Linux arm64 and 72,352 KiB on macOS arm64;
 an 81-megapixel PNG, which the 50-megapixel cap refuses, peaks at 308,372 KiB
@@ -42,7 +44,7 @@ a 20-thousand-token one fit the same ceiling.
 | Threads, idle headless session | 3, plus one per Lua extension in use | Linux x86_64 | exact |
 | fsyncs | 2 per model request, 2 per tool call | Linux x86_64 | exact |
 | Log bytes, 429-call turn | the turn's content plus 1 KiB per tool call | Linux x86_64 | exact |
-| `fiber serve` to its first line | 20 ms | Linux x86_64 | picked |
+| Session start, the internal session command to its first line, no hub | 20 ms | Linux x86_64 | picked |
 | Terminal to its first frame, new session | 50 ms | Linux x86_64 | picked |
 | Terminal to its first frame, attaching | 50 ms plus 10 ms per MiB of session log | Linux x86_64 | picked |
 | Listing 1,000 sessions in one project, warm cache | 50 ms | Linux x86_64 | picked |
@@ -59,7 +61,8 @@ Basis says where a number came from:
   300,000-token context is about 1.2 MB of text, and a 2 MiB conversation
   added about 3 MiB in `research/delegate-memory/`.
 - **Exact** follows from a rule, so the gate checks an equality, not a
-  ceiling. The three threads are the loop, signals and client zero
+  ceiling. The three threads are the loop, signals and one client:
+  the hub's connection, or `fiber ask`'s stdout
   (`docs/architecture.md`, "The threads"). Two fsyncs bracket each effect, and
   no line restates an earlier line in the same turn (`docs/events.md`,
   "Writing").

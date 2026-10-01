@@ -440,21 +440,21 @@ fn config_debug_shows_no_run_flag_value() {
 }
 
 #[test]
-fn every_session_starts_in_auto_mode_unless_configured() {
+fn a_session_exits_after_thirty_idle_minutes_unless_configured() {
     let setup = Setup::new();
     assert_eq!(
-        setup.load(&[]).unwrap().get("permissions.mode", None),
-        Some((json!("auto"), Source::Default))
+        setup.load(&[]).unwrap().get("session.idle_exit_ms", None),
+        Some((json!(1_800_000), Source::Default))
     );
-    setup.write(&setup.global(), r#"{"permissions": {"mode": "yolo"}}"#);
+    setup.write(&setup.global(), r#"{"session": {"idle_exit_ms": 60000}}"#);
     assert_eq!(
         setup
             .load(&[])
             .unwrap()
-            .get("permissions.mode", None)
+            .get("session.idle_exit_ms", None)
             .unwrap()
             .0,
-        json!("yolo")
+        json!(60000)
     );
 }
 

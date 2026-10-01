@@ -56,12 +56,10 @@ codes! {
     DepthExceeded,
     /// An extension failed to start or missed its deadline.
     ExtensionFailed,
-    /// A declared extension, or the session model's provider, is not installed.
+    /// The session model's provider is not installed.
     ExtensionMissing,
     /// A required extension failed to start.
     ExtensionRequiredFailed,
-    /// A repository's extension is not approved.
-    ExtensionUnapproved,
     /// The extension providing the tool died twice.
     ExtensionUnavailable,
     /// A monitor was suppressed for 30 seconds.
@@ -106,6 +104,8 @@ codes! {
     NotFound,
     /// A rewind's `seq` is not a step boundary.
     NotStepBoundary,
+    /// A command arrived before `subscribe`.
+    NotSubscribed,
     /// The process that ran the job died.
     Orphaned,
     /// A job's output file passed 5 GB.

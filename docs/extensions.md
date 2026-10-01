@@ -189,7 +189,7 @@ extension sends the same calls as messages.
 ```
 fiber.tool(name, { description, input_schema, effects, run })
 fiber.provider(name, { models, quota, credential, sign })
-fiber.harness(name, { modes, models, command, line, quota })
+fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { on_failure, timeout, run })
 fiber.watch(kinds, { timeout, run })
@@ -425,8 +425,7 @@ secret pasted into a prompt can be removed before anything records it. A
 refused message is neither logged nor sent, and the sender is told why.
 
 **`before_tool`** may rewrite a call or refuse it, but never approve one.
-Approval is the permission decision's (`docs/permissions.md`), and a mode is
-never changed by an extension. Fiber checks rewritten arguments against the
+Approval is the permission decision's (`docs/permissions.md`). Fiber checks rewritten arguments against the
 tool's schema and runs its effects function again, so the permission decision
 judges the call that will run, not the one the model asked for. A refused call
 completes `denied` with reason `hook` and the extension's name, and never
@@ -580,12 +579,35 @@ A TUI extension has the host calls that need no session: `host.http`,
 `host.every`, `host.drive`, `host.log`, the hashes and `json`. It has no
 `host.model`, `host.delegate`, `host.ask`, `host.emit` or `state.set`, since
 each of those acts inside the session. There is no process TUI extension: a
-program that wants to draw everything itself is a separate client of
-`fiber serve`.
+program that wants to draw everything itself is a separate client of the hub.
 
 What a TUI extension may change on screen is `docs/tui.md`, "Extension
 seams": every slot the terminal draws, the root layout, the key map and the
 slash commands. A future GUI's extensions take the same shape.
+
+### Client halves
+
+A TUI extension, or any other client's half of an extension, belongs to the
+client.
+
+- **It loads only from the client's own Fiber home,** as every extension
+  loads only once installed ("Extensions in a repository"). A remote client
+  could not load one from the session's disk, and a session never sends
+  drawing code.
+- **One instance serves every session the client shows.** Each callback
+  receives the `session_id` it is for (`docs/tui.md`, "How a TUI extension
+  runs").
+- **A client half with a session half declares the session-half versions it
+  works with,** as a version range in its package. Each session names the
+  extensions it loaded, with their versions, in `extensions_loaded`
+  (`docs/events.md`). Where a session has not loaded the session half, or has
+  loaded a version outside the range, the client half is inert for that
+  session: the built-in rendering, and one notice naming the extension and
+  both versions. A client half with no session half, such as a layout or a
+  ledger row for a built-in tool, draws for every session.
+- Anything Fiber itself needs from a person goes through the contract, so a
+  client without an extension's client half loses decoration, never
+  function.
 
 ## Loading, and cost when nothing is loaded
 
@@ -726,9 +748,9 @@ running on.
 | `fiber list` | Lists installed extensions with their versions and commits. |
 
 In a terminal, `install` and `update` show a summary and ask before going
-ahead. The summary is the same one described in
-[Extensions a repository brings](#extensions-a-repository-brings), and on
-update it adds the diff since the installed version. Without a terminal they go
+ahead. The summary is the one in
+[What an install shows](#what-an-install-shows), and on update it adds the
+diff since the installed version. Without a terminal they go
 ahead without asking, so scripts can set up a machine.
 
 Install refuses an extension whose manifest needs a newer Fiber than the one
@@ -763,15 +785,29 @@ time. `fiber update <name>` updates one extension.
 Nothing checks for updates on a timer. Extensions change only when someone runs
 one of these commands, so an idle Fiber does no work.
 
-### Extensions a repository brings
+### Extensions in a repository
 
-A repository can bring extensions in two ways:
+A repository never loads an extension. Extensions are executable code, so
+only one a person installed into Fiber home loads, and it behaves the same in
+every repository. A repository's MCP servers, instruction files, skills and
+prompt templates still load from it: an MCP server after its own approval
+(`docs/mcp.md`, "A repository's servers"), the rest as data.
 
-- ship them in `.fiber/extensions/<name>/`
-- declare them by name and version in `.fiber/config.json`, to be fetched
+A repository may ship an extension's package, in any directory. A person who
+wants it installs it from there, `fiber install ./tools/fiber-lint`, which
+shows the summary in "What an install shows" like any install. The
+repository's `AGENTS.md` or README can say which to install; Fiber reads no
+list of them.
 
-Fiber loads neither until a person approves it. The first time a session would
-load one, the terminal shows:
+**An extension can be scoped to projects.** `fiber install --project`
+installs it for the current project only: it loads in that project's sessions
+and no others. The scope is the person's `extensions."<name>".enabled` key:
+`false` in the global configuration and `true` in the project's, both in Fiber
+home (`docs/configuration.md`). A repository cannot set it.
+
+### What an install shows
+
+In a terminal, `fiber install` and `fiber update` show:
 
 - where it comes from and its version
 - the tools it registers, each with its effects
@@ -780,19 +816,4 @@ load one, the terminal shows:
 - the program a process extension runs, and its install step
 - the skills, prompt templates, themes, binaries and TUI extension it carries
 
-The full source is one key away. Approving a declared extension fetches it.
-
-An approval covers exact content. If the extension changes, Fiber shows the
-diff since the approved content and asks again. Approvals are recorded per
-machine in [Fiber home](state.md) at `approvals/<content-hash>`, so content
-approved in one repository is not asked about again in another.
-
-A headless run never fetches and never loads unapproved content. If a repository
-declares an extension that is not installed, the run fails with
-`extension_missing`. If it brings one nobody has approved, the run fails with
-`extension_unapproved`, listing each one. `fiber approve`, run in the
-repository from a terminal, shows the same summary for each and records the
-approvals, so a later headless run can load them.
-
-An MCP server a repository declares runs a program, so it needs the same
-approval (`docs/mcp.md`, "A repository's servers").
+The full source is one key away.

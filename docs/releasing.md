@@ -172,8 +172,11 @@ The binary it replaces is the one that is running. If Fiber cannot write to
 that binary's directory, such as `/usr/local/bin` owned by root, it stops with
 an error naming the directory. It never asks for elevated privileges.
 
-After step 4, if `fiber remote` is running, `fiber upgrade` restarts it
-(`docs/invocation.md`).
+After step 4, if the hub is running, `fiber upgrade` restarts it: through
+its login service when it is installed (`launchctl kickstart` on macOS,
+`systemctl --user restart` on Linux), and otherwise by signalling it, after
+which the next client starts a new one. Clients reconnect with backoff, and
+no session stops (`docs/invocation.md`, "The hub").
 
 Nothing checks for a new version on its own. An idle Fiber does no work.
 
@@ -185,8 +188,8 @@ later launch from that file killed. After a rename, a running Fiber keeps the
 file it started from until it exits
 ([research/binary-replacement](../research/binary-replacement/README.md)).
 
-A running Fiber sometimes starts another: the terminal starts `fiber serve`,
-and a session starts a delegate. Fiber records its own path when it starts and
+A running Fiber sometimes starts another: the terminal starts the hub, the
+hub starts sessions, and a session starts a delegate. Fiber records its own path when it starts and
 always starts that path. After an upgrade, the new process runs the new
 binary. Asking the operating system for the running binary's path instead
 would fail on Linux, where the path then reads `fiber (deleted)`.

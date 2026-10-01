@@ -22,9 +22,11 @@ Tests sit at three levels. Each proves something the others cannot.
 - **Across crates.** The loop runs with test tools and a test provider plugged
   into its seams, exactly as an extension would plug in. These tests prove turn
   and step behaviour without a binary or a network.
-- **The binary.** A test spawns the built `fiber`, drives it through a door,
-  and reads what a consumer reads: the JSON lines and the session directory
-  left behind.
+- **The binary.** A test starts the built `fiber`: a hub in the test's own
+  `FIBER_HOME`, driven with the terminal's client code, or `fiber ask`. A
+  test of one session may connect to that session's socket directly. It reads
+  what a consumer reads: the JSON lines and the session directory left
+  behind. Driving a session by hand is the `connect` jig ("Jigs").
 
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider
@@ -126,7 +128,7 @@ fails the pull request that caused it.
 ## Fakes
 
 Anything outside Fiber that a test needs is a shared fake. A Fiber delegate
-is a real child `fiber serve`, because it is Fiber. The fakes are:
+is a real child session process, because it is Fiber. The fakes are:
 
 - a provider server serving recorded and scripted streams, and recording
   requests
@@ -180,6 +182,7 @@ A crate's first implementation ticket ships the jigs listed for it:
 | `tools` | `call` | Runs one tool call with the given arguments and prints its result. |
 | `tui` | `draw` | Draws an events file at a given width and prints the screen as text. |
 | `loop` | `turn` | Runs one turn against the fake provider and test tools and prints its events. |
+| `doors` | `connect` | Connects to a running session through the hub, or to its socket, and sends the JSON commands typed on stdin, printing what comes back. |
 
 `contract` has no jig: it holds types, not behaviour. A jig not in this table
 is added to it by the ticket that builds it.

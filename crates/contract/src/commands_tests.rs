@@ -64,14 +64,16 @@ fn samples() -> Vec<Value> {
     let content = json!([{"type": "text", "text": "t"},
         {"type": "image", "data": "aGk=", "mime_type": "image/png"}]);
     vec![
+        json!({"id": "c", "command": "subscribe", "args": {"level": "full"}}),
+        json!({"id": "c", "command": "subscribe", "args": {"level": "summary"}}),
         json!({"id": "c", "command": "prompt", "args": {"content": content}}),
-        json!({"id": "c", "command": "steer", "session_id": "d", "args": {"content": content}}),
+        json!({"id": "c", "command": "steer", "args": {"content": content}}),
         json!({"id": "c", "command": "steer_amend",
             "args": {"command_id": "c0", "content": content}}),
         json!({"id": "c", "command": "steer_drop", "args": {"command_id": "c0"}}),
         json!({"id": "c", "command": "message", "args": {"from_session_id": "s", "text": "t"}}),
         json!({"id": "c", "command": "cancel"}),
-        json!({"id": "c", "command": "reply", "session_id": "d",
+        json!({"id": "c", "command": "reply",
             "args": {"request_id": "r", "declined": true}}),
         json!({"id": "c", "command": "reply", "args": {"request_id": "r", "confirmed": true}}),
         json!({"id": "c", "command": "reply", "args": {"request_id": "r", "labels": ["a"]}}),
@@ -86,10 +88,11 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
+        json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
+        json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "model",
             "args": {"model": "opus", "effort": "high", "thinking": "on"}}),
         json!({"id": "c", "command": "model", "args": {"model": "opus"}}),
-        json!({"id": "c", "command": "mode", "args": {"mode": "readonly"}}),
         json!({"id": "c", "command": "name", "args": {"text": ""}}),
         json!({"id": "c", "command": "handoff", "args": {"instructions": "i"}}),
         json!({"id": "c", "command": "handoff", "args": {}}),
@@ -163,6 +166,34 @@ fn a_key_the_command_does_not_take_is_refused() {
 }
 
 #[test]
+fn subscribe_args_that_do_not_fit_are_invalid_arguments() {
+    // docs/invocation.md, "The command line": a missing key, a key of the
+    // wrong type or a key the command does not take is invalid_arguments.
+    assert!(parse(r#"{"id":"c","command":"subscribe","args":{}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"subscribe","args":{"level":"partial"}}"#).is_err());
+    assert!(
+        parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","extra":true}}"#).is_err()
+    );
+}
+
+#[test]
+fn history_args_that_do_not_fit_are_invalid_arguments() {
+    assert!(parse(r#"{"id":"c","command":"history","args":{}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":"0"}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"extra":true}}"#).is_err());
+}
+
+#[test]
+fn an_optional_arg_set_to_null_is_invalid_arguments() {
+    assert!(
+        parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"to_seq":null}}"#).is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"model","args":{"model":"opus","effort":null}}"#).is_err()
+    );
+}
+
+#[test]
 fn an_unknown_command_is_refused() {
     assert!(parse(r#"{"id":"c","command":"teleport"}"#).is_err());
 }
@@ -195,4 +226,10 @@ fn declined_and_skipped_are_only_ever_true() {
         parse(r#"{"id":"c","command":"reply","args":{"request_id":"r","answers":[{"skipped":false}]}}"#)
             .is_err()
     );
+}
+
+#[test]
+fn a_key_not_in_the_command_line_is_refused() {
+    assert!(parse(r#"{"id":"c","command":"cancel","extra":1}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"cancel","session_id":"s_1"}"#).is_err());
 }

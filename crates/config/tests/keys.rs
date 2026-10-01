@@ -29,17 +29,10 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
-            &["permissions", "mode"],
-            json!("yolo"),
-            json!("readonly"),
-            "one of \"auto\", \"yolo\"",
-            false,
-        ),
-        (
-            &["permissions", "mode"],
-            json!("yolo"),
-            json!(1),
-            "one of \"auto\", \"yolo\"",
+            &["session", "idle_exit_ms"],
+            json!(60000),
+            json!("30m"),
+            COUNT,
             false,
         ),
         (
@@ -228,7 +221,7 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
-            &["mcp", "servers", "gh", "eager"],
+            &["mcp", "servers", "gh", "declare_in_full"],
             json!(true),
             json!(1),
             BOOL,
@@ -256,11 +249,11 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             false,
         ),
         (
-            &["extensions", "acme", "version"],
-            json!("v1.4.0"),
-            json!(1.4),
-            STR,
-            true,
+            &["extensions", "acme", "enabled"],
+            json!(false),
+            json!("yes"),
+            BOOL,
+            false,
         ),
         (
             &["extensions", "acme", "startup_timeout_ms"],
@@ -543,7 +536,7 @@ fn a_server_field_left_out_takes_its_default() {
         Some((json!(false), Source::Default))
     );
     assert_eq!(
-        config.get("mcp.servers.gh.eager", None),
+        config.get("mcp.servers.gh.declare_in_full", None),
         Some((json!(false), Source::Default))
     );
     assert_eq!(
@@ -553,6 +546,10 @@ fn a_server_field_left_out_takes_its_default() {
     assert_eq!(
         config.get("extensions.acme.startup_timeout_ms", None),
         Some((json!(5000), Source::Default))
+    );
+    assert_eq!(
+        config.get("extensions.acme.enabled", None),
+        Some((json!(true), Source::Default))
     );
     assert_eq!(config.get("mcp.servers.gh.timeout_ms", None), None);
     assert_eq!(config.get("model", None), None);
@@ -569,10 +566,10 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         json!({
             "cache": {"lifetime": "1h"},
             "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
-            "permissions": {"mode": "auto"},
             "quota": {"notice_at": 80},
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
+            "session": {"idle_exit_ms": 1800000},
             "tui": {
                 "attention": {"bell": true, "notification": true, "title": true},
                 "hover": true,

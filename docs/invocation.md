@@ -2,35 +2,38 @@
 
 How Fiber is started, what goes in, and what comes back out. This is what is
 true now, not a plan. It is settled by
-[Front doors: which invocation modes does v0.0.1 have?](https://github.com/aakshintala/fiber/issues/10);
-that ticket's resolution holds the rationale and the rejected alternatives.
+[Front doors: which invocation modes does v0.0.1 have?](https://github.com/aakshintala/fiber/issues/10)
+and [Control center: one hub, headless sessions, clients over it](https://github.com/aakshintala/fiber/issues/256);
+those tickets' resolutions hold the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Front door, driver command, session, turn, step
-boundary, steering message, watcher and driver mean what it says there and
-nothing else. The events named here are `docs/events.md`; this page is only
-the process contract over them.
+Vocabulary is `CONTEXT.md`. Front door, hub, driver command, session, turn,
+step boundary, steering message, watcher and driver mean what it says there
+and nothing else. The events named here are `docs/events.md`; this page is
+only the process contract over them.
 
 ## Two doors
 
+Every session is headless. A person or a program reaches one through a door.
+
 | | What it is |
 |---|---|
-| `fiber` | The terminal. Requires a tty; without one it is a usage error naming `fiber serve`. It starts a `fiber serve` session and drives it ("Processes"). |
-| `fiber serve` | The non-interactive door. Stays open. Its stdin is the driver channel: one JSON command per line. This is the door a GUI frontend, a supervising tool or a script uses. It also listens on a local socket, so other clients can attach. |
-| `fiber ask` | The same non-interactive door with the prompt already supplied and no further prompts accepted. Its stdin is the prompt. |
+| `fiber` | The terminal. Requires a tty; without one it is a usage error naming `fiber ask`. It is a client of the hub, starting the hub if none is running ("The hub"). |
+| `fiber ask` | A one-shot session for a caller outside Fiber. Its stdin is the prompt, its stdout is the event stream, and it accepts no further prompts. |
 
-`fiber remote` is not a door. It is an optional daemon that lets web and
-mobile clients reach sessions ("Remote clients").
+The hub is not a door. It is the one process every client talks to, the
+terminal included ("The hub"). A GUI, a phone or a web page is a client of the
+hub, exactly as the terminal is.
 
-`ask` is not a second door and not a second code path. It is `serve` with its
-input already supplied and no more coming — the archived tree reached the same
-conclusion in
-[fiber-zig#190](https://github.com/aakshintala/fiber-zig/issues/190): "There is
-no second execution path."
+A session started by the hub and a session started by `fiber ask` are the same
+program. Both run the internal session command; `ask` runs it with its prompt
+already supplied and no more coming. There is no second execution path, as
+the archived tree also concluded in
+[fiber-zig#190](https://github.com/aakshintala/fiber-zig/issues/190).
 
-Map premise 6 governs both: "Both interactive and non-interactive sessions are
-one agent loop behind two front doors: same session, same event stream, same
-log." A door has no privilege the terminal lacks, and neither has a path to
-state the other does not.
+Map premise 6 governs both: every session is headless and runs one agent
+loop, and the terminal, `fiber ask` and every other client see the same
+session, event stream and log. No door has a privilege another lacks, and
+none has a path to state another does not.
 
 ## Getting a prompt in
 
@@ -54,24 +57,18 @@ figure is documented, not measured here.
 `fiber ask` with no prompt and stdin on a terminal is a usage error, not a
 silent drop into the TUI.
 
-## Why stdin means different things
+## Why stdin is the prompt
 
-On `serve`, stdin is the driver channel. On `ask`, stdin is the prompt. That
-split is deliberate and it is the only difference between them worth naming.
-
-The alternative was deciding what stdin holds by looking at it — treat a line
-that parses as a command object as a command, anything else as text. That
-fails in this repository specifically: a brief asking Fiber about Fiber's own
-command set would open with exactly such a line. A mode switch on content is a
-bug that arrives once, at the worst moment.
+On `ask`, stdin is the prompt. No session takes driver commands on stdin:
+every driver is a client over a socket ("Processes").
 
 What `ask` gives up by spending its stdin on the prompt is the ability to
 answer an interaction or steer mid-run. That costs nothing, because
 `docs/permissions.md` already settles the unattended case — "With no client
 attached and no answer possible, escalation is a block and the run continues
 under the rule above until it exhausts the block budget" — and cancelling is a
-signal, not a command. A caller that wants to talk back uses `serve`, which is
-what it is for.
+signal, not a command. A program that wants to talk back is a client of the
+hub, as the terminal is.
 
 ## Driver commands
 
@@ -88,17 +85,15 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 |---|---|---|---|
 | `id` | string | yes | minted by the client from random bytes, as Fiber mints its own ids (`docs/events.md`, "Identity and ordering"). Acknowledgements and events name the command by it, as `command_id` |
 | `command` | string | yes | the command's name, from the table below |
-| `session_id` | string | no | on `steer` and `reply`, the delegate the command is for; absent means the session this client drives |
 | `args` | object | no | the command's own keys, below; absent when it takes none |
 
 ```json
 {"id":"c_7f3a","command":"steer","args":{"content":[{"type":"text","text":"use the other test file"}]}}
 ```
 
-A line that is not a JSON object, has no string `id` or `command`, has a
-`session_id` or `args` of the wrong type, or has a key not in this table, is
-rejected `malformed`. A `session_id` on a command other than `steer` and
-`reply` is rejected `invalid_arguments`. `args` with a missing key, a key of the wrong type or a
+A line that is not a JSON object, has no string `id` or `command`, has
+`args` of the wrong type, or has a key not in this table, is rejected
+`malformed`. `args` with a missing key, a key of the wrong type or a
 key the command does not take is rejected `invalid_arguments`, so an older
 Fiber says no to a newer client's key instead of ignoring it.
 
@@ -112,6 +107,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 
 | Command | `args` |
 |---|---|
+| `subscribe` | `level` (string), `summary` or `full` |
 | `prompt` | `content` |
 | `steer` | `content` |
 | `steer_amend` | `command_id` (string), the `steer` command's id; `content`, the new message |
@@ -123,8 +119,8 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `background` | none |
 | `reload` | none |
 | `tools` | none |
+| `history` | `from_seq` (integer), `to_seq` (integer, optional) |
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `effort` (string, optional); `thinking` (string, optional) |
-| `mode` | `mode` (string) |
 | `name` | `text` (string); empty clears the name |
 | `handoff` | `instructions` (string, optional) |
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false), `adopt` (array of strings, default empty) |
@@ -136,29 +132,30 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 
 | Command | What it does |
 |---|---|
+| `subscribe` | The first command on every connection. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command before it is rejected `not_subscribed`, and a second `subscribe` is rejected `invalid_arguments`. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
-| `steer` | Sends a steering message, which joins the running turn at its next step boundary. A steering message also moves any running shell call to the background, so it reaches the model at the next step boundary. Takes an optional `session_id` naming a delegate. |
+| `steer` | Sends a steering message, which joins the running turn at its next step boundary. A steering message also moves any running shell call to the background, so it reaches the model at the next step boundary. |
 | `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
 | `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"). Rejected `stale_request` if no turn is running. |
-| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). Takes an optional `session_id` naming a delegate. |
+| `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
 | `job_stop` | Stops a running job by `job_id`. Rejected `stale_request` if the job is not running. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
 | `reload` | Re-reads configuration, restarts changed MCP servers and extensions, and declares the tool set again (`docs/mcp.md`, "Reload"). Rejected `busy` if a turn is running. |
+| `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `model` | Switches model, effort or thinking at the next turn boundary. Takes a model reference and optional effort and thinking. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model. |
-| `mode` | Switches the permission mode at the next turn boundary (`docs/permissions.md`, "Modes"). Takes a mode. Rejected `invalid_arguments` for an unknown mode. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
-| `rewind` | Starts a new session that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |
+| `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. |
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
-`busy`, `stale_request`, `not_step_boundary`, `session_held`,
-`delegate_session`, `closing`.
+`not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
+`session_held`, `delegate_session`, `closing`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
@@ -178,11 +175,10 @@ text. One command closes that window. Both amend and drop are rejected
 `docs/architecture.md` puts one inbox behind one thread draining at step
 boundaries, so an amend lands wholly before a drain or wholly after it.
 
-**`steer` and `reply` can name a delegate.** With an optional `session_id`
-naming a delegate, the command goes to that delegate instead of this session.
-Each parent forwards a command addressed to a descendant down the tree, so a
-driver reaches any delegate in it (`docs/delegates.md`). The command is
-rejected `stale_request` if no such delegate is running.
+**A delegate is reached on its own connection.** A client that shows a
+delegate subscribes to that delegate through the hub, and sends it `steer`
+and `reply` there like any session. No session forwards a command to another
+(`docs/delegates.md`).
 
 **`job_stop` names a running `job_id`.** It is rejected `stale_request` if the
 job is not running. The terminal lists jobs with `/jobs` and can stop one from
@@ -210,11 +206,11 @@ the person typed it, and a client that can attach already controls the session
 pi does the same with `!` and `!!` (`excludeFromContext`). Settled by
 [#148](https://github.com/aakshintala/fiber/issues/148).
 
-**`rewind` moves the process to the new session.** From then on `fiber serve`
-drives the new session. It closes the old session with `rewound` while it
-still holds that session's lock, releases the lock, takes the new one's, and
-its lines carry the new `session_id`. A session no process holds is opened,
-and its lock taken, before it is rewound.
+**`rewind` starts a new session process.** The session being rewound closes
+with `rewound` while it still holds its lock, and the hub starts the new one,
+whose `session_started` names the old session in `forked_from`. Each client
+connected to the old session is sent the new session's id and subscribes to
+it. A session no process holds is rewound by the hub opening it first.
 
 **The set is a floor, not a proof.** It is what Fiber's settled semantics
 require today. A later ticket may add one. Adding a command is additive and not
@@ -258,59 +254,55 @@ editing the global rules file, never from an approval.
 
 **First line is `fiber_started`**, carrying the Fiber version, the
 `schema_version`, the `session_id`, and whether the session is new or resumed.
-Both subcommands take the same resume selector, and so does `fiber`:
-`--resume <id>` takes a full session id or any prefix of one that is unique
-among the project's sessions. In the terminal, `fiber --resume` with no id
-opens the session list. `fiber serve` and `fiber ask` have no list to show, so
-there it is a usage error.
+`fiber ask` and `fiber` take the same resume selector: `--resume <id>` takes a
+full session id or any prefix of one that is unique among the project's
+sessions. In the terminal, `fiber --resume` with no id opens home. `fiber ask`
+has no list to show, so there it is a usage error.
 
-**A rewind changes the session, not the process.** The `session_id` on the
-first line is the session the process started with. After a `rewind` the
-stream goes on with the new session's lines, beginning with its
-`session_started`, whose `forked_from` names the old session.
+**A session exits when it has been idle for `session.idle_exit_ms`**, 30 minutes
+by default (`docs/configuration.md`), whoever is connected. Idle means no turn
+running and no jobs running. Waiting on an approval or a question is idle,
+because nothing is in flight. Connected clients do not keep a session alive: a
+phone or a terminal left open is connected all the time. Leaving never
+cancels. When the delay passes, Fiber gives the ending notice and exits.
 
-**A session exits when it is idle and has no client.** Idle means no turn
-running and no jobs running. A client is a driver: stdin on `fiber serve`, or a
-connection to the session's socket. A client leaves by stdin EOF, by closing
-its connection, or by losing it. Leaving never cancels. When the last client
-has left, Fiber finishes the turn in flight, gives the ending notice and waits
-for any running jobs (`docs/tools.md`, "Background jobs"), then exits.
+**A delegate exits as soon as its run finishes**: its final answer is written
+and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
+`delegate_message` resumes it (`docs/delegates.md`).
 
-**A session that never got a prompt leaves nothing behind.** The terminal
-starts its session at launch, so MCP servers connect while the person types. A
-session that exits with no `turn_started` in its log deletes its own directory,
-so opening `fiber` and then resuming another session leaves no empty session in
-the list.
+**A `fiber ask` session exits when its turn ends** and its jobs are done.
+
+**A prompt sent to an exited session through the hub resumes it**, then
+delivers the prompt. A client showing a session that exits keeps showing it,
+because its conversation is its log.
+
+**A session that never got a prompt leaves nothing behind.** A session that
+exits with no `turn_started` in its log deletes its own directory.
 
 **`close` ends the session whoever else is attached.** It accepts no more
-prompts, then follows the same path.
+prompts, finishes the turn in flight, then any running jobs (`docs/tools.md`,
+"Background jobs"), and exits.
 
-One rule covers every case that matters. A GUI frontend that dies mid-turn
-closes the pipe, and Fiber finishes rather than orphaning itself. Closing the
-terminal does the same, unless another client is still attached. A phone
-that loses its connection mid-turn loses no work. A delegated run is spawned
-with its prompt supplied and stdin already at EOF, so it runs until the
-model's final answer — twenty minutes if it takes twenty minutes — on the same
-path; its caller's turn ending changes nothing, because the caller's turn was
-never holding the pipe.
+One rule covers every case that matters. A GUI that dies mid-turn closes its
+connection, and the session finishes the turn. A phone that loses its
+connection mid-turn loses no work. A delegated run is spawned with its prompt
+supplied, so it runs until the model's final answer, twenty minutes if it
+takes twenty minutes; its caller's turn ending changes nothing.
 
-There is no detach command. A client detaches by closing its connection, and
-a session that exits is resumed from its log, so reattaching to one needs
-nothing kept running.
+There is no detach command. A client leaves by closing its connection. How the
+terminal leaves, and how it stops one session, is `docs/tui.md`, "Quit".
 
-The terminal offers two ways to leave. Detach (a second Ctrl+D on an empty
-input box, or `/detach`) closes its connection, and the rule above applies.
-Quit (a second Ctrl+C, or `/quit`) stops everything: it sends `cancel`, stops
-each running job and delegate, then sends `close`. When the `clients` event
-says another client is attached, quit asks first, and offers detach instead.
+**A request re-raised on resume keeps its `request_id`.** A `reply` sent
+through the hub to a session that exited on a pending request makes the hub
+resume the session, then deliver the reply. A late reply still cannot
+authorise a different action, because a different action is a different
+request.
 
-**A pending approval or question does not keep a session alive.** An
-approval is raised before its tool call runs, and an `ask_user` question runs
-nothing, so nothing is in flight. When the last client leaves with either
-pending and nothing else running, the session exits,
-and `fiber_exited` names the request it stopped on. Resuming the session
-raises the request again and the turn goes on from there. The terminal and
-`fiber remote` list sessions that are waiting on a person, from their logs.
+**A pending approval or question does not keep a session alive past the idle
+delay.** When the delay passes with either pending, the session exits, and
+`fiber_exited` names the request it stopped on. Resuming the session raises
+the request again and the turn goes on from there. The hub lists such a
+session as waiting on the person, from `recent.jsonl` (`docs/state.md`).
 Two cases have no one to wait for, and there escalation is a block as
 `docs/permissions.md` ("Headless") describes: a session started by
 `fiber ask`, and a session that has been sent `close`. In both, and in every
@@ -330,8 +322,8 @@ concurrency section of `docs/architecture.md` and adds nothing here.
 
 **Exit codes: 0 success, 1 failure, 2 usage, 129 SIGHUP, 130 SIGINT, 143
 SIGTERM.** Usage is Fiber called wrongly: a bad flag, two prompt sources, no
-prompt, no tty. `fiber ask` exits 1 when its turn failed; `fiber serve` exits 1
-only when the process itself failed (`docs/errors.md`, "What a caller gets").
+prompt, no tty. `fiber ask` exits 1 when its turn failed; a session the hub
+started exits 1 only when the process itself failed (`docs/errors.md`, "What a caller gets").
 What a signal guarantees before the process goes is "Shutdown".
 
 ## What a caller gets back
@@ -352,9 +344,6 @@ you have `events.jsonl`, byte for byte."
   error, with no `session_id` (`docs/errors.md`, "Before a session exists").
 - **Progress** is the ephemeral lines. They carry no `seq` and never reach the
   log.
-- **After a rewind** the stream holds two sessions' lines. Filtering by each
-  `session_id` gives each session's log, and `fiber_exited` carries the
-  session the process ended on.
 
 Two consequences for the door: **stdout carries no terminal escape codes and
 no tty is required**, because either would break that byte-for-byte equality.
@@ -362,15 +351,24 @@ no tty is required**, because either would break that byte-for-byte equality.
 ## Processes
 
 Settled by
-[Process architecture: core, TUI and shared services](https://github.com/aakshintala/fiber/issues/81);
-the rationale and the rejected layouts are
+[Process architecture: core, TUI and shared services](https://github.com/aakshintala/fiber/issues/81)
+and [Control center](https://github.com/aakshintala/fiber/issues/256); the
+rationale and the rejected layouts are
 [ADR 0009](adr/0009-each-session-is-one-process.md).
 
-- **Every session is one `fiber serve` process.** A Fiber delegate is a
-  child `fiber serve` of its parent, driven over the pipe it was spawned
-  with, as a delegate on any other harness is (`docs/delegates.md`). Each
-  session starts its own MCP servers and process extensions, so nothing is
-  shared between sessions (`docs/mcp.md`, `docs/extensions.md`).
+- **Every session is one process**, running the internal session command. The
+  hub starts one for a client; `fiber ask` is one; a parent starts one for each
+  Fiber delegate. Each session starts its own MCP servers and process
+  extensions, so nothing is shared between sessions (`docs/mcp.md`,
+  `docs/extensions.md`).
+- **No session has a pipe driver.** Every driver is a client over the
+  session's socket. `fiber ask`'s stdout is a watcher.
+- **A Fiber delegate is a child process of its parent.** The parent is an
+  ordinary client over the delegate's socket. It also holds a pipe to the
+  delegate's stdin that it never writes to: end of file on it means the parent
+  is gone, and the delegate shuts down ("Shutdown"). A dropped socket
+  connection is only a client leaving; the parent reconnects. Delegates on
+  other harnesses are child processes too (`docs/delegates.md`).
 - **An image child is a short-lived process, one per image.** The session
   starts it by running `fiber` again with an internal command, not a door,
   so the child always matches its parent's version. The session process
@@ -378,23 +376,20 @@ the rationale and the rejected layouts are
   (`docs/model-routing.md`, "Image limits"). Spawning a child that does
   nothing takes 1.7 ms on macOS, measured with the probe in
   `research/image-limits/README.md`.
-- **The terminal is its own process.** `fiber` starts a `fiber serve` session
-  and is its client zero: commands down the pipe, events back up it. It draws
-  what arrives and has no path to state the stream does not carry. It opens a
-  session's socket only to attach to one already running. It starts that
-  process in a new process session, so a closed window or a signal to the
-  terminal reaches the terminal alone. A TUI crash, or an error in a TUI
-  extension, cannot interrupt the session's work; the session then follows
-  the lifecycle rule like any session whose client left.
+- **The terminal is its own process, a client of the hub.** It has a `full`
+  connection to the session on screen and a `summary` connection to the rest,
+  through the hub. It draws what arrives and has no path to state the stream
+  does not carry. A terminal crash, or an error in a TUI extension, cannot
+  interrupt a session's work.
 - **Every running session listens on a local socket** at
   `~/.fiber/run/<session_id>` (`docs/state.md`), reachable only by the account
-  that owns Fiber home. The socket carries the same driver commands and event
-  stream as stdin and stdout. Being that account is the authentication. The
-  process holding the session's lock owns the socket: it removes any old one
-  before binding, and nothing else ever removes one.
+  that owns Fiber home. Being that account is the authentication. The hub, a
+  delegate's parent and session messages use it; every other client reaches it
+  through the hub. The process holding the session's lock owns the socket: it
+  removes any old one before binding, and nothing else ever removes one.
 - **Resuming a session that is still running attaches to it.** A session log
-  has one writer (`docs/events.md`), so `fiber --resume` never opens a second
-  one. A client attaching first folds the log by `seq`, then streams.
+  has one writer (`docs/events.md`), so a resume never opens a second one. A
+  `full` connection folds the log by `seq` first, then streams.
 - **A client attaches across versions only when it can read the stream.** A
   session keeps the binary it started with through `fiber upgrade`. A client
   reads the session's `schema_version` from `fiber_started`; an additive
@@ -402,10 +397,9 @@ the rationale and the rejected layouts are
   the client says which version the session runs and declines, so the person
   can close it or let it exit.
 
-The pipe and the socket are the only paths into a running session, and they
-carry the same bytes. The terminal, a script on stdin, a parent session and a
-phone through `fiber remote` are the same kind of client, as map premise 5
-requires.
+The socket is the only path into a running session. The terminal, a parent
+session, a GUI and a phone through the hub are the same kind of client, as map
+premise 5 requires.
 
 ## Shutdown
 
@@ -436,7 +430,7 @@ knows and exits.
   ("Stopping a command"). Groups are signalled together, never one after
   another. Six groups that ignore SIGTERM took 0.81 s in parallel and 4.85 s
   in sequence (macOS arm64, `research/shutdown/probe5_nested_kill_cost.py`).
-- A delegate is a child `fiber serve`, and SIGTERM starts its own shutdown.
+- A Fiber delegate is a session process, and SIGTERM starts its own shutdown.
   Its parent waits for it to exit, up to the bound, rather than sending
   SIGKILL at 800 ms, so the delegate stops its own commands and writes its
   own `fiber_exited`. Depth is capped at 2 (`docs/delegates.md`) and every
@@ -464,7 +458,7 @@ released, and the process exits.
 A session waiting on an approval or a question when the signal arrives has nothing running
 (`docs/architecture.md`: "Permission decisions are made in order, before any
 of them runs"). It stops its jobs and exits with `suspended_on` naming the
-request, as it does when the last client leaves ("Lifecycle"), and resuming
+request, as it does when the idle delay passes ("Lifecycle"), and resuming
 raises the request again.
 
 A signal that arrives before `fiber_started` is written exits with the code
@@ -493,40 +487,51 @@ starts, not what the shell starts, and a recorded process group and start
 time cannot prove a group is still the one recorded, so neither is used. The
 gap is stated rather than half closed.
 
-A Fiber delegate whose parent died sees its client leave, finishes its turn
-and jobs, and exits ("Lifecycle"), so its own log is complete. Its parent's
-log still marks the job `orphaned` on resume, because the parent cannot
-know. An MCP call the delegate raises after that fails at once with
-`mcp_server_unavailable`, since nothing can answer it.
+A Fiber delegate whose parent died sees end of file on its lifeline and
+shuts down within the bound, so it writes its own `fiber_exited` and its log
+is complete. Its parent's log still marks the job `orphaned` on resume,
+because the parent cannot know. The resumed parent reads that delegate's log
+and writes any `usage_recorded` lines it is missing (`docs/loop.md`,
+"Spending budget").
 
-**The terminal and the daemon.** The terminal starts its `fiber serve` in a
-new process session, so a closed window or a signal to the terminal reaches
-the terminal alone; the session is one client short and follows
-"Lifecycle". Stopping `fiber remote` ends its relays, and each session sees
-a client leave.
+**The terminal and the hub.** Closing the terminal closes its connections,
+and each session follows "Lifecycle". Stopping the hub ends its relays, and
+each session sees its clients leave. Neither stops a session.
 
-## Remote clients
+## The hub
 
-A web or mobile client can attach to a running session and start a new one.
-It reaches the host through `fiber remote`, an optional daemon.
+Every client reaches sessions through the hub, the local terminal included.
 
-- **`fiber remote` holds no session.** It lists sessions from their logs,
-  starts `fiber serve` processes, resumes a session whose process has exited,
-  and relays each remote client to a session's socket. A session is running
-  when its socket accepts a connection; anything else is a log to resume. Its
-  crash or its restart ends no session, and `fiber upgrade` restarts it.
-- **A remote client reaches a delegate as the terminal does**: through the
-  root, with `session_id` on `steer` and `reply`. It never opens a delegate's
-  own socket.
-- **Fiber ships no relay service.** `fiber remote` listens on an address the
-  person chooses, and the person makes it reachable: tailscale, WireGuard, a
-  LAN or `ssh -L`. Every remote connection presents a token.
+- **The hub holds no session.** It lists sessions, starts and resumes them,
+  and relays every client connection to a session's socket. A session is
+  running when its socket accepts a connection; anything else is a log to
+  resume. Its crash or its restart drops client connections and ends no
+  session. Clients reconnect.
+- **It serves one feed.** The hub holds a `summary` connection to every
+  running session and serves each client the latest `session_status` of every
+  running or waiting top-level session, across all projects. Exited sessions
+  come from a paged query over `recent.jsonl`, filterable by project, newest
+  first (`docs/state.md`). Delegates are never in the feed; a client shows a
+  delegate when the person opens its parent.
+- **It starts sessions with the internal session command**, in the workspace
+  the client names.
+- **A client starts it** when none is running. That hub never listens
+  remotely, and exits once no client has been connected for a while.
+- **`fiber hub install` registers it as a login service** (launchd on macOS,
+  systemd on Linux) that listens on the address the person chose and never
+  exits for being idle. `fiber upgrade` restarts it through the service
+  manager (`docs/releasing.md`).
+- **The hub runs as the account that owns Fiber home** and is trusted as a
+  session is. Locally, being that account is the authentication. Every remote
+  connection presents a token.
+- **Fiber ships no relay service.** The person makes an installed hub
+  reachable: tailscale, WireGuard, a LAN or `ssh -L`.
 - **A remote client has exactly the terminal's powers.** It receives the same
   event stream and sends the same driver commands.
 
-What `fiber remote` speaks, how a client gets its token, and whether Fiber
-installs it as a login service are
-[Remote access: the remote endpoint](https://github.com/aakshintala/fiber/issues/86).
+What the hub speaks, how a client gets and revokes its token, and who builds
+web and mobile clients are
+[Remote access: what the hub speaks](https://github.com/aakshintala/fiber/issues/86).
 
 ## Isolation
 
