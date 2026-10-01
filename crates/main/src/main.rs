@@ -64,27 +64,55 @@ fn run() -> i32 {
 }
 
 /// `fiber install <path>`: installs the extension at a local path into Fiber
-/// home (`docs/extensions.md`, "Installing"), and prints its name.
+/// home, after showing what it registers and asking when stdin is a
+/// terminal (`docs/extensions.md`, "Installing"), and prints its name.
 fn install(args: &[String]) -> i32 {
     let installed = match args {
-        [path] => config::fiber_home_from_env()
-            .map_err(|e| failed(e.code(), e))
-            .and_then(|home| {
-                extensions::install(&home, Path::new(path), env!("CARGO_PKG_VERSION"))
-                    .map_err(|e| failed(e.code(), e))
-            }),
+        [path] => install_path(Path::new(path)),
         _ => Err(usage("Usage: fiber install <path>.")),
     };
     match installed {
-        Ok(name) => {
+        Ok(Some(name)) => {
             eprintln!("fiber: installed {name}");
             0
+        }
+        Ok(None) => {
+            eprintln!("fiber: nothing was installed.");
+            1
         }
         Err(e) => {
             eprintln!("fiber: {}", e.message);
             doors::exit_code(&e)
         }
     }
+}
+
+/// Installs from `source` once approved; `None` when the person declined.
+fn install_path(source: &Path) -> Result<Option<String>, Failure> {
+    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
+    let manifest = config::read_manifest(source).map_err(|e| failed(e.code(), e))?;
+    let providers = config::read_providers(source).map_err(|e| failed(e.code(), e))?;
+    let summary = doors::InstallSummary {
+        name: manifest.name,
+        source: source.display().to_string(),
+        providers: providers
+            .into_iter()
+            .map(|p| {
+                let mut urls: Vec<String> = p.models.into_iter().map(|m| m.base_url).collect();
+                urls.sort();
+                urls.dedup();
+                (p.name, urls)
+            })
+            .collect(),
+    };
+    let stdin = io::stdin();
+    let terminal = stdin.is_terminal();
+    if !doors::install_approved(&summary, terminal, &mut stdin.lock(), &mut io::stderr())? {
+        return Ok(None);
+    }
+    extensions::install(&home, source, env!("CARGO_PKG_VERSION"))
+        .map(Some)
+        .map_err(|e| failed(e.code(), e))
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.
