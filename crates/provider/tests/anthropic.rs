@@ -615,6 +615,37 @@ fn max_tokens_is_the_models_limit_and_never_exceeds_it() {
 }
 
 #[test]
+fn an_enum_with_an_object_or_array_value_is_sent_not_strict() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let with_enum = |name: &str, values: Value| ToolDefinition {
+        name: name.into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"pick": {"type": "string", "enum": values}},
+            "required": ["pick"],
+            "additionalProperties": false
+        }),
+        ..weather_tool()
+    };
+    let mut request = request();
+    request.tools = vec![
+        with_enum("a_array", json!([["x"]])),
+        with_enum("b_object", json!([{"x": 1}])),
+        with_enum("c_plain", json!(["x", 1, null])),
+    ];
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let strict: Vec<bool> = sent_body(&server, 0)["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["strict"].as_bool().unwrap())
+        .collect();
+    assert_eq!(strict, [false, false, true]);
+}
+
+#[test]
 fn past_twenty_strict_tools_the_rest_are_sent_not_strict() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut request = request();

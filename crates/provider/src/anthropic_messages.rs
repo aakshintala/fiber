@@ -125,7 +125,9 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     // `strict` per tool (`docs/model-routing.md`, "Protocols and
     // providers"). Anthropic's strict subset is wider than OpenAI's (it
     // takes optional properties, `anyOf` and `$ref`), so a schema that fits
-    // `strict::fits` fits Anthropic's too. Anthropic refuses a request with
+    // `strict::fits` fits Anthropic's too, except an enum with an object or
+    // array value, which Anthropic excludes (platform.claude.com, "JSON
+    // Schema limitations": "complex types in enums"). Anthropic refuses a request with
     // more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:
     // "The maximum number of strict tools supported is 20"), so past 20 the
     // rest are sent `strict: false`, in name order.
@@ -133,7 +135,9 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let tools: Vec<Value> = tools
         .into_iter()
         .map(|tool| {
-            let strict = strict_left > 0 && strict::fits(&tool.input_schema);
+            let strict = strict_left > 0
+                && strict::fits(&tool.input_schema)
+                && !complex_enum(&tool.input_schema);
             if strict {
                 strict_left -= 1;
             }
@@ -179,6 +183,21 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let mut body = Value::Object(body);
     cap_markers(&mut body);
     body.to_string().into_bytes()
+}
+
+/// Whether any `enum` in `schema` has an object or array value.
+fn complex_enum(schema: &Value) -> bool {
+    match schema {
+        Value::Object(map) => map.iter().any(|(key, value)| {
+            (key == "enum"
+                && value
+                    .as_array()
+                    .is_some_and(|values| values.iter().any(|v| v.is_object() || v.is_array())))
+                || complex_enum(value)
+        }),
+        Value::Array(items) => items.iter().any(complex_enum),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
 }
 
 /// The most tools Anthropic takes with `strict: true` in one request.
