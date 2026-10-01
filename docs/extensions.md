@@ -189,7 +189,7 @@ extension sends the same calls as messages.
 ```
 fiber.tool(name, { description, input_schema, effects, run })
 fiber.provider(name, { models, quota, credential, sign })
-fiber.harness(name, { modes, models, command, line, quota })
+fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
 fiber.hook(point, { on_failure, timeout, run })
 fiber.watch(kinds, { timeout, run })
@@ -425,8 +425,7 @@ secret pasted into a prompt can be removed before anything records it. A
 refused message is neither logged nor sent, and the sender is told why.
 
 **`before_tool`** may rewrite a call or refuse it, but never approve one.
-Approval is the permission decision's (`docs/permissions.md`), and a mode is
-never changed by an extension. Fiber checks rewritten arguments against the
+Approval is the permission decision's (`docs/permissions.md`). Fiber checks rewritten arguments against the
 tool's schema and runs its effects function again, so the permission decision
 judges the call that will run, not the one the model asked for. A refused call
 completes `denied` with reason `hook` and the extension's name, and never
@@ -580,12 +579,33 @@ A TUI extension has the host calls that need no session: `host.http`,
 `host.every`, `host.drive`, `host.log`, the hashes and `json`. It has no
 `host.model`, `host.delegate`, `host.ask`, `host.emit` or `state.set`, since
 each of those acts inside the session. There is no process TUI extension: a
-program that wants to draw everything itself is a separate client of
-`fiber serve`.
+program that wants to draw everything itself is a separate client of the hub.
 
 What a TUI extension may change on screen is `docs/tui.md`, "Extension
 seams": every slot the terminal draws, the root layout, the key map and the
 slash commands. A future GUI's extensions take the same shape.
+
+### Client halves
+
+A TUI extension, or any other client's half of an extension, belongs to the
+client.
+
+- **It loads only from the client's own Fiber home.** A repository brings
+  session halves only; a TUI extension in a repository's package does not
+  load. A remote client could not load one from the session's disk, and a
+  session never sends drawing code.
+- **One instance serves every session the client shows.** Each callback
+  receives the `session_id` it is for (`docs/tui.md`, "How a TUI extension
+  runs").
+- **It declares the session-half versions it works with,** as a version range
+  in its package. Each session names the extensions it loaded, with their
+  versions, in `extensions_loaded` (`docs/events.md`). Where a session has
+  not loaded the extension, or has loaded a version outside the range, the
+  client half is inert for that session: the built-in rendering, and one
+  notice naming the extension and both versions.
+- Anything Fiber itself needs from a person goes through the contract, so a
+  client without an extension's client half loses decoration, never
+  function.
 
 ## Loading, and cost when nothing is loaded
 
@@ -771,14 +791,16 @@ A repository can bring extensions in two ways:
 - declare them by name and version in `.fiber/config.json`, to be fetched
 
 Fiber loads neither until a person approves it. The first time a session would
-load one, the terminal shows:
+load one, the session raises the approval as an interaction before its first
+model request, so any client can answer it (`docs/tui.md`, "Approving a
+repository's extensions"). It shows:
 
 - where it comes from and its version
 - the tools it registers, each with its effects
 - the providers it registers, each with its base URLs
 - the hooks, watchers and commands it registers
 - the program a process extension runs, and its install step
-- the skills, prompt templates, themes, binaries and TUI extension it carries
+- the skills, prompt templates, themes and binaries it carries
 
 The full source is one key away. Approving a declared extension fetches it.
 
