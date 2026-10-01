@@ -804,6 +804,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         std::env::consts::ARCH
     );
     assert_eq!(result, Err(CallError::Cancelled));
+    panic!("TIMING cancel to blocked read returning: {} µs ({} {})", elapsed.as_micros(), std::env::consts::OS, std::env::consts::ARCH);
 }
 
 #[test]
