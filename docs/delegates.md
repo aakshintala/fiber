@@ -155,8 +155,8 @@ final message, any questions, usage totals and worktree state. Their keys are
   emits is relayed onto its parent's stream, and nothing is forwarded down
   the tree.
 - One kind is copied: each `usage_recorded` a parent receives from a delegate
-  is written into the parent's own log, keeping its original `session_id` and
-  `seq`, so a fold counts it once. A grandchild's lines reach the root through
+  is copied into the parent's own log with `origin_session_id`, and a fold
+  counts one line per `generation_id`, so a call is counted once. A grandchild's lines reach the root through
   its parent's log. The root's log then holds the whole tree's spend
   (`docs/loop.md`, "Spending budget").
 - A client shows a delegate's card from that delegate's `session_status`,

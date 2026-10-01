@@ -123,10 +123,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 (`docs/configuration.md`, "Keys"). It is unset by default, and unset means no
 limit. The spend it counts is the `usage` fold (`docs/events.md`) over the
 session's own log, which holds its own `usage_recorded` lines and a copy of
-each one its delegates sent it, and theirs. A parent writes each
-`usage_recorded` it receives from a delegate into its own log, keeping the
-line's original `session_id` and `seq`, and the fold counts each original
-line once. A resumed parent reads the log of each delegate it marks
+each one its delegates sent it, and theirs. A parent writes a copy of each
+`usage_recorded` it receives from a delegate into its own log, naming the
+delegate in `origin_session_id`, and the fold counts one line per
+`generation_id`. A resumed parent reads the log of each delegate it marks
 `orphaned` and writes any copies it is missing.
 A call with `subscription` does not count, because a subscription bills
 nothing per call; its own limit ends it as `quota_exceeded`. A `cost` still
