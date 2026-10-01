@@ -15,7 +15,6 @@
 mod support;
 
 use std::sync::{Arc, Barrier};
-use std::time::Duration;
 
 use contract::events::{Control, FileChange, TurnOutcome};
 use contract::provider::{Finish, Input};
@@ -247,7 +246,7 @@ fn an_effects_function_that_errors_fails_tool_error_and_never_runs() {
 fn every_call_is_decided_before_any_runs_and_results_return_in_request_order() {
     let trace = Arc::default();
     let mut slow = TestTool::reads("slow", "first");
-    slow.delay = Duration::from_millis(100);
+    slow.after = Some("fast");
     slow.trace = Arc::clone(&trace);
     let mut fast = TestTool::reads("fast", "third");
     fast.trace = Arc::clone(&trace);
@@ -476,7 +475,7 @@ fn long(size: usize, bound: Bound) -> (Arc<TestTool>, String) {
 
 #[test]
 fn a_result_over_its_bound_keeps_the_start_and_moves_the_rest_to_an_artifact() {
-    let (tool, full) = long(20 * 1024, Bound::default());
+    let (tool, full) = long(20 * 1024, Bound::DEFAULT);
     let (session, lines) = turn(vec![tool], &[("cat", paris())]);
     let done = completed(&lines)[0];
     let id = done.action_id.clone().unwrap().0;

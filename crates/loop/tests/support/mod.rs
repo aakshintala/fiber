@@ -99,8 +99,8 @@ pub(crate) struct TestTool {
     pub(crate) bound: Bound,
     /// Waited on by every call before it returns.
     pub(crate) barrier: Option<Arc<Barrier>>,
-    /// How long a call takes.
-    pub(crate) delay: Duration,
+    /// A tool whose call a call of this one waits to see finish, in `trace`.
+    pub(crate) after: Option<&'static str>,
     /// What happened, in order, shared between tools: `effects <name>`,
     /// `run <name>`, `done <name>`.
     pub(crate) trace: Arc<Mutex<Vec<String>>>,
@@ -132,9 +132,9 @@ impl TestTool {
                 content: vec![ContentPart::Text { text: text.into() }],
                 ..Output::default()
             },
-            bound: Bound::default(),
+            bound: Bound::DEFAULT,
             barrier: None,
-            delay: Duration::ZERO,
+            after: None,
             trace: Arc::default(),
             ran: Mutex::default(),
         }
@@ -194,7 +194,12 @@ impl Tool for TestTool {
     fn run(&self, arguments: &Map<String, Value>) -> Output {
         self.note("run");
         self.ran.lock().unwrap().push(arguments.clone());
-        thread::sleep(self.delay);
+        if let Some(other) = self.after {
+            let done = format!("done {other}");
+            while !self.trace.lock().unwrap().contains(&done) {
+                thread::sleep(Duration::from_millis(1));
+            }
+        }
         if let Some(barrier) = &self.barrier {
             barrier.wait();
         }

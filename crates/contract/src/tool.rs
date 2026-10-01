@@ -25,7 +25,7 @@ pub trait Tool: Send + Sync {
 
     /// How a long result is cut (`docs/tools.md`, "Bounded results").
     fn bound(&self) -> Bound {
-        Bound::default()
+        Bound::DEFAULT
     }
 }
 
@@ -61,7 +61,7 @@ pub struct Output {
 }
 
 /// How many bytes of a result's text the model is sent: the first `start`
-/// and the last `end`. The default keeps the first 16 KiB.
+/// and the last `end`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Bound {
     /// Bytes kept from the start.
@@ -70,11 +70,10 @@ pub struct Bound {
     pub end: usize,
 }
 
-impl Default for Bound {
-    fn default() -> Self {
-        Self {
-            start: 16 * 1024,
-            end: 0,
-        }
-    }
+impl Bound {
+    /// A tool's bound unless it declares its own: the first 16 KiB.
+    pub const DEFAULT: Self = Self {
+        start: 16 * 1024,
+        end: 0,
+    };
 }
