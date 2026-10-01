@@ -121,8 +121,13 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
 `budget.usd` caps what a session spends, in US dollars billed per token
 (`docs/configuration.md`, "Keys"). It is unset by default, and unset means no
-limit. The spend it counts is the `usage` fold (`docs/events.md`): the
-session's own `usage_recorded` lines and those of its delegates, and theirs.
+limit. The spend it counts is the `usage` fold (`docs/events.md`) over the
+session's own log, which holds its own `usage_recorded` lines and a copy of
+each one its delegates sent it, and theirs. A parent writes each
+`usage_recorded` it receives from a delegate into its own log, keeping the
+line's original `session_id` and `seq`, and the fold counts each original
+line once. A resumed parent reads the log of each delegate it marks
+`orphaned` and writes any copies it is missing.
 A call with `subscription` does not count, because a subscription bills
 nothing per call; its own limit ends it as `quota_exceeded`. A `cost` still
 `null` counts as zero until it settles.
@@ -137,9 +142,16 @@ refuses, the request is not sent:
 - the session's running delegates are stopped, as `job_stop` stops one
   (`docs/delegates.md`, "Lifetime")
 
-The call that crosses the limit completes, so a session overshoots by at most
-one call, or by one run of a delegate on another harness, which reports its
-cost only when the run ends. A delegate checks no budget of its own; its
+The budget is also checked whenever a delegate's `usage_recorded` arrives,
+because a session waiting in `jobs wait` makes no model request of its own.
+When that line reaches the limit, the thread reading the delegate stops the
+running delegates at once, outside the inbox, as cancellation is
+(`docs/architecture.md`, "One inbox"). The loop's next request is refused
+`budget_exceeded` as above.
+
+A call that crosses the limit completes, so the tree overshoots by at most
+one call in flight per running session in it, or by one run of a delegate on
+another harness, which reports its cost only when the run ends. A delegate checks no budget of its own; its
 parent's covers it. To continue, the person raises `budget.usd` and reloads
 (`/settings` does both), or resumes with `-c budget.usd=…`
 (`docs/configuration.md`, "When Fiber reads configuration"), then sends a
