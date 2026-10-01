@@ -141,7 +141,11 @@ impl Connector<()> for KeepSocket {
             details.config.input_buffer_size(),
             details.config.output_buffer_size(),
         );
-        Ok(Some(Socket { stream, buffers }))
+        Ok(Some(Socket {
+            stream,
+            buffers,
+            open: true,
+        }))
     }
 }
 
@@ -150,6 +154,8 @@ impl Connector<()> for KeepSocket {
 struct Socket {
     stream: TcpStream,
     buffers: LazyBuffers,
+    /// False once a read found the peer had closed.
+    open: bool,
 }
 
 impl Transport for Socket {
@@ -172,12 +178,15 @@ impl Transport for Socket {
         let read = self.stream.read(input)?;
         self.buffers.input_appended(read);
         // No bytes is the peer closing: ureq reads `false` as no progress.
-        Ok(read != 0)
+        self.open = read != 0;
+        Ok(self.open)
     }
 
-    // Only ureq's pool asks, to decide whether to reuse the connection, and
-    // each call has its own agent, so nothing is ever reused.
     fn is_open(&mut self) -> bool {
-        true
+        self.open
     }
 }
+
+#[cfg(test)]
+#[path = "http_tests.rs"]
+mod tests;
