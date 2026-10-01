@@ -3,7 +3,7 @@
 //! script and records every request it receives.
 
 use std::collections::VecDeque;
-use std::io::{self, BufRead, BufReader, Write};
+use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
@@ -189,18 +189,25 @@ fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>) {
 
 fn serve(stream: TcpStream, state: &Mutex<State>) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
-    let request = read_request(&mut reader)?;
+    let (request, malformed) = read_request(&mut reader)?;
     let response = {
         let mut state = lock(state);
         state.requests.push(request);
-        state.script.pop_front()
-    }
-    .unwrap_or_else(|| {
-        Response::status(
-            500,
-            r#"{"error":"fakes: no scripted response left for this request"}"#,
-        )
-    });
+        // A malformed body is the client's bug: it gets a 400 and the script
+        // keeps its next response.
+        match malformed {
+            Some(why) => Response::status(
+                400,
+                format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
+            ),
+            None => state.script.pop_front().unwrap_or_else(|| {
+                Response::status(
+                    500,
+                    r#"{"error":"fakes: no scripted response left for this request"}"#,
+                )
+            }),
+        }
+    };
     write_response(reader.get_mut(), &response)
 }
 
@@ -208,7 +215,8 @@ fn invalid(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidData, what.to_owned())
 }
 
-fn read_request(reader: &mut impl BufRead) -> io::Result<Request> {
+/// The request, and why its body's framing is malformed if it is.
+fn read_request(reader: &mut impl BufRead) -> io::Result<(Request, Option<Malformed>)> {
     let mut line = String::new();
     reader.read_line(&mut line)?;
     let mut parts = line.split_whitespace();
@@ -244,8 +252,11 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<Request> {
         // A request with any transfer coding ends in chunked (RFC 9112,
         // section 6.1).
         .any(|(n, _)| n == "transfer-encoding");
+    let mut malformed = None;
     let body = if chunked {
-        read_chunked(reader)?
+        let mut body = Vec::new();
+        malformed = read_chunked(reader, &mut body).err();
+        body
     } else {
         let length = headers
             .iter()
@@ -256,42 +267,63 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<Request> {
         reader.read_exact(&mut body)?;
         body
     };
-    Ok(Request {
-        method,
-        path,
-        headers,
-        body,
-    })
+    Ok((
+        Request {
+            method,
+            path,
+            headers,
+            body,
+        },
+        malformed,
+    ))
 }
 
-/// A chunked body (RFC 9112, section 7.1), decoded: each chunk's bytes in
-/// order, with chunk extensions and trailers dropped.
-fn read_chunked(reader: &mut impl BufRead) -> io::Result<Vec<u8>> {
-    let mut body = Vec::new();
-    let mut line = String::new();
+/// Why a chunked request body could not be decoded.
+type Malformed = &'static str;
+
+const TRUNCATED: Malformed = "the chunked body ends before its framing does";
+
+/// Decodes a chunked body (RFC 9112, section 7.1) into `body`: each chunk's
+/// bytes in order, with chunk extensions and trailers dropped. On malformed
+/// or truncated framing, `body` holds what decoded before it.
+fn read_chunked(reader: &mut impl BufRead, body: &mut Vec<u8>) -> Result<(), Malformed> {
     loop {
-        line.clear();
-        reader.read_line(&mut line)?;
+        let line = framing_line(reader)?;
         let size = line.split(';').next().unwrap_or("").trim();
-        let size = usize::from_str_radix(size, 16)
-            .map_err(|_| invalid("chunk size is not a hex number"))?;
+        let size = u64::from_str_radix(size, 16).map_err(|_| "a chunk size is not a hex number")?;
         if size == 0 {
             break;
         }
-        let mut chunk = vec![0; size];
-        reader.read_exact(&mut chunk)?;
-        body.extend(chunk);
-        line.clear();
-        reader.read_line(&mut line)?;
+        // `take` rather than a buffer of `size`, so a huge declared size
+        // cannot allocate before a byte arrives.
+        let read = reader
+            .by_ref()
+            .take(size)
+            .read_to_end(body)
+            .map_err(|_| TRUNCATED)?;
+        if u64::try_from(read) != Ok(size) {
+            return Err(TRUNCATED);
+        }
+        if !framing_line(reader)?.is_empty() {
+            return Err("a chunk's data is not followed by CRLF");
+        }
     }
     // Trailers, up to the blank line that ends the body. They are read so
     // the client's bytes are all consumed before the connection closes.
-    loop {
-        line.clear();
-        reader.read_line(&mut line)?;
-        if line.trim_end_matches(['\r', '\n']).is_empty() {
-            return Ok(body);
-        }
+    while !framing_line(reader)?.is_empty() {}
+    Ok(())
+}
+
+/// One line of chunked framing, without its CRLF.
+fn framing_line(reader: &mut impl BufRead) -> Result<String, Malformed> {
+    let mut line = String::new();
+    match reader.read_line(&mut line) {
+        Ok(0) | Err(_) => Err(TRUNCATED),
+        Ok(_) if !line.ends_with('\n') => Err(TRUNCATED),
+        Ok(_) => line
+            .strip_suffix("\r\n")
+            .map(str::to_owned)
+            .ok_or("a chunked framing line does not end in CRLF"),
     }
 }
 

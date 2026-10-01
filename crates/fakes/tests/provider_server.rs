@@ -4,20 +4,25 @@
 #![allow(
     clippy::unwrap_used,
     clippy::expect_used,
+    clippy::panic,
     clippy::indexing_slicing,
-    reason = "test code may unwrap and index (docs/code-quality.md, \"Lints\"), helpers outside a #[test] included"
+    reason = "test code may unwrap, panic and index (docs/code-quality.md, \"Lints\"), helpers outside a #[test] included"
 )]
 
-use std::io::{Read, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::io::{self, Read, Write};
+use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
+use std::sync::mpsc;
+use std::thread;
 use std::time::Duration;
 
 use fakes::{ProviderServer, Request, Response};
 
-/// The deadline on every connect, write and read: a stall fails naming the
-/// operation instead of hanging until nextest kills the test.
-const DEADLINE: Duration = Duration::from_secs(10);
+/// The deadline on each wait: connecting, writing the whole request, and
+/// reading the whole reply. A stall fails naming the wait. A test makes at
+/// most 3 exchanges of 3 waits, 18 s in all, and twice that is under
+/// nextest's 120 s (docs/testing.md, "Waits and timeouts").
+const DEADLINE: Duration = Duration::from_secs(2);
 
 fn addr(server: &ProviderServer) -> SocketAddr {
     server.url().trim_start_matches("http://").parse().unwrap()
@@ -42,20 +47,36 @@ fn post(server: &ProviderServer, path: &str, headers: &[(&str, &str)], body: &[u
     exchange(server, &request)
 }
 
-/// Sends `request` as written and reads the reply to the end of the
-/// connection, each step under `DEADLINE`.
+/// Sends `request` as written, ends the write side, and reads the reply to
+/// the end of the connection. A client thread does the I/O and reports each
+/// step, so each wait has one overall deadline and a stall names its step.
 fn exchange(server: &ProviderServer, request: &[u8]) -> Reply {
-    let mut stream = TcpStream::connect_timeout(&addr(server), DEADLINE)
-        .expect("connecting to the fake provider within the deadline");
-    stream.set_write_timeout(Some(DEADLINE)).unwrap();
-    stream.set_read_timeout(Some(DEADLINE)).unwrap();
-    stream
-        .write_all(request)
-        .expect("writing the request to the fake provider within the deadline");
-    let mut raw = Vec::new();
-    stream
-        .read_to_end(&mut raw)
-        .expect("reading the fake provider's whole reply within the deadline");
+    let (addr, request) = (addr(server), request.to_vec());
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let steps = || -> io::Result<()> {
+            let mut stream = TcpStream::connect(addr)?;
+            tx.send(Ok(Vec::new())).unwrap();
+            stream.write_all(&request)?;
+            stream.shutdown(Shutdown::Write)?;
+            tx.send(Ok(Vec::new())).unwrap();
+            let mut raw = Vec::new();
+            stream.read_to_end(&mut raw)?;
+            tx.send(Ok(raw)).unwrap();
+            Ok(())
+        };
+        if let Err(e) = steps() {
+            tx.send(Err(e)).unwrap();
+        }
+    });
+    let wait = |step: &str| match rx.recv_timeout(DEADLINE) {
+        Ok(Ok(bytes)) => bytes,
+        Ok(Err(e)) => panic!("{step}: {e}"),
+        Err(_) => panic!("{step}: not done within {DEADLINE:?}"),
+    };
+    wait("connecting to the fake provider");
+    wait("writing the request to the fake provider");
+    let raw = wait("reading the fake provider's whole reply");
     let split = raw.windows(4).position(|w| w == b"\r\n\r\n").unwrap();
     let head = String::from_utf8(raw[..split].to_vec()).unwrap();
     let mut lines = head.split("\r\n");
@@ -232,4 +253,32 @@ fn it_records_a_chunked_body_decoded() {
     assert_eq!(reply.body, b"ok");
     let body = String::from_utf8(server.requests()[0].body.clone()).unwrap();
     assert_eq!(body, r#"{"model":"m","n":1}"#);
+}
+
+#[test]
+fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
+    let server = ProviderServer::start([Response::stream("ok")]).unwrap();
+
+    let reply = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n3\r\nabcX\r\n0\r\n\r\n",
+    );
+    let truncated = exchange(
+        &server,
+        b"POST /v1/messages HTTP/1.1\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nab",
+    );
+    let next = post(&server, "/v1/messages", &[], b"{}");
+
+    assert_eq!(reply.status, 400);
+    let why = String::from_utf8(reply.body).unwrap();
+    assert!(why.contains("not followed by CRLF"), "{why}");
+    assert_eq!(truncated.status, 400);
+    let why = String::from_utf8(truncated.body).unwrap();
+    assert!(why.contains("ends before its framing does"), "{why}");
+    // The script kept its response for the next well-formed request.
+    assert_eq!((next.status, next.body), (200, b"ok".to_vec()));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(requests[0].body, b"abc");
+    assert_eq!(requests[1].body, b"ab");
 }
