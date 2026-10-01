@@ -25,7 +25,10 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   approvals/<content-hash>        one file per approved extension content
   credentials/<provider>          one file per provider, mode 0600
   run/<session_id>                one local socket per running session
+  run/hub                         the hub's local socket
+  recent.jsonl                    recently exited sessions, a rebuildable index
   cache/models/<provider>.json    discovered model list
+  cache/mcp/<server>.json         an MCP server's last tool list
   crashes/<session_id>-<ms>.txt   one report per panic (docs/code-quality.md)
 ```
 
@@ -133,13 +136,16 @@ approved in one repository is not asked about again in another
 **Credentials.** One file per provider at `credentials/<provider>`, mode
 0600, in a 0700 directory. There is no OS keychain. OAuth refresh takes a
 lock on the credential file (`docs/model-routing.md`). Every tool call
-touching `credentials/` is refused in every mode
+touching `credentials/` is refused
 ([docs/permissions.md](permissions.md#credentials)).
 
 **Cache.** `cache/` holds only what is always safe to delete;
 `rm -rf ~/.fiber/cache` is a documented safe reset. Today it holds each
 provider's discovered model list, one file per provider at
-`cache/models/<provider>.json`, fetched and replaced whole.
+`cache/models/<provider>.json`, fetched and replaced whole, and each MCP
+server's last tool list at `cache/mcp/<server>.json`, keyed by a hash of the
+server's declaration (`docs/mcp.md`, "Starting servers"). A writer replaces
+a file by rename, so two sessions refreshing one list leave one whole file.
 
 **Crash reports.** `crashes/<session_id>-<ms>.txt` holds one panic's
 message, thread name and backtrace, written by the panic hook before the
@@ -152,7 +158,10 @@ started with `isolation: worktree`. When one is removed or kept is
 `docs/delegates.md` ("Worktrees").
 
 **Sockets.** `run/<session_id>` is the local socket of a running session
-(`docs/invocation.md`, "Processes"), mode 0600 in a 0700 directory. The process
+(`docs/invocation.md`, "Processes"), mode 0600 in a 0700 directory. The hub, a
+delegate's parent and session messages connect to it; every other client
+reaches it through the hub. `run/hub` is the hub's own socket, which local
+clients connect to; the hub that binds it removes a stale one first. The process
 holding that session's `session.lock` owns it: it removes any socket left by a
 dead process before binding, unlinks its own at exit, and nothing else removes
 one. It sits at the top of Fiber home
@@ -161,6 +170,14 @@ because macOS limits a socket's path to 103 bytes (`sun_path[104]` in
 `projects/<key>/sessions/<id>/` exceeds that. Linux allows 107 (`unix(7)`, not
 measured here). A `FIBER_HOME` long enough to break the limit is a startup
 error naming the variable.
+
+**Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
+JSON line per session that exited, appended by the session itself as it
+exits, with its id, workspace, name and what it stopped on. A session
+appends whether or not a hub is running. The hub reads it at start, keeps the
+newest 100, and rewrites the file with them by rename when it passes about
+1,000 lines. It is a derived index, rebuildable from the logs, and never the
+truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 **Prompt history.** Per project, `history.jsonl`: one JSON line per prompt,
 append-only. Up-arrow recalls prompts typed anywhere in that project.

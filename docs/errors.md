@@ -48,20 +48,21 @@ caller gets back").
 
 - **`fiber ask`** runs one turn. If the turn failed, `fiber_exited.error` copies
   the turn's error and the process exits 1.
-- **`fiber serve`** runs many turns, and a driver has seen each one's
-  `turn_completed`. A failed turn does not fail the process. `serve` exits 1
-  with an `error` only when the process itself failed.
+- **A session the hub started** runs many turns, and its clients have seen
+  each one's `turn_completed`. A failed turn does not fail the process. It
+  exits 1 with an `error` only when the process itself failed.
 - **A signal** exits 129, 130 or 143 with no `error`; the exit code says what
   happened (`docs/invocation.md`, "Shutdown").
 
 ### Before a session exists
 
-A failure before `fiber_started` has no session and no log. `fiber ask` and
-`fiber serve` still print one `fiber_exited` line on stdout, carrying the exit
+A failure before `fiber_started` has no session and no log. `fiber ask`
+still prints one `fiber_exited` line on stdout, carrying the exit
 code and `error`, and one sentence on stderr. The line has no `session_id`, so
 filtering stdout by session still gives each session's log byte for byte, and
-`fiber ask … | tail -1` reads the verdict whatever happened. The terminal door
-prints the sentence on stderr only.
+`fiber ask … | tail -1` reads the verdict whatever happened. A session the
+hub started writes the same line, and the hub passes it to the client that
+asked for the session.
 
 | Code | When | Exit |
 |---|---|---|
@@ -242,7 +243,7 @@ Notices, for a failure outside any action:
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
-Driver command rejections (`malformed`, `busy`, `stale_request`, `not_step_boundary`,
+Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
 `closing`)
 are `docs/invocation.md`, "Driver commands".
