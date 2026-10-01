@@ -50,6 +50,8 @@ pub enum Command {
     Reload,
     /// Answers with every declared tool.
     Tools,
+    /// Answers with durable log lines in a seq range.
+    History(HistoryArgs),
     /// Switches model, effort or thinking at the next turn boundary.
     Model(ModelArgs),
     /// Sets the session's name.
@@ -226,6 +228,17 @@ pub enum RememberScope {
 pub struct JobStop {
     /// The running job.
     pub job_id: JobId,
+}
+
+/// The `args` of `history`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HistoryArgs {
+    /// The first `seq` to return, inclusive.
+    pub from_seq: Seq,
+    /// The last `seq` to return, inclusive; absent means the latest line.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub to_seq: Option<Seq>,
 }
 
 /// The `args` of `model`.

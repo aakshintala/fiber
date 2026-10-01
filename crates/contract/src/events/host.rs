@@ -7,7 +7,7 @@ use serde_json::Value;
 use super::action::Progress;
 use super::context::Outcome;
 use crate::shapes::{Failure, Point, Process, Question, Usage, Worktree};
-use crate::{CommandId, ErrorCode, JobId, SessionId};
+use crate::{CommandId, Envelope, ErrorCode, JobId, SessionId};
 
 /// Why an MCP server failed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -299,17 +299,17 @@ pub struct JobsPendingNotified {
 }
 
 /// `command_accepted`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CommandAccepted {
     /// The command's id.
     pub command_id: CommandId,
-    /// On `rewind`, `tools` and a `shell` sent with `send` false.
+    /// On `rewind`, `tools`, `history` and a `shell` sent with `send` false.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub result: Option<CommandResult>,
 }
 
 /// What an accepted command answers with.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum CommandResult {
     /// For `rewind`.
@@ -321,6 +321,11 @@ pub enum CommandResult {
     Tools {
         /// One per declared tool.
         tools: Vec<ToolInfo>,
+    },
+    /// For `history`: the durable lines in the requested range.
+    History {
+        /// At most 256 durable event lines.
+        lines: Vec<Envelope>,
     },
     /// For `shell` sent with `send` false, as on `shell_command`.
     Shell {

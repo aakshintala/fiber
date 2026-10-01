@@ -551,6 +551,12 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"command_id": "c", "result": {"output": "o",
             "artifact": "artifacts/o", "process": process}}),
         ),
+        (
+            "command_accepted",
+            json!({"command_id": "c", "result": {"lines": [
+            {"kind": "step_started", "session_id": "s", "ts": 1, "schema_version": 1,
+             "seq": 0, "payload": {}}]}}),
+        ),
         ("command_accepted", json!({"command_id": "c"})),
         (
             "command_rejected",

@@ -88,6 +88,8 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "background"}),
         json!({"id": "c", "command": "reload"}),
         json!({"id": "c", "command": "tools"}),
+        json!({"id": "c", "command": "history", "args": {"from_seq": 0, "to_seq": 10}}),
+        json!({"id": "c", "command": "history", "args": {"from_seq": 0}}),
         json!({"id": "c", "command": "model",
             "args": {"model": "opus", "effort": "high", "thinking": "on"}}),
         json!({"id": "c", "command": "model", "args": {"model": "opus"}}),
@@ -172,6 +174,13 @@ fn subscribe_args_that_do_not_fit_are_invalid_arguments() {
     assert!(
         parse(r#"{"id":"c","command":"subscribe","args":{"level":"full","extra":true}}"#).is_err()
     );
+}
+
+#[test]
+fn history_args_that_do_not_fit_are_invalid_arguments() {
+    assert!(parse(r#"{"id":"c","command":"history","args":{}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":"0"}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"extra":true}}"#).is_err());
 }
 
 #[test]
