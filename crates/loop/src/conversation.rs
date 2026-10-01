@@ -145,7 +145,7 @@ fn user(content: &[ContentPart]) -> Input {
 }
 
 /// The text parts of `content`, joined. Only text reaches the model yet.
-fn text(content: &[ContentPart]) -> String {
+pub(crate) fn text(content: &[ContentPart]) -> String {
     content
         .iter()
         .filter_map(|part| match part {
