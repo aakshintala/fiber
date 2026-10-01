@@ -227,3 +227,9 @@ fn declined_and_skipped_are_only_ever_true() {
             .is_err()
     );
 }
+
+#[test]
+fn a_key_not_in_the_command_line_is_refused() {
+    assert!(parse(r#"{"id":"c","command":"cancel","extra":1}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"cancel","session_id":"s_1"}"#).is_err());
+}
