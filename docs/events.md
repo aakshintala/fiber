@@ -84,13 +84,12 @@ to durable lines carrying its own `session_id` and you have `events.jsonl`, byte
 for byte. There is no second format and no replay command: a client catching up
 reads the file.
 
-A Fiber delegate's lines are relayed onto its parent's stdout as they are, each
-carrying the delegate's `session_id`, so filtering by `session_id` still gives
-the parent's log (`docs/delegates.md`, "One stream").
+A delegate's lines stay on the delegate's own stream; nothing is relayed onto
+its parent's (`docs/delegates.md`, "Streams").
 
-The TUI is a separate process that reads the same event stream from the
-session's socket (`docs/invocation.md`, "Processes"), so it holds no private
-path to state; anything it renders exists in this contract, as an ephemeral
+The TUI is a separate process that reads the same event stream through the
+hub (`docs/invocation.md`, "Processes"), so it holds no private path to
+state; anything it renders exists in this contract, as an ephemeral
 event where it is display-only.
 
 ## Identity and ordering
@@ -232,7 +231,6 @@ the envelope's `schema_version`.
 |---|---|---|---|
 | `version` | string | yes | the Fiber version, such as `0.0.1` |
 | `resumed` | boolean | yes | `false` for a new session, `true` for a resumed one |
-| `mode` | string | yes | the permission mode this process opened the session in: `auto`, `readonly` or `yolo` (`docs/permissions.md`, "Modes") |
 
 #### `fiber_exited`
 
@@ -270,8 +268,8 @@ Every other duplicate is the bug this page exists to prevent — a stored fold
 that is read back and goes stale.
 
 The alternative was making callers filter the stream for the last
-`assistant_message_completed`, which is a one-liner today and stops being one
-as soon as a delegate relays its own messages onto the same stdout.
+`assistant_message_completed`, which a one-shot caller should not have to
+know about.
 
 ### Session and turn
 
@@ -374,11 +372,33 @@ session").
 
 #### `clients`
 
-Ephemeral. Written whenever a client attaches or leaves.
+Ephemeral. Written whenever a `full` connection attaches or leaves
+(`docs/invocation.md`, "Driver commands", `subscribe`).
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `count` | integer | yes | the clients attached to the session, the receiving client included |
+| `count` | integer | yes | the `full` connections attached to the session, the receiving client included; `summary` connections are not counted |
+
+#### `session_status`
+
+Ephemeral. The session's own summary of itself, for a client that is not
+showing it: a session list, a rail, a delegate card. Written when any field
+changes. The latest wins, and a client that subscribes, at either level, is
+sent the latest.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string | yes | the session's name, or its first prompt when it has none |
+| `workspace` | string | yes | the workspace path |
+| `parent` | string | no | on a delegate, the parent's `session_id` |
+| `model` | string | yes | the model reference in use |
+| `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting` or `idle`; a closed set |
+| `tool` | string | no | with `tool`, the running tool's name |
+| `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval` or `question`) and `summary` (string, one line) |
+| `since` | integer | yes | when this state began, as `ts` |
+| `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
+| `delegates` | integer | yes | delegates running |
+| `jobs` | integer | yes | jobs running, delegates excluded |
 
 #### `context_added`
 
@@ -400,7 +420,7 @@ threading this rests on is the concurrency section of `docs/architecture.md`;
 the driver commands that send, amend and withdraw one — `steer`, `steer_amend`
 and `steer_drop` — are `docs/invocation.md`.
 
-`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/invocation.md`, "Lifecycle"). The latest wins, and a client that attaches is sent the latest.
+`clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/tui.md`, "Quit"). The latest wins, and a client that attaches is sent the latest.
 
 `steering_queue` lets every attached client show and edit the queue, not only
 the client that sent a message. It is ephemeral because `steering_applied`
@@ -567,7 +587,7 @@ Durable. The envelope's `action_id` is the tool call.
 | `effects` | array of strings | yes | as in "Declared effects" |
 | `reversible` | boolean | yes | as in "Declared effects" |
 | `paths` | array of strings | no | as in "Declared effects" |
-| `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3), `readonly` (4) or `review` (9); a closed set |
+| `step` | string | yes | which step of `docs/permissions.md`, "The order a call is judged in", raised it: `standing_ask` (3) or `review` (7); a closed set |
 | `standing_rule` | object | no | on `standing_ask`, the rule that asked: `scope` (`global` or `project`) and `prefix` (string) |
 | `escalation` | object | no | on `review` in `auto`, why the reviewer handed the call to a person: `cause`, which is `consecutive_blocks`, `session_blocks` or `reviewer_failed`, a closed set; `reason` (string), the reviewer's reason for blocking this call, on the two block causes; `error` (`error`), on `reviewer_failed` |
 | `rule` | object | no | on `review`, the rule an allow can remember: `subject` (string), the call's primary argument as its tool reads it, and `prefix` (string), the widening the tool offers, which `subject` starts with (`docs/permissions.md`, "What a rule matches"). Absent when no rule can match the call |
@@ -579,8 +599,8 @@ Durable. The envelope's `action_id` is the tool call.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `request_id` | string | no | the request it answers; absent when the decision raised none |
-| `decision` | string | yes | `allow` or `deny`; a closed set. On a `readonly` request, `allow` means leave `readonly`, and the call is then judged from step 5 |
-| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer`, `mode` or `cancel`, the turn cancelled while the request was pending (`docs/architecture.md`, "Cancellation"); a closed set |
+| `decision` | string | yes | `allow` or `deny`; a closed set |
+| `decided_by` | string | yes | `credential_deny`, `person`, `standing_rule`, `session_grant`, `reviewer` or `cancel`, the turn cancelled while the request was pending (`docs/architecture.md`, "Cancellation"); a closed set |
 | `reason` | string | no | why, in words, such as the reviewer's reason |
 | `feedback` | string | no | what the person typed with a denial, which the model receives |
 | `grant` | object | no | on a person's `allow` that added a session grant: `tool` and `prefix` (strings), the later calls it allows (`docs/permissions.md`, "What a rule matches") |
@@ -596,20 +616,6 @@ action.
 
 The full shape of approvals, and what happens with no human present, is
 `docs/permissions.md`.
-
-#### `mode_changed`
-
-Durable.
-
-| Key | Type | Required | Meaning |
-|---|---|---|---|
-| `before` | string | yes | the permission mode before |
-| `after` | string | yes | the permission mode after |
-| `by` | string | yes | `command`, the `mode` command; `request`, a yes to leaving `readonly`; or `parent`, the parent session's change; a closed set |
-| `request_id` | string | no | with `by` `request`, the question answered |
-
-A mode change applies to the next tool call judged after it. It never reaches
-the model and never rebuilds the preamble.
 
 ### Interactions
 
@@ -676,6 +682,7 @@ none.
 | `cost` | number or null | yes | in US dollars: the vendor's own figure where it reports one, otherwise the model's declared prices applied to `tokens` (`docs/model-routing.md`, "Cost"); `null` when neither exists |
 | `subscription` | boolean | no | `true` when a subscription login covered the call, so `cost` is an API-price estimate, not money billed; absent means billed per token |
 | `extension` | string | no | the extension whose `host.model` made the call |
+| `origin_session_id` | string | no | on a copy, the session whose call it was (`docs/delegates.md`, "Streams"); absent on the session's own calls |
 
 #### `quota_noticed`
 
@@ -711,7 +718,11 @@ Ephemeral. A failure outside any action.
 
 One `usage_recorded` per model call, whatever started it. A cost that settles
 late is a second `usage_recorded` with the same `generation_id`, replacing the
-first. Consumers sum; resume rebuilds the ledger by folding. No pending queue,
+first. A parent writes a copy of each `usage_recorded` it receives from a
+delegate, with the same payload and `origin_session_id` added, so a session's
+log holds its whole tree's spend. The fold counts one line per
+`generation_id`, the latest, so a copy of a copy is still one call. Consumers
+sum; resume rebuilds the ledger by folding. No pending queue,
 no watermarks, no reconciliation file.
 
 On 20 completed calls to `z-ai/glm-5.3-flash` through OpenRouter, streaming and not,
@@ -892,6 +903,19 @@ follows it. The next model request misses the prompt cache.
 
 Behaviour is `docs/extensions.md`.
 
+#### `extensions_loaded`
+
+Durable. The full set of extensions the session loaded. Written once at
+session start, before the first model request, and again after every
+`reload`, following `reloaded`. It always carries the whole set, never a
+difference; the latest wins, and a `summary` connection is sent the latest.
+A client half reads it to decide whether it draws for this session
+(`docs/extensions.md`, "Client halves").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extensions` | array | yes | one object per loaded extension: `name` (string), `version` (string) and `source` (`home` or `repository`, a closed set) |
+
 #### `extension_state_set`
 
 Durable.
@@ -998,7 +1022,6 @@ Durable. Written after `job_started`, for each run.
 | `delegate_session_id` | string | yes | the delegate's `session_id`; on another harness, the harness's own session id, which Fiber sets before it starts |
 | `harness` | string | yes | the harness, such as `fiber` |
 | `model` | string | yes | the model reference, with any role resolved |
-| `mode` | string | yes | the permission mode it starts in: `readonly`, `auto` or `yolo` (`docs/permissions.md`, "Delegates") |
 | `workspace` | string | yes | the delegate's workspace |
 | `worktree` | object | no | when isolated: `path` and `branch` (strings) |
 | `forked_from` | object | no | for a fork: `session_id` and `seq` |
@@ -1262,8 +1285,8 @@ rebuildable, and never the truth.
 ## Versioning
 
 One integer `schema_version` on every line, shared by durable and ephemeral,
-never negotiated at startup — a line relayed from another Fiber build has to be
-readable on its own.
+never negotiated at startup — a line read by a client of another Fiber build
+has to be readable on its own.
 
 - **Additive, no bump:** a new kind, a new optional field, a new value in an open
   set (`error.code`, denial `reason`, `notice.code`). Consumers skip unknown
