@@ -1,7 +1,7 @@
 //! The vocabulary every other Fiber crate speaks (`docs/architecture.md`).
 //!
 //! It holds the event envelope and every event kind (`docs/events.md`), every
-//! driver command (`docs/invocation.md`) and every error code
+//! driver command (`docs/invocation.md`), the loop's inbox message and every error code
 //! (`docs/errors.md`), and the provider seam (`docs/architecture.md`). It
 //! contains no behaviour beyond serialisation.
 
@@ -10,6 +10,7 @@ pub mod commands;
 mod envelope;
 pub mod events;
 mod ids;
+pub mod inbox;
 mod pre_session;
 pub mod provider;
 pub mod shapes;

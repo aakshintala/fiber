@@ -4,5 +4,7 @@
 //! (`docs/architecture.md`, "The call rules").
 
 mod provider_server;
+mod scripted_provider;
 
 pub use provider_server::{ProviderServer, Request, Response};
+pub use scripted_provider::{Scripted, ScriptedProvider, reply};
