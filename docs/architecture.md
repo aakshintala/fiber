@@ -50,11 +50,14 @@ ephemeral event where it is display-only.
 | `log` | Owns the session directory. The only thing that opens `events.jsonl`, holds the lock, mints `seq` and decides fsync order. Also hands events to whoever is watching. |
 | `loop` | Runs turns and steps (`docs/loop.md`). The only thing that decides what happens next. |
 | `provider` | Talks to model APIs: wire formats, credentials, streaming. Reached only through the provider seam. |
-| `tools` | Runs tool calls: shell, file edits, search. Reached only through the tool seam. |
+| `tools` | Runs the built-in tools that act on the workspace and the session: shell, file edits, search, web fetch, `ask_user`, session messaging and `tool_search`. Reached only through the tool seam. |
+| `mcp` | The MCP client: both transports, OAuth, the cached tool lists and `mcp_resources` (`docs/mcp.md`), and `fiber mcp serve`. Reached only through the tool seam. |
+| `jobs` | Background jobs and delegates: starting, watching and stopping them, the runner for delegates on another harness, and their worktrees (`docs/delegates.md`). Reached only through the tool seam. |
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
-| `doors` | `fiber ask` (argv or stdin in, JSON lines out), the hub, and the internal session command they and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
+| `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket (`docs/invocation.md`, "The hub"). Holds no session. |
+| `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists
@@ -70,11 +73,13 @@ extension talks to `contract`, not to `loop`.
 ## The call rules
 
 `contract` depends on nothing and everything depends on it. `log` and
-`config` depend only on `contract`. `provider`, `tools` and `extensions`
-depend on `contract` and never on `loop`, on each other, or on `tui`. `loop`
+`config` depend only on `contract`. `provider`, `tools`, `mcp`, `jobs` and
+`extensions` depend on `contract` and never on `loop`, on each other, or on
+`tui`. `loop`
 depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
-or `main`. `tui` and `doors` depend on `contract` and on `log`'s reading side,
-and never on `loop`, `provider`, `tools` or `extensions`. `main` depends on
+or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
+side, and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
+`extensions`. `main` depends on
 everything, and nothing depends on `main`.
 
 `fakes` holds the shared fakes that tests and jigs run against
