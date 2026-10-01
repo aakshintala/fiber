@@ -115,11 +115,13 @@ process, with its own MCP servers and extensions. Nothing is shared between
 them.
 _Avoid_: process tree, job tree
 
-### Daemon
+### Hub
 
-The optional long-lived process that lets remote clients start and attach
-sessions. It holds no session.
-_Avoid_: server, gateway, broker, host
+The one process every client talks to, the local terminal included. It lists
+sessions, starts and resumes them, relays every client connection to a
+session's socket, and serves one feed of every live session's status. It
+holds no session.
+_Avoid_: daemon, server, gateway, broker, host (host is the Lua `host.*` calls)
 
 ### Fork
 
@@ -187,20 +189,23 @@ _Avoid_: attachment, blob, spill file, result store
 ### Watcher
 
 Something that reads the event stream and cannot reply. The terminal's
-rendering, a non-interactive run's stdout, a second client. A watcher can be
+rendering, `fiber ask`'s stdout, a second client. A watcher can be
 absent, slow or added later without changing the session.
 
 ### Driver
 
-Something that sends commands to a session. The terminal's input, and stdin on
-the non-interactive door. A driver may only send the commands Fiber defines.
+Something that sends commands to a session over its socket: the terminal's
+input, a GUI, a parent driving its delegate. A driver may only send the
+commands Fiber defines.
 _Avoid_: controller
 
 ### Client
 
 Something attached to a running session that watches it and may drive it: the
-terminal, a script on stdin, a phone through the daemon. Every client has the
-same powers. A session with no client finishes its work and exits.
+terminal, a GUI, a phone, a parent session. Every client but a parent reaches
+a session through the hub, and every client has the same powers. A `full`
+client receives the whole stream; a `summary` client only the session's
+status. Clients do not keep a session alive.
 _Avoid_: frontend, UI, consumer
 
 ### Participant
@@ -254,8 +259,9 @@ _Avoid_: external extension, sidecar, plugin host
 ### TUI extension
 
 The part of an extension that runs in the terminal's process and draws there.
-It reaches its session only through the event stream and driver commands, like
-any client.
+It belongs to the client and loads only from the client's own Fiber home. It
+reaches sessions only through the event stream and driver commands, like any
+client.
 _Avoid_: UI plugin, facet
 
 ### Slot
@@ -395,9 +401,10 @@ _Avoid_: teardown, graceful exit, termination
 
 ### Front door
 
-A way of starting Fiber. There are two: the terminal, and the non-interactive
-door. Which subcommand opened a door changes where its prompt comes from and
-when it exits, never what the loop does.
+A way a person or program reaches Fiber. There are two: the terminal, a client
+of the hub, and `fiber ask`, a one-shot session for a caller outside Fiber.
+Which door was used changes where a prompt comes from and when a session
+exits, never what the loop does.
 _Avoid_: mode, entry point, interface
 
 ### Driver command
