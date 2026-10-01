@@ -914,7 +914,7 @@ A client half reads it to decide whether it draws for this session
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `extensions` | array | yes | one object per loaded extension: `name` (string), `version` (string) and `source` (`home` or `repository`, a closed set) |
+| `extensions` | array | yes | one object per loaded extension: `name` (string) and `version` (string) |
 
 #### `extension_state_set`
 

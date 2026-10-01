@@ -80,9 +80,10 @@ this one:
 
 - A repository cannot declare a provider or change a base URL
   (`docs/model-routing.md`, "Choosing the model").
-- A repository can declare MCP servers and extensions, but they load only after
-  a person approves them (`docs/mcp.md`, "A repository's servers";
-  `docs/extensions.md`, "Extensions a repository brings").
+- A repository can declare MCP servers, which start only after a person
+  approves them (`docs/mcp.md`, "A repository's servers"). It cannot declare
+  or enable an extension (`docs/extensions.md`, "Extensions in a
+  repository").
 
 ## Keys
 
@@ -112,7 +113,7 @@ set the key.
 | `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
-| `extensions."<name>".version` | none | yes, with approval | Declares an extension for the repository, to be fetched (`docs/extensions.md`, "Extensions a repository brings"). |
+| `extensions."<name>".enabled` | true | no | Whether an installed extension loads; `false` globally and `true` in a project's file scopes it to that project (`docs/extensions.md`, "Extensions in a repository"). |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
 | `extensions."<name>".commands."<command>"` | none | yes | A new name for one of the extension's commands, when two extensions clash. |
 | `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |

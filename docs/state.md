@@ -22,7 +22,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
   data/<extension>/               an extension's data for this machine
-  approvals/<content-hash>        one file per approved extension content
+  approvals/<content-hash>        one file per approved MCP server declaration
   credentials/<provider>          one file per provider, mode 0600
   run/<session_id>                one local socket per running session
   run/hub                         the hub's local socket
@@ -127,11 +127,11 @@ never touches them ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.
 `fiber remove` deletes an extension's data directories too, asking first in a
 terminal.
 
-**Approvals.** One file per approved extension content, at
-`approvals/<content-hash>`. The file existing means that content is
-approved; deleting it revokes the approval. Recorded per machine, so content
-approved in one repository is not asked about again in another
-(`docs/extensions.md`).
+**Approvals.** One file per approved MCP server declaration from a
+repository, at `approvals/<content-hash>`. The file existing means that
+declaration is approved; deleting it revokes the approval. Recorded per
+machine, so a declaration approved in one repository is not asked about again
+in another (`docs/mcp.md`, "A repository's servers").
 
 **Credentials.** One file per provider at `credentials/<provider>`, mode
 0600, in a 0700 directory. There is no OS keychain. OAuth refresh takes a

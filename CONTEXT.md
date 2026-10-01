@@ -291,11 +291,12 @@ A directory in Fiber home that belongs to one extension, one per machine and
 one per project, for what it keeps across sessions.
 _Avoid_: storage, cache, extension home
 
-### Extension approval
+### Server approval
 
-A person's decision to let a repository's extension load, made after seeing
-what it registers and carries. It covers exact content: a changed extension
-needs a new approval.
+A person's decision to let an MCP server a repository declares start, made
+after seeing its declaration. It covers the exact declaration: a changed one
+needs a new approval. A repository brings no extensions, so there is no
+extension approval.
 _Avoid_: review (the reviewer is the permission model), trust
 
 ### MCP server

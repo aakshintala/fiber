@@ -74,8 +74,7 @@ asked for the session.
 | `credential_missing` | the session model's credential cannot be found | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
-| `extension_missing` | the repository declares an extension that is not installed, or the session model's provider is not installed | 1 |
-| `extension_unapproved` | the repository brings an extension nobody approved | 1 |
+| `extension_missing` | the session model's provider is not installed | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
 | `mcp_server_unapproved` | the repository declares an MCP server nobody approved | 1 |
@@ -188,9 +187,8 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_missing` | exit | no credential was found for the session's model |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
-| `extension_missing` | exit | a declared extension, or the session model's provider, is not installed |
+| `extension_missing` | exit | the session model's provider is not installed |
 | `extension_required_failed` | exit | a required extension failed to start |
-| `extension_unapproved` | exit | a repository's extension is not approved |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |

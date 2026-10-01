@@ -270,11 +270,18 @@ Fiber does not advertise roots. codex advertises none; Claude Code does.
 ## A repository's servers
 
 A server declared in a repository's configuration runs a program, so it needs
-the same approval as an extension a repository brings (`docs/extensions.md`,
-"Extensions a repository brings"). The approval covers the server's exact
-declaration: a changed declaration needs a new approval. A headless run fails
+a person's approval before it starts. The session that would start it raises
+the approval as an interaction before its first model request, showing the
+server's declaration, so any client can answer it (`docs/tui.md`, "Approving
+a repository's MCP servers"). The approval covers the server's exact
+declaration: a changed declaration needs a new approval, and approvals are
+recorded per machine in Fiber home (`docs/state.md`). A headless run fails
 with `mcp_server_unapproved` if a repository declares a server nobody has
-approved. `fiber approve` records the approval from a terminal.
+approved. `fiber approve`, run in the repository from a terminal, records the
+approvals.
+
+A repository's servers load per repository, unlike extensions, which never
+load from one (`docs/extensions.md`, "Extensions in a repository").
 
 The approval covers what the declaration says to run, not the program itself. A
 declaration that fetches its program at start, such as `npx -y`, can run
