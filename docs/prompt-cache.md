@@ -122,7 +122,7 @@ Providers that route by key are given the root session's id:
 | OpenAI | `prompt_cache_key` |
 | ChatGPT/codex | the `session_id` header (`session-id` and `session_id` both work) |
 | OpenRouter | `session_id` |
-| OpenCode Go | the `x-opencode-session` header |
+| OpenCode | the `x-opencode-session` header |
 
 A fork and every session in its lineage use the root's id. Probed: a different
 `prompt_cache_key` missed the whole cache on GPT-6 Luna.

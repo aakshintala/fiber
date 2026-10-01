@@ -1,0 +1,24 @@
+[
+ {
+  "method": "GET",
+  "url": "https://opencode.ai/zen/go/v1/usage",
+  "request": null,
+  "status": 200,
+  "headers": {
+   "Date": "Thu, 01 Oct 2026 08:19:43 GMT",
+   "Content-Type": "application/json",
+   "Content-Length": "238",
+   "Connection": "close",
+   "CF-Ray": "a43a0b469c56f566-LAX",
+   "Access-Control-Allow-Origin": "*",
+   "Cache-Control": "no-store",
+   "Server": "cloudflare",
+   "access-control-allow-headers": "Content-Type, Authorization, X-Api-Key, X-Opencode-Org-Id",
+   "access-control-allow-methods": "GET, OPTIONS",
+   "cf-placement": "remote-ORD",
+   "x-opencode-log-id": "2c73ee9f-9860-47fa-a297-a5866a5e7f70"
+  },
+  "elapsed_s": 0.39,
+  "body": "{\"usage\":{\"rolling\":{\"status\":\"ok\",\"percent\":0,\"resetsAt\":\"2026-10-01T13:18:56.498Z\"},\"weekly\":{\"status\":\"ok\",\"percent\":0,\"resetsAt\":\"2026-10-05T00:00:00.000Z\"},\"monthly\":{\"status\":\"ok\",\"percent\":0,\"resetsAt\":\"2026-10-29T18:16:08.000Z\"}}}"
+ }
+]

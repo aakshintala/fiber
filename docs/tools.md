@@ -971,9 +971,8 @@ the first-party providers:
 | Provider | Source | Reports |
 |---|---|---|
 | ChatGPT/codex | `/wham/usage` | percent used of a primary and a secondary window, with reset times |
-| OpenCode Go | `GET /zen/go/v1/usage` | percent used of rolling, weekly and monthly windows, with reset times |
+| OpenCode | `GET /zen/go/v1/usage` | percent used of Go's rolling, weekly and monthly windows, with reset times; Zen reports none |
 | OpenRouter | `GET /api/v1/key` | credit remaining, and the key's limit if it has one |
-| OpenCode Zen | none | no quota reported |
 | Anthropic, OpenAI, Gemini API, Databricks, muse, AWS Bedrock, Google Vertex, Azure | none | no quota reported |
 
 muse's `x-ratelimit-remaining-*` headers are a per-minute rate limit, not
