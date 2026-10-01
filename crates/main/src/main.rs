@@ -52,18 +52,78 @@ fn run() -> i32 {
     };
     match args.split_first() {
         Some((door, rest)) if door == "ask" => ask(rest),
+        Some((command, rest)) if command == "install" => install(rest),
         // The terminal door needs a tty and the hub; neither is built, so
         // every other invocation is called wrongly.
         Some(_) | None => {
-            let message = "Usage: fiber ask \"<prompt>\", or fiber ask < <file>.";
+            let message = "Usage: fiber ask [--model <model>] \"<prompt>\", fiber ask < <file>, or fiber install <path>.";
             eprintln!("fiber: {message}");
             2
         }
     }
 }
 
+/// `fiber install <path>`: installs the extension at a local path into Fiber
+/// home, after showing what it registers and asking when stdin is a
+/// terminal (`docs/extensions.md`, "Installing"), and prints its name.
+fn install(args: &[String]) -> i32 {
+    let installed = match args {
+        [path] => install_path(Path::new(path)),
+        _ => Err(usage("Usage: fiber install <path>.")),
+    };
+    match installed {
+        Ok(Some(name)) => {
+            eprintln!("fiber: installed {name}");
+            0
+        }
+        Ok(None) => {
+            eprintln!("fiber: nothing was installed.");
+            1
+        }
+        Err(e) => {
+            eprintln!("fiber: {}", e.message);
+            doors::exit_code(&e)
+        }
+    }
+}
+
+/// Installs from `source` once approved; `None` when the person declined.
+fn install_path(source: &Path) -> Result<Option<String>, Failure> {
+    let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
+    let manifest = config::read_manifest(source).map_err(|e| failed(e.code(), e))?;
+    let providers = config::read_providers(source).map_err(|e| failed(e.code(), e))?;
+    let summary = doors::InstallSummary {
+        name: manifest.name,
+        source: source.display().to_string(),
+        providers: providers
+            .into_iter()
+            .map(|p| {
+                let mut urls: Vec<String> = p.models.into_iter().map(|m| m.base_url).collect();
+                urls.sort();
+                urls.dedup();
+                (p.name, urls)
+            })
+            .collect(),
+    };
+    let stdin = io::stdin();
+    let terminal = stdin.is_terminal();
+    if !doors::install_approved(&summary, terminal, &mut stdin.lock(), &mut io::stderr())? {
+        return Ok(None);
+    }
+    extensions::install(&home, source, env!("CARGO_PKG_VERSION"))
+        .map(Some)
+        .map_err(|e| failed(e.code(), e))
+}
+
 /// `fiber ask`: one session, one turn, its events on stdout.
 fn ask(args: &[String]) -> i32 {
+    let (model, args) = match args {
+        [flag, model, rest @ ..] if flag == "--model" => (Some(model.clone()), rest),
+        [flag] if flag == "--model" => {
+            return ask_failed(usage("`--model` takes a model, such as `provider/model`."));
+        }
+        _ => (None, args),
+    };
     let arg = match args {
         [] => None,
         [flag, ..] if flag.starts_with('-') => {
@@ -82,7 +142,7 @@ fn ask(args: &[String]) -> i32 {
         Ok(prompt) => prompt,
         Err(e) => return ask_failed(e),
     };
-    let parts = match parts() {
+    let parts = match parts(model) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
@@ -123,8 +183,9 @@ fn ask(args: &[String]) -> i32 {
 }
 
 /// Fiber home, configuration, the chosen model, its credential and its
-/// provider: everything a failure of which leaves no session.
-fn parts() -> Result<Parts, Failure> {
+/// provider: everything a failure of which leaves no session. `model` is
+/// `--model`, which sets configuration's `model` for this run.
+fn parts(model: Option<String>) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
@@ -139,7 +200,7 @@ fn parts() -> Result<Parts, Failure> {
         home: home.clone(),
         workspace: workspace.clone(),
         project: config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?,
-        overrides: Vec::new(),
+        overrides: model.map(|m| format!("model={m}")).into_iter().collect(),
     })
     .map_err(|e| failed(e.code(), e))?;
     // ponytail: notices from configuration and loading are dropped until the
@@ -169,7 +230,20 @@ fn parts() -> Result<Parts, Failure> {
         extra_body: model.model.extra_body.clone(),
     };
     let provider: Arc<dyn Provider> = match model.model.protocol {
-        Protocol::OpenaiResponses => Arc::new(Responses::new(endpoint)),
+        Protocol::OpenaiResponses => {
+            let responses = Responses::new(endpoint);
+            Arc::new(
+                match model
+                    .model
+                    .compat
+                    .get("cache_key_header")
+                    .and_then(Value::as_str)
+                {
+                    Some(name) => responses.cache_key_header(name),
+                    None => responses,
+                },
+            )
+        }
         Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
         Protocol::OpenaiCompletions | Protocol::GoogleGenerativeAi | Protocol::BedrockConverse => {
             // ponytail: docs/errors.md has no code for a protocol this Fiber
