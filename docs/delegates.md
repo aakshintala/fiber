@@ -199,7 +199,7 @@ final message, any questions, usage totals and worktree state. Their keys are
   A delegate never waits on a person: an escalation is a block and an
   `ask_user` question ends its turn ("Results").
 - A Fiber delegate exits as soon as its run finishes: its final answer is
-  written and its own jobs are done. It does not wait for `session.idle_exit`
+  written and its own jobs are done. It does not wait for `session.idle_exit_ms`
   (`docs/invocation.md`, "Lifecycle").
 - A delegate that finishes its task with jobs of its own still running follows
   the rule for a session about to end (`docs/tools.md`): it is woken once, then

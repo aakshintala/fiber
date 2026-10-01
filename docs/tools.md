@@ -690,7 +690,7 @@ This is a session the hub started, which any client may answer.
 - One call raises one `form` interaction, with one field per question: select,
   multi-select or text input. One `reply` answers the whole form.
 - It has no timeout. It lives like a pending approval: when
-  `session.idle_exit` passes, the session exits on it with `suspended_on`,
+  `session.idle_exit_ms` passes, the session exits on it with `suspended_on`,
   and resuming raises it again (`docs/invocation.md`, "Lifecycle").
 - The request and its answer are `interaction_requested` and
   `interaction_resolved` (`docs/events.md`, "Interactions").

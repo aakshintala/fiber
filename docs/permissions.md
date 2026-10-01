@@ -351,7 +351,7 @@ the rule above until it exhausts the block budget. The turn then completes
 `failed` with code `blocked`, so a headless caller learns the task needed
 permissions it was not given. No answer is possible in a
 session started by `fiber ask`, and in a session that has been sent `close`.
-Anywhere else, a person may come back: after `session.idle_exit` the session
+Anywhere else, a person may come back: after `session.idle_exit_ms` the session
 exits on the pending escalation and raises it again when resumed
 (`docs/invocation.md`, "Lifecycle").
 

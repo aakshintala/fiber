@@ -257,7 +257,7 @@ full session id or any prefix of one that is unique among the project's
 sessions. In the terminal, `fiber --resume` with no id opens home. `fiber ask`
 has no list to show, so there it is a usage error.
 
-**A session exits when it has been idle for `session.idle_exit`**, 30 minutes
+**A session exits when it has been idle for `session.idle_exit_ms`**, 30 minutes
 by default (`docs/configuration.md`), whoever is connected. Idle means no turn
 running and no jobs running. Waiting on an approval or a question is idle,
 because nothing is in flight. Connected clients do not keep a session alive: a
@@ -265,7 +265,7 @@ phone or a terminal left open is connected all the time. Leaving never
 cancels. When the delay passes, Fiber gives the ending notice and exits.
 
 **A delegate exits as soon as its run finishes**: its final answer is written
-and its own jobs are done. It does not wait for `session.idle_exit`. A later
+and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later
 `delegate_message` resumes it (`docs/delegates.md`).
 
 **A `fiber ask` session exits when its turn ends** and its jobs are done.
