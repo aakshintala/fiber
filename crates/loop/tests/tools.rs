@@ -17,9 +17,9 @@ mod support;
 use std::sync::{Arc, Barrier};
 use std::time::Duration;
 
-use contract::events::TurnOutcome;
+use contract::events::{Control, FileChange, TurnOutcome};
 use contract::provider::{Finish, Input};
-use contract::shapes::{ContentPart, Effect};
+use contract::shapes::{ContentPart, Effect, Process};
 use contract::tool::{Bound, Tool};
 use contract::{Envelope, ErrorCode};
 use fakes::Scripted;
@@ -101,6 +101,34 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
             text: "Sunny.".into(),
         })
     );
+}
+
+#[test]
+fn a_result_carries_what_the_tool_returned() {
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.output.process = Some(Process {
+        exit_code: Some(0),
+        signal: None,
+        timed_out: false,
+    });
+    tool.output.details = Some(json!({"diff": "+a"}));
+    tool.output.changes = Some(vec![FileChange {
+        path: "/w/a".into(),
+        added: 1,
+        removed: 0,
+    }]);
+    tool.output.control = Some(Control {
+        handoff: "note".into(),
+    });
+    let (_, lines) = turn(vec![Arc::new(tool)], &[("get_weather", paris())]);
+    let done = &completed(&lines)[0].payload;
+    assert_eq!(done["process"], json!({"exit_code": 0, "timed_out": false}));
+    assert_eq!(done["details"], json!({"diff": "+a"}));
+    assert_eq!(
+        done["changes"],
+        json!([{"path": "/w/a", "added": 1, "removed": 0}])
+    );
+    assert_eq!(done["control"], json!({"handoff": "note"}));
 }
 
 #[test]
@@ -337,6 +365,8 @@ fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
             "completed"
         ]
     );
+    let denied = completed(&lines)[1];
+    assert_eq!(denied.payload["reason"], "not_reviewed");
     assert_eq!(
         kinds(&lines)
             .iter()

@@ -14,6 +14,7 @@ fn schema() -> Value {
             "mode": {"type": "string", "enum": ["fast", "slow"]},
             "edits": {"type": "array", "items": {"type": "integer"}},
             "note": {"type": ["string", "null"]},
+            "id": {"type": ["string", "integer"]},
             "either": {"anyOf": [{"type": "integer"}, {"type": "boolean"}]}
         },
         "required": ["path"],
@@ -43,14 +44,14 @@ fn each_repair_the_schema_allows_one_reading_of() {
         "path": "/a",
         "limit": " 5 ",
         "ratio": "0.5",
-        "all": "true",
+        "all": "false",
         "edits": "[1, 2]",
         "mode": null
     }))
     .unwrap();
     assert_eq!(
         repaired,
-        json!({"path": "/a", "limit": 5, "ratio": 0.5, "all": true, "edits": [1, 2]})
+        json!({"path": "/a", "limit": 5, "ratio": 0.5, "all": false, "edits": [1, 2]})
     );
     assert!(check(&schema(), &repaired).is_empty());
     let mut made = made;
@@ -80,8 +81,9 @@ fn nothing_with_two_readings_or_none_is_repaired() {
         json!({"path": "/a", "edits": "[\"x\"]"}),
         json!({"path": "/a", "edits": "[1,"}),
         json!({"path": "/a", "either": "3"}),
-        // A string where the schema takes one.
+        // A string where the schema takes one, alone or beside another type.
         json!({"path": "5"}),
+        json!({"path": "/a", "id": "5"}),
     ] {
         assert_eq!(fixes(&arguments), None, "{arguments}");
     }
@@ -136,4 +138,30 @@ fn the_check_gives_one_line_per_bad_field() {
 fn keywords_outside_the_subset_are_skipped() {
     let schema = json!({"type": "object", "properties": {"x": {"type": "uuid", "format": "z"}}});
     assert!(check(&schema, &json!({"x": 1, "y": 2})).is_empty());
+}
+
+#[test]
+fn bounds_are_inclusive_and_each_type_is_checked() {
+    let at_bounds = json!({"path": "a", "limit": 1, "id": -3});
+    assert!(check(&schema(), &at_bounds).is_empty());
+    assert!(check(&schema(), &json!({"path": "a", "limit": 100})).is_empty());
+    assert_eq!(
+        check(
+            &schema(),
+            &json!({"path": 5, "edits": 5, "note": 1, "limit": -1, "all": "true"})
+        ),
+        [
+            "`/all`: expected boolean, got a string",
+            "`/edits`: expected array, got a number",
+            "`/limit`: must be at least 1",
+            "`/note`: expected string or null, got a number",
+            "`/path`: expected string, got a number",
+        ]
+    );
+}
+
+#[test]
+fn the_string_true_becomes_a_boolean() {
+    let made = repair(&schema(), &json!({"path": "a", "all": "true"})).unwrap();
+    assert_eq!(made.repaired["all"], true);
 }

@@ -33,9 +33,7 @@ fn fix(schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>)
     let allowed = types(schema);
     let wants = |name: &str| allowed.contains(&name);
     let found = match value {
-        Value::String(text) if !allowed.is_empty() && !wants("string") => {
-            parse(schema, text, &wants)
-        }
+        Value::String(text) if !wants("string") => parse(schema, text, &wants),
         Value::Object(map) => {
             let required = required(schema);
             for (key, property) in properties(schema) {
