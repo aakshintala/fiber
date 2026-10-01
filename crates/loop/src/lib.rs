@@ -122,6 +122,8 @@ impl Loop {
             waiting: None,
             conversation: Vec::new(),
             sent: None,
+            // ponytail: a later tool of the same name replaces an earlier one
+            // unrecorded; no event records a replacement yet (#336).
             tools: tools
                 .into_iter()
                 .map(|tool| {

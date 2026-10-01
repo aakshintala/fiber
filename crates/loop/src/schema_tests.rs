@@ -218,3 +218,47 @@ fn an_any_of_does_not_hide_the_keywords_beside_it() {
         ]
     );
 }
+
+#[test]
+fn the_keywords_beside_an_any_of_are_repaired_too() {
+    let schema = json!({
+        "type": "object",
+        "properties": {"n": {"type": "integer", "anyOf": [{}]}}
+    });
+    let made = repair(&schema, &json!({"n": "3"})).unwrap();
+    assert_eq!(made.repaired["n"], 3);
+    assert_eq!(made.repairs[0].path, "/n");
+}
+
+#[test]
+fn an_ambiguous_branch_makes_the_whole_any_of_ambiguous() {
+    // Branch one's `x` has two readings; branch two alone could repair `y`.
+    let two = json!({"anyOf": [
+        {"type": "object", "properties": {"a": {"type": "integer"}}},
+        {"type": "object", "properties": {"b": {"type": "integer"}}}
+    ]});
+    let schema = json!({"anyOf": [
+        {"type": "object", "properties": {"x": two}},
+        {"type": "object", "properties": {"y": {"type": "integer"}}}
+    ]});
+    let arguments = json!({"x": {"a": "1", "b": "2"}, "y": "3"});
+    assert_eq!(repair(&schema, &arguments), None);
+    // Without the ambiguity, branch two's reading is the one.
+    let made = repair(&schema, &json!({"x": {"a": 1}, "y": "3"}));
+    assert!(made.is_none(), "already passes through branch one");
+    let made = repair(&schema, &json!({"x": 5, "y": "3"})).unwrap();
+    assert_eq!(made.repaired["y"], 3);
+}
+
+#[test]
+fn a_null_an_any_of_allows_is_kept() {
+    let schema = json!({
+        "type": "object",
+        "properties": {
+            "n": {"anyOf": [{"type": "integer"}, {"type": "null"}]},
+            "m": {"anyOf": [{"type": "integer"}, {"type": "string"}]}
+        }
+    });
+    let made = repair(&schema, &json!({"n": null, "m": null})).unwrap();
+    assert_eq!(made.repaired, *json!({"n": null}).as_object().unwrap());
+}
