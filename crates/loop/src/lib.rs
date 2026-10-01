@@ -13,8 +13,9 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    AssistantMessageCompleted, CallStatus, Empty, Event, InputItem, MessageOutcome, SessionStarted,
-    SteeringApplied, ToolCallCompleted, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    AssistantMessageCompleted, CacheLifetime, CallStatus, Empty, Event, InputItem, MessageOutcome,
+    SessionStarted, SteeringApplied, ToolCallCompleted, TurnCompleted, TurnOutcome, TurnStarted,
+    UsageRecorded,
 };
 use contract::provider::{CallError, Delta, Input, ModelRequest, Provider, Reply, ReplyAction};
 use contract::shapes::{ContentPart, Failure, Sender};
@@ -57,6 +58,8 @@ pub struct Loop {
     model: String,
     system_prompt: String,
     inbox: Receiver<Message>,
+    /// The root session's id, for providers that route by key.
+    cache_key: String,
     /// Taken from the inbox by the check before a turn completes, and
     /// applied by the next step.
     waiting: Option<Message>,
@@ -64,6 +67,8 @@ pub struct Loop {
     /// and never by re-reading the log (`docs/loop.md`, "What the model is
     /// sent").
     conversation: Vec<Input>,
+    /// How much of `conversation` the previous request sent.
+    sent: Option<usize>,
 }
 
 impl Loop {
@@ -76,7 +81,7 @@ impl Loop {
         inbox: Receiver<Message>,
         workspace: String,
     ) -> Result<Self, Error> {
-        log.append(
+        let started = log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace,
                 parent: None,
@@ -92,8 +97,12 @@ impl Loop {
             model,
             system_prompt,
             inbox,
+            // A new session is its own root (`docs/prompt-cache.md`, "Cache
+            // markers and keys").
+            cache_key: started.session_id.0,
             waiting: None,
             conversation: Vec::new(),
+            sent: None,
         })
     }
 
@@ -172,7 +181,13 @@ impl Loop {
             system_prompt: self.system_prompt.clone(),
             tools: Vec::new(),
             effort: None,
+            // ponytail: fixed until the preamble is built and logged
+            // (`docs/prompt-cache.md`, "The preamble").
+            tool_choice: "auto".to_owned(),
+            cache_lifetime: CacheLifetime::OneHour,
+            cache_key: self.cache_key.clone(),
             conversation: self.conversation.clone(),
+            previous_end: self.sent.replace(self.conversation.len()),
         };
         let message = ActionId(mint("a_"));
         self.append(

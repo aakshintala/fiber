@@ -13,7 +13,7 @@
 mod support;
 
 use contract::Seq;
-use contract::events::TurnOutcome;
+use contract::events::{CacheLifetime, TurnOutcome};
 use contract::provider::Input;
 use fakes::Response;
 use serde_json::{Value, json};
@@ -215,6 +215,17 @@ fn the_conversation_is_kept_in_memory_not_reread_from_the_log() {
             {"role": "user", "content": "two"},
         ])
     );
+    // The second request starts where the first ended, and both carry the
+    // session's own id as the cache key and the preamble's settings.
+    let requests = session.requests.lock().unwrap().clone();
+    assert_eq!(requests[0].previous_end, None);
+    assert_eq!(requests[1].previous_end, Some(1));
+    for request in &requests {
+        assert_eq!(request.cache_key, "s_test");
+        assert_eq!(request.tool_choice, "auto");
+        assert_eq!(request.cache_lifetime, CacheLifetime::OneHour);
+    }
+    assert_eq!(body(&session, 1)["prompt_cache_key"], "s_test");
 }
 
 #[test]
