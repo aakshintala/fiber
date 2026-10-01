@@ -455,6 +455,18 @@ fn two_prompts_or_none_is_a_usage_error() {
     assert_pre_session(&setup.fiber(&["ask", "a", "b"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "--model", "x"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "--verbose"], None), 2, "usage");
+    assert_pre_session(
+        &setup.fiber(&["ask", "x", "fake/m", "hi"], None),
+        2,
+        "usage",
+    );
+    let run = setup.fiber(&["ask", "--model"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert!(
+        run.stderr.contains("`--model` takes a model"),
+        "{}",
+        run.stderr
+    );
     assert!(server.requests().is_empty());
     assert!(!setup.home().join("projects").exists());
 }

@@ -67,7 +67,7 @@ fn run() -> i32 {
 /// home (`docs/extensions.md`, "Installing"), and prints its name.
 fn install(args: &[String]) -> i32 {
     let installed = match args {
-        [path] if !path.starts_with('-') => config::fiber_home_from_env()
+        [path] => config::fiber_home_from_env()
             .map_err(|e| failed(e.code(), e))
             .and_then(|home| {
                 extensions::install(&home, Path::new(path), env!("CARGO_PKG_VERSION"))
