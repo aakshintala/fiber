@@ -28,11 +28,18 @@ selection=$(cargo xtask select --base "$base")
 value() { sed -n "s/^$1=//p" <<<"$selection"; }
 mode=$(value mode)
 packages=$(value packages)
-libraries=$(value libraries)
+package_specs=$(value package_specs)
+library_specs=$(value library_specs)
 echo "== selection: $mode; crates: ${packages:-none}"
 
+# cargo fmt only matches a bare name among workspace members. The other
+# commands below resolve `-p` against the whole dependency graph, so they
+# need a spec that still names one package once a workspace crate shares a
+# name with a dependency (docs/ci.md, "Selection").
 package_args=()
 for p in $packages; do package_args+=(-p "$p"); done
+package_spec_args=()
+for p in $package_specs; do package_spec_args+=(-p "$p"); done
 
 log=$(mktemp)
 trap 'rm -f "$log"' EXIT
@@ -65,17 +72,17 @@ fi
 
 if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   echo "== cargo clippy --all-targets"
-  cargo clippy --all-targets "${package_args[@]}"
+  cargo clippy --all-targets "${package_spec_args[@]}"
   echo "== cargo nextest run"
-  cargo nextest run "${package_args[@]}" 2>&1 | tee "$log"
+  cargo nextest run "${package_spec_args[@]}" 2>&1 | tee "$log"
   nextest=$(count '[0-9]+ tests? run')
   # A crate with no library has no doc-tests, and cargo refuses to look.
   doctests=0
-  if [ -n "$libraries" ]; then
-    library_args=()
-    for p in $libraries; do library_args+=(-p "$p"); done
+  if [ -n "$library_specs" ]; then
+    library_spec_args=()
+    for p in $library_specs; do library_spec_args+=(-p "$p"); done
     echo "== cargo test --doc"
-    cargo test --doc "${library_args[@]}" 2>&1 | tee "$log"
+    cargo test --doc "${library_spec_args[@]}" 2>&1 | tee "$log"
     doctests=$(count '[0-9]+ passed')
   fi
   echo "tests run: $nextest under nextest, $doctests doc-tests"
