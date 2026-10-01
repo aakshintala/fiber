@@ -393,10 +393,9 @@ session messages directly and the parent would drop out of the path.
 
 | What | How |
 |---|---|
-| Start | `claude -p --output-format stream-json --verbose --input-format stream-json --session-id <uuid> --model <model> --effort <effort> --permission-mode <mode>` |
+| Start | `claude -p --output-format stream-json --verbose --input-format stream-json --session-id <uuid> --model <model> --effort <effort> --permission-mode auto` |
 | Resume | the same, with `--resume <session-id>` in place of `--session-id` |
-| Modes | `readonly` is `plan`, `auto` is `auto`, `yolo` is `bypassPermissions` |
-| Mode change while running | a `set_permission_mode` control request on its input |
+| Auto mode | `--permission-mode auto`, declared per model |
 | Messages while running | yes, as a `user` line on its input; it joins the turn at the next step boundary |
 | Session messages out | `--mcp-config` naming `fiber mcp serve`, which adds it for the run and keeps the person's own servers |
 | Final answer, usage, cost | the `result` line: `result`, `usage` and `total_cost_usd` |
@@ -426,11 +425,10 @@ Probed on Claude Code 2.1.284:
 
 | What | How |
 |---|---|
-| Start | `cursor-agent -p --output-format stream-json --trust --approve-mcps --model '<model>[effort=<effort>]'`, plus the mode's flags |
+| Start | `cursor-agent -p --output-format stream-json --trust --approve-mcps --model '<model>[effort=<effort>]' --auto-review` |
 | Resume | the same, with `--resume <chat-id>` |
 | Session id | `cursor-agent create-chat` before the first run |
-| Modes | `readonly` is `--mode plan`, `auto` is `--auto-review`, `yolo` is `--force` |
-| Mode change while running | none: stopped and resumed |
+| Auto mode | `--auto-review` |
 | Messages while running | none: delivered as a resume |
 | Session messages out | an entry for `fiber mcp serve` in `~/.cursor/mcp.json`, which has no per-run flag. Fiber asks the person once, the first time a cursor-agent delegate starts, and remembers the answer. With no entry, a cursor-agent delegate receives session messages but cannot send them |
 | Final answer, usage | the `result` line: `result` and `usage`, which has tokens and no cost |
@@ -450,6 +448,3 @@ Not yet probed: `create-chat`, which is from `--help`; whether
 `--auto-review` overrides the person's `approvalMode`; what SIGTERM does; and
 where its quota comes from. Until its quota is known, the cursor-agent
 harness declares no `quota()`.
-
-## Not settled here
-
