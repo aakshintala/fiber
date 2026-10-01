@@ -452,8 +452,6 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   - It has run for 30 seconds.
   - It was started with `run_in_background` or `tty`, in which case it
     moves at once.
-  - A steering message arrives while it runs, so the message reaches the
-    model at the next step boundary instead of waiting for the command.
   - A driver sends the `background` driver command (`docs/invocation.md`).
   - Its shell exits while processes it started are still running ("When a
     command ends").
