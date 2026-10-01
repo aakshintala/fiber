@@ -207,6 +207,8 @@ A cache entry also expires after its lifetime with no request.
   "Hooks").
 - The reviewer has its own cache. Its prompt is fixed instructions, then the
   person's messages and the tool calls in log order, then the call under review.
+  Where a provider routes by key, its key is the reviewed session's own id plus
+  `reviewer`, a delegate's included.
 - The system prompt holds only what is fixed for the session. What it holds
   and what feeds it is `docs/system-prompt.md`.
 
