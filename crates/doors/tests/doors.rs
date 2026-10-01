@@ -22,7 +22,9 @@ use std::sync::{Arc, Mutex};
 use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
 use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
-use doors::{Session, exit_before_session, failure, mint, project, prompt};
+use doors::{
+    InstallSummary, Session, exit_before_session, failure, install_approved, mint, project, prompt,
+};
 use log::Log;
 use serde_json::Value;
 
@@ -282,4 +284,57 @@ fn a_socket_path_at_the_platforms_limit_binds() {
 
     assert_eq!(socket(&dir).as_os_str().len(), max);
     session.close(log);
+}
+
+fn summary() -> InstallSummary {
+    InstallSummary {
+        name: "github.com/aakshintala/fiber/providers/opencode".into(),
+        source: "/src/opencode".into(),
+        providers: vec![(
+            "opencode".into(),
+            vec![
+                "https://opencode.ai/zen/go/v1".into(),
+                "https://opencode.ai/zen/v1".into(),
+            ],
+        )],
+    }
+}
+
+#[test]
+fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
+    for (answer, approved) in [
+        ("y\n", true),
+        ("yes\n", true),
+        ("n\n", false),
+        ("\n", false),
+        ("", false),
+    ] {
+        let mut out = Vec::new();
+        let ok = install_approved(&summary(), true, &mut answer.as_bytes(), &mut out).unwrap();
+        assert_eq!(ok, approved, "answer {answer:?}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Install github.com/aakshintala/fiber/providers/opencode from /src/opencode\n\
+             Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
+             Install it? [y/N] "
+        );
+    }
+    let none = InstallSummary {
+        providers: Vec::new(),
+        ..summary()
+    };
+    let mut out = Vec::new();
+    install_approved(&none, true, &mut "y\n".as_bytes(), &mut out).unwrap();
+    assert!(
+        String::from_utf8(out)
+            .unwrap()
+            .contains("It registers no provider.\n")
+    );
+}
+
+#[test]
+fn an_install_without_a_terminal_goes_ahead_without_asking() {
+    let mut out = Vec::new();
+    assert!(install_approved(&summary(), false, &mut "n\n".as_bytes(), &mut out).unwrap());
+    assert!(out.is_empty());
 }
