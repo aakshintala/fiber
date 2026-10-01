@@ -180,6 +180,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `ambiguous_match` | tool call | an edit block's text occurs more than once (`docs/tools.md`, "File tools") |
 | `authentication_failed` | model call, turn | the provider rejected the credential |
 | `blocked` | turn | the block budget ran out with no human to answer |
+| `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
 | `closing` | tool call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions") |
 | `config_invalid` | exit | a configuration file is invalid |
@@ -192,6 +193,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
+| `http_error` | tool call | `web_fetch` got a status other than 2xx |
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
 | `invalid_arguments` | tool call | the arguments failed the tool's schema or checks |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
@@ -224,6 +226,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `timeout` | tool call, job | a deadline passed |
+| `too_large` | tool call | a `web_fetch` download larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
 | `unreachable` | tool call | `session_message` named an id no running session has |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
@@ -239,6 +242,7 @@ Notices, for a failure outside any action:
 | `config_key_ignored` | an unknown key, or a key a repository may not set |
 | `extension_failed` | an extension failed to start or missed its deadline |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
+| `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
