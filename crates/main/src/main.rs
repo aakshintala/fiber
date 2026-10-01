@@ -22,6 +22,7 @@ use doors::{Session, failure};
 use extensions::Providers;
 use log::Log;
 use r#loop::Loop;
+use provider::anthropic_messages::Messages;
 use provider::openai_responses::Responses;
 use provider::{Compat, Endpoint};
 use serde_json::Value;
@@ -163,14 +164,13 @@ fn parts() -> Result<Parts, Failure> {
         compat: Compat {
             store: model.model.compat.get("store").and_then(Value::as_bool),
         },
+        max_output_tokens: model.model.max_output_tokens,
         extra_body: model.model.extra_body.clone(),
     };
     let provider: Arc<dyn Provider> = match model.model.protocol {
         Protocol::OpenaiResponses => Arc::new(Responses::new(endpoint)),
-        Protocol::AnthropicMessages
-        | Protocol::OpenaiCompletions
-        | Protocol::GoogleGenerativeAi
-        | Protocol::BedrockConverse => {
+        Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
+        Protocol::OpenaiCompletions | Protocol::GoogleGenerativeAi | Protocol::BedrockConverse => {
             // ponytail: docs/errors.md has no code for a protocol this Fiber
             // does not speak yet; `extension_missing` stands in.
             return Err(failure(
