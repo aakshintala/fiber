@@ -1,0 +1,45 @@
+event: response.created
+data: {"type":"response.created","sequence_number":0,"response":{"id":"resp_6abe2cb2408e2468c74041aa","object":"response","created_at":1790848178,"status":"in_progress","parallel_tool_calls":true,"temperature":1,"top_p":1,"background":false,"truncation":"disabled","top_logprobs":0,"model":"muse-spark-1.3-contributor","error":null,"incomplete_details":null,"output":[],"instructions":"You are a terse assistant. Use tools when asked.","tool_choice":"auto","tools":[{"type":"function","name":"get_weather","description":"Weather for a city.","strict":true,"parameters":{"additionalProperties":false,"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}],"reasoning":{"effort":"low"}}}
+
+event: response.in_progress
+data: {"type":"response.in_progress","sequence_number":1,"response":{"id":"resp_6abe2cb2408e2468c74041aa","object":"response","created_at":1790848178,"status":"in_progress","parallel_tool_calls":true,"temperature":1,"top_p":1,"background":false,"truncation":"disabled","top_logprobs":0,"model":"muse-spark-1.3-contributor","error":null,"incomplete_details":null,"output":[],"instructions":"You are a terse assistant. Use tools when asked.","tool_choice":"auto","tools":[{"type":"function","name":"get_weather","description":"Weather for a city.","strict":true,"parameters":{"additionalProperties":false,"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}],"reasoning":{"effort":"low"}}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":2,"output_index":0,"item":{"id":"rs_6abe2cb2408e2468c74041aa:rs_01a0f6de9a2270b9960e031bb9b4463d","type":"reasoning","status":"in_progress","summary":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":3,"output_index":0,"item":{"id":"rs_6abe2cb2408e2468c74041aa:rs_01a0f6de9a2270b9960e031bb9b4463d","type":"reasoning","status":"completed","encrypted_content":"Q-PaDgEqoRS08yt_bNT1ewsSSyLEsw4mIJ6S805JWSFCDyrupissf6oG4tw2zRJ50gIW3vJUUCnyIbJ5tUfGj4eElE38X9BIYHgVZgGH1mB_mTgG02TU40CSl9HRzdkGSb0zwUAfFzNKkGc1sAcVPTtSBwVUaHoCaz8WvX2nPPVIAQmneGnUf8B5XC1b25iYN2zVsKrdWWofc19T8qMDA5m8B7a92JwYm6jwaHrtCJs1a-sHs7omOKCA92yw885ygHdtMjaOXwVWeYxi4VCnyboIfelFTgbBpr4Kpg1xN3hwMfsTr3DMgjVmTsK9dEIxHGZFjxAuIb70lLuKnwQFccFE8XI3wIpgmOttEpaHAIzShW14JB97DnR1COURHXmXLDuG06TvQHLp_4H3LvTNNG0WGqONKgzDGY3CAuwwrn2FjkHUDwsxm7G5iy-FbUZwAJCGtVju7EwGsjXiaEE4b_VUkWNRoyj0hWZS21Y7XFTYrlwd5GMC04zPqKYEwqFmh-hPLO3BMhKOhc2K1HSQm9B7yYYBk9ZwEu0WeMr2fjSg7fejvzAy4V3Ex73SaONt6uLpmgSlAzPrLRXRpr0ViqyjDHBn19sXmQSbPHXJ10ioyt4qzOaT2JUMYwe7-2XdMsu2M1dNW4hNu3fro42bv0ym1nxkNv8TMpOIxBJjBaxtjUuLY81nENau-Xaka3Dpqe-xXtm4b21Yi8bI1A6JPHFkbiUBYFUiRMiQ25d1eTKwLi7evVEW9qNy4vZyVUptwxDJGRpINWZd1PNh-ed9oKzYiTcn566ZRebOfI6iyVWtnt8vdM9PA9kQJcmzpgVXPm3JyFA2xvVa6n3LJmpwFgKNu5myiXnxVsdVy4gg1l3EuLeatNz8TfWn4E4fOHHnEKgXrGM4PolufWGQvV1NAdgXU9gC33vHKssk1dGToY3xdfIWMVqqBi9E2pPu24s3hSoFVy3Cc5knLAmp-7yMTs8_-8nCgM7yL0jf2ExLRPgZMsVXcAJeJBbbSK3BTHNHma5Kpm17QVDwPHNvyrRCSlzuRmamU5F8V4qH7IWFLIO9OSl_FRM9pevfn3_YYQ84ikRS9Dx6EyoaVsumVhiPKYnP4KDVqV-6lZDaSHwe_gihQDcITc0Bs8Um9W5-PmqMDdfupIKI0Mybs8UJLIiUI2N1QSTGm9asMkBdwiUtzr8RlQ6kh2HL9AySDHwTfE-plVmKxrzN47cvXP37eDAgRS1A1zCFjo8wvwyiJlDDdbitVVR4TWJwThWY5bwr_u2o5LKoh-FtmxDlt-3w_3riCbDGi-Hec4jReaiSuSz6s6FVaHEdx2XKt37OekW-bS-L2XmcSUj-E18ajt-q0kcyazfCgalQjYDTJROYxVqsBNDDMLjxx_skoz_VtJsyD6sgQ2oeqT5ek7yQcFRHjA","summary":[]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":4,"output_index":1,"item":{"id":"rs_01a0f6de9c127475b70e2e864e652d22","type":"message","status":"in_progress","role":"assistant","phase":"commentary","content":[]}}
+
+event: response.content_part.added
+data: {"type":"response.content_part.added","sequence_number":5,"output_index":1,"content_index":0,"item_id":"rs_01a0f6de9c127475b70e2e864e652d22","part":{"type":"output_text","text":"","annotations":[],"logprobs":[]}}
+
+event: response.output_text.delta
+data: {"type":"response.output_text.delta","sequence_number":6,"output_index":1,"content_index":0,"item_id":"rs_01a0f6de9c127475b70e2e864e652d22","delta":"I'll check the weather in Lisbon for you.","logprobs":[]}
+
+event: response.output_text.done
+data: {"type":"response.output_text.done","sequence_number":7,"output_index":1,"content_index":0,"item_id":"rs_01a0f6de9c127475b70e2e864e652d22","text":"I'll check the weather in Lisbon for you.","logprobs":[]}
+
+event: response.content_part.done
+data: {"type":"response.content_part.done","sequence_number":8,"output_index":1,"content_index":0,"item_id":"rs_01a0f6de9c127475b70e2e864e652d22","part":{"type":"output_text","text":"I'll check the weather in Lisbon for you.","annotations":[],"logprobs":[]}}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":9,"output_index":1,"item":{"id":"rs_01a0f6de9c127475b70e2e864e652d22","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I'll check the weather in Lisbon for you.","annotations":[],"logprobs":[]}]}}
+
+event: response.output_item.added
+data: {"type":"response.output_item.added","sequence_number":10,"output_index":2,"item":{"id":"fc_01a0f6de9c9970708c4324dd5a750a10","type":"function_call","status":"in_progress","name":"get_weather","call_id":"call_01a0f6de9c9970708c4324dd5a750a10","arguments":""}}
+
+event: response.function_call_arguments.delta
+data: {"type":"response.function_call_arguments.delta","sequence_number":11,"output_index":2,"item_id":"fc_01a0f6de9c9970708c4324dd5a750a10","delta":"{\"city\":\"Lisbon\"}"}
+
+event: response.function_call_arguments.done
+data: {"type":"response.function_call_arguments.done","sequence_number":12,"output_index":2,"item_id":"fc_01a0f6de9c9970708c4324dd5a750a10","arguments":"{\"city\":\"Lisbon\"}","name":"get_weather"}
+
+event: response.output_item.done
+data: {"type":"response.output_item.done","sequence_number":13,"output_index":2,"item":{"id":"fc_01a0f6de9c9970708c4324dd5a750a10","type":"function_call","status":"completed","name":"get_weather","call_id":"call_01a0f6de9c9970708c4324dd5a750a10","arguments":"{\"city\":\"Lisbon\"}"}}
+
+event: response.completed
+data: {"type":"response.completed","sequence_number":14,"response":{"id":"resp_6abe2cb2408e2468c74041aa","object":"response","created_at":1790848178,"completed_at":1790848179,"status":"completed","parallel_tool_calls":true,"temperature":1,"top_p":1,"background":false,"truncation":"disabled","top_logprobs":0,"model":"muse-spark-1.3-contributor","error":null,"incomplete_details":null,"output":[{"id":"rs_6abe2cb2408e2468c74041aa:rs_01a0f6de9a2270b9960e031bb9b4463d","type":"reasoning","status":"completed","encrypted_content":"Q-PaDgENw3gcUMGMGDJ7pnJWndy99COgqPFPPmfwpkyyUPxEd8SITvoCwcwqnZst2dCholgtBvveUoXHzNF_QQaXe-UqAwyDYimmmIFbbq3rf1Rfjm1vt2VHu5JJgesHmxXggLGmzfU44MK9i1qPeGUl1NXEhQjuQv2H4aDh7q2zp1knBqs9QzBJPCRxPRC1-rkJTVisl0ik8PKT6l-GHHA5x6YdjSEBgEk7JXOYdJ_4ZAScp79hKMahgMJH-gEVBDT-fhYsSDYIyfrAxiqPec6844bUXVmAy5qNwjdduCQ6LcAoFl3yaSem3fVpMUeAn4qWJUyZ1siMngW1P3tQkmbk-oAyVpA5r4eiHDFzfBdKsnvsuD8cU03YVvH4eNg-INKfxH4K4GrOnHTgkLRs0GCtM5CnbjDY6MkTN0LKbXhaxkDDR9X8vWtc3nug6NGB4NmdUiGqs6wunLiCVwaM-IaozQu1fXYGu5uIrCGZrFkT1WjWPirLbAz0JNHXEVB-XHWgfftC48Mu4vOdB0meh4AYTKS6bW3ofkTbkth1hIVXs8QotgPBF5z_8v7t_JVEgF_qA806LQXdMbxHTT5hvJZhuY3-ZgPRRq47g_7e2LCzhq07a7bjmqvOmCnex3dbQ7KspPvm_L-uwyoZ00oAxhTvkHgpKa_jre1FaNuV2PRtW0oMc29WFXRPwOSDfiH2Pa7yjwVOln3dYUQpTiZ4lZjKta48FefLIQxfoYaiLa5VWnJWmUOb3KkAsfS0R_nBGvXFsdx_rxqnXuyuNtf8ODmpGBMnVOH7UtWzfypHktn1mkhiBc5EIpRAsIuYBWzkXTNNRH0e9IYrMz2X-7RQyvs7e1AhYQ8MpHyXeeihfadLP87jw32aqkWgWTEGAww6depYNhvO8aahusqYjT6wPw2jUnqOPIF_XbqwBKJd05BO7jEDbqYnTe5UAQfzQqBz5PqqOmrlarbSztp8830OmTunmj2GuVvL9CYcj4onjicj4MaLCQIIRJsM14mQLSc9D3eQbTT2W63TOSUCKxCbXxtwNlhFbb6LMZtcZ91GHucWkexqrIv59riZJPv2099mQQ6ZO0qYqvXF-YUSOTLZzPQNjXWNntP-Z6g4ilLpBZBZfSYmShVHxK0Fn1xPgDkCOegaBmI9FRhR0CotdsVmYOVZql-uXac_BeP81SESdtiXyUoYRGOYx_lgHyo_K9_QjlnFBFOx3SdalYfFU-pGen8a6xUoJSpk1aWlokPb0Ci-e_PzVqAfX7FJ0eHFnygyk0Ifv_VEENDgddbUKISBrV7g4sACUyF8RFF5gOGVN4ZsBsiaPc2zEk_TvwZ5Hc_2KB9SYfvDsrP35UVO8jtUT_uiypTwC--Tajj-kPpFPjrlVFKzNzXcHoIFyYDLqw1R3xVzV-aEk2aBiyrpRQ","summary":[]},{"id":"rs_01a0f6de9c127475b70e2e864e652d22","type":"message","status":"completed","role":"assistant","phase":"commentary","content":[{"type":"output_text","text":"I'll check the weather in Lisbon for you.","annotations":[],"logprobs":[]}]},{"id":"fc_01a0f6de9c9970708c4324dd5a750a10","type":"function_call","status":"completed","name":"get_weather","call_id":"call_01a0f6de9c9970708c4324dd5a750a10","arguments":"{\"city\":\"Lisbon\"}"}],"usage":{"input_tokens":546,"output_tokens":129,"total_tokens":675,"input_tokens_details":{"cached_tokens":0},"output_tokens_details":{"reasoning_tokens":60}},"instructions":"You are a terse assistant. Use tools when asked.","tool_choice":"auto","tools":[{"type":"function","name":"get_weather","description":"Weather for a city.","strict":true,"parameters":{"additionalProperties":false,"properties":{"city":{"type":"string"}},"required":["city"],"type":"object"}}],"reasoning":{"effort":"low"}}}
+

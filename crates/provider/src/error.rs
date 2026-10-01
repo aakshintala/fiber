@@ -1,0 +1,136 @@
+//! Why a model call failed, and the code each case reports
+//! (`docs/errors.md`, "A failed model call").
+
+use contract::ErrorCode;
+use contract::shapes::{Failure, ProviderFailure};
+use serde_json::Value;
+
+/// A failed model call.
+#[derive(Debug, Clone, PartialEq, thiserror::Error)]
+pub enum Error {
+    /// The connection could not be made, or dropped.
+    #[error("Fiber could not reach the provider: {0}")]
+    Connection(String),
+    /// The provider answered with a status other than 2xx.
+    #[error("The provider answered HTTP {status}.")]
+    Status {
+        /// The HTTP status.
+        status: u16,
+        /// The response body, as text.
+        body: String,
+        /// The seconds a `retry-after` header asked Fiber to wait.
+        retry_after: Option<f64>,
+    },
+    /// The stream ended before its terminal event, or carried something
+    /// Fiber could not read.
+    #[error("The reply stream ended early: {0}.")]
+    StreamIncomplete(String),
+    /// The stream ended with a failure the provider reported in it, such as
+    /// `response.failed`.
+    #[error("The provider failed the reply.")]
+    ReplyFailed {
+        /// The provider's own code for the failure, when it sent one.
+        code: Option<String>,
+        /// The provider's own message.
+        message: String,
+    },
+    /// A stop reason the protocol does not map.
+    #[error("The reply ended with a stop reason Fiber does not know: `{0}`.")]
+    UnknownStopReason(String),
+    /// The provider declined to answer on policy grounds.
+    #[error("The provider declined to answer: {0}.")]
+    Refused(String),
+}
+
+impl Error {
+    /// The stable code a consumer switches on.
+    pub fn code(&self) -> ErrorCode {
+        match self {
+            Self::Connection(_) => ErrorCode::ConnectionFailed,
+            Self::Status { status, body, .. } => status_code(*status, body),
+            Self::StreamIncomplete(_) => ErrorCode::StreamIncomplete,
+            Self::ReplyFailed { code, message } => reply_failed_code(code.as_deref(), message),
+            Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
+            Self::Refused(_) => ErrorCode::Refused,
+        }
+    }
+
+    /// The failure as a failed model call records it, naming `provider`.
+    pub fn failure(&self, provider: &str) -> Failure {
+        let (retry_after, said) = match self {
+            Self::Status {
+                status,
+                body,
+                retry_after,
+            } => (*retry_after, Some((*status, body_message(body)))),
+            Self::ReplyFailed { message, .. } => (None, Some((200, message.clone()))),
+            Self::Connection(_)
+            | Self::StreamIncomplete(_)
+            | Self::UnknownStopReason(_)
+            | Self::Refused(_) => (None, None),
+        };
+        Failure {
+            code: self.code(),
+            message: self.to_string(),
+            retry_after,
+            provider: said.map(|(status, message)| ProviderFailure {
+                name: provider.to_owned(),
+                status,
+                message,
+            }),
+        }
+    }
+}
+
+/// The code for an HTTP status, reading the body where the status alone
+/// cannot classify.
+fn status_code(status: u16, body: &str) -> ErrorCode {
+    match status {
+        401 => ErrorCode::AuthenticationFailed,
+        429 => ErrorCode::RateLimited,
+        408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
+        _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
+            ErrorCode::ContextOverflow
+        }
+        _ => ErrorCode::InvalidRequest,
+    }
+}
+
+/// The code for a failure inside a 200 stream: from the provider's own code,
+/// or `stream_incomplete` when none matches (`docs/model-routing.md`, "When
+/// a model call fails").
+fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
+    match code {
+        Some("rate_limit_exceeded") => ErrorCode::RateLimited,
+        Some("server_error") => ErrorCode::ProviderUnavailable,
+        _ if overflow(code, message) => ErrorCode::ContextOverflow,
+        _ => ErrorCode::StreamIncomplete,
+    }
+}
+
+/// The one overflow shape seen on `openai-responses` (`docs/errors.md`,
+/// "Recognising a context overflow").
+fn overflow(code: Option<&str>, message: &str) -> bool {
+    code == Some("invalid_prompt") && message.contains("exceeds the context window")
+}
+
+/// The provider's own code in an error body: `error.code`.
+fn body_code(body: &str) -> Option<String> {
+    let value: Value = serde_json::from_str(body).ok()?;
+    value
+        .pointer("/error/code")
+        .and_then(Value::as_str)
+        .map(str::to_owned)
+}
+
+/// The provider's own message in an error body: `error.message`, or
+/// `detail` as ChatGPT/codex sends it, or else the body itself.
+fn body_message(body: &str) -> String {
+    let value: Option<Value> = serde_json::from_str(body).ok();
+    value
+        .as_ref()
+        .and_then(|v| v.pointer("/error/message").or_else(|| v.get("detail")))
+        .and_then(Value::as_str)
+        .unwrap_or(body)
+        .to_owned()
+}
