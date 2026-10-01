@@ -169,3 +169,19 @@ fn a_leftover_install_that_cannot_be_removed_fails_the_install() {
     assert_eq!(result.unwrap_err().code(), ErrorCode::IoFailed);
     assert!(!setup.home().join("extensions/acme").exists());
 }
+
+#[test]
+fn a_source_holding_fiber_home_or_inside_it_is_refused() {
+    let setup = Setup::new();
+    let outer = setup.source("outer", &manifest("acme"), &[]);
+    let home = outer.join("home");
+    let err = install(&home, &outer, "0.1.0").unwrap_err();
+    assert!(matches!(err, Error::Overlaps { .. }), "{err:?}");
+    assert!(!home.join("extensions/acme").exists());
+
+    let inner = setup.home().join("extensions/acme");
+    write(&inner.join("extension.json"), &manifest("acme").to_string());
+    let err = install(&setup.home(), &inner, "0.1.0").unwrap_err();
+    assert!(matches!(err, Error::Overlaps { .. }), "{err:?}");
+    assert!(inner.join("extension.json").is_file());
+}

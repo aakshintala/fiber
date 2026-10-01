@@ -34,6 +34,12 @@ pub enum Error {
         /// Why.
         source: io::Error,
     },
+    /// A source that holds Fiber home's `extensions/`, or lies inside it.
+    #[error("{} holds Fiber home's extensions or lies inside them; install from a directory outside Fiber home.", path.display())]
+    Overlaps {
+        /// The source, resolved.
+        path: PathBuf,
+    },
     /// The manifest's `fiber` is newer than the running Fiber.
     #[error(
         "`{name}` needs Fiber {needs} or later, and this is Fiber {running}. Run `fiber upgrade`."
@@ -107,6 +113,7 @@ impl Error {
         match self {
             Self::Config(e) => e.code(),
             Self::Io { .. } => ErrorCode::IoFailed,
+            Self::Overlaps { .. } => ErrorCode::Usage,
             // ponytail: docs/errors.md has no code for an extension this
             // Fiber cannot run; `usage` stands in until the owner names one.
             Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => ErrorCode::Usage,

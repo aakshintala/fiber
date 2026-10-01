@@ -119,20 +119,41 @@ fn a_repository_cannot_choose_the_source() {
 }
 
 #[test]
-fn no_key_anywhere_is_credential_missing() {
+fn no_key_anywhere_is_credential_missing_and_says_why() {
     let setup = Setup::new();
     let config = setup.load(&[]).unwrap();
-    for source in [
-        None,
-        Some(CredentialSource::Env("FIBER_TEST_SURELY_UNSET_7f3a".into())),
-        Some(CredentialSource::File(setup.root().join("absent"))),
-        command(&["false"]),
-        command(&["printf", "  \n"]),
-        command(&["/nonexistent/fiber-test-program"]),
+    let empty = setup.root().join("empty");
+    setup.write(&empty, " \n");
+    for (source, why) in [
+        (None, "declares no other source".to_owned()),
+        (
+            Some(CredentialSource::Env("FIBER_TEST_SURELY_UNSET_7f3a".into())),
+            "FIBER_TEST_SURELY_UNSET_7f3a is not set".to_owned(),
+        ),
+        (
+            Some(CredentialSource::File(setup.root().join("absent"))),
+            "absent does not exist".to_owned(),
+        ),
+        (
+            Some(CredentialSource::File(empty.clone())),
+            format!("{} is empty", empty.display()),
+        ),
+        (
+            command(&["false"]),
+            "`false` failed (exit status: 1)".to_owned(),
+        ),
+        (command(&["printf", "  \n"]), "printed no key".to_owned()),
+        (
+            command(&["/nonexistent/fiber-test-program"]),
+            "`/nonexistent/fiber-test-program` could not be started".to_owned(),
+        ),
+        (command(&[]), "the configured command is empty".to_owned()),
     ] {
         let err = config.credential(&acme(source.clone())).unwrap_err();
         assert_eq!(err.code(), ErrorCode::CredentialMissing, "{source:?}");
-        assert!(err.to_string().contains("fiber login acme"), "{err}");
+        let message = err.to_string();
+        assert!(message.contains(&why), "{message}");
+        assert!(message.contains("fiber login acme"), "{message}");
     }
 }
 

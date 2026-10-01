@@ -31,25 +31,60 @@ pub fn install(home: &Path, source: &Path, fiber_version: &str) -> Result<String
     }
     let slug = slug(&manifest.name)?;
     let root = home.join("extensions");
+    fs::create_dir_all(&root).map_err(io(&root))?;
+    overlap(source, &root)?;
     let target = root.join(&slug);
     let fresh = root.join(format!(".{slug}.{}.new", std::process::id()));
     let old = root.join(format!(".{slug}.{}.old", std::process::id()));
     remove(&fresh)?;
+    remove(&old)?;
     let copied =
         copy(source, &fresh).and_then(|()| config::read_providers(&fresh).map_err(Error::from));
     if let Err(e) = copied {
         remove(&fresh)?;
         return Err(e);
     }
-    let replacing = fs::symlink_metadata(&target).is_ok();
-    if replacing {
-        fs::rename(&target, &old).map_err(io(&target))?;
+    if let Err(e) = swap(&fresh, &target, &old, |from, to| fs::rename(from, to)) {
+        remove(&fresh)?;
+        return Err(e);
     }
-    fs::rename(&fresh, &target).map_err(io(&target))?;
-    if replacing {
-        remove(&old)?;
-    }
+    // The new copy is in place: a stale copy left behind is skipped by
+    // loading and removed by the next install of this extension.
+    remove(&old).unwrap_or(());
     Ok(manifest.name)
+}
+
+/// Moves `fresh` to `target`. An installed copy is moved to `old` first and
+/// moved back if `fresh` cannot take its place, so a failure leaves the
+/// installed copy as it was.
+fn swap(
+    fresh: &Path,
+    target: &Path,
+    old: &Path,
+    rename: impl Fn(&Path, &Path) -> io::Result<()>,
+) -> Result<(), Error> {
+    let replacing = fs::symlink_metadata(target).is_ok();
+    if replacing {
+        rename(target, old).map_err(io(target))?;
+    }
+    if let Err(e) = rename(fresh, target) {
+        if replacing {
+            rename(old, target).map_err(io(old))?;
+        }
+        return Err(io(target)(e));
+    }
+    Ok(())
+}
+
+/// Refuses a source that holds `extensions/` or lies inside it: the copy
+/// would read what it writes, or replace what it reads.
+fn overlap(source: &Path, root: &Path) -> Result<(), Error> {
+    let source = fs::canonicalize(source).map_err(io(source))?;
+    let root = fs::canonicalize(root).map_err(io(root))?;
+    if root.starts_with(&source) || source.starts_with(&root) {
+        return Err(Error::Overlaps { path: source });
+    }
+    Ok(())
 }
 
 /// `extensions/<name>/`'s directory name: every `/` becomes `-`, as for a
@@ -109,3 +144,7 @@ fn io(path: &Path) -> impl Fn(io::Error) -> Error {
         source,
     }
 }
+
+#[cfg(test)]
+#[path = "install_tests.rs"]
+mod tests;

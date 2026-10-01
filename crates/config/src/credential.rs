@@ -42,12 +42,16 @@ impl Config {
         };
         let found = match &source {
             CredentialSource::Env(var) => match std::env::var(var) {
-                Ok(value) => usable(&value),
-                Err(_) => None,
+                Ok(value) => {
+                    usable(&value).ok_or_else(|| format!("the environment variable {var} is empty"))
+                }
+                Err(_) => Err(format!("the environment variable {var} is not set")),
             },
             CredentialSource::File(file) => match fs::read_to_string(file) {
-                Ok(value) => usable(&value),
-                Err(e) if e.kind() == ErrorKind::NotFound => None,
+                Ok(value) => usable(&value).ok_or_else(|| format!("{} is empty", file.display())),
+                Err(e) if e.kind() == ErrorKind::NotFound => {
+                    Err(format!("{} does not exist", file.display()))
+                }
                 Err(source) => {
                     return Err(ConfigError::Io {
                         file: file.clone(),
@@ -57,14 +61,7 @@ impl Config {
             },
             CredentialSource::Command(argv) => run(argv),
         };
-        found.ok_or_else(|| {
-            let from = match &source {
-                CredentialSource::Env(var) => format!("the environment variable {var} is not set"),
-                CredentialSource::File(file) => format!("{} does not exist", file.display()),
-                CredentialSource::Command(argv) => {
-                    format!("`{}` printed no key", argv.join(" "))
-                }
-            };
+        found.map_err(|from| {
             missing(format!(
                 "nothing is stored in credentials/{name}, and {from}"
             ))
@@ -79,17 +76,22 @@ fn usable(value: &str) -> Option<Secret> {
     (!value.is_empty()).then(|| Secret::new(value.into()))
 }
 
-/// What the command prints on stdout when it succeeds.
-fn run(argv: &[String]) -> Option<Secret> {
-    let (program, args) = argv.split_first()?;
+/// What the command prints on stdout when it succeeds, or why it gave no
+/// key.
+fn run(argv: &[String]) -> Result<Secret, String> {
+    let shown = argv.join(" ");
+    let Some((program, args)) = argv.split_first() else {
+        return Err("the configured command is empty".into());
+    };
     let output = Command::new(program)
         .args(args)
         .stdin(Stdio::null())
         .stderr(Stdio::null())
         .output()
-        .ok()?;
+        .map_err(|e| format!("`{shown}` could not be started: {e}"))?;
     if !output.status.success() {
-        return None;
+        return Err(format!("`{shown}` failed ({})", output.status));
     }
     usable(&String::from_utf8_lossy(&output.stdout))
+        .ok_or_else(|| format!("`{shown}` printed no key"))
 }
