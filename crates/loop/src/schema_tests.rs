@@ -262,3 +262,17 @@ fn a_null_an_any_of_allows_is_kept() {
     let made = repair(&schema, &json!({"n": null, "m": null})).unwrap();
     assert_eq!(made.repaired, *json!({"n": null}).as_object().unwrap());
 }
+
+#[test]
+fn an_ambiguous_item_makes_its_branch_ambiguous() {
+    let two = json!({"anyOf": [
+        {"type": "object", "properties": {"a": {"type": "integer"}}},
+        {"type": "object", "properties": {"b": {"type": "integer"}}}
+    ]});
+    let schema = json!({"anyOf": [
+        {"type": "array", "items": two},
+        {"type": "array", "items": {"type": "object", "properties": {"a": {"type": "integer"}}}}
+    ]});
+    let schema = json!({"type": "object", "properties": {"l": schema}});
+    assert_eq!(repair(&schema, &json!({"l": [{"a": "1", "b": "2"}]})), None);
+}
