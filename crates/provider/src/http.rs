@@ -1,12 +1,15 @@
 //! Sending a request over HTTP, on a socket Fiber owns so another thread can
 //! close it (`docs/architecture.md`, "Cancellation"). ureq runs behind a
 //! connector that keeps a handle to each `TcpStream` it opens; shutting that
-//! handle down ends a read blocked inside ureq, under TLS too.
+//! handle down ends a read blocked inside ureq, under TLS too. A provider
+//! that signs its requests is asked for its headers on every send, a retry
+//! included (`docs/model-routing.md`, "Signing a request").
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpStream};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
+use contract::signing::{SignRequest, Signer};
 use ureq::Agent;
 use ureq::config::Config;
 use ureq::tls::{RootCerts, TlsConfig};
@@ -71,10 +74,36 @@ pub(crate) fn post(
     body: &[u8],
     cancel: &Arc<Cancel>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
+    post_signed(url, headers, body, None, cancel)
+}
+
+/// [`post`], with the headers `signer` adds for this request.
+// ponytail: no `Endpoint` carries a signer yet, so only tests pass one; the
+// protocols call `post` until `Endpoint` gains the field.
+pub(crate) fn post_signed(
+    url: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    signer: Option<&dyn Signer>,
+    cancel: &Arc<Cancel>,
+) -> Result<(impl Read + use<>, Option<bool>), Error> {
     // A call cancelled before it starts never resolves or connects.
     if cancel.is_cancelled() {
         return Err(Error::Connection("the call was cancelled".into()));
     }
+    let signed = match signer {
+        Some(signer) => signer
+            .sign(&SignRequest {
+                method: "POST",
+                url,
+                headers,
+                body,
+            })
+            // ponytail: `error.rs` has no variant for a failed `sign()`, so
+            // it reports `connection_failed` until one is added.
+            .map_err(|why| Error::Connection(format!("the request could not be signed: {why}")))?,
+        None => Vec::new(),
+    };
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build();
@@ -89,7 +118,7 @@ pub(crate) fn post(
     let connector = KeepSocket(Arc::clone(cancel)).chain(RustlsConnector::default());
     let agent = Agent::with_parts(config, connector, DefaultResolver::default());
     let mut request = agent.post(url);
-    for (name, value) in headers {
+    for (name, value) in headers.iter().chain(&signed) {
         request = request.header(name, value);
     }
     let response = request

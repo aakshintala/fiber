@@ -144,8 +144,10 @@ dependencies = [
  "contract",
  "fakes",
  "mlua",
+ "ring",
  "serde_json",
  "thiserror",
+ "ureq",
 ]
 
 [[package]]

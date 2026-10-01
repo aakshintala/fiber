@@ -18,7 +18,11 @@ use extensions::{Error, LuaExtension};
 const WAIT: Duration = Duration::from_secs(10);
 
 fn fixture() -> Arc<LuaExtension> {
-    Arc::new(LuaExtension::new("fixture", fakes::lua_fixture()))
+    Arc::new(LuaExtension::new(
+        "fixture",
+        fakes::lua_fixture(),
+        "/nonexistent-fiber-home",
+    ))
 }
 
 /// Runs one command on its own thread under `WAIT`, so a callback the runtime
@@ -47,9 +51,9 @@ fn only_the_stripped_library_and_the_host_globals_exist() {
     let names = call(&fixture(), "globals", "").unwrap();
     assert_eq!(
         names,
-        "_G,_VERSION,assert,collectgarbage,coroutine,error,fiber,getmetatable,ipairs,load,\
-         math,next,pairs,pcall,rawequal,rawget,rawlen,rawset,require,select,setmetatable,\
-         string,table,tonumber,tostring,type,utf8,xpcall"
+        "_G,_VERSION,assert,collectgarbage,coroutine,error,fiber,getmetatable,host,ipairs,\
+         json,load,math,next,pairs,pcall,rawequal,rawget,rawlen,rawset,require,select,\
+         setmetatable,string,table,tonumber,tostring,type,utf8,xpcall"
     );
 }
 
@@ -71,7 +75,12 @@ fn require_cannot_leave_the_extensions_directory() {
     write(&dir.join("init.lua"), "local m = require(\"outside\")\n");
     std::os::unix::fs::symlink(&outside, dir.join("outside.lua")).unwrap();
 
-    let err = call(&Arc::new(LuaExtension::new("ext", dir)), "x", "").unwrap_err();
+    let err = call(
+        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        "x",
+        "",
+    )
+    .unwrap_err();
     let Error::Lua { message, .. } = &err else {
         panic!("{err:?}")
     };
@@ -110,7 +119,12 @@ fn a_registration_without_a_timeout_is_an_error_at_its_line() {
         &dir.join("init.lua"),
         "-- no timeout\nfiber.command(\"x\", { run = function() end })\n",
     );
-    let err = call(&Arc::new(LuaExtension::new("ext", dir)), "x", "").unwrap_err();
+    let err = call(
+        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        "x",
+        "",
+    )
+    .unwrap_err();
     let Error::Lua { message, .. } = &err else {
         panic!("{err:?}")
     };
@@ -208,7 +222,12 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
     big.set_len(u64::try_from(extensions::MEMORY_CAP).unwrap() + 1)
         .unwrap();
 
-    let err = call(&Arc::new(LuaExtension::new("ext", dir)), "x", "").unwrap_err();
+    let err = call(
+        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        "x",
+        "",
+    )
+    .unwrap_err();
     let Error::Lua { message, .. } = &err else {
         panic!("{err:?}")
     };
@@ -229,7 +248,12 @@ fn a_module_exactly_the_memory_cap_is_read() {
         .unwrap();
 
     // Read and compiled: its zero bytes are not Lua.
-    let err = call(&Arc::new(LuaExtension::new("ext", dir)), "x", "").unwrap_err();
+    let err = call(
+        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        "x",
+        "",
+    )
+    .unwrap_err();
     let Error::Lua { message, .. } = &err else {
         panic!("{err:?}")
     };

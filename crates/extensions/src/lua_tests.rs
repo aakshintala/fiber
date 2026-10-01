@@ -8,7 +8,13 @@ use super::*;
 /// the panic.
 #[test]
 fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
-    let vm = Vm::load("fixture", &fakes::lua_fixture(), &|_| Ok(())).unwrap();
+    let vm = Vm::load(
+        "fixture",
+        &fakes::lua_fixture(),
+        Path::new("/nonexistent-fiber-home"),
+        &|_| Ok(()),
+    )
+    .unwrap();
     let boom = vm
         .lua
         .create_function(|_, ()| -> mlua::Result<()> { panic!("host bug") })
@@ -20,7 +26,9 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         .into_function()
         .unwrap();
     vm.deadline.start(LOAD_TIMEOUT);
-    let outcome = catch_unwind(AssertUnwindSafe(|| vm.resume(f, "boom", LOAD_TIMEOUT, "")));
+    let outcome = catch_unwind(AssertUnwindSafe(|| {
+        vm.resume(f, "boom", LOAD_TIMEOUT, mlua::Value::Nil)
+    }));
     assert!(outcome.is_err(), "the panic became {outcome:?}");
 }
 
@@ -34,14 +42,19 @@ fn the_worker_quits_once_a_caller_stops_waiting() {
     for reply in [gone, later] {
         inbox
             .send(Job {
-                command: "echo".to_owned(),
-                text: "x".to_owned(),
+                target: Target::Command("echo".to_owned()),
+                arg: Value::String("x".to_owned()),
                 reply,
             })
             .unwrap();
     }
     drop(inbox);
-    serve("fixture", &fakes::lua_fixture(), &jobs);
+    serve(
+        "fixture",
+        &fakes::lua_fixture(),
+        Path::new("/nonexistent-fiber-home"),
+        &jobs,
+    );
     // Dropping the inbox drops the job left in it, and its reply sender.
     drop(jobs);
     assert_eq!(

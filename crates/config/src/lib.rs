@@ -3,8 +3,10 @@
 //! (`docs/configuration.md`). It is the only crate that reads configuration
 //! files (`docs/architecture.md`, "The call rules"). It also finds Fiber home
 //! (`docs/state.md`, "Override"), keeps secrets in `credentials/`, finds a
-//! provider's key, and reads an extension's manifest and provider data.
+//! provider's key, reads an extension's manifest and provider data, and keeps
+//! each provider's discovered model list in `cache/models/`.
 
+mod cache;
 mod credential;
 mod error;
 mod extension;
@@ -23,6 +25,7 @@ use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::{Map, Value};
 
+pub use cache::{read_model_cache, write_model_cache};
 pub use error::ConfigError;
 pub use extension::{
     Cost, Manifest, ModelData, Protocol, ProviderData, read_manifest, read_providers,
