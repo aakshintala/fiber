@@ -6,5 +6,13 @@
 mod provider_server;
 mod scripted_provider;
 
+use std::path::PathBuf;
+
 pub use provider_server::{ProviderServer, Request, Response};
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
+
+/// The fixture Lua extension's directory: `extension.json`, `init.lua` and
+/// the module it requires, one command per runtime behaviour a test exercises.
+pub fn lua_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lua-fixture")
+}
