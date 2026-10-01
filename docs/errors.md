@@ -181,7 +181,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `authentication_failed` | model call, turn | the provider rejected the credential |
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
-| `closing` | tool call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions") |
+| `closing` | tool call, extension call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends") |
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
