@@ -2,8 +2,9 @@
 
 What Fiber looks like at the terminal, and how a person works it. This is what
 is true now, not a plan. It is settled by
-[TUI: scrollback or full screen?](https://github.com/aakshintala/fiber/issues/15);
-that ticket's resolution holds the rationale and the rejected alternatives.
+[TUI: scrollback or full screen?](https://github.com/aakshintala/fiber/issues/15)
+and [Terminal: a control center over many sessions](https://github.com/aakshintala/fiber/issues/258);
+those tickets' resolutions hold the rationale and the rejected alternatives.
 
 Vocabulary is `CONTEXT.md`. Session, turn, step, step boundary, action, tool
 call, job, delegate, handoff, steering message, client and driver mean what it
@@ -14,14 +15,20 @@ commands".
 ## What the terminal is
 
 - **The terminal is Fiber's only first-party client.** A GUI is a separate
-  project that drives `fiber serve`. Fiber serves no web UI.
+  project that is a client of the hub, as the terminal is. Fiber serves no
+  web UI.
+- **It is a control center over many sessions.** It shows every live session
+  through the hub, from any project, and one of them on screen at a time. It
+  runs from any directory.
 - **It is written in Rust with ratatui and crossterm,** in the `fiber` binary,
   as the `tui` crate (`docs/architecture.md`). It prefers existing crates to
   writing its own. Their memory is recorded but is not a veto; idle CPU, the
   first-frame budget and supply-chain checks stay strict
   (`docs/dependencies.md`, "Measuring memory", and "Performance" below).
 - **It reads the event stream and nothing else.** It is its own process and a
-  client of its session (`docs/invocation.md`, "Processes"). When a screen
+  client of the hub: a `full` connection to the session on screen and a
+  `summary` connection to each other live session (`docs/invocation.md`,
+  "Processes"). When a screen
   needs data the stream does not carry, the stream changes; the terminal has no
   other path to state.
 - **It is full screen only.** There is no scrollback mode. The mouse is a
@@ -34,35 +41,43 @@ commands".
 An extension may change everything the terminal draws, through the slots in
 "Extension seams".
 
-## The start page
+## Home
 
-`fiber` opens on a start page, drawn full screen with no panel. It is centred.
-From the top:
+`fiber` opens on home, the command center, drawn full screen with no panel and
+no rail. It is centred. From the top:
 
 1. the logo
-2. one dim line naming the new session, the workspace and the branch
-3. any approval the repository needs ("Approving a repository's extensions")
-4. a large input box, whose bottom row carries the model, effort and mode
-   chips and "enter starts <session>"
-5. under the box, at its width, the sessions waiting on the person and the
-   three most recent, one row each; each is one click from attaching or
-   resuming
+2. any approval a repository needs, once a session has started there
+   ("Approving a repository's extensions")
+3. a large input box, whose bottom row carries the workspace, model and
+   effort chips and "enter starts a session"
+4. under the box, at its width, the session list ("The session list")
 
 A key hint sits at the foot. Until the first prompt, the input box's
-placeholder says "/? for shortcuts". Typing a prompt starts the new session.
+placeholder says "/? for shortcuts". Typing a prompt and pressing Enter asks
+the hub to start a session in the chosen workspace, and the screen switches to
+it. No session exists before Enter, so opening the terminal, glancing at home
+and leaving creates nothing. The first turn waits for any MCP server that
+starts with the session (`docs/mcp.md`, "Starting servers"), and the working
+line says so: "Connecting 2 MCP servers…".
 
-The first frame draws at once. The session lists fill in when listing returns
-(`docs/performance.md`).
+**The workspace chip** defaults to the directory the terminal was launched in.
+Clicking it opens a picker of recent workspaces, from `recent.jsonl`
+(`docs/state.md`). A remote client has no launch directory, so it always
+shows the picker.
 
-A failed attach at start says why on the start page: the session is held, or
-its schema is too new.
+The first frame draws at once. The session list fills in when the hub's feed
+arrives (`docs/performance.md`).
+
+A failed attach says why on home: the session is held, or its schema is too
+new.
 
 ### The logo
 
 The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
 accent gradient, the version dim.
 
-- **On the start page it is four rows tall,** in pixel letters drawn with half
+- **On home it is four rows tall,** in pixel letters drawn with half
   blocks, with each letter's counter shaded, as opencode draws its logo.
 - **Where the terminal speaks an image protocol** (kitty, iTerm2 or Sixel), an
   image replaces the pixel letters in exactly the same cells: a smooth wave
@@ -78,38 +93,57 @@ accent gradient, the version dim.
 
 ### Approving a repository's extensions
 
-Extensions and MCP servers a repository brings are approved on the start page,
-before the first prompt, so approving costs no prompt-cache rebuild. A swapped
-view shows the content `docs/extensions.md` fixes, with three choices:
-approve, skip for this session, or never. Typing a prompt first means skip for
-now.
+Extensions and MCP servers a repository brings are approved by the session
+that would load them. When the hub starts a session in a workspace whose
+repository brings unapproved content, the session raises the approval as an
+interaction before its first model request, so approving costs no
+prompt-cache rebuild, and any client can answer it. The terminal shows it in
+the session's view, as a swapped view with the content `docs/extensions.md`
+fixes and three choices: approve, skip for this session, or never.
 
 ### The session list
 
-`/resume`, a bare `fiber --resume`, or a click on the Session card opens the
-session list. It shows the project's sessions newest first, two rows each:
+Home lists sessions, live ones first, then recently exited ones, one row
+each, growing with the number of live sessions and scrolling past the screen:
 
-- the first prompt, or the session's name when it has one
-- the id, the turn count, the branch and a note, such as
-  "approval: shell cargo publish --dry-run", "question: 2 of 3 answered",
-  "no client; 2 jobs running" or "continues s_2b8e11 from seq 812"
+- a glyph for the state: ● running, ◐ waiting on the person, ✗ stopped
+  without exiting, ○ exited
+- the name, or the first prompt when it has none
+- what it waits on, such as "approval: shell cargo publish --dry-run" or
+  "question: 2 of 3 answered", and its spend
+- the workspace's last path segment, for a session outside the launch
+  project
 
-A glyph gives the state: ● running, ◐ waiting on the person, ✗ stopped without
-exiting, ○ exited. The right-hand column says what Enter does: attach, resume,
-or "cannot attach" for a session whose `schema_version` this terminal cannot
-read.
+Live sessions come from the hub's feed, across every project. Exited sessions
+come from `recent.jsonl`, then from the hub's paged query for older ones.
+When the terminal was launched inside a git repository, home and the rail
+show only that repository's project, every worktree of it, with a line saying
+"N waiting in other projects" and a toggle to show everything. Outside a git
+repository they show everything.
+
+Clicking a row, or Enter on it, opens the session: an exited one is resumed by
+the hub. A ✕ on a live row stops that session ("Quit"). A row whose
+`schema_version` this terminal cannot read says "cannot attach".
 
 ### On exit
 
-The terminal is restored and one line is printed: the session id and the
-command to resume it.
+The terminal is restored and one line is printed per live session: its id and
+the command to resume it.
 
 ## Layout
 
-The screen is a conversation column on the left and a side panel on the
-right. The panel is always shown while the screen is wide enough. It replaces
+The screen is a session rail on the left while two or more sessions are
+live, a conversation column, and a side panel on the right. The panel is always shown while the screen is wide enough. It replaces
 a footer and status line, and the input box spans only the conversation
 column.
+
+### The rail
+
+The rail lists the live sessions, one or two rows each: the state glyph, the
+name, and what it waits on. Rows are numbered, and ⌥1 to ⌥9 jump to them.
+Clicking a row, or its key, switches the conversation and the panel to that
+session. The rail is drawn from each session's `session_status` and shows only
+while two or more sessions are live. Home never shows it.
 
 ### The panel
 
@@ -120,21 +154,20 @@ screen.
 
 The default cards, in order:
 
-- **Session:** the working directory, with the permission mode as one word
-  beside it; the git branch; model, effort and thinking; a context bar that
+- **Session:** the working directory; the git branch; model, effort and thinking; a context bar that
   fills toward the automatic handoff point, with a marker there; tokens, cache
   hit rate, cost billed and cost on subscription, delegates included, against
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
   MCP server that is down.
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one card for all of them, two rows each, at most 6 rows
-  shown. It scrolls on its own under the mouse wheel.
+  shown, drawn from each delegate's `session_status` over a `summary`
+  connection. It scrolls on its own under the mouse wheel.
 - **Jobs:** one line saying how many run. A click lists them, one row each.
 - **Quota,** from its extension. Quota is not built in.
 
 The context bar is drawn against `preamble_built`'s `context_window` and
-`trigger_at`. The permission mode comes from `fiber_started` and
-`mode_changed`. Per-file counts come from `tool_call_completed`'s `changes`,
+`trigger_at`. Per-file counts come from `tool_call_completed`'s `changes`,
 never from `details`, which has no fixed shape a client may rely on
 (`docs/events.md`).
 
@@ -143,7 +176,7 @@ context breakdown, usage, the tools, a delegate's or job's transcript, or a
 file's diff. The same views back `/model`, `/context`, `/usage` and `/tools`.
 
 There is no built-in task list
-([Task list, and leaving readonly](https://github.com/aakshintala/fiber/issues/56)).
+([Task list](https://github.com/aakshintala/fiber/issues/56)).
 An extension's widget can supply one.
 
 Running tool calls show in the conversation, on the live group's line, not in
@@ -199,7 +232,8 @@ the conversation. The views are:
   Which fields a skill has, and whether one can be switched off here, is the
   Skills item of [Map: designing Fiber](https://github.com/aakshintala/fiber/issues/1).
 - **`/rewind`** ("Rewind").
-- **An extension's approval** on the start page.
+- **An extension's approval**, before a new session's first request
+  ("Approving a repository's extensions").
 
 ### The working line
 
@@ -237,17 +271,23 @@ area. Clicking any other segment opens its card's view.
 
 ### Shedding
 
-Below the narrow layout, the screen sheds in this order: the panel, then the
-status rows, then the working line's detail. Below a floor of about 40 by 10
+The rail sheds before the panel: first to a one-column strip of glyphs, then
+gone, with "N waiting" joining the status line. Below the narrow layout, the
+screen sheds in this order: the panel, then the status rows, then the working
+line's detail. Below a floor of about 40 by 10
 cells it shows one centred line, "Fiber needs 40×10 · now 32×8". The session
 keeps running, nothing is lost, and the screen redraws on resize.
 
 ### A dropped connection
 
-A banner replaces the working line: "Connection lost · reconnecting
-(attempt 2)…". The terminal retries with backoff while the conversation and
-the draft stay. If the session exited meanwhile, the banner says so and
-offers resume.
+A session that exits while on screen stays on screen, because its
+conversation is its log. Sending a prompt resumes it through the hub, with no
+banner.
+
+When the hub cannot be reached, a banner replaces the working line:
+"Connection lost · reconnecting (attempt 2)…", or "Hub restarting" during an
+upgrade. The terminal retries with backoff while the conversation and the
+draft stay.
 
 ## The conversation
 
@@ -417,9 +457,6 @@ An approval request is a panel at the bottom that replaces the input box
   goes to the feedback. The two remembering choices show the prefix the rule
   allows, the one the request offers (`docs/permissions.md`, "What a rule
   matches"). A request that offers no rule shows neither.
-- A request to leave `readonly` offers "leave readonly" and "stay in
-  readonly" instead, since a yes approves no call (`docs/permissions.md`,
-  "Leaving readonly").
 - The panel says why it asked: the standing rule that asked, the reviewer's
   reason when the reviewer escalated, or that the reviewer failed.
 - The asking call's tool group expands so the full call can be read.
@@ -543,10 +580,11 @@ marked with OSC 8 or handled on click.
 | Insert a line break | Shift+Enter | Ctrl+J |
 | Close what is on top; interrupt the turn when nothing is open | Esc | |
 | Clear the draft, then quit | Ctrl+C, twice within about a second on an empty box | `/quit` |
-| Detach | Ctrl+D, twice on an empty box | `/detach` |
-| Cycle the permission mode | Shift+Tab | click the mode on the Session card; `/mode <name>` |
-| Recall an earlier prompt | ↑ in an empty box | |
-| Search earlier prompts | Ctrl+R | |
+| Go home | ⌥0 | `/home` |
+| Start a new session | Ctrl+N | `/new` |
+| Switch to rail row N | ⌥1 to ⌥9 | click the row |
+| Recall an earlier prompt from the project of the session on screen | ↑ in an empty box | |
+| Search those prompts | Ctrl+R | |
 | Move by word | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
 | Delete a word | ⌥Backspace | |
 | Start or end of the line | ⌘← ⌘→, where the terminal passes them | |
@@ -569,7 +607,9 @@ closes it.
 
 | Command | What it does |
 |---|---|
-| `/resume` | Opens the session list. |
+| `/home` | Goes home. |
+| `/new` | Goes home with the cursor in the input box. |
+| `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
@@ -580,11 +620,11 @@ closes it.
 | `/rewind` | Opens the rewind view. |
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
 | `/name <text>` | Names the session. |
-| `/mode <name>` | Sets the permission mode. |
 | `/login` | Logs in ("Logging in"). |
 | `/approvals` | Reopens the waiting approvals and questions. |
-| `/quit` | Quits ("Quit and detach"). |
-| `/detach` | Detaches. |
+| `/reload` | Reloads configuration, MCP servers and extensions (`docs/mcp.md`, "Reload"). |
+| `/close` | Stops the session on screen ("Quit"). |
+| `/quit` | Quits ("Quit"). |
 | `/?`, `/help` | Opens the key map. |
 
 An extension's commands appear in the same list, tagged with the extension's
@@ -598,34 +638,28 @@ lists providers and extension credentials. An API key goes in a hidden field
 in a bottom panel. OAuth opens the browser and also shows the URL to copy, for
 SSH.
 
-### Quit and detach
-
-Quit and detach are separate actions.
+### Quit
 
 - **Ctrl+C clears, then quits.** It clears a draft in the input box. With the
   box empty, it says "Press Ctrl+C again to quit", and a second press within
   about a second quits. It never interrupts a turn on its own; Esc does that.
-- **Quit** is a second Ctrl+C, or `/quit`. It stops everything: it sends
-  `cancel`, stops each running job and delegate, then sends `close`, which ends
-  the session for every client.
-- **Detach** is a second Ctrl+D on an empty input box, or `/detach`. It closes
-  the connection, and the session goes on under the lifecycle rules
-  (`docs/invocation.md`, "Lifecycle"): it finishes its turn and jobs, then
-  exits if no client is left.
-- **When another client is attached, quit asks first:** "Another client is
-  connected. Quit closes the session for it too · enter quit · d detach · esc
-  stay". The `clients` event says how many are attached.
-
-### The permission mode
-
-Shift+Tab cycles the permission mode (`docs/permissions.md`, "Modes"). The new
-mode shows for a moment on the working line and the Session card. Clicking the
-mode on the Session card opens a picker.
+- **Quit** is a second Ctrl+C, or `/quit`. With no session working, meaning
+  no turn, job or delegate running, the terminal exits without asking. With
+  some working, it asks: "2 sessions working · enter leave them running · c
+  close all · esc stay".
+  - Enter, the default, leaves them running. The terminal closes its
+    connections, and each session follows the lifecycle rules
+    (`docs/invocation.md`, "Lifecycle").
+  - "Close all" sends each working session `cancel`, stops its jobs and
+    delegates, then sends `close`. The prompt says how many of them are also
+    open elsewhere, from each session's `clients`.
+- **Stopping one session** is `/close`, or the ✕ on its home row. It sends
+  `cancel`, stops the session's jobs and delegates, then sends `close`.
 
 ### Getting the person's attention
 
-When a session starts waiting on the person, for an approval, a question or a
-finished turn, the terminal:
+When any live session starts waiting on the person, for an approval, a
+question or a finished turn, whether or not it is on screen, the terminal:
 
 - sends an OSC 9 desktop notification where the terminal supports one
   (Ghostty, iTerm2, kitty, WezTerm), and a bell elsewhere
@@ -775,14 +809,14 @@ Rust, and an extension may replace it or add slots of its own. The machinery
 around the slots stays the terminal's: paging, scrolling, selection, search and
 the panel's scrolling. So every extension keeps what "History and paging" and
 "Reading and copying" promise. A program that wants to draw the whole screen
-itself is a separate client of `fiber serve`, not a TUI extension.
+itself is a separate client of the hub, not a TUI extension.
 
 ### The slots
 
 | Slot | What it draws |
 |---|---|
 | `layout` | Where each region goes: the conversation, the panel, the working line, the steering queue, the input box, the status rows, and any region an extension adds |
-| `start_page` | The start page |
+| `home` | Home |
 | `turn_card` | A turn's card and its ▣ line |
 | `prompt` | A person's prompt bubble |
 | `reply` | An assistant reply |
@@ -863,6 +897,20 @@ built-in rather than drawing the row again.
 
 ### How a TUI extension runs
 
+- **From the terminal's own Fiber home only.** A TUI extension belongs to the
+  client. A repository brings session halves only, and its TUI extensions do
+  not load (`docs/extensions.md`, "Client halves").
+- **One VM per extension, for every session.** Every callback and event
+  handler receives the `session_id` it is for, and the extension keys its own
+  state by it. Timers belong to the extension, not to a session. `on_focus`
+  runs with the `session_id` when the session on screen changes, and
+  whole-screen slots (`layout`, `input_box`, keys, slash commands) receive the
+  session on screen.
+- **Only for a session that loaded its session half,** at a version inside
+  the range the TUI extension declares. For any other session it draws
+  nothing and the built-in rendering stands, with one notice naming the
+  extension and both versions. A later `extensions_loaded` switches it on or
+  off without a restart.
 - **On the terminal's thread.** Each TUI extension has its own Lua VM there.
   Its event handlers and timers run as coroutines, and a host call suspends
   the coroutine until the reply arrives through the terminal's event loop, as
@@ -900,7 +948,7 @@ top. An extension's view or overlay takes focus when it opens.
   map as if no extension were there.
 - **Esc** closes whatever is on top, unless the focused slot handles it
   itself.
-- **The second Ctrl+C always quits** ("Quit and detach"), whatever the focused
+- **The second Ctrl+C always quits** ("Quit"), whatever the focused
   slot does, so a slot that swallows every key cannot trap the person. The
   first Ctrl+C is the slot's.
 - **A click** on a span with a `click` id goes to that slot's click handler.
