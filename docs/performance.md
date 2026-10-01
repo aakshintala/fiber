@@ -61,7 +61,8 @@ Basis says where a number came from:
   300,000-token context is about 1.2 MB of text, and a 2 MiB conversation
   added about 3 MiB in `research/delegate-memory/`.
 - **Exact** follows from a rule, so the gate checks an equality, not a
-  ceiling. The three threads are the loop, signals and client zero
+  ceiling. The three threads are the loop, signals and one client:
+  the hub's connection, or `fiber ask`'s stdout
   (`docs/architecture.md`, "The threads"). Two fsyncs bracket each effect, and
   no line restates an earlier line in the same turn (`docs/events.md`,
   "Writing").
