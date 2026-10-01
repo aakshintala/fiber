@@ -130,7 +130,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 |---|---|
 | `subscribe` | The first command on every connection. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command before it is rejected `not_subscribed`, and a second `subscribe` is rejected `invalid_arguments`. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
-| `steer` | Sends a steering message, which joins the running turn at its next step boundary. A steering message also moves any running shell call to the background, so it reaches the model at the next step boundary. |
+| `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
