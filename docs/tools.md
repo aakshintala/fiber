@@ -924,8 +924,9 @@ and keeps what mail it needs (`docs/extensions.md`, "Registering").
 **The target takes it as it takes any message.** It enters the loop's inbox
 (`docs/architecture.md`, "One inbox"). During a turn it is a steering message
 and joins at the next step boundary. Between turns it starts a turn
-(`docs/loop.md`, "Starting a turn"). `before_message` runs on it, so an
-extension can rewrite or refuse it. It is logged with `source` `session`
+(`docs/loop.md`, "Starting a turn"). `before_message` runs on it with the
+sender's id and its parent's id, so an extension can rewrite or refuse it, or
+refuse every message from outside its own tree. It is logged with `source` `session`
 (`docs/events.md`, "Where a message came from"). The model sees it framed
 with the sender's id and name.
 

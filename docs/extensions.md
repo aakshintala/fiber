@@ -402,7 +402,7 @@ the event stream (`docs/events.md`) and has no hook point. How an extension watc
 | Hook point | When it runs | What the hook sees | What it may return |
 |---|---|---|---|
 | `session_start` | A session starts, resumes, forks or rewinds, before the first model request | why it started, the session's id and workspace root | context to add |
-| `before_message` | A person's or a driver's message arrives, as a turn's input or as steering, before it is logged | the message's text and images | a replacement message, a refusal with a reason, context to add |
+| `before_message` | A person's or a driver's message arrives, as a turn's input or as steering, before it is logged | the message's text and images, and for a session message the sender's id and its parent's id | a replacement message, a refusal with a reason, context to add |
 | `turn_start` | A turn has started, before its first model request | the turn's input and what started it | context to add |
 | `before_tool` | A call has passed its schema check and its effects function, before permission is decided | the tool's name, the arguments, the declared effects, paths and reversibility | replacement arguments, a refusal with a reason |
 | `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
