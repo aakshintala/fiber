@@ -364,6 +364,7 @@ fn two_prompts_or_none_is_a_usage_error() {
     assert_pre_session(&setup.fiber(&["ask"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "a", "b"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "--model", "x"], None), 2, "usage");
+    assert_pre_session(&setup.fiber(&["ask", "--verbose"], None), 2, "usage");
     assert!(server.requests().is_empty());
     assert!(!setup.home().join("projects").exists());
 }
@@ -400,8 +401,10 @@ fn a_missing_credential_fails_before_the_session() {
 fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
     let setup = Setup::new();
 
-    let run = setup.fiber(&[], None);
+    for args in [&[][..], &["hi"][..]] {
+        let run = setup.fiber(args, None);
 
-    assert_eq!(run.code, Some(2));
-    assert!(run.stderr.contains("fiber ask"), "stderr: {}", run.stderr);
+        assert_eq!(run.code, Some(2));
+        assert!(run.stderr.contains("fiber ask"), "stderr: {}", run.stderr);
+    }
 }

@@ -392,3 +392,19 @@ fn a_fiber_home_too_long_for_a_socket_is_a_usage_error_and_leaves_nothing() {
     assert!(error.message.contains("FIBER_HOME"));
     assert!(!home.exists());
 }
+
+#[test]
+fn a_socket_path_at_the_platforms_limit_binds() {
+    let max = if cfg!(target_os = "macos") { 103 } else { 107 };
+    let temp = Temp::new();
+    // `<home>/run/` and an 18-byte session id.
+    let pad = max - "/run/".len() - 18 - temp.0.as_os_str().len() - 1;
+    let home = temp.0.join("h".repeat(pad));
+    let sessions = home.join("projects/p/sessions");
+
+    let session = Session::start(&home, &sessions, Box::new(Shared::default())).unwrap();
+    let dir = only_session(&sessions);
+    let id = dir.file_name().unwrap().to_str().unwrap();
+    assert_eq!(home.join("run").join(id).as_os_str().len(), max);
+    assert_eq!(session.exit(Ok(())), 0);
+}
