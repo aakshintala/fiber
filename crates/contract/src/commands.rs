@@ -66,8 +66,6 @@ pub enum Command {
     Prompt(ContentArgs),
     /// Sends a steering message.
     Steer(ContentArgs),
-    /// Replaces a queued steering message's text.
-    SteerAmend(SteerAmend),
     /// Removes a queued steering message.
     SteerDrop(SteerDrop),
     /// Delivers a session message from another session.
@@ -126,16 +124,6 @@ pub enum SentPart {
 #[serde(deny_unknown_fields)]
 pub struct ContentArgs {
     /// The message.
-    pub content: Vec<SentPart>,
-}
-
-/// The `args` of `steer_amend`.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct SteerAmend {
-    /// The `steer` command's id.
-    pub command_id: CommandId,
-    /// The new message.
     pub content: Vec<SentPart>,
 }
 
