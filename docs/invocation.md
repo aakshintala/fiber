@@ -106,8 +106,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `subscribe` | `level` (string), `summary` or `full` |
 | `prompt` | `content` |
 | `steer` | `content` |
-| `steer_amend` | `command_id` (string), the `steer` command's id; `content`, the new message |
-| `steer_drop` | `command_id` (string), as `steer_amend` |
+| `steer_drop` | `command_id` (string), the `steer` command's id |
 | `message` | `from_session_id` (string), `text` (string) |
 | `cancel` | none |
 | `reply` | `request_id` (string) and the answer ("Replying") |
@@ -131,8 +130,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `subscribe` | The first command on every connection. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command before it is rejected `not_subscribed`, and a second `subscribe` is rejected `invalid_arguments`. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
-| `steer_amend` | Replaces a steering message's text while it is still queued. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
-| `steer_drop` | Removes a queued steering message, named as `steer_amend` names it, so nothing is applied. |
+| `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
 | `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"). Rejected `stale_request` if no turn is running. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
@@ -163,13 +161,10 @@ to grow with them. What happens to a stale one is already `docs/events.md`'s:
 "a reply naming a request that is no longer pending is rejected and does
 nothing, so a late approval can never authorise a different action."
 
-**`steer_amend` is the atomic form of drop-then-steer.** Without it a client
-changing queued text sends `steer_drop` then `steer`, and the loop can drain
-the queue between them — the turn gets nothing when it should have got the new
-text. One command closes that window. Both amend and drop are rejected
-`stale_request` once `steering_applied` has landed, and neither can tear:
-`docs/architecture.md` puts one inbox behind one thread draining at step
-boundaries, so an amend lands wholly before a drain or wholly after it.
+**Editing a queued steering message is drop, then steer.** If the loop
+drains the queue between the two, the new text joins one step later. If it
+drained before the drop, the drop is rejected `stale_request`, so the client
+knows the original was applied. Nothing is lost or applied twice.
 
 **A delegate is reached on its own connection.** A client that shows a
 delegate subscribes to that delegate through the hub, and sends it `steer`

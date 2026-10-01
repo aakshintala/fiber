@@ -417,8 +417,8 @@ completes (`docs/loop.md`, "Ending a turn"), so only a message that arrives
 after that becomes the next turn's input, and it appears on the next
 `turn_started` instead. The
 threading this rests on is the concurrency section of `docs/architecture.md`;
-the driver commands that send, amend and withdraw one — `steer`, `steer_amend`
-and `steer_drop` — are `docs/invocation.md`.
+the driver commands that send and withdraw one, `steer` and `steer_drop`, are
+`docs/invocation.md`.
 
 `clients` lets a client know whether it is the only one attached, which the terminal asks before quitting (`docs/tui.md`, "Quit"). The latest wins, and a client that attaches is sent the latest.
 

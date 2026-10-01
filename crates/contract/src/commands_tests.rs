@@ -68,8 +68,6 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "subscribe", "args": {"level": "summary"}}),
         json!({"id": "c", "command": "prompt", "args": {"content": content}}),
         json!({"id": "c", "command": "steer", "args": {"content": content}}),
-        json!({"id": "c", "command": "steer_amend",
-            "args": {"command_id": "c0", "content": content}}),
         json!({"id": "c", "command": "steer_drop", "args": {"command_id": "c0"}}),
         json!({"id": "c", "command": "message", "args": {"from_session_id": "s", "text": "t"}}),
         json!({"id": "c", "command": "cancel"}),
