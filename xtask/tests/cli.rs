@@ -117,7 +117,11 @@ fn select_runs_a_changed_crate_and_its_dependents() {
     let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
     assert_eq!(
         (code, out.as_str()),
-        (0, "mode=crates\npackages=a b c\nlibraries=a b\n")
+        (
+            0,
+            "mode=crates\npackages=a b c\npackage_specs=a@0.0.0 b@0.0.0 c@0.0.0\n\
+             libraries=a b\nlibrary_specs=a@0.0.0 b@0.0.0\n"
+        )
     );
 }
 
@@ -126,17 +130,63 @@ fn select_counts_untracked_and_committed_changes() {
     let dir = workspace();
     dir.write("crates/b/src/new.rs", "");
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert_eq!(out, "mode=crates\npackages=b\nlibraries=b\n");
+    assert_eq!(
+        out,
+        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibraries=b\nlibrary_specs=b@0.0.0\n"
+    );
 
     git(&dir, &["checkout", "-qb", "topic"]);
     dir.write("docs/notes.md", "notes\n");
     git(&dir, &["add", "."]);
     git(&dir, &["commit", "-qm", "docs"]);
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert_eq!(out, "mode=crates\npackages=b\nlibraries=b\n");
+    assert_eq!(
+        out,
+        "mode=crates\npackages=b\npackage_specs=b@0.0.0\nlibraries=b\nlibrary_specs=b@0.0.0\n"
+    );
     std::fs::remove_file(dir.path().join("crates/b/src/new.rs")).unwrap();
     let (_, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
-    assert_eq!(out, "mode=docs\npackages=\nlibraries=\n");
+    assert_eq!(
+        out,
+        "mode=docs\npackages=\npackage_specs=\nlibraries=\nlibrary_specs=\n"
+    );
+}
+
+#[test]
+fn select_prints_an_unambiguous_spec_for_a_crate_named_like_a_dependency() {
+    // Fiber has a workspace crate named `log`. Once any crate depends on
+    // `ureq`, which pulls in the crates.io `log` 0.4.x, `cargo -p log`
+    // fails with "specification 'log' is ambiguous". `package_specs` and
+    // `library_specs` must print `name@version` so `scripts/check` can pass
+    // an unambiguous spec to `cargo clippy`/`nextest`/`test --doc`, which
+    // resolve `-p` against the whole dependency graph, not just workspace
+    // members.
+    let dir = TestDir::new("named-like-a-dependency");
+    dir.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/log\"]\nresolver = \"3\"\n",
+    );
+    dir.write(".gitignore", "target/\nCargo.lock\n");
+    dir.write(
+        "crates/log/Cargo.toml",
+        "[package]\nname = \"log\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    dir.write("crates/log/src/lib.rs", "//! log\n");
+    dir.write("docs/dependencies.md", DEPENDENCIES);
+    dir.write("docs/code-quality.md", CODE_QUALITY);
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "base"]);
+    dir.write("crates/log/src/lib.rs", "//! log, changed\n");
+    let (code, out) = xtask(&dir, &["select", "--base", "main"], &[], "");
+    assert_eq!(
+        (code, out.as_str()),
+        (
+            0,
+            "mode=crates\npackages=log\npackage_specs=log@0.0.0\n\
+             libraries=log\nlibrary_specs=log@0.0.0\n"
+        )
+    );
 }
 
 #[test]
