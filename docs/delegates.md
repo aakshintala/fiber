@@ -45,18 +45,13 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 
 | Tool | Arguments | What it does |
 |---|---|---|
-| `delegate_spawn` | `description`, `prompt`, `model`, `mode`, `isolation`, `workspace`, `timeout_ms` | Starts a delegate. Returns a receipt with the delegate id and the output path. |
-| `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model, effort or mode: see "Forks". |
+| `delegate_spawn` | `description`, `prompt`, `model`, `isolation`, `workspace`, `timeout_ms` | Starts a delegate. Returns a receipt with the delegate id and the output path. |
+| `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model or effort: see "Forks". |
 | `delegate_message` | `id`, `message` | Steers a running delegate, or resumes a finished one. |
-| `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, the modes each harness supports, and the quota of each provider and harness (`docs/tools.md`, "Provider quota"). |
+| `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, and the quota of each provider and harness (`docs/tools.md`, "Provider quota"). |
 | `jobs` | as `docs/tools.md` | Lists, waits for and stops delegates. |
 
 - `description` is a short label for people.
-- `mode` is `readonly`, `auto` or `yolo`, and defaults to the parent's mode.
-  A mode more permissive than the parent's, or one the harness does not
-  support, fails with `invalid_arguments` (`docs/permissions.md`,
-  "Delegates"). The list of values never changes, so it sits in the tool
-  definition; which harness supports which is in `delegate_models`.
 - `isolation` is `none` (the default) or `worktree`.
 - `workspace` defaults to the parent's workspace. A delegate started inside a
   worktree delegate defaults to that worktree.
@@ -96,12 +91,14 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   running (Fiber and Claude Code) sends a steering message. It joins the delegate's turn at its next step boundary.
 - To a running delegate whose harness cannot take one, the message is queued and
   delivered as a resume when the delegate finishes.
-- To a finished delegate, it resumes it.
+- To a finished delegate, it resumes it. A Fiber delegate exits as soon as
+  its run finishes ("Lifetime"), so most messages to a finished delegate are
+  resumes.
 - The receipt says which of these happened.
-- A person reaches any delegate in the tree: the driver commands `steer` and
-  `reply` take an optional `session_id`, and each parent forwards a command
-  addressed to a descendant down the tree. How the terminal shows and steers
-  delegates is `docs/tui.md`.
+- A person reaches a delegate on its own connection: a client that opens a
+  delegate subscribes to it through the hub and sends it `steer` there, as to
+  any session. No session forwards a command to another. How the terminal
+  shows and steers delegates is `docs/tui.md`.
 - `delegate_message` acts only on the caller's own delegates, as `jobs` does.
 - Any session reaches any running delegate, a sibling included, with
   `session_message` (`docs/tools.md`, "Messaging other sessions"). A Fiber
@@ -135,7 +132,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 
 The `job_*` kinds are unchanged. A delegate adds two kinds keyed by `job_id`, as
 `job_line` is for monitors: `delegate_started`, naming the delegate's session,
-harness, model, mode, workspace and worktree, and `delegate_finished`, carrying its
+harness, model, workspace and worktree, and `delegate_finished`, carrying its
 final message, any questions, usage totals and worktree state. Their keys are
 `docs/events.md`, "Jobs".
 
@@ -151,33 +148,37 @@ final message, any questions, usage totals and worktree state. Their keys are
 - A delegate's `session_started` carries `parent { session_id, delegate_id }`
   and, for a fork, `forked_from { session_id, seq }`.
 
-## One stream
+## Streams
 
-- A Fiber delegate's lines are relayed onto the parent's stdout as they are,
-  each carrying the delegate's `session_id`. Filtering stdout to the parent's
-  `session_id` still gives the parent's log byte for byte.
-- The parent's log holds only the parent's own events.
-- Another harness's raw stream goes to the job's output file, never onto the
-  parent's stream.
+- Each delegate's stream is its own. A parent reads its Fiber delegate's
+  stream as an ordinary client of the delegate's socket. Nothing a delegate
+  emits is relayed onto its parent's stream, and nothing is forwarded down
+  the tree.
+- One kind is copied: each `usage_recorded` a parent receives from a delegate
+  is written into the parent's own log, keeping its original `session_id` and
+  `seq`, so a fold counts it once. A grandchild's lines reach the root through
+  its parent's log. The root's log then holds the whole tree's spend
+  (`docs/loop.md`, "Spending budget").
+- A client shows a delegate's card from that delegate's `session_status`,
+  read over a `summary` connection, and its conversation over a `full` one
+  when the person opens it (`docs/tui.md`).
+- Another harness's raw stream goes to the job's output file.
 
 ## Permissions
 
-- A delegate starts in the `mode` it was given, which is never more
-  permissive than its parent's. It runs in the less permissive of that mode
-  and its parent's current mode, so a mode change on the parent reaches it
-  (`docs/permissions.md`, "Delegates").
-- A delegate in `readonly` never asks to leave it.
-- A Fiber delegate in `auto` has its own reviewer. An escalation from it is
-  relayed up the tree to whoever drives the root, and answered with `reply`
-  naming the delegate's `session_id`. With nobody attached, it is a block, as
-  for any unattended run, and the delegate carries on.
-- The parent's model never answers a delegate's approval. It shapes the
-  delegate's reviewer only through the prompt it wrote and `delegate_message`,
-  which the reviewer reads as the human's messages.
-- Starting any delegate declares `executes`, so the parent's mode judges the
-  start. A `readonly` parent asks to leave `readonly` first.
-- Another harness runs in its own mode that its extension maps the Fiber mode
-  to, and is judged by its own rules ("Harness extensions").
+- Every delegate runs in `auto`, as every session does (`docs/permissions.md`).
+- `delegate_spawn`, `delegate_fork` and `delegate_message` declare `executes`
+  and are always judged by the parent's reviewer: no fast path, session grant
+  or standing allow skips them. The parent's reviewer judges what the parent's
+  model tells a delegate against the parent's own person's messages, because
+  the delegate's reviewer reads that prompt and those messages as the human's.
+- A Fiber delegate has its own reviewer. An escalation from it is a block, as
+  for any unattended run, and the delegate carries on. No model answers a
+  delegate's approval, its parent's included, and nothing relays it to a
+  person.
+- Another harness runs in its own auto mode and is judged by its own rules
+  ("Harness extensions"). A harness and model are offered as a delegate only
+  when their auto mode is declared to work.
 
 ## Limits
 
@@ -195,11 +196,11 @@ final message, any questions, usage totals and worktree state. Their keys are
 ## Lifetime
 
 - A delegate survives cancellation of its parent's turn, as every job does.
-  An approval or question the delegate is waiting on stays pending, because
-  the cancel resolves only the requests in the parent's own turn
-  (`docs/architecture.md`, "Cancellation"). The person still answers it with
-  `reply` naming the delegate's `session_id`, and its resolved line goes in
-  the delegate's log alone. This holds for a delegate on any harness.
+  A delegate never waits on a person: an escalation is a block and an
+  `ask_user` question ends its turn ("Results").
+- A Fiber delegate exits as soon as its run finishes: its final answer is
+  written and its own jobs are done. It does not wait for `session.idle_exit`
+  (`docs/invocation.md`, "Lifecycle").
 - A delegate that finishes its task with jobs of its own still running follows
   the rule for a session about to end (`docs/tools.md`): it is woken once, then
   waited for.
@@ -208,20 +209,24 @@ final message, any questions, usage totals and worktree state. Their keys are
   every descendant. Its parent waits for it to exit, up to the shutdown
   bound, before sending SIGKILL.
 - Every delegate is a child process of the session that started it, whatever
-  its harness. A Fiber delegate is a child `fiber serve`
-  ([ADR 0009](adr/0009-each-session-is-one-process.md)): its prompt and
-  commands go down the pipe, its events come back up it, and the parent is
-  its client zero. The parent drives it only through the driver commands and
-  events, so no delegate has a path a supervisor lacks.
+  its harness. A Fiber delegate runs the internal session command
+  ([ADR 0009](adr/0009-each-session-is-one-process.md)). Its parent is an
+  ordinary client over its socket and drives it only through the driver
+  commands and events, so no delegate has a path a supervisor lacks.
+- A Fiber delegate's stdin is a lifeline. The parent holds it open and never
+  writes to it. End of file on it means the parent is gone, however it died,
+  and the delegate shuts down within the bound (`docs/invocation.md`,
+  "Shutdown"). A dropped socket connection is only a client leaving: the
+  parent reconnects and the delegate carries on.
 - A Fiber delegate starts its own MCP servers and process extensions, as
   every session does (`docs/mcp.md`, "Where servers run").
 - Stopping a Fiber delegate is a signal to its process group, as for any job
   (`docs/tools.md`, "Shell").
-- If a parent's process dies without a shutdown, its delegates keep running:
-  each sees its client leave, finishes its turn and jobs, and exits
-  (`docs/invocation.md`, "Lifecycle"). The parent's log marks each job
+- If a parent's process dies without a shutdown, each Fiber delegate sees
+  end of file on its lifeline and shuts down. The parent's log marks each job
   `orphaned` on resume (`docs/tools.md`, "Background jobs"), because the
-  parent cannot know.
+  parent cannot know, and the resumed parent reads each orphaned delegate's
+  log for the `usage_recorded` lines it is missing.
 - A crash of any kind in a delegate, in Rust or in Lua's C code, ends that
   delegate `failed` and nothing else.
 
@@ -280,9 +285,8 @@ model reference on it, such as `claude` in `claude:opus:high`.
 
 As data, for the harness:
 
-- the Fiber modes it supports, and the harness mode or flags each one maps to
+- the flags that run the harness in its own auto mode
 - whether it takes messages while running
-- whether its mode can be changed while it runs
 - whether SIGTERM stops it cleanly, so it gets the shutdown wait
   (`docs/invocation.md`, "Shutdown")
 
@@ -294,7 +298,7 @@ As data, for each model:
 As Lua, none of which runs on a model request:
 
 - `command(spec)` returns the program, arguments and environment for a start
-  or a resume. `spec` carries the prompt, the model reference, the mode, the
+  or a resume. `spec` carries the prompt, the model reference, the
   workspace, and the harness session id.
 - `line(text)` is called with each line the harness prints, and returns what
   that line carries, if anything: the final answer, usage, quota, or a
@@ -309,7 +313,7 @@ As Lua, none of which runs on a model request:
 
 - **Configuration.** The harness loads the person's configuration for it.
   `command` passes only what drives the program: print mode, the JSON output
-  stream, the session id, the model and effort, the mode, resume, and where
+  stream, the session id, the model and effort, the auto-mode flags, resume, and where
   the harness takes one per run, `fiber mcp serve` ("Delegates on another
   harness").
 - **Session id.** Fiber fixes the harness's session id before the program
@@ -325,10 +329,6 @@ As Lua, none of which runs on a model request:
   `delegate_message` as a line on its input. Fiber closes its input after
   the final answer, so the program exits. For any other harness the message
   waits and is delivered as a resume ("Talking to a delegate").
-- **Mode changes.** When the delegate's mode changes, a harness that can change
-  mode while running is told. A harness that cannot is stopped and resumed in
-  the new mode when the change tightens its mode. A change that loosens it
-  waits for the next run.
 - **Usage.** The parent writes one `usage_recorded` per run, from the usage
   `line` returned. Its cost is the harness's own where it reports one, or
   computed from the declared prices. It carries `subscription` when the
@@ -453,6 +453,3 @@ harness declares no `quota()`.
 
 ## Not settled here
 
-- Whether a parent relays its delegates' streams, or every client connects
-  to each session it watches:
-  [Tree or peers: should a parent relay its delegates' streams?](https://github.com/aakshintala/fiber/issues/226)
