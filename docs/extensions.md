@@ -325,6 +325,8 @@ state.keys()
   logged just before the line the hook changed, and is dropped if the hook
   fails. Any other write takes effect for the extension at once and is logged
   at the loop's next drain of its inbox, so a crash before then loses it.
+  Once `fiber_exited` is written there is no next drain: `state.set` and
+  `state.unset` fail with code `closing` ("When a session ends").
 - **A handoff changes nothing.** The session continues, and so does its
   extension state.
 
@@ -663,7 +665,10 @@ process extension is restarted. Both are handed their folded state again.
 On a normal exit, when a session is idle with no client or has been sent
 `close`, Fiber delivers every remaining event to each watcher and waits for
 each to finish, within its timeout. That is where a worklog or a memory
-written at session end runs. A process extension then has its manifest's
+written at session end runs. It writes to the extension's data directory
+(`docs/state.md`, "What each part holds"), not to extension state: these
+deliveries come after `fiber_exited`, the last line the log takes, so
+`state.set` and `state.unset` fail with code `closing`. A process extension then has its manifest's
 `exit_timeout_ms` to finish, and after that gets the shutdown sequence every
 child gets: SIGTERM, 800 ms, then SIGKILL (`docs/invocation.md`, "Shutdown").
 
