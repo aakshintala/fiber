@@ -206,7 +206,57 @@ fn a_credential_with_no_token_is_extension_failed() {
     let provider = fixture(&setup, &server);
     let err = within(move || provider.token()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::ExtensionFailed);
-    assert!(matches!(err, Error::BadReturn { .. }), "{err:?}");
+    let Error::BadReturn {
+        extension,
+        callback,
+        ..
+    } = &err
+    else {
+        panic!("{err:?}")
+    };
+    assert_eq!(
+        (extension.as_str(), callback.as_str()),
+        ("fixture", "fixture.credential")
+    );
+}
+
+#[test]
+fn sign_returns_a_table_of_headers_or_nothing() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    let mut script = String::new();
+    for (name, returns) in [
+        ("empty", "{}"),
+        ("none", "nil"),
+        ("list", "{ \"a\" }"),
+        ("number", "1"),
+    ] {
+        script.push_str(&format!(
+            "fiber.provider(\"{name}\", {{ sign = {{ timeout = 1000, run = function() return {returns} end }} }})\n"
+        ));
+    }
+    write(&dir.join("init.lua"), &script);
+    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    for (name, ok) in [
+        ("empty", true),
+        ("none", true),
+        ("list", false),
+        ("number", false),
+    ] {
+        let provider = LuaProvider::new(Arc::clone(&extension), name, setup.home());
+        let signed = within(move || {
+            provider.sign(&SignRequest {
+                method: "POST",
+                url: "http://x/",
+                headers: &[],
+                body: b"",
+            })
+        });
+        match signed {
+            Ok(headers) => assert!(ok && headers.is_empty(), "{name}: {headers:?}"),
+            Err(why) => assert!(!ok && why.contains("a table of headers"), "{name}: {why}"),
+        }
+    }
 }
 
 #[test]

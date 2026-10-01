@@ -91,12 +91,12 @@ impl LuaProvider {
     // token expires.
     pub fn token(self: &Arc<Self>) -> Result<Secret, Error> {
         let mut state = lock(&self.token);
-        let now = SystemTime::now();
         if let Some((token, expires)) = &state.current
-            && *expires > now
+            && let Ok(left) = expires.duration_since(SystemTime::now())
+            && !left.is_zero()
         {
             let token = token.clone();
-            let due = expires.duration_since(now).unwrap_or_default() <= REFRESH_BEFORE;
+            let due = left <= REFRESH_BEFORE;
             if due && !state.refreshing {
                 state.refreshing = true;
                 let this = Arc::clone(self);
