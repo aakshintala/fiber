@@ -26,8 +26,26 @@ pub(crate) fn check(schema: &Value, value: &Value) -> Vec<String> {
 }
 
 fn fix(schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>) {
-    // `anyOf` allows more than one reading by definition.
-    if schema.get("anyOf").is_some() {
+    if let Some(Value::Array(options)) = schema.get("anyOf") {
+        if check(schema, value).is_empty() {
+            return;
+        }
+        // Each branch's repair is a reading; it is kept only when exactly
+        // one reading passes the whole schema.
+        let mut readings: Vec<(Value, Vec<Repair>)> = Vec::new();
+        for option in options {
+            let mut reading = value.clone();
+            let mut made = Vec::new();
+            fix(option, &mut reading, path, &mut made);
+            let new = !readings.iter().any(|(seen, _)| *seen == reading);
+            if !made.is_empty() && new && check(schema, &reading).is_empty() {
+                readings.push((reading, made));
+            }
+        }
+        if let [(reading, made)] = readings.as_mut_slice() {
+            *value = std::mem::take(reading);
+            repairs.append(made);
+        }
         return;
     }
     let allowed = types(schema);
@@ -117,11 +135,10 @@ fn walk(schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
             format!("`{path}`")
         }
     };
-    if let Some(Value::Array(options)) = schema.get("anyOf") {
-        if !options.iter().any(|o| check(o, value).is_empty()) {
-            errors.push(format!("{}: matches none of the shapes allowed", at()));
-        }
-        return;
+    if let Some(Value::Array(options)) = schema.get("anyOf")
+        && !options.iter().any(|o| check(o, value).is_empty())
+    {
+        errors.push(format!("{}: matches none of the shapes allowed", at()));
     }
     let types = types(schema);
     if !types.is_empty() && !types.iter().any(|t| is(value, t)) {

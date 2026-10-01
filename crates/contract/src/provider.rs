@@ -119,6 +119,12 @@ pub enum Input {
         action_id: ActionId,
         /// The text the model is sent.
         text: String,
+        /// Whether the call's `tool_call_completed` is `failed`. A protocol
+        /// sends it as its error flag.
+        // ponytail: carried, not yet sent; each protocol encodes it in a
+        // provider change (`docs/tools.md`, "What a result carries").
+        #[serde(default)]
+        is_error: bool,
     },
 }
 

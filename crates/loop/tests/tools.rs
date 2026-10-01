@@ -19,7 +19,7 @@ use std::sync::{Arc, Barrier};
 use contract::events::{Control, FileChange, TurnOutcome};
 use contract::provider::{Finish, Input};
 use contract::shapes::{ContentPart, Effect, Process};
-use contract::tool::{Bound, Tool};
+use contract::tool::{Bound, EffectsError, Tool};
 use contract::{Envelope, ErrorCode};
 use fakes::Scripted;
 use serde_json::{Value, json};
@@ -98,6 +98,7 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
         Some(&Input::ToolResult {
             action_id: done.action_id.clone().unwrap(),
             text: "Sunny.".into(),
+            is_error: false,
         })
     );
 }
@@ -133,10 +134,14 @@ fn a_result_carries_what_the_tool_returned() {
 #[test]
 fn a_failed_result_completes_failed_with_its_code() {
     let tool = Arc::new(TestTool::failing("get_weather", ErrorCode::ToolError));
-    let (_, lines) = turn(vec![tool], &[("get_weather", paris())]);
+    let (session, lines) = turn(vec![tool], &[("get_weather", paris())]);
     let done = completed(&lines)[0];
     assert_eq!(done.payload["status"], "failed");
     assert_eq!(done.payload["error"]["code"], "tool_error");
+    assert!(matches!(
+        session.requests()[1].conversation.last(),
+        Some(Input::ToolResult { is_error: true, .. })
+    ));
 }
 
 #[test]
@@ -229,7 +234,7 @@ fn arguments_that_need_no_repair_record_none() {
 #[test]
 fn an_effects_function_that_errors_fails_tool_error_and_never_runs() {
     let mut tool = TestTool::reads("get_weather", "Sunny.");
-    tool.effects = Err("The effects function broke.".into());
+    tool.effects = Err(EffectsError::Tool("The effects function broke.".into()));
     let tool = Arc::new(tool);
     let (_, lines) = turn(vec![tool.clone()], &[("get_weather", paris())]);
     assert_eq!(

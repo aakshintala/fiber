@@ -266,10 +266,16 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
         (action_id.clone(), call.name.clone())
     };
     let result = |n: usize| {
-        let Input::ToolResult { action_id, text } = &sent[n] else {
+        let Input::ToolResult {
+            action_id,
+            text,
+            is_error,
+        } = &sent[n]
+        else {
             panic!("{:?}", sent[n]);
         };
         assert!(text.contains("No tool is named"), "{text}");
+        assert!(is_error);
         action_id.clone()
     };
     assert_eq!(sent[0], user("one"));
@@ -460,6 +466,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
                 .as_str()
                 .unwrap()
                 .into(),
+            is_error: true,
         }
     );
 }

@@ -18,7 +18,7 @@ pub trait Tool: Send + Sync {
     /// The call's effects, from arguments that passed the schema check. Fiber
     /// calls it before permission is decided. An error fails the call
     /// `tool_error`, and it never runs.
-    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, String>;
+    fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError>;
 
     /// Runs the call, blocking until it ends.
     fn run(&self, arguments: &Map<String, Value>) -> Output;
@@ -41,6 +41,28 @@ pub struct Effects {
     /// The widening a rule would offer, such as `npm test`.
     pub prefix: Option<String>,
 }
+
+/// Why an effects function could not classify a call. Either way the call
+/// fails closed (`docs/tools.md`, "Before a call runs").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EffectsError {
+    /// The arguments passed the schema but name something the tool cannot
+    /// classify, such as a path it cannot resolve; the message says what.
+    Arguments(String),
+    /// The tool's own code failed, such as an extension's Lua raising an
+    /// error; the message is the failure.
+    Tool(String),
+}
+
+impl std::fmt::Display for EffectsError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Arguments(message) | Self::Tool(message) => f.write_str(message),
+        }
+    }
+}
+
+impl std::error::Error for EffectsError {}
 
 /// What a call returned (`docs/tools.md`, "What a result carries"). The loop
 /// adds the status and, when it cuts the result, the artifact.

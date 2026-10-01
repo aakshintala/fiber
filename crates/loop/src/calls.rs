@@ -117,7 +117,7 @@ impl Loop {
         }
         let effects = match tool.effects(&arguments) {
             Ok(effects) => effects,
-            Err(message) => return Err(Box::new(failed(ErrorCode::ToolError, message))),
+            Err(e) => return Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))),
         };
         // ponytail: only the fast paths are decided; every other call is
         // denied until the permission order and the reviewer exist
@@ -181,12 +181,11 @@ impl Loop {
         let head = full.floor_char_boundary(bound.start);
         let tail = full.ceil_char_boundary(full.len().saturating_sub(bound.end).max(head));
         let removed = tail.saturating_sub(head);
-        let relative = format!("artifacts/{}.txt", id.0);
-        let path = self.session_dir.join(&relative);
-        let saved = std::fs::create_dir_all(self.session_dir.join("artifacts"))
-            .and_then(|()| std::fs::write(&path, full));
-        let (notice, artifact) = match saved {
-            Ok(()) => (
+        let (notice, artifact) = match self
+            .log
+            .write_artifact(&format!("{}.txt", id.0), full.as_bytes())
+        {
+            Ok((relative, path)) => (
                 format!(
                     "[{removed} bytes cut. The full output is in {}; read it with `read`.]",
                     path.display()

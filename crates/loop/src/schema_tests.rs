@@ -75,12 +75,12 @@ fn nothing_with_two_readings_or_none_is_repaired() {
         json!({"path": null}),
         json!({"path": "/a", "note": null}),
         // Not an integer, not a boolean, JSON that does not pass the check,
-        // JSON that does not parse, and `anyOf`.
+        // JSON that does not parse, and `anyOf` with no reading that passes.
         json!({"path": "/a", "limit": "2.5"}),
         json!({"path": "/a", "all": "yes"}),
         json!({"path": "/a", "edits": "[\"x\"]"}),
         json!({"path": "/a", "edits": "[1,"}),
-        json!({"path": "/a", "either": "3"}),
+        json!({"path": "/a", "either": "x"}),
         // A string where the schema takes one, alone or beside another type.
         json!({"path": "5"}),
         json!({"path": "/a", "id": "5"}),
@@ -164,4 +164,57 @@ fn bounds_are_inclusive_and_each_type_is_checked() {
 fn the_string_true_becomes_a_boolean() {
     let made = repair(&schema(), &json!({"path": "a", "all": "true"})).unwrap();
     assert_eq!(made.repaired["all"], true);
+}
+
+#[test]
+fn an_any_of_with_exactly_one_reading_is_repaired() {
+    let made = repair(&schema(), &json!({"path": "a", "either": "3"})).unwrap();
+    assert_eq!(made.repaired["either"], 3);
+    assert_eq!(made.repairs.len(), 1);
+    assert_eq!(made.repairs[0].path, "/either");
+    assert_eq!(made.repairs[0].fix, RepairFix::StringToNumber);
+    let made = repair(&schema(), &json!({"path": "a", "either": "false"})).unwrap();
+    assert_eq!(made.repaired["either"], false);
+    // Two branches reading the same value are one reading.
+    let same = json!({"anyOf": [{"type": "integer"}, {"type": "number"}]});
+    assert!(
+        repair(
+            &json!({"type": "object", "properties": {"n": same}}),
+            &json!({"n": "3"})
+        )
+        .is_some()
+    );
+}
+
+#[test]
+fn an_any_of_with_two_readings_is_not_repaired() {
+    let two = json!({"anyOf": [
+        {"type": "object", "properties": {"a": {"type": "integer"}}},
+        {"type": "object", "properties": {"b": {"type": "integer"}}}
+    ]});
+    assert_eq!(repair(&two, &json!({"a": "1", "b": "2"})), None);
+    // Arguments that already pass need no reading.
+    assert_eq!(repair(&two, &json!({"a": "1"})), None);
+}
+
+#[test]
+fn an_any_of_does_not_hide_the_keywords_beside_it() {
+    let schema = json!({
+        "type": "object",
+        "required": ["city"],
+        "properties": {"city": {"type": "string"}},
+        "anyOf": [{"type": "object"}]
+    });
+    assert_eq!(check(&schema, &json!({})), ["`/city`: missing"]);
+    assert_eq!(
+        check(&schema, &json!({"city": 1})),
+        ["`/city`: expected string, got a number"]
+    );
+    assert_eq!(
+        check(&schema, &json!("x")),
+        [
+            "arguments: matches none of the shapes allowed",
+            "arguments: expected object, got a string"
+        ]
+    );
 }

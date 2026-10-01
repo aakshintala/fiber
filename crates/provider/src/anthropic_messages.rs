@@ -383,7 +383,9 @@ fn block_of(input: &Input, reference: &str, call_ids: &BTreeMap<&ActionId, &str>
             "name": call.name,
             "input": call.arguments,
         })),
-        Input::ToolResult { action_id, text } => Some(json!({
+        Input::ToolResult {
+            action_id, text, ..
+        } => Some(json!({
             "type": "tool_result",
             "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
             "content": text,

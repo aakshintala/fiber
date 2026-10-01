@@ -78,8 +78,6 @@ pub struct Loop {
     tools: BTreeMap<String, (Arc<dyn Tool>, ToolDefinition)>,
     /// The workspace, symlinks resolved.
     workspace: PathBuf,
-    /// The session directory, whose `artifacts/` holds cut results.
-    session_dir: PathBuf,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
 }
@@ -87,12 +85,7 @@ pub struct Loop {
 impl Loop {
     /// Starts a new session's loop, writing `session_started`. `tools` are
     /// registered by name; a later one replaces an earlier one of the same
-    /// name (`docs/architecture.md`, "Tool seam"). `session_dir` is the
-    /// directory `log` writes to.
-    #[allow(
-        clippy::too_many_arguments,
-        reason = "each is a distinct part of the session; a struct of them is the same list"
-    )]
+    /// name (`docs/architecture.md`, "Tool seam").
     pub fn start(
         log: Arc<Log>,
         provider: Arc<dyn Provider>,
@@ -100,7 +93,6 @@ impl Loop {
         system_prompt: String,
         inbox: Receiver<Message>,
         workspace: String,
-        session_dir: PathBuf,
         tools: Vec<Arc<dyn Tool>>,
     ) -> Result<Self, Error> {
         let resolved = PathBuf::from(&workspace);
@@ -136,7 +128,6 @@ impl Loop {
                 })
                 .collect(),
             workspace: resolved,
-            session_dir,
             cut_off: false,
         })
     }

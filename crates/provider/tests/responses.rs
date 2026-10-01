@@ -522,10 +522,12 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         Input::ToolResult {
             action_id: ActionId("a_2".into()),
             text: "bad arguments".into(),
+            is_error: false,
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
+            is_error: false,
         },
     ]);
     let server = ProviderServer::start([Response::stream(stream(&[completed(

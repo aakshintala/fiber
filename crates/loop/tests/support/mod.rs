@@ -24,7 +24,7 @@ use contract::events::{
 use contract::inbox::Message;
 use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
-use contract::tool::{Bound, Effects, Output, Tool};
+use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, SessionId};
 use fakes::{Scripted, ScriptedProvider, reply};
 use log::Log;
@@ -93,7 +93,7 @@ pub(crate) fn calls_reply(text: &str, calls: &[(&str, Value)]) -> Scripted {
 pub(crate) struct TestTool {
     pub(crate) name: &'static str,
     /// What its effects function returns.
-    pub(crate) effects: Result<DeclaredEffects, String>,
+    pub(crate) effects: Result<DeclaredEffects, EffectsError>,
     /// What a call returns.
     pub(crate) output: Output,
     pub(crate) bound: Bound,
@@ -182,7 +182,7 @@ impl Tool for TestTool {
         }
     }
 
-    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, String> {
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
         self.note("effects");
         self.effects.clone().map(|declared| Effects {
             declared,
@@ -299,7 +299,6 @@ impl Session {
             "You are terse.".into(),
             rx,
             workspace.display().to_string(),
-            home.0.join(&id.0),
             tools,
         )
         .unwrap();
