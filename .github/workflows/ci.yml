@@ -81,6 +81,10 @@ jobs:
           BASE: ${{ steps.base.outputs.base }}
         run: cargo xtask select --base "$BASE" | tee -a "$GITHUB_OUTPUT"
 
+      - name: Docs check
+        if: github.event_name == 'pull_request'
+        run: scripts/check-docs
+
       - name: Read the ticket's labels
         id: ticket
         if: github.event_name == 'pull_request'
@@ -101,48 +105,15 @@ jobs:
           echo "ticket: ${number:-none}; bug: $bug"
           echo "bug=$bug" >>"$GITHUB_OUTPUT"
 
-      - name: Install cargo-mutants
-        if: github.event_name == 'pull_request'
-        uses: taiki-e/install-action@83ac0ad63c0167e6f06796fab0fce28db1bf3db0 # v2.87.22
-        with:
-          tool: cargo-mutants
-
-      - name: Count mutants
-        id: mutants
-        if: github.event_name == 'pull_request'
-        env:
-          BASE: ${{ steps.base.outputs.base }}
-        run: |
-          git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
-          cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --list >"$RUNNER_TEMP/mutants.txt"
-          count=$(grep -c . "$RUNNER_TEMP/mutants.txt" || true)
-          echo "mutants: $count"
-          echo "count=$count" >>"$GITHUB_OUTPUT"
-
       - name: Plan
         id: plan
         env:
           MODE: ${{ steps.select.outputs.mode }}
           PACKAGES: ${{ steps.select.outputs.packages }}
           BUG: ${{ steps.ticket.outputs.bug || 'false' }}
-          MUTANTS: ${{ steps.mutants.outputs.count || 0 }}
         run: |
           cargo xtask plan --mode "$MODE" --packages "$PACKAGES" --event "$GITHUB_EVENT_NAME" \
-            --bug "$BUG" --mutants "$MUTANTS" | tee -a "$GITHUB_OUTPUT"
-
-  docs:
-    name: Docs check
-    needs: select
-    if: fromJSON(needs.select.outputs.jobs).docs
-    runs-on: ubuntu-24.04
-    steps:
-      - &checkout-shallow
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - *toolchain
-      - *cache-restore
-      - run: scripts/check-docs
+            --bug "$BUG" | tee -a "$GITHUB_OUTPUT"
 
   lint:
     name: Linux x86_64 checks
@@ -221,6 +192,11 @@ jobs:
       - name: cargo mutants --in-diff
         run: |
           git diff "$BASE...HEAD" >"$RUNNER_TEMP/diff.patch"
+          # A shard with no mutants of its own stops here.
+          if [ -z "$(cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --shard "$SHARD/$SHARD_TOTAL" --list)" ]; then
+            echo "no mutants in shard $SHARD"
+            exit 0
+          fi
           cargo mutants --in-diff "$RUNNER_TEMP/diff.patch" --test-tool nextest \
             --shard "$SHARD/$SHARD_TOTAL"
 
@@ -265,11 +241,13 @@ jobs:
 
   ci:
     name: CI
-    needs: [select, docs, lint, test, mutants, bug_base]
+    needs: [select, lint, test, mutants, bug_base]
     if: always()
     runs-on: ubuntu-24.04
     steps:
-      - *checkout-shallow
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - *toolchain
       - *cache-restore
       - name: Every selected job passed and every other job was skipped

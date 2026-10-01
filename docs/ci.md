@@ -30,6 +30,10 @@ One check is required to merge: `CI`. It passes only when every job the
 selection chose succeeded and every job it did not choose was skipped. If
 the selection itself fails, `CI` fails.
 
+The selection is one job that every other job waits for, so it does as
+little as it can: it works out the selection and, on a pull request, runs
+the docs check, below.
+
 A branch does not have to be up to date with `main` to merge, and there is no
 merge queue. The backstop on `main` catches two pull requests that each
 passed alone but break together.
@@ -41,8 +45,8 @@ A newer push to a pull request cancels that pull request's older run.
 A pull request runs only what its diff can affect.
 
 - A diff in which every file is Markdown, or is under `docs/` or
-  `research/`, runs the docs job alone: the docs check, below. A file a
-  crate compiles in is the exception, below.
+  `research/`, runs no job after the selection, whose docs check is the
+  whole run. A file a crate compiles in is the exception, below.
 - A diff that changes `Cargo.lock`, any `Cargo.toml`, `rust-toolchain.toml`,
   anything under `.github/` or `scripts/`, `clippy.toml`, `deny.toml`,
   `.cargo/config.toml` or `.config/nextest.toml` runs everything.
@@ -85,7 +89,6 @@ run: CI opens a flake issue naming the test, or comments on the open one
 On Linux x86_64 alone:
 
 - `cargo fmt --check`
-- the docs check, below
 - no non-test source file over 800 lines
 - the `unsafe` table in `docs/code-quality.md` matches the code
 - the compiled-in list matches the files crates compile in, Markdown
@@ -95,9 +98,9 @@ On Linux x86_64 alone:
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
-- mutation testing: `cargo-mutants --in-diff`, split across runners with one
-  shard per 25 mutants, at most 6. Both numbers were picked, not measured;
-  they are reset from the first real runs.
+- mutation testing: `cargo-mutants --in-diff`, split across 6 runners. Each
+  lists its own share of the diff's mutants and stops when it has none. The
+  number was picked, not measured; it is reset from the first real runs.
 - for a pull request whose ticket, the issue its body resolves, is labelled
   `bug`, its new and changed tests run against the base commit, and at least
   one must fail there
@@ -124,9 +127,9 @@ network (`docs/testing.md`).
   `.github/` does not exist. A path with a placeholder in it, such as
   `docs/<area>.md`, is not checked.
 
-It runs on every pull request, not only docs-only ones, because the change
-that breaks a citation is usually a code change that renames or deletes what
-a doc points at. External URLs are not checked: nothing in CI reaches the
+It runs in the selection job on every pull request, not only docs-only
+ones, because the change that breaks a citation is usually a code change
+that renames or deletes what a doc points at. External URLs are not checked: nothing in CI reaches the
 public network.
 
 ## Advisories

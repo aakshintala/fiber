@@ -161,14 +161,12 @@ fn plan_prints_the_jobs_and_shards() {
         "pull_request",
         "--bug",
         "true",
-        "--mutants",
-        "30",
     ];
     let (code, out) = xtask(&dir, &args, &[], "");
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_base\":true,\"docs\":true,\"lint\":true,\"mutants\":true,\"test\":true}\nshards=[0,1]\nshard_total=2\n"
+        "jobs={\"bug_base\":true,\"lint\":true,\"mutants\":true,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
     );
     let bad = [
         "plan",
@@ -178,10 +176,6 @@ fn plan_prints_the_jobs_and_shards() {
         "",
         "--event",
         "push",
-        "--bug",
-        "false",
-        "--mutants",
-        "x",
     ];
     assert_eq!(xtask(&dir, &bad, &[], "").0, 2);
 }

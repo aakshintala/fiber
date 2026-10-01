@@ -191,30 +191,8 @@ fn uncompiled_docs_in_a_mixed_diff_do_not_add_crates() {
     }
 }
 
-#[test]
-fn shards_are_one_per_25_mutants_at_most_6() {
-    for (mutants, shards) in [
-        (0, 0),
-        (1, 1),
-        (25, 1),
-        (26, 2),
-        (150, 6),
-        (151, 6),
-        (1000, 6),
-    ] {
-        assert_eq!(shard_count(mutants), shards, "{mutants} mutants");
-    }
-}
-
-fn jobs(
-    docs: bool,
-    lint: bool,
-    test: bool,
-    mutants: bool,
-    bug_base: bool,
-) -> BTreeMap<&'static str, bool> {
+fn jobs(lint: bool, test: bool, mutants: bool, bug_base: bool) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
-        ("docs", docs),
         ("lint", lint),
         ("test", test),
         ("mutants", mutants),
@@ -223,12 +201,12 @@ fn jobs(
 }
 
 #[test]
-fn a_docs_only_pull_request_runs_the_docs_job_alone() {
-    let plan = plan("docs", &[], "pull_request", true, 40);
+fn a_docs_only_pull_request_runs_no_job_after_the_selection() {
+    let plan = plan("docs", &[], "pull_request", true);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, false, false, false, false),
+            jobs: jobs(false, false, false, false),
             shards: 0
         }
     );
@@ -236,41 +214,35 @@ fn a_docs_only_pull_request_runs_the_docs_job_alone() {
 
 #[test]
 fn a_code_pull_request_runs_what_it_selected() {
-    let plan = plan("crates", &strings(&["log"]), "pull_request", true, 40);
+    let plan = plan("crates", &strings(&["log"]), "pull_request", true);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(true, true, true, true, true),
-            shards: 2
+            jobs: jobs(true, true, true, true),
+            shards: 6
         }
     );
 }
 
 #[test]
-fn a_pull_request_without_mutants_or_a_bug_label_runs_neither_check() {
-    let plan = plan("all", &strings(&["log"]), "pull_request", false, 0);
-    assert_eq!(
-        plan,
-        Plan {
-            jobs: jobs(true, true, true, false, false),
-            shards: 0
-        }
-    );
+fn a_pull_request_without_a_bug_label_skips_the_bug_check() {
+    let plan = plan("all", &strings(&["log"]), "pull_request", false);
+    assert_eq!(plan.jobs, jobs(true, true, true, false));
 }
 
 #[test]
 fn a_pull_request_that_selects_no_crate_skips_the_tests() {
-    let plan = plan("crates", &[], "pull_request", false, 0);
-    assert_eq!(plan.jobs, jobs(true, true, false, false, false));
+    let plan = plan("crates", &[], "pull_request", false);
+    assert_eq!(plan.jobs, jobs(true, false, true, false));
 }
 
 #[test]
 fn the_backstop_runs_the_tests_alone() {
-    let plan = plan("docs", &[], "push", true, 40);
+    let plan = plan("docs", &[], "push", true);
     assert_eq!(
         plan,
         Plan {
-            jobs: jobs(false, false, true, false, false),
+            jobs: jobs(false, true, false, false),
             shards: 0
         }
     );
