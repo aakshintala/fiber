@@ -6,6 +6,7 @@
 //! A protocol is native Rust here; a provider is data an extension declares,
 //! which arrives as an [`Endpoint`].
 
+pub mod anthropic_messages;
 mod error;
 mod http;
 pub mod openai_responses;

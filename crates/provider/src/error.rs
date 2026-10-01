@@ -128,17 +128,20 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
 /// a model call fails").
 fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
     match code {
-        Some("rate_limit_exceeded") => ErrorCode::RateLimited,
-        Some("server_error") => ErrorCode::ProviderUnavailable,
+        Some("rate_limit_exceeded" | "rate_limit_error") => ErrorCode::RateLimited,
+        Some("server_error" | "overloaded_error" | "api_error") => ErrorCode::ProviderUnavailable,
         _ if overflow(code, message) => ErrorCode::ContextOverflow,
         _ => ErrorCode::StreamIncomplete,
     }
 }
 
-/// The one overflow shape seen on `openai-responses` (`docs/errors.md`,
-/// "Recognising a context overflow").
+/// The overflow shapes seen on `openai-responses` and documented for
+/// `anthropic-messages` (`docs/errors.md`, "Recognising a context
+/// overflow"). The Anthropic phrase is unprobed: no probed request
+/// overflowed the context window.
 fn overflow(code: Option<&str>, message: &str) -> bool {
-    code == Some("invalid_prompt") && message.contains("exceeds the context window")
+    (code == Some("invalid_prompt") && message.contains("exceeds the context window"))
+        || message.contains("prompt is too long")
 }
 
 /// The provider's own code in an error body: `error.code`.
