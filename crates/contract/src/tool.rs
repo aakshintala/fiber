@@ -99,3 +99,20 @@ impl Bound {
         end: 0,
     };
 }
+
+#[cfg(test)]
+mod tests {
+    use super::EffectsError;
+
+    #[test]
+    fn an_effects_error_reads_as_its_message() {
+        assert_eq!(
+            EffectsError::Arguments("no such path".into()).to_string(),
+            "no such path"
+        );
+        assert_eq!(
+            EffectsError::Tool("lua: boom".into()).to_string(),
+            "lua: boom"
+        );
+    }
+}
