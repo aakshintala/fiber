@@ -375,7 +375,9 @@ impl Loop {
         )?;
         if reply.finish == Finish::OutputLimit {
             // None of a cut-off reply's calls runs (`docs/loop.md`, "A reply
-            // cut off by the output limit").
+            // cut off by the output limit"). One with no call ends the step
+            // as any reply with no call does ("Ending a turn").
+            let called = !calls.is_empty();
             for (id, _) in calls {
                 self.append(
                     &Event::ToolCallCompleted(calls::truncated()),
@@ -394,7 +396,7 @@ impl Loop {
                     }),
                 )));
             }
-            return Ok(Step::Next);
+            return Ok(if called { Step::Next } else { Step::Replied });
         }
         self.cut_off = false;
         if calls.is_empty() {

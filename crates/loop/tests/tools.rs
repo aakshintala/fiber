@@ -411,6 +411,33 @@ fn a_cut_off_reply_runs_none_of_its_calls_and_the_turn_continues() {
 }
 
 #[test]
+fn a_cut_off_reply_with_no_call_completes_the_turn() {
+    let mut cut = Scripted::text("Half a");
+    if let Ok(reply) = &mut cut.end {
+        reply.finish = Finish::OutputLimit;
+    }
+    let mut session = Session::new(vec![cut], None);
+    session.inbox.send(message("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 1);
+}
+
+#[test]
+fn a_cut_off_after_a_cut_off_with_calls_fails_the_turn_even_with_no_call() {
+    let mut first = calls_reply("", &[("get_weather", paris())]);
+    let mut second = Scripted::text("Half a");
+    for cut in [&mut first, &mut second] {
+        if let Ok(reply) = &mut cut.end {
+            reply.finish = Finish::OutputLimit;
+        }
+    }
+    let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
+    let mut session = Session::with_tools(vec![first, second], None, vec![tool]);
+    session.inbox.send(message("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+}
+
+#[test]
 fn a_second_cut_off_in_a_row_fails_the_turn() {
     let cut = || {
         let mut cut = calls_reply("Let me", &[("get_weather", paris())]);
