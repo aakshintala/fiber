@@ -208,7 +208,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
-| `no_model` | exit | nothing chose a model |
+| `no_model` | exit, notice | nothing chose a model |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
 | `not_found` | tool call | the path `read` or `edit` names does not exist |
 | `orphaned` | job | the process that ran the job died |
@@ -243,6 +243,7 @@ Notices, for a failure outside any action:
 | `extension_failed` | an extension failed to start or missed its deadline |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
+| `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
