@@ -1160,6 +1160,8 @@ fn reasoning_details_without_an_index_are_kept_as_they_came() {
         details(json!([second])),
         details(json!([{"type": "reasoning.text", "index": 0, "id": "a", "text": "p"}])),
         details(json!([{"type": "reasoning.text", "index": 0, "id": "b", "text": "q"}])),
+        // A piece without an id continues the one with its index.
+        details(json!([{"type": "reasoning.text", "index": 0, "text": "r"}])),
         chunk(json!({}), Some("stop")),
     ]));
     let ReplyAction::Reasoning(reasoning) = &reply.unwrap().actions[0] else {
@@ -1169,7 +1171,7 @@ fn reasoning_details_without_an_index_are_kept_as_they_came() {
         reasoning.provider_item,
         Some(json!({"reasoning_details": [first, second,
             {"type": "reasoning.text", "index": 0, "id": "a", "text": "p"},
-            {"type": "reasoning.text", "index": 0, "id": "b", "text": "q"}]}))
+            {"type": "reasoning.text", "index": 0, "id": "b", "text": "qr"}]}))
     );
 }
 

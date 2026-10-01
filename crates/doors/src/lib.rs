@@ -11,7 +11,7 @@ mod session;
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
-use std::io::{self, Read, Write};
+use std::io::{self, BufRead, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
@@ -74,6 +74,48 @@ pub fn prompt(
             "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.",
         )),
     }
+}
+
+/// What `fiber install` shows before it installs (`docs/extensions.md`,
+/// "What an install shows"), for an extension that registers only
+/// providers as data.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InstallSummary {
+    /// The extension's name.
+    pub name: String,
+    /// Where it is installed from.
+    pub source: String,
+    /// Each provider it registers, with its models' base URLs.
+    pub providers: Vec<(String, Vec<String>)>,
+}
+
+/// Whether `fiber install` goes ahead (`docs/extensions.md`, "Installing"):
+/// in a terminal it writes `summary` to `out` and asks, and only `y` or
+/// `yes` goes ahead; without a terminal it goes ahead without asking.
+pub fn install_approved(
+    summary: &InstallSummary,
+    terminal: bool,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+) -> Result<bool, Failure> {
+    if !terminal {
+        return Ok(true);
+    }
+    let io = |e: io::Error| failure(ErrorCode::IoFailed, format!("the terminal: {e}"));
+    let mut text = format!("Install {} from {}\n", summary.name, summary.source);
+    if summary.providers.is_empty() {
+        text.push_str("It registers no provider.\n");
+    }
+    for (provider, urls) in &summary.providers {
+        text.push_str(&format!("Provider {provider}: {}\n", urls.join(", ")));
+    }
+    text.push_str("Install it? [y/N] ");
+    out.write_all(text.as_bytes())
+        .and_then(|()| out.flush())
+        .map_err(io)?;
+    let mut answer = String::new();
+    input.read_line(&mut answer).map_err(io)?;
+    Ok(matches!(answer.trim(), "y" | "Y" | "yes"))
 }
 
 /// Ends a process that failed before any session existed: the

@@ -594,7 +594,7 @@ impl Decoder {
         }
     }
 
-    /// Merges one streamed `reasoning_details` entry into the earlier one of
+    /// Merges one streamed `reasoning_details` entry into the latest one of
     /// the same `index` and `type`: its text pieces appended, its other
     /// fields set.
     fn detail(&mut self, entry: &Value) {
@@ -613,7 +613,7 @@ impl Decoder {
                 && kept.get("type") == entry.get("type")
                 && (id.is_none() || kept.get("id").is_none_or(|k| Some(k) == id))
         };
-        let Some(Value::Object(kept)) = self.details.iter_mut().find(|k| same(k)) else {
+        let Some(Value::Object(kept)) = self.details.iter_mut().rev().find(|k| same(k)) else {
             self.details.push(Value::Object(entry.clone()));
             return;
         };
