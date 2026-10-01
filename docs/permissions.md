@@ -44,8 +44,7 @@ one is a reversible write.
 
 Classification is per call, not per tool. A tool that classified itself once,
 at registration, would make every shell call as dangerous as the worst shell
-call, and the mode that escapes that noise is the one with no protection at
-all.
+call, and the only escape from that noise would be no protection at all.
 
 A tool registered by an extension classifies its own calls and is believed.
 An extension runs with the account's full rights, so misdeclaring buys it
@@ -58,45 +57,22 @@ An MCP tool declares its effects from the hints its server gives, per tool
 rather than per call. How the hints map to effects is `docs/mcp.md`
 ("Effects").
 
-## Modes
+## One mode
 
-A session starts in the mode in `permissions.mode` (`docs/configuration.md`),
-which is `auto` or `yolo` and defaults to `auto`. The default is the same for
-every session, interactive or headless. `readonly` is never a default: a
-person chooses it for one session with the `mode` command.
-**Only a person changes the mode.** The model, a tool or an extension never
-does. The model only chooses the mode a new delegate starts in, never above
-its own ([Delegates](#delegates)). A person changes it in two ways:
+Every session runs in `auto`, interactive or headless, a delegate included.
+There is no other mode and no way to change it. Calls the person wants decided
+differently are standing rules ([Remembering a decision](#remembering-a-decision)).
 
-- between turns, to any mode, with the `mode` command (`docs/invocation.md`)
-- by answering yes when a `readonly` session asks to leave `readonly`
-  ([Leaving readonly](#leaving-readonly))
-
-A change applies to the session and to every delegate of it that is
-running, as [Delegates](#delegates) says, so a delegate is never in a more
-permissive mode than its parent.
-Each change is a `mode_changed` event (`docs/events.md`) in every session it
-applies to. A mode change adds,
-hides or rewrites no tool and changes nothing in the system prompt, so it
-keeps the prompt cache (`docs/prompt-cache.md`).
-
-| Mode | What answers |
+| What answers | When |
 |---|---|
-| `auto` | the reviewer, escalating to a human on repetition or failure |
-| `readonly` | a person, asked whether to leave `readonly`, for any effect but `reads` |
-| `yolo` | nothing is asked; the credential deny and standing denies still apply |
+| a fast path, a session grant or a standing rule | the call matches one |
+| the reviewer | everything else, escalating to a human on repetition or failure |
 
-There is no mode in which a person answers every call. A session offline, or
-with the reviewer's provider down, is still gated: a reviewer that fails
-hands the call to a person ([What happens on a block](#what-happens-on-a-block)).
-A call a person wants to see every time is a standing ask
-([Remembering a decision](#remembering-a-decision)).
-
-`yolo` honours the credential deny, a standing deny, and nothing else. A
-standing deny is the one thing a person wrote down deliberately, and a mode
-that exists to stop asking questions should not also revoke an answer already
-given. Yolo changes nothing about the log: every tool call is recorded
-exactly as in any other mode.
+There is no setting in which a person answers every call. A session offline,
+or with the reviewer's provider down, is still gated: a reviewer that fails
+hands the call to a person ([What happens on a block](#what-happens-on-a-block)),
+and the person can switch the reviewer to another model. A call a person
+wants to see every time is a standing ask.
 
 ## The order a call is judged in
 
@@ -105,47 +81,19 @@ arguments, and a rewritten call is classified again before this order judges
 it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
 
 1. **The credential deny**: a call whose paths touch Fiber home's
-   `credentials/` is refused, in every mode. See [Credentials](#credentials).
+   `credentials/` is refused. See [Credentials](#credentials).
 2. **A standing deny** matching this call: refused. No model call, no question.
-3. **A standing ask** matching this call: a human is asked, whatever the mode.
-4. **`readonly` mode**: a call with any effect other than `reads` asks a
-   person whether to leave `readonly` ([Leaving readonly](#leaving-readonly)),
-   except a web search or a fetch to a known host ([Fast paths](#fast-paths)).
-5. **`yolo` mode**: allowed.
-6. **A fast path** — see below: allowed, with no model call.
-7. **A session grant** matching this call: allowed.
-8. **A standing allow** matching this call: allowed.
-9. Otherwise **reviewed** by the reviewer.
+3. **A standing ask** matching this call: a human is asked.
+4. **A fast path** — see below: allowed, with no model call.
+5. **A session grant** matching this call: allowed.
+6. **A standing allow** matching this call: allowed.
+7. Otherwise **reviewed** by the reviewer.
+
+A call to `delegate_spawn`, `delegate_fork` or `delegate_message` skips steps
+4 to 6 and is always reviewed ([Delegates](#delegates)).
 
 The credential deny and a standing deny are both evaluated before everything
 else, because a rule that can be widened by a later layer is not a deny.
-
-### Leaving readonly
-
-Fiber has no plan mode. `readonly` is how a session works without changing
-anything, and this is how it stops.
-
-A call in `readonly` with any effect other than `reads` does not run, except
-the web calls in [Fast paths](#fast-paths). Fiber
-asks the person whether to leave `readonly`, showing the call that asked. It
-is a `permission_requested` raised by step 4.
-
-- **Yes** switches the session to `permissions.mode` and writes
-  `mode_changed`. The call then
-  continues from step 5 in the new mode. Yes is not an approval of the call:
-  in `auto` the reviewer may still block it.
-- **No** refuses the call. Every later call in the same turn with an effect
-  other than `reads` is refused without asking, so a model cannot repeat the
-  question call after call. The next turn can ask again.
-- **No answer possible** (see [Headless](#headless)): the call is refused, as
-  if the person had said no.
-
-A refusal reaches the model as the call's result, with a reason saying the
-session is `readonly` and the person kept it so. The turn continues.
-
-Only a root session asks. A delegate in `readonly` is there because its
-parent is, so it never asks to leave: its calls with an effect other than
-`reads`, the web calls in [Fast paths](#fast-paths) aside, are refused, with a reason saying its parent is `readonly`.
 
 ### Fast paths
 
@@ -154,9 +102,8 @@ Three classes of call never reach a reviewer or a person:
 - every call whose only effect is `reads`, or that declares no effect,
 - a `writes` call whose paths all sit inside the **workspace**, and
 - a web search, and a web fetch to a host known in the session
-  (`docs/tools.md`, "Web fetch and web search"). Both run in `readonly`
-  too: they only retrieve. A fetch to any other host is reviewed, and in
-  `readonly` it asks the person to leave `readonly`.
+  (`docs/tools.md`, "Web fetch and web search"). A fetch to any other host
+  is reviewed.
 
 Everything else — shell execution, other network calls, and any write outside the
 workspace — is reviewed. This is where nearly all of the cost is saved, and it
@@ -173,7 +120,7 @@ edit and version control can undo one — and costs latency on every action.
 Fiber refuses every tool call whose declared paths touch the credential
 directory in [Fiber home](state.md) (`credentials/`). This is a built-in
 deny: it is not a standing rule, no person or extension can remove it, and
-it applies in every mode, `yolo` included. It covers every effect — a read, a
+it applies to every call. It covers every effect — a read, a
 write, anything — not only reads.
 
 Fiber does not confine tools ([Confinement](#confinement)), so without this
@@ -193,7 +140,7 @@ Like every other decision on this page, it relies on declared paths. The
 shell tool declares paths only for commands it recognises as read-only
 (`docs/tools.md`, "Shell"). A command it does not recognise, such as
 `python -c` opening a token file, declares no paths and the deny does not see
-it: in `auto` the call is reviewed, and in `yolo` nothing stops it.
+it: the call is reviewed.
 An extension tool that misdeclares its paths gets nothing it could not do
 directly, the same boundary the Effects section already states for
 extensions.
@@ -206,7 +153,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 
 Fiber does not confine what a tool call can reach at the operating-system
 level. A program a tool starts runs with the account's full rights, on every
-platform and in every mode. Everything on this page decides whether a call
+platform. Everything on this page decides whether a call
 runs; nothing limits what it does once it runs.
 
 - Approving an `executes` call grants whatever the account can do. That
@@ -228,7 +175,7 @@ a fence would have broken in the owner's sessions, is
 
 ## The reviewer
 
-In `auto`, a call that reaches step 9 is judged by a model.
+A call that reaches step 7 is judged by a model.
 
 ### What it is shown
 
@@ -346,9 +293,9 @@ written.
 
 An approval remembers in one of two scopes, the person's choice: a session
 grant, or a standing rule appended to the project's rules file. A global rule
-is added by editing the global rules file. Only a request raised at step 9
+is added by editing the global rules file. Only a request raised at step 7
 offers to remember: a standing ask comes before every allow, so an allow rule
-could never answer it, and a yes to leaving `readonly` approves no call.
+could never answer it.
 
 A deny rule and an ask rule are matched the same way and are evaluated first.
 
@@ -360,12 +307,12 @@ their contents.
 `permission_requested` carries the tool call's `action_id`, the call's declared
 effects, its paths, and which step of the order above sent it here. It also
 says why a person is asked: on a standing ask, the rule that asked; on a
-review in `auto`, the escalation's cause; and on a review, the rule an allow
+review, the escalation's cause; and on a review, the rule an allow
 can remember.
 
 `permission_resolved` carries the decision, the reason, and **what decided it**:
-the credential deny, a human, a standing rule, a session grant, the reviewer,
-or the mode. A reviewer decision also carries the reviewer's model and which
+the credential deny, a human, a standing rule, a session grant or the
+reviewer. A reviewer decision also carries the reviewer's model and which
 stage decided.
 
 A blocked call ends as `tool_call_completed` with `status: denied` and a
@@ -388,10 +335,9 @@ It is the reviewer's block, recorded as a `permission_resolved` with
 
 ## Headless
 
-A run started with no client, such as `fiber ask`, starts in the mode
-`permissions.mode` sets, `auto` by default, like every other session
-("Modes"). In `auto` the reviewer is what stands in for the
-person, which is the case it exists for.
+A run started with no client, such as `fiber ask`, runs in `auto` like
+every other session. The reviewer is what stands in for the person, which is
+the case it exists for.
 
 A calling harness that wants to answer can. `docs/architecture.md` settles that
 "the terminal is a watcher and a driver, never a participant" — a permission
@@ -405,47 +351,30 @@ the rule above until it exhausts the block budget. The turn then completes
 `failed` with code `blocked`, so a headless caller learns the task needed
 permissions it was not given. No answer is possible in a
 session started by `fiber ask`, and in a session that has been sent `close`.
-Anywhere else, a client that leaves may come back: the session exits on the
-pending escalation and raises it again when resumed (`docs/invocation.md`,
-"Lifecycle").
+Anywhere else, a person may come back: after `session.idle_exit` the session
+exits on the pending escalation and raises it again when resumed
+(`docs/invocation.md`, "Lifecycle").
 
 ## Delegates
 
-The modes are ordered `readonly`, then `auto`, then `yolo`, from least to
-most permissive.
-
-- `delegate_spawn` takes a `mode` (`docs/delegates.md`, "The tools"). It
-  defaults to the parent's mode, and a mode more permissive than the
-  parent's fails with `invalid_arguments`. A fork takes the parent's mode.
-- A delegate runs in the less permissive of the mode it was started in and
-  its parent's current mode. When the parent's mode changes, each running
-  delegate's mode is recomputed, and a change is a `mode_changed` with `by`
-  `parent` in that delegate. Loosening the parent never takes a delegate
-  above the mode it was started in.
-- A delegate in `readonly` never asks to leave it
-  ([Leaving readonly](#leaving-readonly)).
-- Starting any delegate declares `executes`, so the parent's mode judges the
-  start, and a `readonly` parent asks to leave `readonly` first.
-
-A Fiber delegate is judged by these rules like any session:
-
-- In `auto`, each delegate has its own reviewer, which judges that delegate's
+- Starting or messaging a delegate is always reviewed. `delegate_spawn`,
+  `delegate_fork` and `delegate_message` declare `executes`, and no fast
+  path, session grant or standing allow skips the parent's reviewer for them.
+  A delegate's reviewer reads its parent's prompt and messages as the human's,
+  so without this a parent's model could talk a delegate's reviewer into an
+  action the parent's own reviewer never judged. The parent's reviewer judges
+  the prompt or message against the parent's own person's messages.
+- Each Fiber delegate has its own reviewer, which judges that delegate's
   calls.
-- An escalation from a delegate is relayed up the tree to whoever drives the
-  root session. They answer it with `reply` naming the delegate's `session_id`
-  (`docs/invocation.md`). Where the root can get no answer, the escalation is
-  a block, as for any headless run, and the delegate carries on.
+- An escalation from a delegate is a block, as for any headless run, and the
+  delegate carries on. It is never relayed up the tree.
 - A model never answers a delegate's approval, the parent's model included.
-  The parent's model shapes the delegate's reviewer only through the prompt it
-  wrote and through `delegate_message`, which the reviewer reads as the human's
-  messages.
 
-A delegate on another harness is judged by that harness, in the harness's
-own mode that its extension maps each Fiber mode to (`docs/delegates.md`,
-"Harness extensions"). The credential deny and standing rules do not reach
-inside it: the harness's own rules, as the person configured them, apply
-there. A harness supports only the modes its extension maps, and
-`delegate_models` lists them.
+A delegate on another harness is judged by that harness, in its own auto
+mode (`docs/delegates.md`, "Harness extensions"). The credential deny and
+standing rules do not reach inside it: the harness's own rules, as the person
+configured them, apply there. A harness and model are offered as a delegate
+only when their auto mode is declared to work.
 
 ## Not settled here
 
