@@ -1,0 +1,27 @@
+[package]
+name = "loop"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# `loop` depends on `contract`, `log` and the three seams, which live in
+# `contract` (docs/architecture.md, "The call rules").
+[dependencies]
+contract = { path = "../contract" }
+log = { path = "../log" }
+thiserror.workspace = true
+
+# A test plugs the real `openai-responses` protocol into the provider seam
+# against the fake provider server, as `main` plugs it in for a session.
+[dev-dependencies]
+fakes = { path = "../fakes" }
+provider = { path = "../provider" }
+serde_json.workspace = true
+
+# The jig (docs/testing.md, "Jigs").
+[[example]]
+name = "turn"
+
+[lints]
+workspace = true
