@@ -61,6 +61,26 @@ pub enum ConfigError {
         /// The key.
         key: String,
     },
+    /// A file that is JSON but does not have the shape its kind of file needs.
+    #[error("{} does not fit {expected} (line {line}, column {column}). Fix the file and try again.", file.display())]
+    Shape {
+        /// The file.
+        file: PathBuf,
+        /// Where the value that does not fit ends.
+        line: usize,
+        /// Where the value that does not fit ends.
+        column: usize,
+        /// What kind of file it should be.
+        expected: &'static str,
+    },
+    /// No key for a provider, or a stored credential that cannot be used.
+    #[error("No credential for `{provider}`: {why}. Run `fiber login {provider}`.")]
+    CredentialMissing {
+        /// The provider.
+        provider: String,
+        /// Where Fiber looked, never a value.
+        why: String,
+    },
     /// A secret's name that is not one file name.
     #[error("`{name}` is not a secret's name: it must be one file name in credentials/.")]
     SecretName {
@@ -73,9 +93,14 @@ impl ConfigError {
     /// The stable code a caller switches on.
     pub fn code(&self) -> ErrorCode {
         match self {
-            Self::Json { .. } | Self::WrongType { .. } | Self::NotPlain { .. } => {
-                ErrorCode::ConfigInvalid
-            }
+            Self::Json { .. }
+            | Self::WrongType { .. }
+            | Self::NotPlain { .. }
+            | Self::Shape { .. } => ErrorCode::ConfigInvalid,
+            // ponytail: a stored credential that exists but is empty also
+            // reports `credential_missing`; a dedicated code waits on the
+            // owner (docs/errors.md has none).
+            Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
             Self::Io { .. } => ErrorCode::IoFailed,
             Self::FiberHome(_) | Self::Override { .. } => ErrorCode::Usage,
             Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,

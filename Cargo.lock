@@ -112,6 +112,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "extensions"
+version = "0.0.0"
+dependencies = [
+ "config",
+ "contract",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "fakes"
 version = "0.0.0"
 dependencies = [
