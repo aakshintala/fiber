@@ -136,6 +136,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     body.insert("input".into(), Value::Array(input(endpoint, request)));
     body.insert("tools".into(), Value::Array(tools));
     body.insert("tool_choice".into(), json!(request.tool_choice));
+    body.insert("prompt_cache_key".into(), json!(request.cache_key));
     // OpenAI offers one cache lifetime, so `cache_lifetime` is not sent, and
     // its cache has no markers (`docs/prompt-cache.md`, "Cache lifetime").
     body.insert("stream".into(), json!(true));

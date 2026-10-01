@@ -49,6 +49,11 @@ pub struct ModelRequest {
     /// The cache lifetime, sent only where the protocol offers a choice
     /// (`docs/prompt-cache.md`, "Cache lifetime").
     pub cache_lifetime: CacheLifetime,
+    /// The cache key for providers that route by key: the root session's id,
+    /// or for the reviewer the reviewed session's id plus `reviewer`
+    /// (`docs/prompt-cache.md`, "Cache markers and keys" and "Rules for other
+    /// areas"). The caller builds it.
+    pub cache_key: String,
     /// The conversation, in log order.
     pub conversation: Vec<Input>,
     /// The index into `conversation` where the previous request in this

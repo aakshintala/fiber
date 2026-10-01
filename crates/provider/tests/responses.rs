@@ -93,6 +93,7 @@ fn request() -> ModelRequest {
         effort: Some("low".into()),
         tool_choice: "auto".into(),
         cache_lifetime: CacheLifetime::OneHour,
+        cache_key: "s_root".into(),
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
@@ -403,6 +404,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
     assert_eq!(body["stream"], true);
     assert_eq!(body["reasoning"], json!({"effort": "low"}));
     assert_eq!(body["tool_choice"], "auto");
+    assert_eq!(body["prompt_cache_key"], "s_root");
     assert_eq!(
         body["input"],
         json!([{"role": "user", "content": "What is the weather in Paris? Use the tool."}])
