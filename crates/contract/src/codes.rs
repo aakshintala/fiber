@@ -31,6 +31,8 @@ codes! {
     AuthenticationFailed,
     /// The block budget ran out with no human to answer.
     Blocked,
+    /// `web_fetch` named a link-local address or a cloud metadata host.
+    BlockedHost,
     /// The spending budget was reached, or an extension refused a model
     /// request.
     BudgetExceeded,
@@ -66,8 +68,12 @@ codes! {
     Flooded,
     /// An extension hook errored or ran out of time.
     HookFailed,
+    /// `web_fetch` got a status other than 2xx.
+    HttpError,
     /// Fiber cannot tell whether the call completed.
     Indeterminate,
+    /// The instruction text passes 10% of the context window.
+    InstructionsLarge,
     /// Arguments failed their schema or checks.
     InvalidArguments,
     /// The provider rejected the request for any other reason.
@@ -139,6 +145,8 @@ codes! {
     StreamIncomplete,
     /// A deadline passed.
     Timeout,
+    /// A `web_fetch` download larger than 10 MiB.
+    TooLarge,
     /// Full tool definitions take more than 10% of the context window.
     ToolDefinitionsLarge,
     /// The tool itself failed, or its effects function errored.

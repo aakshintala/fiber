@@ -240,3 +240,6 @@ Only what no tool can:
 - no code that a standard-library feature, a lint or a crate listed in
   `docs/dependencies.md` already covers. A replacement that adds lines, memory
   or behaviour is not a simplification
+- every code a doc says something fails with, is rejected with, or carries
+  as a notice's code has a row in `docs/errors.md`, "Registry", or its
+  notices table
