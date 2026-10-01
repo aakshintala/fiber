@@ -4,15 +4,16 @@
 //! read, so an older Fiber says no to a newer client's key instead of ignoring
 //! it.
 
-use serde::{Deserialize, Serialize};
+use serde::de::Error as _;
+use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::Value;
 
 use crate::events::Decision;
 use crate::shapes::True;
 use crate::{CommandId, JobId, RequestId, Seq, SessionId};
 
 /// One command line: one JSON object on the driver channel.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CommandLine {
     /// Minted by the client from random bytes. Acknowledgements and events
     /// name the command by it, as `command_id`.
@@ -20,6 +21,39 @@ pub struct CommandLine {
     /// The command, as `command` and its `args`.
     #[serde(flatten)]
     pub command: Command,
+}
+
+impl<'de> Deserialize<'de> for CommandLine {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        if let Some(args) = value.get("args")
+            && args.is_object()
+            && contains_null(args)
+        {
+            return Err(D::Error::custom("an optional key is absent, never null"));
+        }
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct Line {
+            id: CommandId,
+            #[serde(flatten)]
+            command: Command,
+        }
+        let line = Line::deserialize(value).map_err(D::Error::custom)?;
+        Ok(Self {
+            id: line.id,
+            command: line.command,
+        })
+    }
+}
+
+fn contains_null(value: &Value) -> bool {
+    match value {
+        Value::Null => true,
+        Value::Array(items) => items.iter().any(contains_null),
+        Value::Object(map) => map.values().any(contains_null),
+        Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
 }
 
 /// A driver command, keyed by `command`, with its keys under `args`.

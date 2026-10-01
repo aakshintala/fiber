@@ -184,6 +184,16 @@ fn history_args_that_do_not_fit_are_invalid_arguments() {
 }
 
 #[test]
+fn an_optional_arg_set_to_null_is_invalid_arguments() {
+    assert!(
+        parse(r#"{"id":"c","command":"history","args":{"from_seq":0,"to_seq":null}}"#).is_err()
+    );
+    assert!(
+        parse(r#"{"id":"c","command":"model","args":{"model":"opus","effort":null}}"#).is_err()
+    );
+}
+
+#[test]
 fn an_unknown_command_is_refused() {
     assert!(parse(r#"{"id":"c","command":"teleport"}"#).is_err());
 }
