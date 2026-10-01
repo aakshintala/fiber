@@ -68,3 +68,17 @@ pub struct Compat {
     /// markers on content parts, as OpenRouter passes them to Anthropic.
     pub cache_control: bool,
 }
+
+impl Compat {
+    /// The flags a model's `compat` object declares. A flag that is absent,
+    /// or not a boolean, is not set.
+    pub fn from_data(data: &Map<String, Value>) -> Self {
+        let flag = |name: &str| data.get(name).and_then(Value::as_bool);
+        Self {
+            store: flag("store"),
+            max_tokens: flag("max_tokens").unwrap_or(false),
+            reasoning_object: flag("reasoning_object").unwrap_or(false),
+            cache_control: flag("cache_control").unwrap_or(false),
+        }
+    }
+}

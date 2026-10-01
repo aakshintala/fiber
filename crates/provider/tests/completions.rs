@@ -1052,3 +1052,22 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
         .collect();
     assert_eq!(indices, [0, 0, 1]);
 }
+
+#[test]
+fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
+    let data = json!({"store": false, "max_tokens": true, "reasoning_object": "yes",
+        "cache_control": true});
+    assert_eq!(
+        Compat::from_data(data.as_object().unwrap()),
+        Compat {
+            store: Some(false),
+            max_tokens: true,
+            reasoning_object: false,
+            cache_control: true,
+        }
+    );
+    assert_eq!(
+        Compat::from_data(&serde_json::Map::new()),
+        Compat::default()
+    );
+}

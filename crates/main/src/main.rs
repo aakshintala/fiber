@@ -23,9 +23,9 @@ use extensions::Providers;
 use log::Log;
 use r#loop::Loop;
 use provider::anthropic_messages::Messages;
+use provider::openai_completions::Completions;
 use provider::openai_responses::Responses;
 use provider::{Compat, Endpoint};
-use serde_json::Value;
 
 /// What a session is built from, read before it exists.
 struct Parts {
@@ -161,16 +161,15 @@ fn parts() -> Result<Parts, Failure> {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
-        compat: Compat {
-            store: model.model.compat.get("store").and_then(Value::as_bool),
-        },
+        compat: Compat::from_data(&model.model.compat),
         max_output_tokens: model.model.max_output_tokens,
         extra_body: model.model.extra_body.clone(),
     };
     let provider: Arc<dyn Provider> = match model.model.protocol {
         Protocol::OpenaiResponses => Arc::new(Responses::new(endpoint)),
+        Protocol::OpenaiCompletions => Arc::new(Completions::new(endpoint)),
         Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
-        Protocol::OpenaiCompletions | Protocol::GoogleGenerativeAi | Protocol::BedrockConverse => {
+        Protocol::GoogleGenerativeAi | Protocol::BedrockConverse => {
             // ponytail: docs/errors.md has no code for a protocol this Fiber
             // does not speak yet; `extension_missing` stands in.
             return Err(failure(
