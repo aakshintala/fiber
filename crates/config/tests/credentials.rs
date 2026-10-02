@@ -16,6 +16,17 @@ fn acme(credential: Option<CredentialSource>) -> ProviderData {
     ProviderData {
         name: "acme".into(),
         credential,
+        credential_name: None,
+        headers: Default::default(),
+        models: Vec::new(),
+    }
+}
+
+fn shared(name: &str, stored: &str, credential: Option<CredentialSource>) -> ProviderData {
+    ProviderData {
+        name: name.into(),
+        credential,
+        credential_name: Some(stored.into()),
         headers: Default::default(),
         models: Vec::new(),
     }
@@ -155,6 +166,52 @@ fn no_key_anywhere_is_credential_missing_and_says_why() {
         assert!(message.contains(&why), "{message}");
         assert!(message.contains("fiber login acme"), "{message}");
     }
+}
+
+#[test]
+fn one_stored_credential_serves_both_opencode_providers() {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/opencode");
+    let providers = config::read_providers(&dir).unwrap();
+    let go = providers.iter().find(|p| p.name == "opencode-go").unwrap();
+    let zen = providers.iter().find(|p| p.name == "opencode-zen").unwrap();
+    assert_eq!(go.credential_name.as_deref(), Some("opencode"));
+    assert_eq!(zen.credential_name.as_deref(), Some("opencode"));
+    let setup = Setup::new();
+    store_secret(&setup.home(), "opencode", &Secret::new("shared\n".into())).unwrap();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.credential(go).unwrap().expose(), "shared");
+    assert_eq!(config.credential(zen).unwrap().expose(), "shared");
+}
+
+#[test]
+fn a_failing_shared_credential_names_the_file_actually_read() {
+    let setup = Setup::new();
+    store_secret(&setup.home(), "opencode", &Secret::new(" \n".into())).unwrap();
+    let config = setup.load(&[]).unwrap();
+    let err = config
+        .credential(&shared("opencode-go", "opencode", None))
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    let message = err.to_string();
+    assert!(
+        message.contains("credentials/opencode is empty"),
+        "{message}"
+    );
+    assert!(
+        message.contains("No credential for `opencode-go`"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_provider_naming_no_shared_credential_reads_its_own_name() {
+    let setup = Setup::new();
+    store_secret(&setup.home(), "shared", &Secret::new("shared\n".into())).unwrap();
+    let config = setup.load(&[]).unwrap();
+    let err = config.credential(&acme(None)).unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    let message = err.to_string();
+    assert!(message.contains("credentials/acme"), "{message}");
 }
 
 #[test]

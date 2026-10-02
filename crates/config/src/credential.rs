@@ -12,21 +12,22 @@ use crate::extension::ProviderData;
 use crate::secret::{CredentialSource, Secret, read_secret};
 
 impl Config {
-    /// The provider's key. A stored credential owns its provider: when
-    /// `credentials/<name>` exists but cannot be used, that is the error, and
-    /// no other source is tried. Otherwise `providers."<name>".credential`
-    /// from the global or per-project layer replaces the provider's own
-    /// source. A command runs each time this is called; the caller asks once
-    /// per process.
+    /// The provider's key. The stored credential it names, or its own
+    /// name when it names none, comes first: when `credentials/<stored>`
+    /// exists but cannot be used, that is the error, and no other source
+    /// is tried. Otherwise `providers."<name>".credential` from the global
+    /// or per-project layer replaces the provider's own source. A command
+    /// runs each time this is called; the caller asks once per process.
     pub fn credential(&self, provider: &ProviderData) -> Result<Secret, ConfigError> {
         let name = &provider.name;
+        let stored = provider.credential_name.as_deref().unwrap_or(name);
         let missing = |why: String| ConfigError::CredentialMissing {
             provider: name.clone(),
             why,
         };
-        if let Some(stored) = read_secret(&self.home, name)? {
-            return usable(stored.expose())
-                .ok_or_else(|| missing(format!("credentials/{name} is empty")));
+        if let Some(secret) = read_secret(&self.home, stored)? {
+            return usable(secret.expose())
+                .ok_or_else(|| missing(format!("credentials/{stored} is empty")));
         }
         let configured = self
             .merged(None)
@@ -37,7 +38,7 @@ impl Config {
             .and_then(Result::ok);
         let Some(source) = configured.or_else(|| provider.credential.clone()) else {
             return Err(missing(format!(
-                "nothing is stored in credentials/{name}, and the provider declares no other source"
+                "nothing is stored in credentials/{stored}, and the provider declares no other source"
             )));
         };
         let found = match &source {
@@ -63,7 +64,7 @@ impl Config {
         };
         found.map_err(|from| {
             missing(format!(
-                "nothing is stored in credentials/{name}, and {from}"
+                "nothing is stored in credentials/{stored}, and {from}"
             ))
         })
     }

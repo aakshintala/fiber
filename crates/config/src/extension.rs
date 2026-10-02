@@ -34,6 +34,10 @@ pub struct ProviderData {
     /// How its key is found when no credential is stored.
     #[serde(default)]
     pub credential: Option<CredentialSource>,
+    /// The stored credential it reads, defaulting to its own name.
+    /// Providers in one package that share a key name the same one.
+    #[serde(default)]
+    pub credential_name: Option<String>,
     /// Headers sent on every request.
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
