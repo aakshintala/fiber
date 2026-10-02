@@ -42,7 +42,7 @@ impl contract::signing::Signer for Recorder {
     fn sign(
         &self,
         request: &contract::signing::SignRequest<'_>,
-    ) -> Result<Vec<(String, String)>, String> {
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
         self.0.lock().unwrap().push((
             request.method.to_owned(),
             request.url.to_owned(),
@@ -59,8 +59,8 @@ impl contract::signing::Signer for Refuses {
     fn sign(
         &self,
         _: &contract::signing::SignRequest<'_>,
-    ) -> Result<Vec<(String, String)>, String> {
-        Err("no key".to_owned())
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Err(contract::signing::Error::Failed("no key".to_owned()))
     }
 }
 
@@ -104,9 +104,18 @@ fn a_request_that_cannot_be_signed_is_never_sent() {
         Some(&Refuses),
         &std::sync::Arc::default(),
     );
-    let Err(crate::Error::Connection(why)) = sent.map(|_| ()) else {
+    let Err(err) = sent.map(|_| ()) else {
         panic!("signed anyway");
     };
-    assert!(why.contains("no key"), "{why}");
+    let crate::Error::Sign(why) = &err else {
+        panic!("not a sign failure: {err:?}");
+    };
+    assert!(why.to_string().contains("no key"), "{why}");
+    assert_eq!(err.code(), contract::ErrorCode::ConnectionFailed);
+    assert_eq!(
+        err.should_retry(),
+        Some(false),
+        "a sign failure is not retried"
+    );
     assert!(server.requests().is_empty());
 }

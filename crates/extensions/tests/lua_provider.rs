@@ -43,7 +43,7 @@ fn fixture(setup: &Setup, server: &ProviderServer) -> Arc<LuaProvider> {
     store_secret(&home, "fixture.url", &Secret::new(server.url())).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
     let extension = Arc::new(LuaExtension::new("fixture", fakes::lua_fixture(), &home));
-    LuaProvider::new(extension, "fixture", home)
+    LuaProvider::new(extension, "fixture")
 }
 
 fn listing(ids: &[&str]) -> Response {
@@ -186,17 +186,31 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
 }
 
 #[test]
-fn an_expired_token_is_fetched_again_before_it_is_used() {
+fn an_expired_token_just_returned_is_an_error() {
     let setup = Setup::new();
-    let server = ProviderServer::start([
-        token("t1", Duration::ZERO),
-        token("t2", Duration::from_secs(3600)),
-    ])
-    .unwrap();
+    let server = ProviderServer::start([token("t1", Duration::ZERO)]).unwrap();
     let provider = fixture(&setup, &server);
-    let first = Arc::clone(&provider);
-    assert_eq!(within(move || first.token()).unwrap().expose(), "t1");
-    assert_eq!(within(move || provider.token()).unwrap().expose(), "t2");
+    let err = within(move || provider.token()).unwrap_err();
+    assert!(matches!(err, Error::BadReturn { .. }), "{err:?}");
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(err.to_string().contains("already expired"), "{err}");
+}
+
+#[test]
+fn a_credential_with_no_usable_expiry_is_an_error() {
+    for body in [
+        r#"{"access_token":"t1"}"#,
+        r#"{"access_token":"t1","expires_at":"soon"}"#,
+        r#"{"access_token":"t1","expires_at":null}"#,
+    ] {
+        let setup = Setup::new();
+        let server = ProviderServer::start([Response::status(200, body)]).unwrap();
+        let provider = fixture(&setup, &server);
+        let err = within(move || provider.token()).unwrap_err();
+        assert!(matches!(err, Error::BadReturn { .. }), "{body}: {err:?}");
+        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+        assert!(err.to_string().contains("expires_at"), "{err}");
+    }
 }
 
 #[test]
@@ -243,7 +257,7 @@ fn sign_returns_a_table_of_headers_or_nothing() {
         ("list", false),
         ("number", false),
     ] {
-        let provider = LuaProvider::new(Arc::clone(&extension), name, setup.home());
+        let provider = LuaProvider::new(Arc::clone(&extension), name);
         let signed = within(move || {
             provider.sign(&SignRequest {
                 method: "POST",
@@ -254,7 +268,10 @@ fn sign_returns_a_table_of_headers_or_nothing() {
         });
         match signed {
             Ok(headers) => assert!(ok && headers.is_empty(), "{name}: {headers:?}"),
-            Err(why) => assert!(!ok && why.contains("a table of headers"), "{name}: {why}"),
+            Err(why) => assert!(
+                !ok && why.to_string().contains("a table of headers"),
+                "{name}: {why}"
+            ),
         }
     }
 }
@@ -317,7 +334,7 @@ fn a_function_the_provider_never_registered_is_extension_failed() {
         "fiber.provider(\"p\", { models = { timeout = 1000, run = function() return {} end } })\n",
     );
     let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let provider = LuaProvider::new(Arc::clone(&extension), "p", setup.home());
+    let provider = LuaProvider::new(Arc::clone(&extension), "p");
     let tokens = Arc::clone(&provider);
     let err = within(move || tokens.token()).unwrap_err();
     assert!(matches!(err, Error::UnknownCallback { .. }), "{err:?}");

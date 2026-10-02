@@ -5,13 +5,12 @@
 //! function on the request path, which sees the body's SHA-256 and never the
 //! body.
 
-use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{ModelData, Secret};
-use contract::signing::{SignRequest, Signer};
+use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
 use crate::host::sha256_hex;
@@ -24,7 +23,6 @@ pub const REFRESH_BEFORE: Duration = Duration::from_secs(5 * 60);
 pub struct LuaProvider {
     extension: Arc<LuaExtension>,
     name: String,
-    home: PathBuf,
     models: Mutex<Option<Vec<ModelData>>>,
     token: Mutex<TokenState>,
 }
@@ -36,16 +34,12 @@ struct TokenState {
 }
 
 impl LuaProvider {
-    /// The provider `name` of `extension`, caching in the Fiber home `home`.
-    pub fn new(
-        extension: Arc<LuaExtension>,
-        name: impl Into<String>,
-        home: impl Into<PathBuf>,
-    ) -> Arc<Self> {
+    /// The provider `name` of `extension`. Its model cache and secrets use
+    /// the extension's Fiber home.
+    pub fn new(extension: Arc<LuaExtension>, name: impl Into<String>) -> Arc<Self> {
         Arc::new(Self {
             extension,
             name: name.into(),
-            home: home.into(),
             models: Mutex::default(),
             token: Mutex::default(),
         })
@@ -57,7 +51,7 @@ impl LuaProvider {
         if let Some(models) = lock(&self.models).clone() {
             return Ok(models);
         }
-        if let Some(cached) = config::read_model_cache(&self.home, &self.name)? {
+        if let Some(cached) = config::read_model_cache(self.extension.home(), &self.name)? {
             return Ok(lock(&self.models).get_or_insert(cached).clone());
         }
         self.discover()
@@ -76,7 +70,7 @@ impl LuaProvider {
         let models: Vec<ModelData> = serde_json::from_value(returned.clone()).map_err(|e| {
             self.bad_return("models", format!("something other than a model list: {e}"))
         })?;
-        config::write_model_cache(&self.home, &self.name, &returned)?;
+        config::write_model_cache(self.extension.home(), &self.name, &returned)?;
         *lock(&self.models) = Some(models.clone());
         Ok(models)
     }
@@ -137,6 +131,12 @@ impl LuaProvider {
                     "no `expires_at` in seconds since the Unix epoch".into(),
                 )
             })?;
+        // A token that is already expired, or whose expiry is this instant,
+        // was never usable. Returning it would send a request that the
+        // vendor will reject (`docs/model-routing.md`, "Credentials").
+        if expires <= SystemTime::now() {
+            return Err(self.bad_return("credential", "a token that has already expired".into()));
+        }
         Ok((Secret::new(token.to_owned()), expires))
     }
 
@@ -156,7 +156,7 @@ impl LuaProvider {
 /// Calls `sign({ method, url, headers, body_sha256 })` and returns the
 /// headers it returns, a table of names to values.
 impl Signer for LuaProvider {
-    fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, String> {
+    fn sign(&self, request: &SignRequest<'_>) -> Result<Vec<(String, String)>, signing::Error> {
         let headers: Map<String, Value> = request
             .headers
             .iter()
@@ -168,10 +168,14 @@ impl Signer for LuaProvider {
             "headers": headers,
             "body_sha256": sha256_hex(request.body),
         });
-        let returned = self.call("sign", arg).map_err(|e| e.to_string())?;
+        let returned = self
+            .call("sign", arg)
+            .map_err(|e| signing::Error::Failed(e.to_string()))?;
         let not_headers = || {
-            self.bad_return("sign", "something other than a table of headers".into())
-                .to_string()
+            signing::Error::NotHeaders(
+                self.bad_return("sign", "something other than a table of headers".into())
+                    .to_string(),
+            )
         };
         match returned {
             Value::Object(map) => map

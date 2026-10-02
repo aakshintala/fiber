@@ -153,6 +153,11 @@ impl LuaExtension {
         &self.name
     }
 
+    /// The Fiber home this extension was installed into.
+    pub(crate) fn home(&self) -> &Path {
+        &self.home
+    }
+
     /// Whether the extension's VM and thread exist and take calls.
     pub fn is_running(&self) -> bool {
         matches!(*self.lock(), State::Running(_))

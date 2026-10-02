@@ -99,9 +99,10 @@ pub(crate) fn post_signed(
                 headers,
                 body,
             })
-            // ponytail: `error.rs` has no variant for a failed `sign()`, so
-            // it reports `connection_failed` until one is added.
-            .map_err(|why| Error::Connection(format!("the request could not be signed: {why}")))?,
+            // ponytail: #322 has not named the code a failed `sign()` reports,
+            // so `Error::Sign` maps to `connection_failed` until it does. A
+            // sign failure is not retried (`Error::should_retry`).
+            .map_err(Error::Sign)?,
         None => Vec::new(),
     };
     let tls = TlsConfig::builder()
