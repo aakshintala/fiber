@@ -439,7 +439,8 @@ Most first-party providers use a key. The table in
 else.
 
 A provider whose credential is a token that expires declares a Lua
-`credential()` function. It returns a token and its expiry. Fiber caches the
+`credential()` function. It returns `{ token = <string>, expires_at = <Unix
+seconds> }`: the token and the time it expires. Fiber caches the
 token and calls the function again when the token is within 5 minutes of
 expiry. It runs off the request path. A cloud's own sign-in, such as Google
 Vertex's, is this function, written in the extension, not in Fiber.

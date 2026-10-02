@@ -114,7 +114,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | getrandom | random ids | ~0 | ~0 | ~0 | 3 | 325 |
-| ring | SHA-256, for PKCE and extension binary checksums | ~0 | ~0 | ~0 | 8 | 341 |
+| ring | SHA-256, for PKCE and extension binary checksums; HMAC-SHA256, for `host.hmac_sha256` | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
