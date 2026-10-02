@@ -7,25 +7,31 @@
 //! reply on its own thread (`docs/architecture.md`, "One inbox" and
 //! "Streaming").
 
-use std::collections::VecDeque;
 use std::collections::hash_map::RandomState;
+use std::collections::{BTreeMap, VecDeque};
 use std::hash::BuildHasher;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    AssistantMessageCompleted, CacheLifetime, CallStatus, Class, Empty, Event, InputItem,
-    MessageOutcome, SessionStarted, SteeringApplied, ToolCallCompleted, TurnCompleted, TurnOutcome,
-    TurnStarted, UsageRecorded,
+    AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, InputItem, MessageOutcome,
+    SessionStarted, SteeringApplied, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
+    UsageRecorded,
 };
 use contract::inbox::Message;
-use contract::provider::{CallError, Delta, Input, ModelRequest, Provider, Reply, ReplyAction};
-use contract::shapes::{ContentPart, Failure};
+use contract::provider::{
+    CallError, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
+};
+use contract::shapes::Failure;
+use contract::tool::Tool;
 use contract::{ActionId, ErrorCode, TurnId};
 use log::Log;
 
+mod calls;
 mod conversation;
 mod process;
+mod schema;
 
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
@@ -71,10 +77,23 @@ pub struct Loop {
     conversation: Vec<Input>,
     /// How much of `conversation` the previous request sent.
     sent: Option<usize>,
+    /// The registered tools by name.
+    tools: BTreeMap<String, calls::Registered>,
+    /// Each tool registered under a name already taken. #304 records it on
+    /// `preamble_built`, with each tool's `registered_by`.
+    #[expect(dead_code, reason = "read when #304 writes preamble_built")]
+    replaced: Vec<ToolReplaced>,
+    /// The workspace, symlinks resolved.
+    workspace: PathBuf,
+    /// Whether this turn's previous reply was cut off by the output limit.
+    cut_off: bool,
 }
 
 impl Loop {
-    /// Starts a new session's loop, writing `session_started`.
+    /// Starts a new session's loop, writing `session_started`. `tools` are
+    /// registered by name, each with who registered it: `builtin`, or the
+    /// extension or MCP server. A later one replaces an earlier one of the
+    /// same name (`docs/architecture.md`, "Tool seam").
     pub fn start(
         log: Arc<Log>,
         provider: Arc<dyn Provider>,
@@ -82,7 +101,11 @@ impl Loop {
         system_prompt: String,
         inbox: Receiver<Message>,
         workspace: String,
+        tools: Vec<(String, Arc<dyn Tool>)>,
     ) -> Result<Self, Error> {
+        let (tools, replaced) = calls::register(tools);
+        let resolved = PathBuf::from(&workspace);
+        let resolved = resolved.canonicalize().unwrap_or(resolved);
         let started = log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace,
@@ -106,6 +129,10 @@ impl Loop {
             waiting: None,
             conversation: Vec::new(),
             sent: None,
+            tools,
+            replaced,
+            workspace: resolved,
+            cut_off: false,
         })
     }
 
@@ -127,6 +154,7 @@ impl Loop {
             .chain(self.inbox.try_iter())
             .collect();
         let turn = TurnId(mint("t_"));
+        self.cut_off = false;
         self.append(
             &Event::TurnStarted(TurnStarted {
                 input: input
@@ -158,7 +186,7 @@ impl Loop {
         Ok(Some(outcome))
     }
 
-    /// One step (`docs/loop.md`, "One step"), steps 1 to 4 and 7.
+    /// One step (`docs/loop.md`, "One step").
     fn step(&mut self, turn: &TurnId) -> Result<Step, Error> {
         self.append(&Event::StepStarted(Empty {}), turn, None)?;
         let steering: Vec<Message> = self
@@ -180,7 +208,7 @@ impl Loop {
         }
         let request = ModelRequest {
             system_prompt: self.system_prompt.clone(),
-            tools: Vec::new(),
+            tools: self.tools.values().map(|(_, _, d)| d.clone()).collect(),
             effort: None,
             // ponytail: fixed until the preamble is built and logged
             // (`docs/prompt-cache.md`, "The preamble").
@@ -284,7 +312,7 @@ impl Loop {
     /// Writes a reply's actions, its usage and its completion. A reasoning
     /// action with readable text takes the next action `opened` while it
     /// streamed; any other opens now. A tool call ends the step with a next
-    /// one.
+    /// one, once every call has completed.
     fn record(
         &mut self,
         reply: Reply,
@@ -313,9 +341,9 @@ impl Loop {
                 }
                 ReplyAction::ToolCall(call) => {
                     let id = ActionId(mint("a_"));
-                    let name = call.name.clone();
-                    self.append(&Event::ToolCallRequested(call), turn, Some(&id))?;
-                    calls.push((id, name));
+                    let call = self.repaired(call);
+                    self.append(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
+                    calls.push((id, call));
                 }
             }
         }
@@ -345,35 +373,36 @@ impl Loop {
             turn,
             Some(message),
         )?;
-        if calls.is_empty() {
-            return Ok(Step::Replied);
-        }
-        // No tool is registered, so every call fails `unknown_tool`
-        // (`docs/loop.md`, "Tool calls that do not run").
-        for (id, name) in calls {
-            let text = format!("No tool is named `{name}`. Call only the tools you were given.");
-            self.append(
-                &Event::ToolCallCompleted(ToolCallCompleted {
-                    status: CallStatus::Failed,
-                    reason: None,
-                    error: Some(Failure {
-                        code: ErrorCode::UnknownTool,
-                        message: text.clone(),
+        if reply.finish == Finish::OutputLimit {
+            // None of a cut-off reply's calls runs (`docs/loop.md`, "A reply
+            // cut off by the output limit"). One with no call ends the step
+            // as any reply with no call does ("Ending a turn").
+            let called = !calls.is_empty();
+            for (id, _) in calls {
+                self.append(
+                    &Event::ToolCallCompleted(calls::truncated()),
+                    turn,
+                    Some(&id),
+                )?;
+            }
+            if std::mem::replace(&mut self.cut_off, true) {
+                return Ok(Step::Ended(ended(
+                    TurnOutcome::Failed,
+                    Some(Failure {
+                        code: ErrorCode::OutputTruncated,
+                        message: "Two replies in a row reached the output limit.".to_owned(),
                         retry_after: None,
                         provider: None,
                     }),
-                    process: None,
-                    content: vec![ContentPart::Text { text }],
-                    details: None,
-                    artifact: None,
-                    changes: None,
-                    control: None,
-                    changed_by: None,
-                }),
-                turn,
-                Some(&id),
-            )?;
+                )));
+            }
+            return Ok(if called { Step::Next } else { Step::Replied });
         }
+        self.cut_off = false;
+        if calls.is_empty() {
+            return Ok(Step::Replied);
+        }
+        self.run_calls(calls, turn)?;
         Ok(Step::Next)
     }
 

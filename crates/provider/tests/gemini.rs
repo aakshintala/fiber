@@ -523,6 +523,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
             conversation.push(Input::ToolResult {
                 action_id: ActionId(format!("a_{n}")),
                 text: "18 C, clear".into(),
+                is_error: false,
             });
         }
     }

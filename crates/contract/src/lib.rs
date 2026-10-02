@@ -2,7 +2,7 @@
 //!
 //! It holds the event envelope and every event kind (`docs/events.md`), every
 //! driver command (`docs/invocation.md`), the loop's inbox message and every error code
-//! (`docs/errors.md`), and the provider seam (`docs/architecture.md`). It
+//! (`docs/errors.md`), and the provider and tool seams (`docs/architecture.md`). It
 //! contains no behaviour beyond serialisation.
 
 mod codes;
@@ -15,6 +15,7 @@ mod pre_session;
 pub mod provider;
 pub mod shapes;
 pub mod signing;
+pub mod tool;
 
 pub use codes::ErrorCode;
 pub use envelope::{Envelope, SCHEMA_VERSION};

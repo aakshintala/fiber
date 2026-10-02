@@ -275,6 +275,7 @@ fn ask(args: &[String]) -> i32 {
             String::new(),
             inbox,
             parts.workspace.to_string_lossy().into_owned(),
+            Vec::new(),
         )
         .and_then(Loop::run)
         .map_err(|e| failed(e.code(), e))

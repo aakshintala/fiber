@@ -205,7 +205,9 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 "name": call.name,
                 "arguments": arguments_text(&call.arguments),
             })),
-            Input::ToolResult { action_id, text } => Some(json!({
+            Input::ToolResult {
+                action_id, text, ..
+            } => Some(json!({
                 "type": "function_call_output",
                 "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
                 "output": text,
