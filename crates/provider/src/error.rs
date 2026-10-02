@@ -131,6 +131,9 @@ impl Error {
 fn status_code(status: u16, body: &str) -> ErrorCode {
     match status {
         401 => ErrorCode::AuthenticationFailed,
+        // Gemini answers a bad key with 400 `API_KEY_INVALID`
+        // (`research/google-generative-ai-probe`, `raw/auth-badheader.json`).
+        400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
         _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
@@ -146,7 +149,12 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
 fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
     match code {
         Some("rate_limit_exceeded" | "rate_limit_error") => ErrorCode::RateLimited,
-        Some("server_error" | "overloaded_error" | "api_error") => ErrorCode::ProviderUnavailable,
+        // Gemini's in-stream `error.status` is a `google.rpc.Code` name.
+        Some("RESOURCE_EXHAUSTED") => ErrorCode::RateLimited,
+        Some(
+            "server_error" | "overloaded_error" | "api_error" | "INTERNAL" | "UNAVAILABLE"
+            | "DEADLINE_EXCEEDED",
+        ) => ErrorCode::ProviderUnavailable,
         _ if overflow(code, message) => ErrorCode::ContextOverflow,
         _ => ErrorCode::StreamIncomplete,
     }
@@ -191,6 +199,15 @@ fn body_code(body: &str) -> Option<String> {
         .iter()
         .find_map(|p| value.pointer(p).and_then(Value::as_str))
         .map(str::to_owned)
+}
+
+/// Whether a Google error body's `error.details` names `reason`
+/// (`google.rpc.ErrorInfo`).
+fn has_reason(body: &str, reason: &str) -> bool {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.pointer("/error/details")?.as_array().cloned())
+        .is_some_and(|details| details.iter().any(|d| d["reason"] == reason))
 }
 
 /// The provider's own message in an error body: `error.message`, or
