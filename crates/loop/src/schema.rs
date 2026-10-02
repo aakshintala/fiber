@@ -62,12 +62,14 @@ fn any_of(
         let mut reading = value.clone();
         let mut made = Vec::new();
         if fix(option, &mut reading, path, &mut made, pick) {
-            // Every reading of the inner `anyOf` passes it, so the first
-            // shows whether this branch could pass at all. The branch is
-            // judged by itself: another branch passing proves nothing here.
+            // The branch's readings count when they pass the whole schema,
+            // whichever branch they pass through.
+            // ponytail: the first reading stands for all of them, which is
+            // exact unless another branch constrains the ambiguous field;
+            // enumerate every reading if a real schema does that.
             let mut first = value.clone();
             fix(option, &mut first, path, &mut Vec::new(), true);
-            if check(option, &first).is_empty() && check(schema, &first).is_empty() {
+            if check(schema, &first).is_empty() {
                 return true;
             }
             continue;
