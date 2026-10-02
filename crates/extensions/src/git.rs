@@ -111,13 +111,13 @@ impl Origin {
             .collect())
     }
 
-    /// Clones the repository at `tag` (its default branch when none) to
+    /// Clones the repository at `tag` to
     /// `dest`, history included only when `history`, and returns the exact
     /// commit. `dest/.git` stays.
     pub(crate) fn clone(
         &self,
         repo: &str,
-        tag: Option<&str>,
+        tag: &str,
         history: bool,
         dest: &Path,
     ) -> Result<String, Error> {
@@ -127,9 +127,7 @@ impl Origin {
         if !history {
             args.extend(["--depth", "1"]);
         }
-        if let Some(tag) = tag {
-            args.extend(["--branch", tag]);
-        }
+        args.extend(["--branch", tag]);
         args.extend([url.as_str(), &to]);
         self.run(&args, None)?;
         Ok(self

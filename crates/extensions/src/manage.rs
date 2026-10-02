@@ -1,22 +1,20 @@
-//! `fiber install`, `update`, `remove` and `list` by name
-//! (`docs/extensions.md`, "Installing"): a [`Plan`] fetches and checks
-//! everything first, so a failure installs nothing.
+//! `fiber install` and `fiber update` (`docs/extensions.md`, "Installing"): a
+//! [`Plan`] fetches, resolves and checks everything first, and its commit
+//! puts everything in place or nothing.
 
-use std::collections::BTreeMap;
-use std::fs;
+use std::collections::{BTreeMap, BTreeSet};
+use std::fs::{self, File};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Manifest, ProviderData};
-use serde_json::Value;
 
 use crate::Error;
 use crate::git::{Origin, full_name, split};
-use crate::install::{Paths, RECORD, Record, commit_all, io, remove, slug, stage};
-use crate::resolve::{meets, newest, pick};
-
-/// More rounds of choosing versions than any real set of dependencies needs.
-const ROUNDS: usize = 10;
+use crate::install::{Paths, Provenance, Record, commit_all, io, remove, slug, stage};
+use crate::installed::{Installed, list, lock};
+use crate::prepare::prepare;
+use crate::resolve::{meets, newest, pick, root_meets};
 
 /// What is asked for.
 pub enum Request {
@@ -28,33 +26,14 @@ pub enum Request {
     Update(String),
 }
 
-/// An installed extension.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Installed {
-    /// Its name.
-    pub name: String,
-    /// Its version: the tag it was fetched at.
-    pub version: String,
-    /// The exact commit; none when installed from a local path.
-    pub commit: Option<String>,
-    /// A local path, or its name.
-    pub source: String,
-    /// Asked for, rather than pulled in as a dependency.
-    pub requested: bool,
-    /// The extensions it depends on, each with a minimum version.
-    pub depends: BTreeMap<String, String>,
-}
-
 /// One extension an install will put in place.
 pub struct Item {
     /// Its name.
     pub name: String,
     /// Its version.
     pub version: String,
-    /// A local path, or its name.
-    pub source: String,
-    /// The exact commit; none for a local path.
-    pub commit: Option<String>,
+    /// Where it comes from.
+    pub provenance: Provenance,
     /// For an update, what changed since the installed commit.
     pub changes: Option<String>,
     /// Its manifest.
@@ -64,11 +43,67 @@ pub struct Item {
     paths: Paths,
 }
 
-/// Everything an install will put in place, fetched and checked. Dropping it
-/// installs nothing and removes what was fetched.
+impl Item {
+    /// Where it comes from, as shown to the person: a path, or its name.
+    pub fn source(&self) -> String {
+        match &self.provenance {
+            Provenance::Path(path) => path.display().to_string(),
+            Provenance::Git { .. } => self.name.clone(),
+        }
+    }
+
+    /// The staged copy of its files, which is what will be installed.
+    pub fn staged(&self) -> &Path {
+        &self.paths.fresh
+    }
+
+    /// What it carries, one line each, such as `skills: a, b`: the
+    /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file
+    /// and the platforms it has binaries for.
+    // ponytail: docs/extensions.md names these kinds but not where they live;
+    // these directory names are a guess until it does.
+    pub fn carries(&self) -> Vec<String> {
+        let mut lines = Vec::new();
+        for (dir, label) in [
+            ("skills", "skills"),
+            ("prompts", "prompt templates"),
+            ("themes", "themes"),
+            ("tui", "TUI extension"),
+        ] {
+            let Ok(entries) = fs::read_dir(self.staged().join(dir)) else {
+                continue;
+            };
+            let mut names: Vec<String> = entries
+                .filter_map(Result::ok)
+                .map(|e| e.file_name().to_string_lossy().into_owned())
+                .collect();
+            names.sort();
+            if !names.is_empty() {
+                lines.push(format!("{label}: {}", names.join(", ")));
+            }
+        }
+        if let Some(prompt) = &self.manifest.prompt {
+            lines.push(format!("system prompt text: {prompt}"));
+        }
+        if !self.manifest.binaries.is_empty() {
+            let platforms: Vec<&str> = self.manifest.binaries.keys().map(String::as_str).collect();
+            lines.push(format!(
+                "binaries for {}, of which only this platform's is downloaded",
+                platforms.join(", ")
+            ));
+        }
+        lines
+    }
+}
+
+/// Everything an install will put in place, fetched and checked, holding the
+/// lock over `extensions/`. Dropping it installs nothing and removes what
+/// was fetched.
 pub struct Plan {
+    root: String,
     items: BTreeMap<String, Item>,
     scratch: PathBuf,
+    _lock: File,
 }
 
 impl Plan {
@@ -77,11 +112,18 @@ impl Plan {
         self.items.values()
     }
 
-    /// Puts every extension in place, or none, and returns their names.
+    /// Runs each install step and downloads each binary, then puts every
+    /// extension in place, or none. Returns their names, the one asked for
+    /// first.
     pub fn commit(self) -> Result<Vec<String>, Error> {
+        for item in self.items.values() {
+            prepare(&item.paths.fresh, &item.manifest)?;
+        }
         let paths: Vec<Paths> = self.items.values().map(|i| i.paths.clone()).collect();
         commit_all(&paths, |from, to| fs::rename(from, to))?;
-        Ok(self.items.keys().cloned().collect())
+        let mut names: Vec<String> = self.items.keys().cloned().collect();
+        names.sort_by_key(|n| *n != self.root);
+        Ok(names)
     }
 }
 
@@ -103,47 +145,52 @@ pub fn plan(
     fiber_version: &str,
     origin: &Origin,
 ) -> Result<Plan, Error> {
+    let lock = lock(home)?;
     let installed = list(home)?;
-    let scratch = std::env::temp_dir().join(format!(
-        "fiber-fetch-{}-{}",
-        std::process::id(),
-        NEXT.fetch_add(1, Ordering::Relaxed)
-    ));
+    let id = NEXT.fetch_add(1, Ordering::Relaxed);
+    let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));
     remove(&scratch)?;
     fs::create_dir_all(&scratch).map_err(io(&scratch))?;
     let mut plan = Plan {
+        root: String::new(),
         items: BTreeMap::new(),
         scratch,
+        _lock: lock,
     };
     let mut ctx = Ctx {
+        id,
         home,
         fiber_version,
         origin,
         installed: &installed,
     };
-    match request {
-        Request::Path(path) => {
-            ctx.add_path(&mut plan, path)?;
+    plan.root = match request {
+        Request::Path(path) => ctx.add_path(&mut plan, path, None)?,
+        Request::Install(typed) => {
+            let name = full_name(typed);
+            ctx.add_git(&mut plan, &name, None, true)?;
+            name
         }
-        Request::Install(typed) => ctx.add_git(&mut plan, &full_name(typed), None, true)?,
         Request::Update(typed) => {
             let name = full_name(typed);
             let Some(have) = installed.iter().find(|i| i.name == name) else {
                 return Err(Error::NotInstalled { name });
             };
-            match &have.commit {
-                None => {
-                    ctx.add_path(&mut plan, Path::new(&have.source))?;
+            match &have.provenance {
+                Provenance::Path(path) => ctx.add_path(&mut plan, path, Some(&name))?,
+                Provenance::Git { .. } => {
+                    ctx.add_git(&mut plan, &name, None, true)?;
+                    name
                 }
-                Some(_) => ctx.add_git(&mut plan, &name, None, true)?,
             }
         }
-    }
+    };
     ctx.resolve(&mut plan)?;
     Ok(plan)
 }
 
 struct Ctx<'a> {
+    id: usize,
     home: &'a Path,
     fiber_version: &'a str,
     origin: &'a Origin,
@@ -155,23 +202,60 @@ impl Ctx<'_> {
         asked || self.installed.iter().any(|i| i.name == name && i.requested)
     }
 
-    fn add_path(&mut self, plan: &mut Plan, path: &Path) -> Result<String, Error> {
-        let manifest = config::read_manifest(path)?;
+    /// Refuses a name whose directory another name already has, in Fiber
+    /// home or in this plan.
+    fn slug_free(&self, plan: &Plan, name: &str) -> Result<(), Error> {
+        let mine = slug(name)?;
+        let others = self
+            .installed
+            .iter()
+            .map(|i| &i.name)
+            .chain(plan.items.keys());
+        for other in others {
+            if other != name && slug(other)? == mine {
+                return Err(Error::SlugTaken {
+                    name: name.into(),
+                    other: other.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Stages the extension in a local directory. `expect` is the installed
+    /// name an update must find there.
+    fn add_path(
+        &mut self,
+        plan: &mut Plan,
+        path: &Path,
+        expect: Option<&str>,
+    ) -> Result<String, Error> {
+        let path = fs::canonicalize(path).map_err(io(path))?;
+        let manifest = config::read_manifest(&path)?;
+        if let Some(expect) = expect
+            && manifest.name != expect
+        {
+            return Err(Error::WrongName {
+                asked: expect.into(),
+                found: manifest.name,
+            });
+        }
+        self.slug_free(plan, &manifest.name)?;
         let record = Record {
-            source: path.display().to_string(),
+            name: manifest.name.clone(),
+            provenance: Provenance::Path(path.clone()),
             version: manifest.version.clone(),
-            commit: None,
             requested: true,
         };
-        let (manifest, providers, paths) = stage(self.home, path, self.fiber_version, &record)?;
+        let (manifest, providers, paths) =
+            stage(self.home, self.id, &path, self.fiber_version, &record)?;
         let name = manifest.name.clone();
         plan.items.insert(
             name.clone(),
             Item {
                 name: name.clone(),
                 version: record.version,
-                source: record.source,
-                commit: None,
+                provenance: record.provenance,
                 changes: None,
                 manifest,
                 providers,
@@ -190,9 +274,11 @@ impl Ctx<'_> {
         asked: bool,
     ) -> Result<(), Error> {
         let (repo, dir) = split(name)?;
+        self.slug_free(plan, name)?;
         let tag = match tag {
-            Some(tag) => Some(tag),
-            None => newest(&self.origin.tags(repo)?),
+            Some(tag) => tag,
+            None => newest(&self.origin.tags(repo)?)
+                .ok_or_else(|| Error::NoTag { name: name.into() })?,
         };
         let clone = plan.scratch.join(slug(name)?);
         remove(&clone)?;
@@ -200,21 +286,29 @@ impl Ctx<'_> {
             .installed
             .iter()
             .find(|i| i.name == name)
-            .and_then(|i| i.commit.as_deref());
+            .and_then(|i| match &i.provenance {
+                Provenance::Git { commit } => Some(commit.as_str()),
+                Provenance::Path(_) => None,
+            });
         let history = asked && old.is_some();
-        let commit = self.origin.clone(repo, tag.as_deref(), history, &clone)?;
+        let commit = self.origin.clone(repo, &tag, history, &clone)?;
         let changes = old
             .filter(|_| history)
             .map(|old| self.origin.changes(&clone, old, dir));
         remove(&clone.join(".git"))?;
-        let source = clone.join(dir);
         let record = Record {
-            source: name.into(),
-            version: tag.clone().unwrap_or_default(),
-            commit: Some(commit),
+            name: name.into(),
+            provenance: Provenance::Git { commit },
+            version: tag,
             requested: self.requested(name, asked),
         };
-        let (manifest, providers, paths) = stage(self.home, &source, self.fiber_version, &record)?;
+        let (manifest, providers, paths) = stage(
+            self.home,
+            self.id,
+            &clone.join(dir),
+            self.fiber_version,
+            &record,
+        )?;
         if manifest.name != name {
             remove(&paths.fresh)?;
             return Err(Error::WrongName {
@@ -222,14 +316,12 @@ impl Ctx<'_> {
                 found: manifest.name,
             });
         }
-        let version = tag.unwrap_or_else(|| manifest.version.clone());
         plan.items.insert(
             name.into(),
             Item {
                 name: name.into(),
-                version,
-                source: record.source,
-                commit: record.commit,
+                version: record.version,
+                provenance: record.provenance,
                 changes,
                 manifest,
                 providers,
@@ -239,29 +331,46 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// Chooses each dependency's version until every minimum is met.
+    /// Chooses each dependency's version until every minimum is met. Each
+    /// round starts from the manifests reachable from the request, so a
+    /// manifest that a newer version replaced neither conflicts nor keeps a
+    /// package in the plan; the rounds end when nothing changes, or when a
+    /// round repeats an earlier state.
     fn resolve(&mut self, plan: &mut Plan) -> Result<(), Error> {
-        for _ in 0..ROUNDS {
-            let mut wants: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
-            let mut add = |name: &str, depends: &BTreeMap<String, String>| {
-                for (dep, min) in depends {
-                    wants
-                        .entry(dep.clone())
-                        .or_default()
-                        .insert(name.to_owned(), min.clone());
-                }
-            };
-            for item in plan.items.values() {
-                add(&item.name, &item.manifest.depends);
-            }
-            for have in self.installed {
-                if !plan.items.contains_key(&have.name) {
-                    add(&have.name, &have.depends);
+        let mut seen = BTreeSet::new();
+        loop {
+            let reach = reachable(plan);
+            let dropped: Vec<String> = plan
+                .items
+                .keys()
+                .filter(|n| !reach.contains(*n))
+                .cloned()
+                .collect();
+            for name in dropped {
+                if let Some(item) = plan.items.remove(&name) {
+                    remove(&item.paths.fresh)?;
                 }
             }
+            let state: Vec<(String, String)> = plan
+                .items
+                .iter()
+                .map(|(n, i)| (n.clone(), i.version.clone()))
+                .collect();
+            if !seen.insert(state) {
+                return Err(Error::Unresolved);
+            }
+            let wants = self.wants(plan);
             let mut changed = false;
             for (dep, w) in &wants {
-                let have = plan.items.get(dep).map(|i| i.version.as_str()).or_else(|| {
+                if !reach.contains(dep) {
+                    continue;
+                }
+                let chosen = plan.items.get(dep).map(|i| i.version.as_str());
+                if dep == &plan.root {
+                    root_meets(dep, chosen.unwrap_or_default(), w)?;
+                    continue;
+                }
+                let have = chosen.or_else(|| {
                     self.installed
                         .iter()
                         .find(|i| &i.name == dep)
@@ -276,74 +385,52 @@ impl Ctx<'_> {
                 let tag = pick(dep, w, &self.origin.tags(repo)?)?;
                 self.add_git(plan, dep, Some(tag), false)?;
                 changed = true;
+                break;
             }
             if !changed {
                 return Ok(());
             }
         }
-        Err(Error::Unresolved)
     }
-}
 
-/// The installed extensions, by name. One whose manifest cannot be read is
-/// skipped: loading reports it.
-pub fn list(home: &Path) -> Result<Vec<Installed>, Error> {
-    let root = home.join("extensions");
-    let entries = match fs::read_dir(&root) {
-        Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(io(&root)(e)),
-    };
-    let mut found = Vec::new();
-    for entry in entries {
-        let entry = entry.map_err(io(&root))?;
-        if entry.file_name().to_string_lossy().starts_with('.') {
-            continue;
-        }
-        let dir = entry.path();
-        let Ok(manifest) = config::read_manifest(&dir) else {
-            continue;
+    /// Each reachable extension's dependencies and, for an installed one the
+    /// plan leaves alone, the dependencies it has: name to requirer to
+    /// minimum.
+    fn wants(&self, plan: &Plan) -> BTreeMap<String, BTreeMap<String, String>> {
+        let mut wants: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
+        let mut add = |name: &str, depends: &BTreeMap<String, String>| {
+            for (dep, min) in depends {
+                wants
+                    .entry(dep.clone())
+                    .or_default()
+                    .insert(name.to_owned(), min.clone());
+            }
         };
-        let record: Value = fs::read_to_string(dir.join(RECORD))
-            .ok()
-            .and_then(|t| serde_json::from_str(&t).ok())
-            .unwrap_or(Value::Null);
-        let text = |key: &str| record.get(key).and_then(Value::as_str).map(str::to_owned);
-        found.push(Installed {
-            version: text("version").unwrap_or_else(|| manifest.version.clone()),
-            commit: text("commit"),
-            source: text("source").unwrap_or_else(|| dir.display().to_string()),
-            requested: record
-                .get("requested")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
-            depends: manifest.depends,
-            name: manifest.name,
-        });
+        for item in plan.items.values() {
+            add(&item.name, &item.manifest.depends);
+        }
+        for have in self.installed {
+            if !plan.items.contains_key(&have.name) {
+                add(&have.name, &have.depends);
+            }
+        }
+        wants
     }
-    found.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(found)
 }
 
-/// Removes an extension, then every dependency that nothing left needs.
-/// Returns what it removed, the one asked for first.
-pub fn uninstall(home: &Path, typed: &str) -> Result<Vec<String>, Error> {
-    let name = full_name(typed);
-    let mut left = list(home)?;
-    if !left.iter().any(|i| i.name == name) {
-        return Err(Error::NotInstalled { name });
+/// The names reachable from the request through the staged manifests,
+/// including dependencies not fetched yet.
+fn reachable(plan: &Plan) -> BTreeSet<String> {
+    let mut reach = BTreeSet::from([plan.root.clone()]);
+    let mut queue = vec![plan.root.clone()];
+    while let Some(name) = queue.pop() {
+        if let Some(item) = plan.items.get(&name) {
+            for dep in item.manifest.depends.keys() {
+                if reach.insert(dep.clone()) {
+                    queue.push(dep.clone());
+                }
+            }
+        }
     }
-    let mut removed = Vec::new();
-    let mut next = Some(name);
-    while let Some(name) = next {
-        let dir = home.join("extensions").join(slug(&name)?);
-        remove(&dir)?;
-        left.retain(|i| i.name != name);
-        removed.push(name);
-        next = left
-            .iter()
-            .find(|i| !i.requested && !left.iter().any(|other| other.depends.contains_key(&i.name)))
-            .map(|i| i.name.clone());
-    }
-    Ok(removed)
+    reach
 }

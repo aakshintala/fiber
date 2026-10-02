@@ -8,6 +8,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
+use extensions::{Error, Origin, Request, plan};
 use serde_json::{Value, json};
 
 static NEXT: AtomicUsize = AtomicUsize::new(0);
@@ -77,4 +78,17 @@ pub(crate) fn provider(name: &str, ids: &[&str]) -> Value {
         .map(|id| json!({ "id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1" }))
         .collect();
     json!({ "name": name, "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": models })
+}
+
+/// Installs the extension in `source` the way `fiber install <path>` does
+/// and returns its name.
+pub(crate) fn install(home: &Path, source: &Path, fiber: &str) -> Result<String, Error> {
+    let names = plan(
+        home,
+        &Request::Path(source.into()),
+        fiber,
+        &Origin::github(),
+    )?
+    .commit()?;
+    Ok(names.into_iter().next().unwrap())
 }

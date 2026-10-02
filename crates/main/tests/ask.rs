@@ -70,7 +70,15 @@ impl Setup {
                 "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
             }),
         );
-        extensions::install(&self.home(), &source, "0.0.0").unwrap();
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.0.0",
+            &extensions::Origin::github(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
         write(
             &self.home().join("config.json"),
             &json!({"model": "fake/m"}),
@@ -115,12 +123,17 @@ impl Setup {
     /// Runs `fiber` with `args`, its stdin on a pseudo-terminal where
     /// `typed` was already typed.
     fn fiber_typing(&self, args: &[&str], typed: &str) -> Run {
+        self.fiber_typing_env(args, typed, &[])
+    }
+
+    /// [`Self::fiber_typing`] with extra environment variables.
+    fn fiber_typing_env(&self, args: &[&str], typed: &str, env: &[(&str, &str)]) -> Run {
         let terminal = Terminal::open();
         fs::File::from(terminal.main.try_clone().unwrap())
             .write_all(typed.as_bytes())
             .unwrap();
         let home = self.home();
-        self.run(home.to_str().unwrap(), args, terminal.stdin(), None, &[])
+        self.run(home.to_str().unwrap(), args, terminal.stdin(), None, env)
     }
 
     /// Runs `fiber` in its own process group, waits for it under
@@ -180,13 +193,6 @@ impl Setup {
             "`fiber` left a process in its group behind"
         );
         Run::from(output)
-    }
-
-    /// Runs `fiber` with `args` and these environment variables set over its
-    /// own, stdin not a terminal.
-    fn fiber_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
-        let home = self.home();
-        self.run(home.to_str().unwrap(), args, Stdio::null(), None, env)
     }
 
     fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
@@ -599,11 +605,12 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
     assert_eq!(
         run.stderr,
         format!(
-            "Install github.com/aakshintala/fiber/providers/opencode from {path}\n\
+            "Install github.com/aakshintala/fiber/providers/opencode from {}\n\
              Version 0.0.0\n\
              Provider opencode-go: https://opencode.ai/zen/go/v1\n\
              Provider opencode-zen: https://opencode.ai/zen/v1\n\
-             Go ahead? [y/N] fiber: installed github.com/aakshintala/fiber/providers/opencode\n"
+             Go ahead? [y/N/s to show the full source] fiber: installed github.com/aakshintala/fiber/providers/opencode\n",
+            fs::canonicalize(&opencode).unwrap().display()
         )
     );
     assert!(installed.join("providers/opencode-go.json").is_file());
@@ -638,7 +645,7 @@ fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
 #[test]
 fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
     let setup = Setup::new();
-    let run = setup.fiber_env(&["install", "openrouter"], &[("PATH", "")]);
+    let run = setup.fiber_with_env(&["install", "openrouter"], &[("PATH", "")]);
     assert_eq!(run.code, Some(2), "{}", run.stderr);
     assert!(run.stderr.contains("Install git"), "{}", run.stderr);
 }
@@ -656,6 +663,179 @@ fn the_extension_commands_take_their_arguments() {
         let run = setup.fiber(&args, None);
         assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
     }
+}
+
+/// Runs the system `git` in `dir`.
+fn git(dir: &Path, args: &[&str]) -> String {
+    let out = Command::new("git")
+        .args(["-c", "user.name=t", "-c", "user.email=t@t"])
+        .args(["-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false"])
+        .args(["-c", "init.defaultBranch=main"])
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+    String::from_utf8(out.stdout).unwrap().trim().to_owned()
+}
+
+/// Fiber's own repository as a local one, with `providers/muse` committed
+/// and tagged `tag`, and the environment that makes `https://github.com/`
+/// mean the directory holding it. This is git's own `url.<base>.insteadOf`,
+/// so the shipped binary needs no test switch.
+struct Github {
+    repo: PathBuf,
+    key: String,
+    value: String,
+}
+
+impl Github {
+    fn new(setup: &Setup) -> Self {
+        let base = setup.root.join("gh");
+        let repo = base.join("aakshintala/fiber");
+        fs::create_dir_all(&repo).unwrap();
+        git(&repo, &["init", "--quiet"]);
+        Self {
+            repo,
+            key: format!("url.file://{}/.insteadOf", base.display()),
+            value: "https://github.com/".into(),
+        }
+    }
+
+    fn env(&self) -> [(&str, &str); 3] {
+        [
+            ("GIT_CONFIG_COUNT", "1"),
+            ("GIT_CONFIG_KEY_0", &self.key),
+            ("GIT_CONFIG_VALUE_0", &self.value),
+        ]
+    }
+
+    /// Commits `providers/muse` with a note file and tags it.
+    fn release(&self, tag: &str) {
+        let dir = self.repo.join("providers/muse");
+        fs::create_dir_all(dir.join("providers")).unwrap();
+        for file in ["extension.json", "providers/muse.json"] {
+            fs::copy(package("muse").join(file), dir.join(file)).unwrap();
+        }
+        fs::write(dir.join("NOTES.md"), format!("notes for {tag}\n")).unwrap();
+        git(&self.repo, &["add", "."]);
+        git(&self.repo, &["commit", "--quiet", "-m", tag]);
+        git(&self.repo, &["tag", tag]);
+    }
+}
+
+const MUSE: &str = "github.com/aakshintala/fiber/providers/muse";
+
+#[test]
+fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
+    let setup = Setup::new();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    let commit = git(&gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
+    let run = setup.fiber_with_env(&["install", "muse"], &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, format!("fiber: installed {MUSE}\n"));
+    let listed = setup.fiber_with_env(&["list"], &[]);
+    assert_eq!(listed.raw, [format!("{MUSE} v0.1.0 {commit}")]);
+    assert!(
+        setup
+            .home()
+            .join("extensions/github.com-aakshintala-fiber-providers-muse/providers/muse.json")
+            .is_file()
+    );
+}
+
+#[test]
+fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source() {
+    let setup = Setup::new();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    let installed = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-providers-muse");
+    let declined = setup.fiber_typing_env(&["install", "muse"], "n\n", &gh.env());
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(
+        declined.stderr.contains("Version v0.1.0\n"),
+        "{}",
+        declined.stderr
+    );
+    assert!(!installed.exists());
+    let run = setup.fiber_typing_env(&["install", "muse"], "s\ny\n", &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr.matches("Go ahead?").count(), 2, "{}", run.stderr);
+    assert!(run.stderr.contains("--- NOTES.md"), "{}", run.stderr);
+    assert!(run.stderr.contains("notes for v0.1.0"), "{}", run.stderr);
+    assert!(installed.join("NOTES.md").is_file());
+}
+
+#[test]
+fn update_moves_to_the_newest_tag_and_a_terminal_shows_what_changed() {
+    let setup = Setup::new();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    let run = setup.fiber_with_env(&["install", "muse"], &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    gh.release("v0.2.0");
+    let declined = setup.fiber_typing_env(&["update", "muse"], "n\n", &gh.env());
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(declined.stderr.contains("Update "), "{}", declined.stderr);
+    assert!(declined.stderr.contains("NOTES.md"), "{}", declined.stderr);
+    assert!(setup.fiber_with_env(&["list"], &[]).raw[0].contains("v0.1.0"));
+    let run = setup.fiber_with_env(&["update", "muse"], &gh.env());
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert!(setup.fiber_with_env(&["list"], &[]).raw[0].contains(" v0.2.0 "));
+}
+
+#[test]
+fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
+    let setup = Setup::new();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    assert_eq!(
+        setup.fiber_with_env(&["install", "muse"], &gh.env()).code,
+        Some(0)
+    );
+    let data = setup
+        .home()
+        .join("data/github.com-aakshintala-fiber-providers-muse");
+    let settings = setup
+        .home()
+        .join("config/github.com-aakshintala-fiber-providers-muse.json");
+    fs::create_dir_all(&data).unwrap();
+    fs::create_dir_all(settings.parent().unwrap()).unwrap();
+    fs::write(data.join("index"), "x").unwrap();
+    fs::write(&settings, "{}").unwrap();
+    let declined = setup.fiber_typing(&["remove", "muse"], "n\n");
+    assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
+    assert!(
+        declined
+            .stderr
+            .contains(&format!("Delete {}", data.display())),
+        "{}",
+        declined.stderr
+    );
+    assert!(
+        declined
+            .stderr
+            .contains(&format!("Delete {}", settings.display())),
+        "{}",
+        declined.stderr
+    );
+    assert!(data.join("index").exists() && settings.exists());
+    let approved = setup.fiber_typing(&["remove", "muse"], "y\n");
+    assert_eq!(approved.code, Some(0), "stderr: {}", approved.stderr);
+    assert!(!data.exists() && !settings.exists());
+    assert!(setup.fiber_with_env(&["list"], &[]).raw.is_empty());
+
+    assert_eq!(
+        setup.fiber_with_env(&["install", "muse"], &gh.env()).code,
+        Some(0)
+    );
+    fs::create_dir_all(&data).unwrap();
+    let headless = setup.fiber(&["remove", "muse"], None);
+    assert_eq!(headless.code, Some(0), "stderr: {}", headless.stderr);
+    assert!(!data.exists());
 }
 
 /// Asserts a completed turn that answered the weather question.

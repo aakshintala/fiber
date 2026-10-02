@@ -83,6 +83,30 @@ pub(crate) fn meets(
     Ok(version(have).is_ok_and(|v| v >= floor && v[0] == floor[0]))
 }
 
+/// Whether the version being installed, `have`, meets every minimum
+/// installed extensions state for it: a different major version stops with
+/// both named, and a lower one is an error too.
+pub(crate) fn root_meets(
+    name: &str,
+    have: &str,
+    wants: &BTreeMap<String, String>,
+) -> Result<(), Error> {
+    let mut all = wants.clone();
+    all.insert("this request".into(), have.into());
+    floor(name, &all)?;
+    if meets(name, have, wants)? {
+        return Ok(());
+    }
+    Err(Error::NoVersion {
+        name: name.into(),
+        needs: wants
+            .values()
+            .max_by_key(|m| minimum(m).ok())
+            .cloned()
+            .unwrap_or_default(),
+    })
+}
+
 /// The lowest tag at or above every minimum in `wants`; the newest tag is
 /// not taken unless a minimum asks for it.
 pub(crate) fn pick(

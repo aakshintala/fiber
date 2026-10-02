@@ -136,3 +136,54 @@ fn every_staged_copy_goes_in_place_and_nothing_is_left_beside() {
         assert!(!dirs.path(&format!("{n}-old")).exists());
     }
 }
+
+#[test]
+fn a_copy_that_cannot_be_put_back_is_an_error_naming_it() {
+    // Moves: a aside, a in place, b aside (fails), then a's old copy back
+    // (fails).
+    let (dirs, paths) = pair("stuck");
+    let calls = Cell::new(0);
+    let err = commit_all(&paths, |from, to| {
+        calls.set(calls.get() + 1);
+        if matches!(calls.get(), 3 | 4) {
+            Err(io::Error::other("injected"))
+        } else {
+            fs::rename(from, to)
+        }
+    })
+    .unwrap_err();
+    let crate::Error::Rollback { why, stuck } = &err else {
+        panic!("{err}")
+    };
+    assert!(why.contains("injected"), "{why}");
+    assert_eq!(stuck, &[dirs.path("a-target")]);
+    assert_eq!(err.code(), contract::ErrorCode::IoFailed);
+    assert!(err.to_string().contains("a-target"), "{err}");
+    // What could be put back was: b was never moved.
+    let b = fs::read_to_string(dirs.path("b-target/v")).unwrap();
+    assert_eq!(b, "old");
+}
+
+#[test]
+fn staging_directories_differ_by_plan_id() {
+    use super::{Provenance, Record, stage};
+    let dirs = Dirs::new("ids");
+    let source = dirs.path("src");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(
+        source.join("extension.json"),
+        r#"{"name":"acme","version":"v1","fiber":"0.1.0","api":1}"#,
+    )
+    .unwrap();
+    let record = Record {
+        name: "acme".into(),
+        provenance: Provenance::Path(source.clone()),
+        version: "v1".into(),
+        requested: true,
+    };
+    let home = dirs.path("home");
+    let one = stage(&home, 1, &source, "0.1.0", &record).unwrap().2;
+    let two = stage(&home, 2, &source, "0.1.0", &record).unwrap().2;
+    assert_ne!(one.fresh, two.fresh);
+    assert!(one.fresh.is_dir() && two.fresh.is_dir());
+}

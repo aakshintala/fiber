@@ -323,6 +323,14 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::Unresolved
         | Error::NotInstalled { .. }
         | Error::WrongName { .. }
+        | Error::Busy
+        | Error::SlugTaken { .. }
+        | Error::NoTag { .. }
+        | Error::BadRecord { .. }
+        | Error::InstallStep { .. }
+        | Error::Download { .. }
+        | Error::BinaryChecksum { .. }
+        | Error::Rollback { .. }
         | Error::ProviderMissing { .. }
         | Error::ModelMissing { .. }
         | Error::UnknownModel { .. }

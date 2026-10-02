@@ -8,9 +8,9 @@ mod common;
 
 use std::fs;
 
-use common::{Setup, manifest, provider, write};
+use common::{Setup, install, manifest, provider, write};
 use contract::ErrorCode;
-use extensions::{Error, install};
+use extensions::Error;
 use serde_json::json;
 
 #[test]
@@ -155,22 +155,6 @@ fn a_directory_without_a_manifest_is_refused() {
 }
 
 #[test]
-fn a_leftover_install_that_cannot_be_removed_fails_the_install() {
-    use std::os::unix::fs::PermissionsExt;
-    let setup = Setup::new();
-    let source = setup.source("local", &manifest("acme"), &[]);
-    let stale = setup
-        .home()
-        .join(format!("extensions/.acme.{}.new", std::process::id()));
-    write(&stale.join("locked/file"), "x");
-    fs::set_permissions(stale.join("locked"), fs::Permissions::from_mode(0o500)).unwrap();
-    let result = install(&setup.home(), &source, "0.1.0");
-    fs::set_permissions(stale.join("locked"), fs::Permissions::from_mode(0o700)).unwrap();
-    assert_eq!(result.unwrap_err().code(), ErrorCode::IoFailed);
-    assert!(!setup.home().join("extensions/acme").exists());
-}
-
-#[test]
 fn a_source_holding_fiber_home_or_inside_it_is_refused() {
     let setup = Setup::new();
     let outer = setup.source("outer", &manifest("acme"), &[]);
@@ -179,8 +163,9 @@ fn a_source_holding_fiber_home_or_inside_it_is_refused() {
     assert!(matches!(err, Error::Overlaps { .. }), "{err:?}");
     assert!(!home.join("extensions/acme").exists());
 
+    let installed = setup.source("installed", &manifest("acme"), &[]);
+    install(&setup.home(), &installed, "0.1.0").unwrap();
     let inner = setup.home().join("extensions/acme");
-    write(&inner.join("extension.json"), &manifest("acme").to_string());
     let err = install(&setup.home(), &inner, "0.1.0").unwrap_err();
     assert!(matches!(err, Error::Overlaps { .. }), "{err:?}");
     assert!(inner.join("extension.json").is_file());
