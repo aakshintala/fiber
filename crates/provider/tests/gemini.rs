@@ -1124,6 +1124,37 @@ fn unsigned_text_stays_ahead_of_the_signed_text_after_it() {
 }
 
 #[test]
+fn consecutive_replies_each_keep_their_own_text() {
+    // A reply cut off by the output limit, unsigned, and the turn's next
+    // reply, signed, with nothing between them (`docs/loop.md`, "A reply
+    // cut off by the output limit"). Both go out, in order.
+    let (cut, _) = decoded(&stream(&[chunk(
+        json!([{"text": "Part one"}]),
+        Some("MAX_TOKENS"),
+    )]));
+    let signed = json!({"text": "Part two.", "thoughtSignature": "c2ln"});
+    let (next, _) = decoded(&stream(&[chunk(json!([signed.clone()]), Some("STOP"))]));
+    let mut conversation = request().conversation;
+    for reply in [cut.unwrap(), next.unwrap()] {
+        for action in &reply.actions {
+            if let ReplyAction::Reasoning(r) = action {
+                conversation.push(Input::Reasoning {
+                    model: REFERENCE.into(),
+                    text: r.text.clone(),
+                    provider_item: r.provider_item.clone(),
+                });
+            }
+        }
+        conversation.push(Input::Assistant { text: reply.text });
+    }
+    let (contents, _) = sent_contents(conversation);
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [{"text": "Part one"}, signed]})
+    );
+}
+
+#[test]
 fn overflowing_usage_counts_fail_instead_of_panicking() {
     let mut overflow = chunk(json!([{"text": "hi"}]), Some("STOP"));
     overflow["usageMetadata"] = json!({"promptTokenCount": 10,

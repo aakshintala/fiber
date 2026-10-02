@@ -280,19 +280,18 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect();
 
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    // The open reply's reasoning and calls, in the order they were logged,
-    // plus its assistant text once that event arrives. A user message or a
-    // tool result ends the reply, and so does the end of the conversation,
-    // so nothing is kept for the next one.
+    // The open reply's reasoning and calls, in the order they were logged.
+    // A reply's `assistant_message_completed` follows its actions, so its
+    // text closes it. A user message, a tool result or the end of the
+    // conversation closes a reply whose text was never logged.
     let mut logged: Vec<&Input> = Vec::new();
-    let mut reply_text: Option<&str> = None;
     for input in &request.conversation {
         match input {
             Input::User { text } => {
-                close_reply(&mut out, &mut logged, &mut reply_text);
+                close_reply(&mut out, &mut logged, "");
                 push(&mut out, "user", json!({"text": text}));
             }
-            Input::Assistant { text } => reply_text = Some(text.as_str()),
+            Input::Assistant { text } => close_reply(&mut out, &mut logged, text),
             // Reasoning goes back unchanged, only to the model that
             // produced it, and never as plain text.
             Input::Reasoning {
@@ -303,7 +302,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::Reasoning { .. } => {}
             Input::ToolCall { .. } => logged.push(input),
             Input::ToolResult { action_id, text } => {
-                close_reply(&mut out, &mut logged, &mut reply_text);
+                close_reply(&mut out, &mut logged, "");
                 let call = calls.get(action_id);
                 let response = with(
                     json!({
@@ -317,19 +316,15 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             }
         }
     }
-    close_reply(&mut out, &mut logged, &mut reply_text);
+    close_reply(&mut out, &mut logged, "");
     out.into_iter()
         .map(|(role, parts)| json!({"role": role, "parts": parts}))
         .collect()
 }
 
-/// Emits the open reply's model parts and drops them, text included.
-fn close_reply(
-    out: &mut Vec<(&'static str, Vec<Value>)>,
-    logged: &mut Vec<&Input>,
-    reply_text: &mut Option<&str>,
-) {
-    let text = reply_text.take().unwrap_or("");
+/// Emits the open reply's model parts, from its logged items and `text`,
+/// and drops the items, so nothing carries into the next reply.
+fn close_reply(out: &mut Vec<(&'static str, Vec<Value>)>, logged: &mut Vec<&Input>, text: &str) {
     for part in replay_reply(logged, text) {
         push(out, "model", part);
     }
