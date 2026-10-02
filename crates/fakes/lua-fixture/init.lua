@@ -112,7 +112,9 @@ end
 
 fiber.provider("fixture", {
   models = {
-    timeout = 5000,
+    -- The real HTTP bound is this timeout plus a grace. Under the load soak
+    -- that bound is wall time, so it has to outlast a stalled process.
+    timeout = 60000,
     run = function()
       local base = host.secret("fixture.url")
       local reply = host.http({
@@ -132,7 +134,7 @@ fiber.provider("fixture", {
     end,
   },
   credential = {
-    timeout = 5000,
+    timeout = 60000,
     run = function()
       local reply = host.http({
         method = "POST",
