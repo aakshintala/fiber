@@ -1,5 +1,5 @@
-use std::io::Read;
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 
@@ -104,6 +104,50 @@ fn a_call_queued_during_registration_keeps_its_declared_timeout() {
     assert_eq!(until, asked.checked_add(Duration::from_millis(5000)));
 }
 
+/// A command whose name is `<provider>.<function>` keeps the timeout it
+/// declared. Asked 100 ms ago, that is still ahead, and the provider
+/// function's 50 ms timeout has already passed.
+#[test]
+fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
+    let dir = extension(
+        "collide",
+        "fiber.command(\"p.sign\", { timeout = 5000, run = function() return \"ok\" end })\n\
+         fiber.provider(\"p\", { sign = { timeout = 50, run = function() return {} end } })\n",
+    );
+    let vm = Vm::load(
+        "ext",
+        &dir,
+        Path::new("/nonexistent-fiber-home"),
+        Instant::now().checked_add(LOAD_TIMEOUT),
+    )
+    .unwrap();
+    let command = command("p.sign");
+    let provider = Target::Provider {
+        name: "p".to_owned(),
+        function: "sign",
+    };
+    let timeouts = vm.declared();
+    assert_eq!(
+        timeouts.timeout(&command),
+        Some(Duration::from_millis(5000))
+    );
+    assert_eq!(timeouts.timeout(&provider), Some(Duration::from_millis(50)));
+    let asked = ago(100);
+    let mut shared = in_phase(Phase::Ready(timeouts));
+    let command_id = shared.push(command.clone(), Value::Null, asked);
+    let Next::Sleep(until) = shared.judge("ext", command_id, &command, asked) else {
+        panic!("the command used the provider function's 50 ms timeout")
+    };
+    assert_eq!(until, asked.checked_add(Duration::from_millis(5000)));
+    let provider_id = shared.push(provider.clone(), Value::Null, asked);
+    let err = returned(shared.judge("ext", provider_id, &provider, asked)).unwrap_err();
+    assert!(
+        matches!(err, Error::Timeout { timeout_ms: 50, .. }),
+        "{err:?}"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// The verify-3 hang: an entry script the hook cannot stop is abandoned by
 /// the first waiter past its grace, and every other waiter gets the same
 /// error instead of waiting on its own reply.
@@ -188,6 +232,29 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
     assert!(matches!(shared.phase, Phase::Ready(_)));
 }
 
+/// A parked call inside its grace is not failed by its caller. The thread
+/// fails it at the deadline; the caller waits the grace out.
+#[test]
+fn a_parked_call_inside_its_grace_keeps_waiting() {
+    let mut shared = ready(&[("park", 100)]);
+    let asked = ago(100);
+    let id = shared.push(command("park"), Value::Null, asked);
+    shared.queue.clear();
+    let deadline = Instant::now();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(deadline),
+            parked: true,
+        },
+    );
+    let Next::Sleep(until) = shared.judge("ext", id, &command("park"), asked) else {
+        panic!("the caller failed a parked call inside its grace")
+    };
+    assert_eq!(until, deadline.checked_add(GRACE));
+    assert!(matches!(shared.phase, Phase::Ready(_)));
+}
+
 /// A running call waits its grace, then abandons the VM.
 #[test]
 fn a_running_call_past_its_grace_abandons_the_vm() {
@@ -195,7 +262,8 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
     let asked = Instant::now();
     let id = shared.push(command("spin"), Value::Null, asked);
     shared.queue.clear();
-    // Far inside the grace, and far past it, so a stall cannot cross either edge.
+    // Still ahead of its deadline, so a stall cannot enter the grace.
+    // Far past the grace is the second half.
     let deadline = Instant::now() + Duration::from_secs(60);
     shared.calls.insert(
         id,
@@ -205,7 +273,7 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
         },
     );
     let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), asked) else {
-        panic!("returned inside its grace")
+        panic!("returned before its deadline")
     };
     assert_eq!(until, deadline.checked_add(GRACE));
     shared.calls.insert(
@@ -221,6 +289,30 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
         shared.phase,
         Phase::Stopped(Error::Stopped { .. })
     ));
+}
+
+/// A running call whose deadline has passed, and whose grace has not, keeps
+/// waiting. The grace is one second, so a deadline of this instant is inside
+/// it for the rest of that second.
+#[test]
+fn a_running_call_inside_its_grace_keeps_waiting() {
+    let mut shared = ready(&[("spin", 100)]);
+    let asked = ago(100);
+    let id = shared.push(command("spin"), Value::Null, asked);
+    shared.queue.clear();
+    let deadline = Instant::now();
+    shared.calls.insert(
+        id,
+        Progress::Started {
+            deadline: Some(deadline),
+            parked: false,
+        },
+    );
+    let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), asked) else {
+        panic!("abandoned inside its grace")
+    };
+    assert_eq!(until, deadline.checked_add(GRACE));
+    assert!(matches!(shared.phase, Phase::Ready(_)));
 }
 
 /// Every waiter on a stopped extension gets the error that stopped it, at
@@ -518,6 +610,12 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         .recv_timeout(Duration::from_secs(10))
         .expect("models never reached the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
+    assert!(
+        until(&ext.hub, |s| {
+            parked(s) == 2 && command_queued(s, "queued") == 1
+        }),
+        "the queued command was not waiting when the VM was abandoned"
+    );
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
     let mut seen = BTreeMap::new();
     for _ in 0..4 {
@@ -549,4 +647,337 @@ fn a_call_on_an_extension_with_no_thread_is_stopped() {
     let id = shared.push(command("x"), Value::Null, Instant::now());
     let err = returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap_err();
     assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
+}
+
+/// How long a test waits for one call before failing.
+const WAIT: Duration = Duration::from_secs(10);
+
+const HTTP_OK: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+
+fn read_request(sock: &mut TcpStream) {
+    let mut got = Vec::new();
+    let mut buf = [0u8; 512];
+    loop {
+        let n = sock.read(&mut buf).expect("reading the request");
+        assert!(n > 0, "the client closed before its request");
+        got.extend_from_slice(buf.get(..n).unwrap());
+        if got.windows(4).any(|window| window == b"\r\n\r\n") {
+            return;
+        }
+        assert!(got.len() <= 8192, "the request header never ended");
+    }
+}
+
+/// Accepts `times` connections. Each is answered when `release` arrives,
+/// after the request is on the socket.
+fn answer_n(
+    listener: TcpListener,
+    accepted: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    times: usize,
+) {
+    for _ in 0..times {
+        let mut sock = listener.accept().unwrap().0;
+        read_request(&mut sock);
+        accepted.send(()).unwrap();
+        if release.recv_timeout(WAIT).is_ok() {
+            sock.write_all(HTTP_OK).unwrap();
+        }
+    }
+}
+
+fn start(ext: &Arc<LuaExtension>, command: &'static str) -> mpsc::Receiver<Result<String, Error>> {
+    let (tx, rx) = mpsc::channel();
+    let ext = Arc::clone(ext);
+    thread::spawn(move || tx.send(ext.command(command, "")));
+    rx
+}
+
+fn command_queued(shared: &Shared, name: &str) -> usize {
+    shared
+        .queue
+        .iter()
+        .filter(|job| matches!(&job.target, Target::Command(got) if got == name))
+        .count()
+}
+
+fn parked(shared: &Shared) -> usize {
+    shared
+        .calls
+        .values()
+        .filter(|progress| matches!(progress, Progress::Started { parked: true, .. }))
+        .count()
+}
+
+/// Registration is still running, and the queued commands are `names`, in order.
+fn queued_during_registration(shared: &Shared, names: &[&str]) -> bool {
+    let queued: Vec<&str> = shared
+        .queue
+        .iter()
+        .filter_map(|job| match &job.target {
+            Target::Command(name) => Some(name.as_str()),
+            Target::Provider { .. } => None,
+        })
+        .collect();
+    matches!(shared.phase, Phase::Registering { .. }) && queued == names
+}
+
+#[test]
+fn a_second_command_waits_until_the_parked_command_finishes() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || answer_n(listener, accepted_tx, release_rx, 1));
+    let dir = extension(
+        "second",
+        &format!(
+            "fiber.command(\"first\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let first = start(&ext, "first");
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("the first command never reached the server");
+    assert_eq!(ext.provider_functions("p").unwrap(), ["sign"]);
+    let second = start(&ext, "second");
+    assert!(
+        until(&ext.hub, |s| parked(s) == 1
+            && command_queued(s, "second") == 1),
+        "the second command was not queued behind the parked first"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(first.recv_timeout(WAIT).unwrap().unwrap(), "ok");
+    assert_eq!(second.recv_timeout(WAIT).unwrap().unwrap(), "second");
+    assert!(ext.is_running());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || answer_n(listener, accepted_tx, release_rx, 1));
+    let dir = extension(
+        "queued-timeout",
+        &format!(
+            "seen = \"no\"\n\
+             fiber.command(\"slow\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"quick\", {{ timeout = 300, run = function() seen = \"yes\"; return \"ran\" end }})\n\
+             fiber.command(\"after\", {{ timeout = 1000, run = function() return seen end }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let slow = start(&ext, "slow");
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("the slow command never reached the server");
+    let quick = start(&ext, "quick");
+    assert!(
+        until(&ext.hub, |s| {
+            parked(s) == 1 && command_queued(s, "quick") == 1
+        }),
+        "quick was not queued behind the parked slow command"
+    );
+    let err = quick
+        .recv_timeout(Duration::from_secs(4))
+        .expect("quick did not time out on its own deadline")
+        .unwrap_err();
+    let Error::Timeout {
+        callback,
+        timeout_ms,
+        ..
+    } = &err
+    else {
+        panic!("{err:?}")
+    };
+    assert_eq!((callback.as_str(), *timeout_ms), ("quick", 300));
+    assert!(ext.is_running(), "the queued timeout stopped the extension");
+    release_tx.send(()).unwrap();
+    assert!(slow.recv_timeout(WAIT).unwrap().is_ok());
+    assert_eq!(
+        start(&ext, "after").recv_timeout(WAIT).unwrap().unwrap(),
+        "no"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
+    let reg = TcpListener::bind("127.0.0.1:0").unwrap();
+    let work = TcpListener::bind("127.0.0.1:0").unwrap();
+    let reg_url = format!("http://{}/", reg.local_addr().unwrap());
+    let work_url = format!("http://{}/", work.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let (work_ok_tx, work_ok_rx) = mpsc::channel();
+    let (work_release_tx, work_release_rx) = mpsc::channel();
+    thread::spawn(move || answer_n(reg, accepted_tx, release_rx, 1));
+    thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 2));
+    let dir = extension(
+        "reg-timeout",
+        &format!(
+            "host.http({{ url = \"{reg_url}\" }})\n\
+             fiber.command(\"work\", {{ timeout = 5000, run = function() return host.http({{ url = \"{work_url}\" }}).body end }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let first = start(&ext, "work");
+    let second = start(&ext, "work");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(
+            s,
+            &["work", "work"]
+        )),
+        "both work calls were not queued during registration"
+    );
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("registration never reached the server");
+    release_tx.send(()).unwrap();
+    for _ in 0..2 {
+        work_ok_rx
+            .recv_timeout(WAIT)
+            .expect("work never reached the server");
+        work_release_tx.send(()).unwrap();
+    }
+    assert_eq!(first.recv_timeout(WAIT).unwrap().unwrap(), "ok");
+    assert_eq!(second.recv_timeout(WAIT).unwrap().unwrap(), "ok");
+    assert!(ext.is_running());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
+fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
+    let reg = TcpListener::bind("127.0.0.1:0").unwrap();
+    let hold = TcpListener::bind("127.0.0.1:0").unwrap();
+    let reg_url = format!("http://{}/", reg.local_addr().unwrap());
+    let hold_url = format!("http://{}/", hold.local_addr().unwrap());
+    let (reg_ok_tx, reg_ok_rx) = mpsc::channel();
+    let (reg_release_tx, reg_release_rx) = mpsc::channel();
+    let (hold_ok_tx, hold_ok_rx) = mpsc::channel();
+    let (hold_release_tx, hold_release_rx) = mpsc::channel();
+    thread::spawn(move || answer_n(reg, reg_ok_tx, reg_release_rx, 1));
+    thread::spawn(move || answer_n(hold, hold_ok_tx, hold_release_rx, 1));
+    let dir = extension(
+        "reg-quick",
+        &format!(
+            "host.http({{ url = \"{reg_url}\" }})\n\
+             fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{hold_url}\" }}).body end }})\n\
+             fiber.command(\"quick\", {{ timeout = 400, run = function() return \"ran\" end }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    // `hold` is queued before `quick` is asked, so `quick` cannot win the queue.
+    let held = start(&ext, "hold");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(s, &["hold"])),
+        "hold was not queued during registration"
+    );
+    let quick = start(&ext, "quick");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(
+            s,
+            &["hold", "quick"]
+        )),
+        "quick was not queued behind hold during registration"
+    );
+    reg_ok_rx
+        .recv_timeout(WAIT)
+        .expect("registration never reached the server");
+    reg_release_tx.send(()).unwrap();
+    hold_ok_rx
+        .recv_timeout(WAIT)
+        .expect("hold never reached the server");
+    let err = quick
+        .recv_timeout(Duration::from_secs(3))
+        .expect("quick did not time out while hold was parked")
+        .unwrap_err();
+    let Error::Timeout { timeout_ms, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(*timeout_ms, 400);
+    assert!(ext.is_running());
+    hold_release_tx.send(()).unwrap();
+    assert!(held.recv_timeout(WAIT).unwrap().is_ok());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The verify-3 hang: an entry script the hook cannot stop, with two calls
+/// waiting on it. Both get `Abandoned` past its deadline and grace, neither
+/// waits forever, and a later call gets it at once.
+#[test]
+fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
+    let dir = extension(
+        "gc-hang",
+        "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let first = start(&ext, "a");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(s, &["a"])),
+        "the first call was not queued during registration"
+    );
+    let second = start(&ext, "b");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(s, &["a", "b"])),
+        "the second call was not queued during registration"
+    );
+    for waiter in [first, second] {
+        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let Error::Abandoned { callback, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(callback, "init.lua");
+    }
+    assert!(!ext.is_running());
+    let err = start(&ext, "a").recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// An entry script that errors stops the extension with its error, for
+/// every call that waited on it and every later call.
+#[test]
+fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || answer_n(listener, accepted_tx, release_rx, 1));
+    let dir = extension(
+        "reg-error",
+        &format!("host.http({{ url = \"{url}\" }})\nerror(\"bad\")\n"),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let first = start(&ext, "a");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(s, &["a"])),
+        "the first call was not queued during registration"
+    );
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("registration never reached the server");
+    let second = start(&ext, "b");
+    assert!(
+        until(&ext.hub, |s| queued_during_registration(s, &["a", "b"])),
+        "the second call was not queued during registration"
+    );
+    release_tx.send(()).unwrap();
+    for waiter in [first, second] {
+        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let Error::Lua { message, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(message, "init.lua:2: bad");
+    }
+    assert!(!ext.is_running());
+    let err = start(&ext, "a").recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(matches!(err, Error::Lua { .. }), "{err:?}");
+    std::fs::remove_dir_all(&dir).unwrap();
 }
