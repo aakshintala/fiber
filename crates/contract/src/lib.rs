@@ -14,6 +14,7 @@ pub mod inbox;
 mod pre_session;
 pub mod provider;
 pub mod shapes;
+pub mod signing;
 pub mod tool;
 
 pub use codes::ErrorCode;
