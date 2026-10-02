@@ -106,6 +106,8 @@ pub enum CacheLifetime {
 pub struct SentTool {
     /// The tool's name.
     pub name: String,
+    /// `builtin`, or the extension or MCP server that registered it.
+    pub registered_by: String,
     /// Whether its definition was deferred.
     pub deferred: bool,
     /// The definition in the protocol's own shape.
@@ -139,6 +141,20 @@ pub struct PreambleBuilt {
     pub system_prompt: String,
     /// Each tool as sent.
     pub tools: Vec<SentTool>,
+    /// Each tool registered under a name already taken; empty when none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub replaced: Vec<ToolReplaced>,
+}
+
+/// A tool registered under a name already taken, on `preamble_built`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ToolReplaced {
+    /// The tool's name.
+    pub name: String,
+    /// The `registered_by` of the tool replaced.
+    pub from: String,
+    /// The `registered_by` of the tool that replaced it.
+    pub to: String,
 }
 
 /// A model and its settings, as on `preamble_built`.

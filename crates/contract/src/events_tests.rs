@@ -429,7 +429,9 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"reason": "switch", "model": "p/m", "context_window": 200000,
             "trigger_at": 140000, "effort": "high", "thinking": "on", "tool_choice": "auto",
             "cache_lifetime": "1h", "system_prompt": "s",
-            "tools": [{"name": "read", "deferred": false, "definition": {"type": "object"}}]}),
+            "tools": [{"name": "read", "registered_by": "e", "deferred": false,
+            "definition": {"type": "object"}}],
+            "replaced": [{"name": "read", "from": "builtin", "to": "e"}]}),
         ),
         (
             "model_changed",
