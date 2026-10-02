@@ -1070,8 +1070,8 @@ Settled by
 that ticket's resolution holds the rationale and the rejected alternatives.
 
 Every tool is declared on every request, in full or deferred. A deferred tool
-is sent as its name only. The model loads its full definition when it needs
-it, and the definition is appended to the conversation, so the cached prefix
+is declared with `defer_loading`. The model sees its name and description until
+it loads the tool. The model loads the full definition when it needs it, and the definition is appended to the conversation, so the cached prefix
 holds (`docs/prompt-cache.md`, "Deferred tools"). The tool set, and which of
 its tools are deferred, change only when the preamble is built.
 
