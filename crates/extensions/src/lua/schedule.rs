@@ -79,7 +79,7 @@ pub(super) fn serve(
         if !release(serve.name, serve.parked) || !serve.pump() {
             return;
         }
-        let busy = !serve.parked.is_empty() || !serve.queued.is_empty();
+        let busy = !serve.parked.is_empty();
         let msg = if !busy {
             match inbox.recv() {
                 Ok(msg) => msg,
@@ -145,7 +145,7 @@ impl Serve<'_> {
     /// Starts `job` now, or queues it when an earlier command is still parked.
     fn on_job(&mut self, job: Job) -> bool {
         let command = matches!(job.target, Target::Command(_));
-        if command && (self.command_parked() || !self.queued.is_empty()) {
+        if command && self.command_parked() {
             self.queued.push_back(job);
             return true;
         }
