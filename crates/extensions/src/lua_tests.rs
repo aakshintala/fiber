@@ -4,6 +4,8 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 use std::sync::mpsc;
 
+use contract::ErrorCode;
+
 use super::hub::Progress;
 use super::*;
 
@@ -36,6 +38,123 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         vm.resume(f, "boom", LOAD_TIMEOUT, mlua::Value::Nil)
     }));
     assert!(outcome.is_err(), "the panic became {outcome:?}");
+}
+
+/// The fixture's VM with no deadline on its entry script, so how fast the
+/// runner loads it cannot fail the test.
+fn fixture_vm() -> Vm {
+    match Vm::load(
+        "fixture",
+        &fakes::lua_fixture(),
+        Path::new("/nonexistent-fiber-home"),
+        None,
+    ) {
+        Ok(vm) => vm,
+        Err(e) => panic!("{e:?}"),
+    }
+}
+
+/// Resumes the fixture's command `name` on its own thread with its deadline
+/// already passed, and sends the error's message once the resume returns. The hook first looks
+/// at the clock `CHECK_EVERY` instructions in, past the few each command
+/// runs before its loop, so only the hook's reach decides whether the
+/// command stops, not how fast the runner is.
+fn resume_past_its_deadline(name: &'static str) -> mpsc::Receiver<Result<(), String>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let vm = fixture_vm();
+        let run = vm
+            .commands
+            .get::<Table>(name)
+            .and_then(|spec| spec.get::<Function>("run"))
+            .unwrap();
+        let thread = vm.lua.create_thread(run).unwrap();
+        vm.deadline.arm(&thread).unwrap();
+        vm.deadline.restore(Some(ago(1)));
+        tx.send(thread.resume::<()>(()).map_err(|e| setup::message(&e)))
+    });
+    rx
+}
+
+/// The hook stops a Lua loop past its deadline. It cannot stop a `__gc`
+/// finalizer (Lua turns hooks off there) or a backtracking `string.find`
+/// (one C call): both still run a grace period later, when the caller
+/// abandons the VM. A slow runner can only make this pass, never fail.
+#[test]
+fn the_hook_stops_a_loop_but_not_a_finalizer_or_a_long_c_call() {
+    let unstoppable = ["spin_gc", "spin_find"].map(|name| (name, resume_past_its_deadline(name)));
+    let err = resume_past_its_deadline("spin")
+        .recv_timeout(WAIT)
+        .expect("the hook did not stop the loop")
+        .unwrap_err();
+    assert_eq!(err, "the callback passed its timeout");
+    let end = Instant::now() + GRACE;
+    for (name, rx) in unstoppable {
+        let left = end.saturating_duration_since(Instant::now());
+        let got = rx.recv_timeout(left);
+        assert!(
+            matches!(got, Err(mpsc::RecvTimeoutError::Timeout)),
+            "{name} ended within the grace: {got:?}"
+        );
+    }
+}
+
+/// Past the memory cap an allocation is a Lua error, and the VM still runs
+/// the next callback. No deadline, so only the cap can stop `grow`.
+#[test]
+fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
+    let vm = fixture_vm();
+    let arg = Value::String(String::new());
+    for _ in 0..2 {
+        let err = match vm.step(&command("grow"), &arg, Duration::ZERO, None) {
+            Err(e) => e,
+            Ok(_) => panic!("grow returned"),
+        };
+        let Error::Lua { message, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert!(message.contains("not enough memory"), "{message}");
+        let echo = vm.step(
+            &command("echo"),
+            &Value::String("alive".to_owned()),
+            Duration::ZERO,
+            None,
+        );
+        assert!(matches!(echo, Ok(Step::Done(Value::String(s))) if s == "alive"));
+    }
+}
+
+/// What loading an extension whose entry script requires `big.lua`, of
+/// `len` bytes, fails with. No deadline, so how fast the runner reads it
+/// cannot fail the test.
+fn load_with_module_of(tag: &str, len: usize) -> String {
+    let dir = extension(tag, "local m = require(\"big\")\n");
+    let big = std::fs::File::create(dir.join("big.lua")).unwrap();
+    big.set_len(u64::try_from(len).unwrap()).unwrap();
+    let loaded = Vm::load("ext", &dir, Path::new("/nonexistent-fiber-home"), None);
+    std::fs::remove_dir_all(&dir).unwrap();
+    match loaded {
+        Err(Error::Lua { message, .. }) => message,
+        Err(e) => panic!("{e:?}"),
+        Ok(_) => panic!("the entry script loaded"),
+    }
+}
+
+#[test]
+fn a_module_larger_than_the_memory_cap_is_not_read() {
+    let message = load_with_module_of("big-over", MEMORY_CAP + 1);
+    assert!(
+        message.starts_with("init.lua:1: `big.lua` is larger than"),
+        "{message}"
+    );
+    assert!(message.contains("memory cap"), "{message}");
+}
+
+#[test]
+fn a_module_exactly_the_memory_cap_is_read() {
+    // Read and compiled: its zero bytes are not Lua.
+    let message = load_with_module_of("big-at", MEMORY_CAP);
+    assert!(message.starts_with("init.lua:1: big.lua:"), "{message}");
 }
 
 fn command(name: &str) -> Target {
@@ -552,16 +671,6 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Accepts one connection, signals once the request is on the socket, and
-/// leaves it unanswered so the callback stays parked.
-fn hold_server() -> (String, mpsc::Receiver<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    thread::spawn(move || hold_until_close(listener, accepted_tx));
-    (url, accepted_rx)
-}
-
 /// Reads until the client drops. The first bytes are the signal that the
 /// request was sent, which is past the point where the socket timeout is set.
 fn hold_until_close(listener: TcpListener, accepted: mpsc::Sender<()>) {
@@ -579,58 +688,84 @@ fn hold_until_close(listener: TcpListener, accepted: mpsc::Sender<()>) {
     }
 }
 
+/// An extension whose hub says registration published `timeouts`, with no
+/// thread: the test starts and parks calls itself.
+fn ready_extension(timeouts: CallbackTimeouts) -> Arc<LuaExtension> {
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        "/nonexistent-extension",
+        "/nonexistent-fiber-home",
+    ));
+    ext.hub.lock().phase = Phase::Ready(timeouts);
+    ext
+}
+
+/// Moves the queued call to `name` onto the thread, as the scheduler does,
+/// with `deadline`. `parked` as `settle` leaves a call on `host.http`.
+fn start_queued(shared: &mut Shared, name: &str, deadline: Instant, parked: bool) {
+    let pos = shared
+        .queue
+        .iter()
+        .position(|job| job.target.to_string() == name)
+        .unwrap_or_else(|| panic!("{name} is not queued"));
+    let job = shared.queue.remove(pos).unwrap();
+    shared.calls.insert(
+        job.id,
+        Progress::Started {
+            deadline: Some(deadline),
+            parked,
+        },
+    );
+}
+
 /// When a running callback abandons the VM, every other waiter, queued or
 /// parked, command or provider call, gets `Stopped` at once rather than at
-/// its own deadline.
+/// its own deadline, and so does the next caller. The test plays the
+/// thread: the running call's deadline and grace are long past and every
+/// other deadline is far ahead, so no clock decides the outcome.
 #[test]
 fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
-    let (park_url, park_accepted) = hold_server();
-    let (models_url, models_accepted) = hold_server();
-    let dir = extension(
-        "abandon",
-        &format!(
-            "fiber.command(\"park\", {{ timeout = 8000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
-             fiber.command(\"queued\", {{ timeout = 8000, run = function() return \"ran\" end }})\n\
-             fiber.provider(\"p\", {{\n\
-               models = {{ timeout = 8000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
-               sign = {{ timeout = 50, run = function() setmetatable({{}}, {{ __gc = function() while true do end end }}); collectgarbage() end }},\n\
-             }})\n"
-        ),
+    let minute = Duration::from_secs(60);
+    let mut timeouts = CallbackTimeouts::default();
+    for name in ["park", "queued"] {
+        timeouts.commands.insert(name.to_owned(), minute);
+    }
+    timeouts.providers.insert(
+        "p".to_owned(),
+        BTreeMap::from([("models".to_owned(), minute), ("sign".to_owned(), minute)]),
     );
-    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let ext = ready_extension(timeouts);
     let (tx, rx) = mpsc::channel();
     let run = |what: &'static str, f: fn(&LuaExtension) -> Result<Value, Error>| {
         let (ext, tx) = (Arc::clone(&ext), tx.clone());
         thread::spawn(move || tx.send((what, f(&ext))));
     };
     run("park", |e| e.command("park", "").map(Value::String));
-    park_accepted
-        .recv_timeout(Duration::from_secs(10))
-        .expect("park never reached the server");
     run("models", |e| e.provider_call("p", "models", Value::Null));
-    models_accepted
-        .recv_timeout(Duration::from_secs(10))
-        .expect("models never reached the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
-    assert!(
-        until(&ext.hub, |s| {
-            parked(s) == 2 && command_queued(s, "queued") == 1
-        }),
-        "the queued command was not waiting when the VM was abandoned"
-    );
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
+    assert!(
+        until(&ext.hub, |s| s.queue.len() == 4),
+        "the four calls were not queued"
+    );
+    {
+        let mut shared = ext.hub.lock();
+        let ahead = Instant::now() + minute;
+        start_queued(&mut shared, "park", ahead, true);
+        start_queued(&mut shared, "p.models", ahead, true);
+        start_queued(&mut shared, "p.sign", ago(60_000), false);
+    }
+    ext.hub.notify();
     let mut seen = BTreeMap::new();
     for _ in 0..4 {
-        let (what, result) = rx
-            .recv_timeout(Duration::from_secs(10))
-            .expect("a waiter did not return");
+        let (what, result) = rx.recv_timeout(WAIT).expect("a waiter did not return");
         seen.insert(what, result.unwrap_err());
     }
-    assert!(
-        matches!(seen["sign"], Error::Abandoned { .. }),
-        "{:?}",
-        seen["sign"]
-    );
+    let Error::Abandoned { callback, .. } = &seen["sign"] else {
+        panic!("{:?}", seen["sign"])
+    };
+    assert_eq!(callback, "p.sign");
+    assert_eq!(seen["sign"].code(), ErrorCode::ExtensionFailed);
     for what in ["park", "models", "queued"] {
         assert!(
             matches!(seen[what], Error::Stopped { .. }),
@@ -639,7 +774,11 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         );
     }
     assert!(!ext.is_running());
-    std::fs::remove_dir_all(&dir).unwrap();
+    let err = start(&ext, "queued")
+        .recv_timeout(WAIT)
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
 }
 
 /// A call that finds no thread started fails rather than wait forever.
@@ -919,25 +1058,31 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
 }
 
 /// The verify-3 hang: an entry script the hook cannot stop, with two calls
-/// waiting on it. Both get `Abandoned` past its deadline and grace, neither
-/// waits forever, and a later call gets it at once.
+/// waiting on it. Both get `Abandoned` once its grace ends, neither waits
+/// forever, and a later call gets it at once. The test plays the thread:
+/// registration's grace ends when the test moves it into the past, so no
+/// clock decides the outcome. That the hook cannot stop such a script is
+/// `the_hook_stops_a_loop_but_not_a_finalizer_or_a_long_c_call`.
 #[test]
 fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
-    let dir = extension(
-        "gc-hang",
-        "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
-    );
-    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        "/nonexistent-extension",
+        "/nonexistent-fiber-home",
+    ));
+    ext.hub.lock().phase = Phase::Registering {
+        abandon_at: Some(Instant::now() + Duration::from_secs(60)),
+    };
     let first = start(&ext, "a");
-    assert!(
-        until(&ext.hub, |s| queued_during_registration(s, &["a"])),
-        "the first call was not queued during registration"
-    );
     let second = start(&ext, "b");
     assert!(
-        until(&ext.hub, |s| queued_during_registration(s, &["a", "b"])),
-        "the second call was not queued during registration"
+        until(&ext.hub, |s| s.queue.len() == 2),
+        "the two calls were not queued during registration"
     );
+    ext.hub.lock().phase = Phase::Registering {
+        abandon_at: Some(ago(1)),
+    };
+    ext.hub.notify();
     for waiter in [first, second] {
         let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
         let Error::Abandoned { callback, .. } = &err else {
@@ -948,7 +1093,6 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
     assert!(!ext.is_running());
     let err = start(&ext, "a").recv_timeout(WAIT).unwrap().unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// An entry script that errors stops the extension with its error, for

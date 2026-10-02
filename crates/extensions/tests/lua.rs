@@ -171,37 +171,6 @@ fn a_wrapped_coroutine_still_yields_values() {
 }
 
 #[test]
-fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
-    let ext = fixture();
-    for _ in 0..2 {
-        let err = call(&ext, "grow", "").unwrap_err();
-        let Error::Lua { message, .. } = &err else {
-            panic!("{err:?}")
-        };
-        assert!(message.contains("not enough memory"), "{message}");
-        assert_eq!(call(&ext, "echo", "alive").unwrap(), "alive");
-    }
-}
-
-#[test]
-fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
-    for command in ["spin_gc", "spin_find"] {
-        let ext = fixture();
-        let err = call(&ext, command, "").unwrap_err();
-        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
-        let Error::Abandoned { callback, .. } = &err else {
-            panic!("{command}: {err:?}")
-        };
-        assert_eq!(callback, command);
-        assert!(!ext.is_running());
-        let err = call(&ext, "echo", "").unwrap_err();
-        assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
-        // The rest of the session goes on: another extension still runs.
-        assert_eq!(call(&fixture(), "echo", "on").unwrap(), "on");
-    }
-}
-
-#[test]
 fn a_lua_error_releases_the_extensions_lock() {
     let ext = fixture();
     assert!(matches!(call(&ext, "fail", ""), Err(Error::Lua { .. })));
@@ -211,53 +180,6 @@ fn a_lua_error_releases_the_extensions_lock() {
     std::thread::spawn(move || tx.send(other.is_running()));
     assert_eq!(rx.recv_timeout(WAIT), Ok(true));
     assert_eq!(call(&ext, "echo", "free").unwrap(), "free");
-}
-
-#[test]
-fn a_module_larger_than_the_memory_cap_is_not_read() {
-    let setup = Setup::new();
-    let dir = setup.home().join("ext");
-    write(&dir.join("init.lua"), "local m = require(\"big\")\n");
-    let big = std::fs::File::create(dir.join("big.lua")).unwrap();
-    big.set_len(u64::try_from(extensions::MEMORY_CAP).unwrap() + 1)
-        .unwrap();
-
-    let err = call(
-        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
-        "x",
-        "",
-    )
-    .unwrap_err();
-    let Error::Lua { message, .. } = &err else {
-        panic!("{err:?}")
-    };
-    assert!(
-        message.starts_with("init.lua:1: `big.lua` is larger than"),
-        "{message}"
-    );
-    assert!(message.contains("memory cap"), "{message}");
-}
-
-#[test]
-fn a_module_exactly_the_memory_cap_is_read() {
-    let setup = Setup::new();
-    let dir = setup.home().join("ext");
-    write(&dir.join("init.lua"), "local m = require(\"big\")\n");
-    let big = std::fs::File::create(dir.join("big.lua")).unwrap();
-    big.set_len(u64::try_from(extensions::MEMORY_CAP).unwrap())
-        .unwrap();
-
-    // Read and compiled: its zero bytes are not Lua.
-    let err = call(
-        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
-        "x",
-        "",
-    )
-    .unwrap_err();
-    let Error::Lua { message, .. } = &err else {
-        panic!("{err:?}")
-    };
-    assert!(message.starts_with("init.lua:1: big.lua:"), "{message}");
 }
 
 /// An entry script the hook stops at its deadline stops the extension with
