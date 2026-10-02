@@ -215,8 +215,10 @@ impl LuaExtension {
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
         let id = shared.push(target.clone(), arg, asked);
+        // Only a change wakes the others: a waiter that notified on every
+        // wake would keep every other waiter spinning.
+        self.hub.notify();
         loop {
-            self.hub.notify();
             match shared.judge(&self.name, id, &target, asked) {
                 Next::Return(result) => {
                     self.hub.notify();
