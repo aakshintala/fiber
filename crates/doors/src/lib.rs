@@ -85,15 +85,20 @@ pub struct InstallSummary {
     pub name: String,
     /// Where it is installed from.
     pub source: String,
+    /// Its version.
+    pub version: String,
+    /// For an update, what changed since the installed commit.
+    pub changes: Option<String>,
     /// Each provider it registers, with its models' base URLs.
     pub providers: Vec<(String, Vec<String>)>,
 }
 
 /// Whether `fiber install` goes ahead (`docs/extensions.md`, "Installing"):
-/// in a terminal it writes `summary` to `out` and asks, and only `y` or
-/// `yes` goes ahead; without a terminal it goes ahead without asking.
+/// in a terminal it writes each of `summaries` to `out` and asks once, and
+/// only `y` or `yes` goes ahead; without a terminal it goes ahead without
+/// asking.
 pub fn install_approved(
-    summary: &InstallSummary,
+    summaries: &[InstallSummary],
     terminal: bool,
     input: &mut dyn BufRead,
     out: &mut dyn Write,
@@ -102,14 +107,31 @@ pub fn install_approved(
         return Ok(true);
     }
     let io = |e: io::Error| failure(ErrorCode::IoFailed, format!("the terminal: {e}"));
-    let mut text = format!("Install {} from {}\n", summary.name, summary.source);
-    if summary.providers.is_empty() {
-        text.push_str("It registers no provider.\n");
+    let mut text = String::new();
+    for summary in summaries {
+        let verb = if summary.changes.is_some() {
+            "Update"
+        } else {
+            "Install"
+        };
+        text.push_str(&format!(
+            "{verb} {} from {}\nVersion {}\n",
+            summary.name, summary.source, summary.version
+        ));
+        if let Some(changes) = &summary.changes {
+            text.push_str(&format!("Changes since the installed commit:\n{changes}"));
+            if !changes.ends_with('\n') {
+                text.push('\n');
+            }
+        }
+        if summary.providers.is_empty() {
+            text.push_str("It registers no provider.\n");
+        }
+        for (provider, urls) in &summary.providers {
+            text.push_str(&format!("Provider {provider}: {}\n", urls.join(", ")));
+        }
     }
-    for (provider, urls) in &summary.providers {
-        text.push_str(&format!("Provider {provider}: {}\n", urls.join(", ")));
-    }
-    text.push_str("Install it? [y/N] ");
+    text.push_str("Go ahead? [y/N] ");
     out.write_all(text.as_bytes())
         .and_then(|()| out.flush())
         .map_err(io)?;

@@ -9,7 +9,7 @@
 )]
 
 use std::fmt::Display;
-use std::io::{self, IsTerminal};
+use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
@@ -19,7 +19,7 @@ use contract::provider::Provider;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
 use doors::{Session, failure};
-use extensions::Providers;
+use extensions::{Origin, Providers, Request};
 use log::Log;
 use r#loop::Loop;
 use provider::anthropic_messages::Messages;
@@ -54,28 +54,40 @@ fn run() -> i32 {
     };
     match args.split_first() {
         Some((door, rest)) if door == "ask" => ask(rest),
-        Some((command, rest)) if command == "install" => install(rest),
+        Some((command, rest)) if command == "install" || command == "update" => {
+            install(command, rest)
+        }
+        Some((command, rest)) if command == "remove" => remove(rest),
+        Some((command, rest)) if command == "list" => list(rest),
         // The terminal door needs a tty and the hub; neither is built, so
         // every other invocation is called wrongly.
         Some(_) | None => {
-            let message = "Usage: fiber ask [--model <model>] \"<prompt>\", fiber ask < <file>, or fiber install <path>.";
+            let message = "Usage: fiber ask [--model <model>] \"<prompt>\", fiber ask < <file>, fiber install <name or path>, fiber update <name>, fiber remove <name>, or fiber list.";
             eprintln!("fiber: {message}");
             2
         }
     }
 }
 
-/// `fiber install <path>`: installs the extension at a local path into Fiber
-/// home, after showing what it registers and asking when stdin is a
-/// terminal (`docs/extensions.md`, "Installing"), and prints its name.
-fn install(args: &[String]) -> i32 {
-    let installed = match args {
-        [path] => install_path(Path::new(path)),
-        _ => Err(usage("Usage: fiber install <path>.")),
+/// `fiber install <name or path>` and `fiber update <name>`: fetches and
+/// checks the extension and its dependencies, shows what they register and
+/// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
+/// prints each name installed.
+fn install(command: &str, args: &[String]) -> i32 {
+    let installed = match (command, args) {
+        ("install", [typed]) if extensions::is_path(typed) => {
+            install_request(Request::Path(PathBuf::from(typed)))
+        }
+        ("install", [typed]) => install_request(Request::Install(typed.clone())),
+        ("update", [typed]) => install_request(Request::Update(typed.clone())),
+        ("install", _) => Err(usage("Usage: fiber install <name or path>.")),
+        _ => Err(usage("Usage: fiber update <name>.")),
     };
     match installed {
-        Ok(Some(name)) => {
-            eprintln!("fiber: installed {name}");
+        Ok(Some(names)) => {
+            for name in names {
+                eprintln!("fiber: installed {name}");
+            }
             0
         }
         Ok(None) => {
@@ -89,32 +101,90 @@ fn install(args: &[String]) -> i32 {
     }
 }
 
-/// Installs from `source` once approved; `None` when the person declined.
-fn install_path(source: &Path) -> Result<Option<String>, Failure> {
+/// Installs what `request` needs once approved; `None` when the person
+/// declined.
+fn install_request(request: Request) -> Result<Option<Vec<String>>, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let manifest = config::read_manifest(source).map_err(|e| failed(e.code(), e))?;
-    let providers = config::read_providers(source).map_err(|e| failed(e.code(), e))?;
-    let summary = doors::InstallSummary {
-        name: manifest.name,
-        source: source.display().to_string(),
-        providers: providers
-            .into_iter()
-            .map(|p| {
-                let mut urls: Vec<String> = p.models.into_iter().map(|m| m.base_url).collect();
-                urls.sort();
-                urls.dedup();
-                (p.name, urls)
-            })
-            .collect(),
-    };
+    let plan = extensions::plan(
+        &home,
+        &request,
+        env!("CARGO_PKG_VERSION"),
+        &Origin::github(),
+    )
+    .map_err(|e| failed(e.code(), e))?;
+    let summaries: Vec<doors::InstallSummary> = plan
+        .items()
+        .map(|item| doors::InstallSummary {
+            name: item.name.clone(),
+            source: item.source.clone(),
+            version: item.version.clone(),
+            changes: item.changes.clone(),
+            providers: item
+                .providers
+                .iter()
+                .map(|p| {
+                    let mut urls: Vec<String> =
+                        p.models.iter().map(|m| m.base_url.clone()).collect();
+                    urls.sort();
+                    urls.dedup();
+                    (p.name.clone(), urls)
+                })
+                .collect(),
+        })
+        .collect();
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
-    if !doors::install_approved(&summary, terminal, &mut stdin.lock(), &mut io::stderr())? {
+    if !doors::install_approved(&summaries, terminal, &mut stdin.lock(), &mut io::stderr())? {
         return Ok(None);
     }
-    extensions::install(&home, source, env!("CARGO_PKG_VERSION"))
-        .map(Some)
+    plan.commit().map(Some).map_err(|e| failed(e.code(), e))
+}
+
+/// `fiber remove <name>`: removes an extension and the dependencies nothing
+/// else uses.
+fn remove(args: &[String]) -> i32 {
+    let [typed] = args else {
+        return fail(usage("Usage: fiber remove <name>."));
+    };
+    let removed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
+        .and_then(|home| extensions::uninstall(&home, typed).map_err(|e| failed(e.code(), e)));
+    match removed {
+        Ok(names) => {
+            for name in names {
+                eprintln!("fiber: removed {name}");
+            }
+            0
+        }
+        Err(e) => fail(e),
+    }
+}
+
+/// `fiber list`: one line per installed extension: name, version and commit.
+fn list(args: &[String]) -> i32 {
+    if !args.is_empty() {
+        return fail(usage("Usage: fiber list."));
+    }
+    let listed = config::fiber_home_from_env()
+        .map_err(|e| failed(e.code(), e))
+        .and_then(|home| extensions::list(&home).map_err(|e| failed(e.code(), e)));
+    match listed {
+        Ok(installed) => {
+            let mut out = io::stdout().lock();
+            for i in installed {
+                let commit = i.commit.as_deref().unwrap_or("local");
+                // A closed stdout leaves nobody to tell.
+                writeln!(out, "{} {} {commit}", i.name, i.version).unwrap_or(());
+            }
+            0
+        }
+        Err(e) => fail(e),
+    }
+}
+
+fn fail(e: Failure) -> i32 {
+    eprintln!("fiber: {}", e.message);
+    doors::exit_code(&e)
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.

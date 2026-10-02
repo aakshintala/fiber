@@ -1,6 +1,6 @@
 //! Installs extensions into Fiber home and registers what they provide
 //! (`docs/extensions.md`). It holds only what a data-only provider needs:
-//! installing from a local path, reading each installed provider's data
+//! installing from a local path or from git by name, reading each installed provider's data
 //! through `config`, and choosing the session's model from them
 //! (`docs/model-routing.md`, "Naming a model" and "Choosing the model"). It
 //! also hosts the Lua runtime a Lua extension runs in (`docs/extensions.md`,
@@ -8,11 +8,14 @@
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
 //! and "Credentials").
 
+mod git;
 mod host;
 mod install;
 mod lua;
 mod lua_provider;
+mod manage;
 mod providers;
+mod resolve;
 
 use std::io;
 use std::path::PathBuf;
@@ -20,9 +23,11 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
+pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use install::install;
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
+pub use manage::{Installed, Item, Plan, Request, list, plan, uninstall};
 pub use providers::{Model, Providers};
 
 /// The extension API's major version this Fiber speaks
@@ -80,6 +85,52 @@ pub enum Error {
     BadName {
         /// The name.
         name: String,
+    },
+    /// `git` is not on the `PATH`.
+    #[error("`git` is not installed. Install git, then run the command again.")]
+    GitMissing,
+    /// A `git` command failed, such as a fetch of an unknown repository.
+    #[error("`git {command}` failed: {why}")]
+    Git {
+        /// The arguments.
+        command: String,
+        /// What `git` said.
+        why: String,
+    },
+    /// Dependents that need different major versions of one extension.
+    #[error("{a} `{name}` and {b} `{name}`: two major versions cannot both be installed.")]
+    MajorConflict {
+        /// The dependency.
+        name: String,
+        /// A dependent and the minimum it states, as "`x` needs 1.2".
+        a: String,
+        /// A dependent of another major version, likewise.
+        b: String,
+    },
+    /// No tag meets the minimums.
+    #[error("No version of `{name}` is {needs} or later.")]
+    NoVersion {
+        /// The dependency.
+        name: String,
+        /// The highest minimum asked.
+        needs: String,
+    },
+    /// The dependencies' versions kept changing one another.
+    #[error("The dependencies' versions could not be settled.")]
+    Unresolved,
+    /// An extension that is not installed.
+    #[error("`{name}` is not installed.")]
+    NotInstalled {
+        /// The name.
+        name: String,
+    },
+    /// A fetched manifest names another extension than the one asked for.
+    #[error("Fetched `{asked}`, but its manifest names `{found}`.")]
+    WrongName {
+        /// The name asked for.
+        asked: String,
+        /// The name in the manifest.
+        found: String,
     },
     /// A model reference whose provider is not installed.
     #[error("The provider `{provider}` is not installed. Run `fiber install {provider}`.")]
@@ -187,7 +238,16 @@ impl Error {
         match self {
             Self::Config(e) => e.code(),
             Self::Io { .. } => ErrorCode::IoFailed,
-            Self::Overlaps { .. } => ErrorCode::Usage,
+            Self::Overlaps { .. } | Self::GitMissing => ErrorCode::Usage,
+            Self::Git { .. } => ErrorCode::IoFailed,
+            // ponytail: docs/errors.md has no code for a dependency that
+            // cannot be met; `config_invalid` stands in until the owner
+            // names one.
+            Self::MajorConflict { .. }
+            | Self::NoVersion { .. }
+            | Self::Unresolved
+            | Self::WrongName { .. } => ErrorCode::ConfigInvalid,
+            Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
             // ponytail: docs/errors.md has no code for an extension this
             // Fiber cannot run; `usage` stands in until the owner names one.
             Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => ErrorCode::Usage,

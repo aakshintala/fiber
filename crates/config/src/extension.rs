@@ -20,10 +20,15 @@ use crate::secret::CredentialSource;
 pub struct Manifest {
     /// The extension's name, which is also where it is fetched from.
     pub name: String,
+    /// The extension's own version, such as `v1.4.0`.
+    pub version: String,
     /// The lowest Fiber version it runs on, such as `0.3.0`.
     pub fiber: String,
     /// The extension API's major version it was written for.
     pub api: u64,
+    /// The other extensions it depends on, each with a minimum version.
+    #[serde(default)]
+    pub depends: BTreeMap<String, String>,
 }
 
 /// `providers/<name>.json`: one provider an extension registers as data.

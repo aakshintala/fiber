@@ -316,6 +316,13 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::ApiVersion { .. }
         | Error::BadVersion { .. }
         | Error::BadName { .. }
+        | Error::GitMissing
+        | Error::Git { .. }
+        | Error::MajorConflict { .. }
+        | Error::NoVersion { .. }
+        | Error::Unresolved
+        | Error::NotInstalled { .. }
+        | Error::WrongName { .. }
         | Error::ProviderMissing { .. }
         | Error::ModelMissing { .. }
         | Error::UnknownModel { .. }

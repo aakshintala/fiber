@@ -60,7 +60,7 @@ impl Setup {
         let source = self.root.join("src");
         write(
             &source.join("extension.json"),
-            &json!({"name": "fake", "fiber": "0.0.0", "api": 1}),
+            &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
         write(
             &source.join("providers/fake.json"),
@@ -180,6 +180,13 @@ impl Setup {
         Run::from(output)
     }
 
+    /// Runs `fiber` with `args` and these environment variables set over its
+    /// own, stdin not a terminal.
+    fn fiber_env(&self, args: &[&str], env: &[(&str, &str)]) -> Run {
+        let home = self.home();
+        self.run(home.to_str().unwrap(), args, Stdio::null(), None, env)
+    }
+
     fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
         self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
     }
@@ -255,7 +262,8 @@ impl From<Output> for Run {
         let raw: Vec<String> = stdout.lines().map(str::to_owned).collect();
         let lines = raw
             .iter()
-            .map(|l| serde_json::from_str(l).unwrap())
+            // `fiber list` prints text; a `kind` lookup on it fails the test.
+            .map(|l| serde_json::from_str(l).unwrap_or(Value::Null))
             .collect();
         Self {
             code: output.status.code(),
@@ -568,7 +576,7 @@ fn go_exchange() -> [Response; 2] {
 fn install(setup: &Setup, path: &Path) {
     let run = setup.fiber(&["install", path.to_str().unwrap()], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(!run.stderr.contains("Install it?"), "{}", run.stderr);
+    assert!(!run.stderr.contains("Go ahead?"), "{}", run.stderr);
 }
 
 #[test]
@@ -590,11 +598,57 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
         run.stderr,
         format!(
             "Install github.com/aakshintala/fiber/providers/opencode from {path}\n\
+             Version 0.0.0\n\
              Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
-             Install it? [y/N] fiber: installed github.com/aakshintala/fiber/providers/opencode\n"
+             Go ahead? [y/N] fiber: installed github.com/aakshintala/fiber/providers/opencode\n"
         )
     );
     assert!(installed.join("providers/opencode.json").is_file());
+}
+
+#[test]
+fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
+    let setup = Setup::new();
+    let muse = package("muse");
+    install(&setup, &muse);
+    let name = "github.com/aakshintala/fiber/providers/muse";
+    let listed = setup.fiber(&["list"], None);
+    assert_eq!(listed.code, Some(0), "stderr: {}", listed.stderr);
+    assert_eq!(listed.raw, [format!("{name} 0.0.0 local")]);
+    let removed = setup.fiber(&["remove", "muse"], None);
+    assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
+    assert_eq!(removed.stderr, format!("fiber: removed {name}\n"));
+    assert!(setup.fiber(&["list"], None).raw.is_empty());
+    let again = setup.fiber(&["remove", "muse"], None);
+    assert_eq!(again.code, Some(1));
+    assert!(
+        again.stderr.contains("is not installed"),
+        "{}",
+        again.stderr
+    );
+}
+
+#[test]
+fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
+    let setup = Setup::new();
+    let run = setup.fiber_env(&["install", "openrouter"], &[("PATH", "")]);
+    assert_eq!(run.code, Some(2), "{}", run.stderr);
+    assert!(run.stderr.contains("Install git"), "{}", run.stderr);
+}
+
+#[test]
+fn the_extension_commands_take_their_arguments() {
+    let setup = Setup::new();
+    for args in [
+        vec!["install"],
+        vec!["install", "a", "b"],
+        vec!["update"],
+        vec!["remove"],
+        vec!["list", "x"],
+    ] {
+        let run = setup.fiber(&args, None);
+        assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
+    }
 }
 
 /// Asserts a completed turn that answered the weather question.
@@ -781,13 +835,13 @@ fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
 }
 
 #[test]
-fn install_takes_one_path() {
+fn install_takes_one_name_or_path() {
     let setup = Setup::new();
     for args in [&["install"][..], &["install", "a", "b"][..]] {
         let run = setup.fiber(args, None);
         assert_eq!(run.code, Some(2));
         assert!(
-            run.stderr.contains("fiber install <path>"),
+            run.stderr.contains("fiber install <name or path>"),
             "{}",
             run.stderr
         );

@@ -31,6 +31,10 @@ impl Setup {
         self.root.join("home")
     }
 
+    pub(crate) fn root(&self) -> PathBuf {
+        self.root.clone()
+    }
+
     pub(crate) fn workspace(&self) -> PathBuf {
         self.root.join("workspace")
     }

@@ -290,6 +290,8 @@ fn summary() -> InstallSummary {
     InstallSummary {
         name: "github.com/aakshintala/fiber/providers/opencode".into(),
         source: "/src/opencode".into(),
+        version: "v1.2.0".into(),
+        changes: None,
         providers: vec![(
             "opencode".into(),
             vec![
@@ -310,13 +312,14 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
         ("", false),
     ] {
         let mut out = Vec::new();
-        let ok = install_approved(&summary(), true, &mut answer.as_bytes(), &mut out).unwrap();
+        let ok = install_approved(&[summary()], true, &mut answer.as_bytes(), &mut out).unwrap();
         assert_eq!(ok, approved, "answer {answer:?}");
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "Install github.com/aakshintala/fiber/providers/opencode from /src/opencode\n\
+             Version v1.2.0\n\
              Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
-             Install it? [y/N] "
+             Go ahead? [y/N] "
         );
     }
     let none = InstallSummary {
@@ -324,7 +327,7 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
         ..summary()
     };
     let mut out = Vec::new();
-    install_approved(&none, true, &mut "y\n".as_bytes(), &mut out).unwrap();
+    install_approved(&[none], true, &mut "y\n".as_bytes(), &mut out).unwrap();
     assert!(
         String::from_utf8(out)
             .unwrap()
@@ -335,6 +338,33 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
 #[test]
 fn an_install_without_a_terminal_goes_ahead_without_asking() {
     let mut out = Vec::new();
-    assert!(install_approved(&summary(), false, &mut "n\n".as_bytes(), &mut out).unwrap());
+    assert!(install_approved(&[summary()], false, &mut "n\n".as_bytes(), &mut out).unwrap());
     assert!(out.is_empty());
+}
+
+#[test]
+fn a_summary_of_several_extensions_asks_once_and_an_update_shows_its_changes() {
+    let update = InstallSummary {
+        changes: Some(" b.lua | 1 +\n".into()),
+        ..summary()
+    };
+    let dep = InstallSummary {
+        name: "github.com/acme/dep".into(),
+        version: "v1.4.0".into(),
+        providers: Vec::new(),
+        ..summary()
+    };
+    let mut out = Vec::new();
+    install_approved(&[update, dep], true, &mut "y\n".as_bytes(), &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Update github.com/aakshintala/fiber/providers/opencode from /src/opencode\n\
+         Version v1.2.0\n\
+         Changes since the installed commit:\n b.lua | 1 +\n\
+         Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
+         Install github.com/acme/dep from /src/opencode\n\
+         Version v1.4.0\n\
+         It registers no provider.\n\
+         Go ahead? [y/N] "
+    );
 }
