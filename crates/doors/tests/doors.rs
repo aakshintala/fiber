@@ -24,6 +24,7 @@ use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
 use doors::{
     InstallSummary, Session, exit_before_session, failure, install_approved, mint, project, prompt,
+    remove_approved,
 };
 use log::Log;
 use serde_json::Value;
@@ -290,6 +291,12 @@ fn summary() -> InstallSummary {
     InstallSummary {
         name: "github.com/aakshintala/fiber/providers/opencode".into(),
         source: "/src/opencode".into(),
+        version: "v1.2.0".into(),
+        changes: None,
+        process: None,
+        install_step: None,
+        carries: Vec::new(),
+        staged: PathBuf::from("/nonexistent-staged"),
         providers: vec![(
             "opencode".into(),
             vec![
@@ -310,13 +317,14 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
         ("", false),
     ] {
         let mut out = Vec::new();
-        let ok = install_approved(&summary(), true, &mut answer.as_bytes(), &mut out).unwrap();
+        let ok = install_approved(&[summary()], true, &mut answer.as_bytes(), &mut out).unwrap();
         assert_eq!(ok, approved, "answer {answer:?}");
         assert_eq!(
             String::from_utf8(out).unwrap(),
             "Install github.com/aakshintala/fiber/providers/opencode from /src/opencode\n\
+             Version v1.2.0\n\
              Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
-             Install it? [y/N] "
+             Go ahead? [y/N/s to show the full source] "
         );
     }
     let none = InstallSummary {
@@ -324,7 +332,7 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
         ..summary()
     };
     let mut out = Vec::new();
-    install_approved(&none, true, &mut "y\n".as_bytes(), &mut out).unwrap();
+    install_approved(&[none], true, &mut "y\n".as_bytes(), &mut out).unwrap();
     assert!(
         String::from_utf8(out)
             .unwrap()
@@ -335,6 +343,123 @@ fn an_install_in_a_terminal_shows_its_summary_and_goes_ahead_only_on_yes() {
 #[test]
 fn an_install_without_a_terminal_goes_ahead_without_asking() {
     let mut out = Vec::new();
-    assert!(install_approved(&summary(), false, &mut "n\n".as_bytes(), &mut out).unwrap());
+    assert!(install_approved(&[summary()], false, &mut "n\n".as_bytes(), &mut out).unwrap());
+    assert!(out.is_empty());
+}
+
+#[test]
+fn a_summary_of_several_extensions_asks_once_and_an_update_shows_its_changes() {
+    let update = InstallSummary {
+        changes: Some(" b.lua | 1 +\n".into()),
+        ..summary()
+    };
+    let dep = InstallSummary {
+        name: "github.com/acme/dep".into(),
+        version: "v1.4.0".into(),
+        providers: Vec::new(),
+        ..summary()
+    };
+    let mut out = Vec::new();
+    install_approved(&[update, dep], true, &mut "y\n".as_bytes(), &mut out).unwrap();
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        "Update github.com/aakshintala/fiber/providers/opencode from /src/opencode\n\
+         Version v1.2.0\n\
+         Changes since the installed commit:\n b.lua | 1 +\n\
+         Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
+         Install github.com/acme/dep from /src/opencode\n\
+         Version v1.4.0\n\
+         It registers no provider.\n\
+         Go ahead? [y/N/s to show the full source] "
+    );
+}
+
+#[test]
+fn a_summary_shows_the_program_the_install_step_and_what_the_package_carries() {
+    let full = InstallSummary {
+        process: Some("node dist/main.js".into()),
+        install_step: Some("npm ci".into()),
+        carries: vec!["skills: plan, review".into(), "themes: dark.json".into()],
+        ..summary()
+    };
+    let mut out = Vec::new();
+    install_approved(&[full], true, &mut "n\n".as_bytes(), &mut out).unwrap();
+    let text = String::from_utf8(out).unwrap();
+    for line in [
+        "Runs the program: node dist/main.js\n",
+        "Install step, run now and at every update: npm ci\n",
+        "Its dependencies' own install scripts run too.\n",
+        "Carries skills: plan, review\n",
+        "Carries themes: dark.json\n",
+    ] {
+        assert!(text.contains(line), "{line:?} in {text}");
+    }
+    let plain = String::from_utf8({
+        let mut out = Vec::new();
+        install_approved(&[summary()], true, &mut "n\n".as_bytes(), &mut out).unwrap();
+        out
+    })
+    .unwrap();
+    assert!(
+        !plain.contains("Install step") && !plain.contains("Carries"),
+        "{plain}"
+    );
+}
+
+#[test]
+fn the_s_key_shows_every_staged_file_and_asks_again() {
+    let dir = std::env::temp_dir().join(format!("fiber-doors-source-{}", std::process::id()));
+    fs::remove_dir_all(&dir).unwrap_or(());
+    fs::create_dir_all(dir.join("lib")).unwrap();
+    fs::write(dir.join("extension.json"), "{}").unwrap();
+    fs::write(dir.join("lib/a.lua"), "return 1\n").unwrap();
+    fs::write(dir.join("blob"), [0xff, 0xfe, 0xfd]).unwrap();
+    let shown = InstallSummary {
+        staged: dir.clone(),
+        ..summary()
+    };
+    let mut out = Vec::new();
+    let ok = install_approved(&[shown], true, &mut "s\ny\n".as_bytes(), &mut out).unwrap();
+    assert!(ok);
+    let text = String::from_utf8(out).unwrap();
+    let prompt = "Go ahead? [y/N/s to show the full source] ";
+    assert_eq!(text.matches(prompt).count(), 2, "{text}");
+    let shown_at = text
+        .find("=== github.com/aakshintala/fiber/providers/opencode")
+        .unwrap();
+    let after = &text[shown_at..];
+    assert!(after.contains("--- extension.json\n{}\n"), "{after}");
+    assert!(after.contains("--- lib/a.lua\nreturn 1\n"), "{after}");
+    assert!(after.contains("--- blob (3 bytes, not text)\n"), "{after}");
+    assert!(after.find("--- blob").unwrap() < after.find("--- extension.json").unwrap());
+    // `s` then no is still no, and nothing else asks again.
+    let mut out = Vec::new();
+    let shown = InstallSummary {
+        staged: dir.clone(),
+        ..summary()
+    };
+    assert!(!install_approved(&[shown], true, &mut "s\nn\n".as_bytes(), &mut out).unwrap());
+    fs::remove_dir_all(&dir).unwrap_or(());
+}
+
+#[test]
+fn a_remove_in_a_terminal_lists_what_it_deletes_and_goes_ahead_only_on_yes() {
+    let names = vec![
+        "github.com/acme/x".to_owned(),
+        "github.com/acme/dep".to_owned(),
+    ];
+    let data = vec![PathBuf::from("/h/data/github.com-acme-x")];
+    for (answer, approved) in [("y\n", true), ("yes\n", true), ("n\n", false), ("", false)] {
+        let mut out = Vec::new();
+        let ok = remove_approved(&names, &data, true, &mut answer.as_bytes(), &mut out).unwrap();
+        assert_eq!(ok, approved, "{answer:?}");
+        assert_eq!(
+            String::from_utf8(out).unwrap(),
+            "Remove github.com/acme/x\nRemove github.com/acme/dep\n\
+             Delete /h/data/github.com-acme-x\nGo ahead? [y/N] "
+        );
+    }
+    let mut out = Vec::new();
+    assert!(remove_approved(&names, &data, false, &mut "n\n".as_bytes(), &mut out).unwrap());
     assert!(out.is_empty());
 }
