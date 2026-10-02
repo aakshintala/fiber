@@ -148,7 +148,7 @@ fn a_token_far_from_expiry_is_reused() {
         let provider = Arc::clone(&provider);
         assert_eq!(within(move || provider.token()).unwrap().expose(), "t1");
     }
-    std::thread::sleep(Duration::from_millis(50));
+    // `token` returns only after the server has recorded the request.
     assert_eq!(server.requests().len(), 1);
     let request = &server.requests()[0];
     assert_eq!(
