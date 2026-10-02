@@ -117,7 +117,7 @@ network (`docs/testing.md`).
 
 ## The docs check
 
-`scripts/check-docs` checks `docs/`, `CONTEXT.md`, `AGENTS.md` and
+`scripts/check-docs` checks `docs/`, `GLOSSARY.md`, `AGENTS.md` and
 `README.md`, offline. It fails when:
 
 - a relative Markdown link, or its `#anchor`, does not resolve

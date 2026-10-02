@@ -5,7 +5,7 @@ This is what is true now, not a plan. It is settled by
 [Testing posture: what a test asserts, and against what](https://github.com/aakshintala/fiber/issues/63);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. The event stream is `docs/events.md`; the crates
+Vocabulary is `GLOSSARY.md`. The event stream is `docs/events.md`; the crates
 are `docs/architecture.md`. Which CI jobs run on which runners is
 `docs/ci.md`. Latency, memory and
 storage budgets are

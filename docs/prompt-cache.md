@@ -6,7 +6,7 @@ input price or less. A request whose bytes differ from some point on pays full
 price, or more, for everything after that point. Fiber keeps those bytes stable
 by design, and every change to them is a named event in the session log.
 
-Vocabulary is `CONTEXT.md`: prompt cache, preamble, session, turn, step.
+Vocabulary is `GLOSSARY.md`: prompt cache, preamble, session, turn, step.
 
 ## What a request is built from
 

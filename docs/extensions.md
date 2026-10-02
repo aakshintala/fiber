@@ -1,6 +1,6 @@
 # Extensions
 
-What is true now about Fiber's extension system. Vocabulary is `CONTEXT.md`.
+What is true now about Fiber's extension system. Vocabulary is `GLOSSARY.md`.
 The seams are `docs/architecture.md`; the runtime choice and its reasoning are
 [ADR 0006](adr/0006-extension-runtime-lua.md); the trust model is
 `docs/permissions.md`. The measurements behind all of it are in

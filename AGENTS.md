@@ -5,7 +5,7 @@ matches the work before starting it.
 
 - How a ticket becomes a merged pull request: `docs/workflow.md`. Every code
   change passes `scripts/check` before a pull request opens.
-- Vocabulary: `CONTEXT.md`. Use its terms in code, docs and issues.
+- Vocabulary: `GLOSSARY.md`. Use its terms in code, docs and issues.
 - What each area does: `docs/<area>.md`. The crates and their boundaries:
   `docs/architecture.md`. Decisions: `docs/adr/`.
 - Tests: `docs/testing.md`. Code rules: `docs/code-quality.md`. Crates and

@@ -7,7 +7,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 How pi, codex and Claude Code run a turn is
 [research/the-turn/README.md](../research/the-turn/README.md).
 
-Vocabulary is `CONTEXT.md`. Turn, step, action, tool call and event mean what
+Vocabulary is `GLOSSARY.md`. Turn, step, action, tool call and event mean what
 it says there and nothing else. The threads and the inbox are
 `docs/architecture.md`, "Concurrency"; the events are `docs/events.md`.
 

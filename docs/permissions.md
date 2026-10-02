@@ -5,7 +5,7 @@ is what is true now, not a plan. It is settled by
 [Permissions and approvals, attended and headless](https://github.com/aakshintala/fiber/issues/13);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Effect, workspace, reviewer, standing rule, session
+Vocabulary is `GLOSSARY.md`. Effect, workspace, reviewer, standing rule, session
 grant, watcher, driver, participant, tool call and event mean what it says
 there and nothing else. The request and reply events themselves are
 `docs/events.md`; this page is only the policy over them.

@@ -5,7 +5,7 @@ gets its result. This is what is true now, not a plan. It is settled by
 [Subagents and delegates: one delegate, on one stream](https://github.com/aakshintala/fiber/issues/21);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Delegate, harness, fork, job, session, steering
+Vocabulary is `GLOSSARY.md`. Delegate, harness, fork, job, session, steering
 message and step boundary mean what it says there and nothing else. Job
 behaviour is `docs/tools.md`, "Background jobs"; the events are
 `docs/events.md`.
