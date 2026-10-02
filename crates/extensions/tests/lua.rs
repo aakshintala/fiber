@@ -30,6 +30,10 @@ const LOAD: Duration = Duration::from_secs(2);
 /// (`docs/extensions.md`).
 const GRACE: Duration = Duration::from_secs(1);
 
+/// A callback timeout whose `host.http` must stay open across [`WAIT`].
+/// ureq's bound is this plus the grace, and that bound is wall time.
+const HOLD_MS: u64 = 180_000;
+
 fn fixture() -> Arc<LuaExtension> {
     extension(
         "fixture",
@@ -87,26 +91,26 @@ fn read_head(sock: &mut impl Read) {
 
 /// `require("hold")` blocks in the loader's read of this fifo. The receiver
 /// fires once that read has opened the file, which is after the VM's last
-/// clock check: the instruction hook does not run during the read.
+/// clock check: the instruction hook does not run during the read. Sending
+/// on the returned sender, or dropping it, ends the read.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn hold_open(dir: &std::path::Path) -> mpsc::Receiver<()> {
+fn hold_open(dir: &std::path::Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     let path = dir.join("hold.lua");
     let made = std::process::Command::new("mkfifo").arg(&path).status();
     assert!(made.unwrap().success(), "mkfifo {path:?}");
     let (tx, rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
     std::thread::spawn(move || {
         let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        // Held open so the loader's read does not see end of file.
-        let (_lock_tx, lock_rx) = mpsc::channel::<()>();
-        match lock_rx.recv() {
+        match release_rx.recv() {
             Ok(()) | Err(mpsc::RecvError) => {}
         }
         drop(held);
     });
-    rx
+    (rx, release_tx)
 }
 
 /// True once `count` threads are parked in `wait_until` at `until`.
@@ -314,7 +318,7 @@ fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
                 "fiber.command(\"{command}\", {{ timeout = 50, run = function()\n{body}end }})\n"
             ),
         );
-        let held = hold_open(&dir);
+        let (held, _release) = hold_open(&dir);
         let clock = FakeClock::new();
         let ext = extension("ext", dir, setup.home(), clock.clone());
         let asked = clock.now();
@@ -414,7 +418,7 @@ fn a_second_command_waits_until_the_parked_command_finishes() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"first\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"first\", {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n\
              fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
         ),
@@ -456,7 +460,7 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
         &dir.join("init.lua"),
         &format!(
             "seen = \"no\"\n\
-             fiber.command(\"slow\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"slow\", {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.command(\"quick\", {{ timeout = 300, run = function() seen = \"yes\"; return \"ran\" end }})\n\
              fiber.command(\"after\", {{ timeout = 1000, run = function() return seen end }})\n"
         ),
@@ -500,15 +504,10 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
 #[test]
 fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let setup = Setup::new();
-    let reg = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let work = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let reg_url = format!("http://{}/", reg.local_addr().unwrap());
     let work_url = format!("http://{}/", work.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
     let (work_ok_tx, _work_ok_rx) = mpsc::channel();
     let (work_release_tx, work_release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_when_released(reg, accepted_tx, release_rx));
     std::thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 2));
     // A call that ignores time spent registering runs `work` and gets an
     // answer at once, so the timeout assertion fails.
@@ -517,17 +516,20 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "host.http({{ url = \"{reg_url}\" }})\n\
+            "require(\"hold\")\n\
              fiber.command(\"work\", {{ timeout = 1000, run = function() return host.http({{ url = \"{work_url}\" }}).body end }})\n"
         ),
     );
+    // The entry script's own `host.http` is bounded by the 2s load deadline
+    // plus the grace, as wall time. A fifo read is not, and it is past the
+    // entry script's clock checks.
+    let (held, release) = hold_open(&dir);
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let first = start(&ext, "work");
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for registration to reach the server");
+    held.recv_timeout(WAIT)
+        .expect("waited for the entry script to block past its clock checks");
     let second = start(&ext, "work");
     // Both wait on the entry script's grace, which is later than the
     // command's own timeout. Advancing that timeout does not abandon the VM.
@@ -536,7 +538,7 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
         "waited for both calls to park on registration"
     );
     clock.advance(Duration::from_millis(1000));
-    release_tx.send(()).unwrap();
+    release.send(()).unwrap();
     for waiter in [first, second] {
         let err = waiter
             .recv_timeout(WAIT)
@@ -553,39 +555,35 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
 #[test]
 fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     let setup = Setup::new();
-    let reg = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let hold = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let reg_url = format!("http://{}/", reg.local_addr().unwrap());
     let hold_url = format!("http://{}/", hold.local_addr().unwrap());
-    let (reg_ok_tx, reg_ok_rx) = mpsc::channel();
-    let (reg_release_tx, reg_release_rx) = mpsc::channel();
     let (hold_ok_tx, hold_ok_rx) = mpsc::channel();
     let (hold_release_tx, hold_release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_when_released(reg, reg_ok_tx, reg_release_rx));
     std::thread::spawn(move || answer_when_released(hold, hold_ok_tx, hold_release_rx));
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
         &format!(
-            "host.http({{ url = \"{reg_url}\" }})\n\
-             fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{hold_url}\" }}).body end }})\n\
+            "require(\"hold\")\n\
+             fiber.command(\"hold\", {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{hold_url}\" }}).body end }})\n\
              fiber.command(\"quick\", {{ timeout = 400, run = function() return \"ran\" end }})\n"
         ),
     );
+    let (opened, release) = hold_open(&dir);
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let held = start(&ext, "hold");
-    reg_ok_rx
+    opened
         .recv_timeout(WAIT)
-        .expect("waited for registration to reach the server");
+        .expect("waited for the entry script to block past its clock checks");
     let quick = start(&ext, "quick");
     assert!(
         parked_at(&clock, asked + LOAD + GRACE, 2),
         "waited for hold and quick to park on registration"
     );
     clock.advance(Duration::from_millis(400));
-    reg_release_tx.send(()).unwrap();
+    release.send(()).unwrap();
     let err = quick
         .recv_timeout(WAIT)
         .expect("waited for quick")
@@ -614,7 +612,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"p.sign\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"p.sign\", {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
         ),
     );
@@ -622,7 +620,7 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let ran = start(&ext, "p.sign");
-    let grace = asked + Duration::from_millis(5000) + GRACE;
+    let grace = asked + Duration::from_millis(HOLD_MS) + GRACE;
     assert!(
         clock.await_parked(grace, WAIT),
         "waited for p.sign to park at its own grace"
@@ -699,7 +697,7 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
         &dir.join("init.lua"),
         "setmetatable({}, { __gc = function() require(\"hold\") end })\ncollectgarbage()\n",
     );
-    let held = hold_open(&dir);
+    let (held, _release) = hold_open(&dir);
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
@@ -730,29 +728,21 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
 #[test]
 fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
     let setup = Setup::new();
-    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    std::thread::spawn(move || answer_when_released(listener, accepted_tx, release_rx));
     let dir = setup.home().join("ext");
-    write(
-        &dir.join("init.lua"),
-        &format!("host.http({{ url = \"{url}\" }})\nerror(\"bad\")\n"),
-    );
+    write(&dir.join("init.lua"), "require(\"hold\")\nerror(\"bad\")\n");
+    let (held, release) = hold_open(&dir);
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let first = start(&ext, "a");
-    accepted_rx
-        .recv_timeout(WAIT)
-        .expect("waited for registration to reach the server");
+    held.recv_timeout(WAIT)
+        .expect("waited for the entry script to block past its clock checks");
     let second = start(&ext, "b");
     assert!(
         parked_at(&clock, abandon, 2),
         "waited for both callers to park on registration"
     );
-    release_tx.send(()).unwrap();
+    release.send(()).unwrap();
     for waiter in [first, second] {
         let err = waiter
             .recv_timeout(WAIT)
