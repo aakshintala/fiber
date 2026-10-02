@@ -13,9 +13,10 @@
 
 use std::collections::{BTreeMap, HashMap, VecDeque};
 use std::io;
-use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+use contract::clock::{Clock, Wake};
 use serde_json::Value;
 
 use crate::Error;
@@ -25,13 +26,35 @@ use super::{ENTRY, GRACE, Target, expired, timeout_ms};
 /// A `host.http` reply: the status and body, or why it failed.
 pub(super) type HttpResult = Result<(u16, Vec<u8>), String>;
 
-#[derive(Default)]
 pub(super) struct Hub {
     shared: Mutex<Shared>,
     changed: Condvar,
+    clock: Arc<dyn Clock>,
 }
 
 impl Hub {
+    /// The hub every waiter and the extension's thread share, subscribed to
+    /// `clock` so a move of that clock wakes them.
+    pub(super) fn new(clock: Arc<dyn Clock>) -> Arc<Self> {
+        let hub = Arc::new(Self {
+            shared: Mutex::new(Shared::default()),
+            changed: Condvar::new(),
+            clock: Arc::clone(&clock),
+        });
+        let cloned = Arc::clone(&hub);
+        let wake: Arc<dyn Wake> = cloned;
+        clock.subscribe(Arc::downgrade(&wake));
+        hub
+    }
+
+    pub(super) fn clock(&self) -> &dyn Clock {
+        self.clock.as_ref()
+    }
+
+    pub(super) fn clock_handle(&self) -> Arc<dyn Clock> {
+        Arc::clone(&self.clock)
+    }
+
     pub(super) fn lock(&self) -> MutexGuard<'_, Shared> {
         // A panic aborts the process (`docs/code-quality.md`, "Panics"), so
         // no holder can leave the lock poisoned.
@@ -43,22 +66,52 @@ impl Hub {
         self.changed.notify_all();
     }
 
-    /// Sleeps until a change or `until`, whichever is first.
+    /// Sleeps until a change or `until`, whichever is first. `until` at or
+    /// before the clock's now returns without blocking.
     pub(super) fn wait<'a>(
-        &self,
+        &'a self,
         shared: MutexGuard<'a, Shared>,
         until: Option<Instant>,
     ) -> MutexGuard<'a, Shared> {
-        let Some(until) = until else {
-            return self
-                .changed
-                .wait(shared)
-                .unwrap_or_else(PoisonError::into_inner);
-        };
-        self.changed
-            .wait_timeout(shared, until.saturating_duration_since(Instant::now()))
-            .unwrap_or_else(PoisonError::into_inner)
-            .0
+        let changed = &self.changed;
+        // `FnMut` cannot move the guard out and back. The slot holds it
+        // across the one call `wait_until` makes.
+        let mut slot = Some(shared);
+        self.clock.wait_until(until, &mut |bound| {
+            let Some(shared) = slot.take() else {
+                return;
+            };
+            slot = Some(match bound {
+                Some(d) if d.is_zero() => shared,
+                Some(d) => {
+                    changed
+                        .wait_timeout(shared, d)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+                None => changed.wait(shared).unwrap_or_else(PoisonError::into_inner),
+            });
+        });
+        match slot {
+            Some(shared) => shared,
+            None => self.lock(),
+        }
+    }
+
+    /// Blocks until `done` holds, or `timeout` of real time passes. For a
+    /// test that waits on the hub's own signal.
+    #[cfg(test)]
+    pub(super) fn wait_for(
+        &self,
+        shared: MutexGuard<'_, Shared>,
+        timeout: Duration,
+        mut done: impl FnMut(&Shared) -> bool,
+    ) -> bool {
+        let (guard, _) = self
+            .changed
+            .wait_timeout_while(shared, timeout, |state| !done(state))
+            .unwrap_or_else(PoisonError::into_inner);
+        done(&guard)
     }
 
     /// Records `result` for the call `id`, if its caller still waits.
@@ -167,9 +220,9 @@ impl Shared {
     /// Whether registration is done, still running, or has stopped the
     /// extension. A waiter that finds the entry script past its grace
     /// abandons it.
-    pub(super) fn gate(&mut self, name: &str) -> Gate<'_> {
+    pub(super) fn gate(&mut self, name: &str, now: Instant) -> Gate<'_> {
         if let Phase::Registering { abandon_at } = self.phase
-            && expired(abandon_at)
+            && expired(abandon_at, now)
         {
             // ponytail: the abandoned thread is leaked, still running, until
             // the process exits; Rust cannot stop a thread.
@@ -189,7 +242,14 @@ impl Shared {
     }
 
     /// Judges the call `id` against the phase and its own progress.
-    pub(super) fn judge(&mut self, name: &str, id: u64, target: &Target, asked: Instant) -> Next {
+    pub(super) fn judge(
+        &mut self,
+        name: &str,
+        id: u64,
+        target: &Target,
+        asked: Instant,
+        now: Instant,
+    ) -> Next {
         // Stopped is final for every waiter, one holding a result included.
         if let Phase::Stopped(e) = &self.phase {
             let e = again(name, e);
@@ -205,7 +265,7 @@ impl Shared {
                 _ => Err(stopped(name)),
             });
         }
-        let declared = match self.gate(name) {
+        let declared = match self.gate(name, now) {
             Gate::Ready(timeouts) => timeouts.timeout(target),
             Gate::Wait(until) => return Next::Sleep(until),
             Gate::Stopped(e) => {
@@ -223,7 +283,7 @@ impl Shared {
             }
             _ => (asked.checked_add(timeout), false),
         };
-        if !expired(until) {
+        if !expired(until, now) {
             return Next::Sleep(until);
         }
         self.forget(id);
@@ -251,6 +311,15 @@ impl Shared {
     fn forget(&mut self, id: u64) {
         self.calls.remove(&id);
         self.queue.retain(|job| job.id != id);
+    }
+}
+
+impl Wake for Hub {
+    fn wake(&self) {
+        // The hub lock is taken before the notify, so a waiter that has
+        // judged and not yet parked cannot miss this wake.
+        let _guard = self.lock();
+        self.changed.notify_all();
     }
 }
 

@@ -18,6 +18,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
+use contract::clock::Clock;
 use mlua::{FromLua, Function, Lua, LuaOptions, MultiValue, StdLib, Table, Thread};
 use serde_json::Value;
 
@@ -127,14 +128,25 @@ pub struct LuaExtension {
 
 impl LuaExtension {
     /// The extension `name`, whose files are in `dir`, in the Fiber home
-    /// `home` that `host.secret` reads.
-    pub fn new(name: impl Into<String>, dir: impl Into<PathBuf>, home: impl Into<PathBuf>) -> Self {
+    /// `home` that `host.secret` reads. `clock` is the extension's clock:
+    /// deadlines, the load bound and the grace all read it.
+    pub fn new(
+        name: impl Into<String>,
+        dir: impl Into<PathBuf>,
+        home: impl Into<PathBuf>,
+        clock: Arc<dyn Clock>,
+    ) -> Self {
         Self {
             name: name.into(),
             dir: dir.into(),
             home: home.into(),
-            hub: Arc::default(),
+            hub: Hub::new(clock),
         }
+    }
+
+    /// The clock this extension's deadlines read.
+    pub(crate) fn clock(&self) -> &dyn Clock {
+        self.hub.clock()
     }
 
     /// The extension's name.
@@ -175,7 +187,8 @@ impl LuaExtension {
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
         loop {
-            let until = match shared.gate(&self.name) {
+            let now = self.hub.clock().now();
+            let until = match shared.gate(&self.name, now) {
                 Gate::Ready(timeouts) => {
                     return Ok(timeouts
                         .providers
@@ -215,15 +228,18 @@ impl LuaExtension {
     /// Queues the call and waits on the hub until it is answered, or until
     /// its own limit passes ("Extension lifecycle" in `hub.rs`).
     fn call(&self, target: Target, arg: Value) -> Result<Value, Error> {
-        let asked = Instant::now();
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
+        // Read under the hub lock, so a clock move that wakes waiters cannot
+        // land between the judgement and the park.
+        let asked = self.hub.clock().now();
         let id = shared.push(target.clone(), arg, asked);
         // Only a change wakes the others: a waiter that notified on every
         // wake would keep every other waiter spinning.
         self.hub.notify();
         loop {
-            match shared.judge(&self.name, id, &target, asked) {
+            let now = self.hub.clock().now();
+            match shared.judge(&self.name, id, &target, asked, now) {
                 Next::Return(result) => {
                     self.hub.notify();
                     return result;
@@ -239,7 +255,7 @@ impl LuaExtension {
         if !matches!(shared.phase, Phase::Idle) {
             return Ok(());
         }
-        let load_by = Instant::now().checked_add(LOAD_TIMEOUT);
+        let load_by = self.hub.clock().now().checked_add(LOAD_TIMEOUT);
         let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
         let hub = Arc::clone(&self.hub);
         thread::Builder::new()
@@ -293,8 +309,8 @@ impl std::fmt::Display for Target {
     }
 }
 
-fn expired(at: Option<Instant>) -> bool {
-    at.is_some_and(|at| Instant::now() >= at)
+fn expired(at: Option<Instant>, now: Instant) -> bool {
+    at.is_some_and(|at| now >= at)
 }
 
 fn timeout_ms(timeout: Duration) -> u64 {
@@ -312,6 +328,7 @@ pub(crate) use setup::Deadline;
 struct Vm {
     lua: Lua,
     name: String,
+    clock: Arc<dyn Clock>,
     deadline: Deadline,
     /// What `host.http` yields, so a callback's own yield is not a request.
     http_tag: mlua::Value,
@@ -338,8 +355,14 @@ impl Vm {
     /// Creates the VM and runs the entry script under the deadline
     /// `load_by`, which started when Fiber first asked, so creating the VM
     /// and reading the script count.
-    fn load(name: &str, dir: &Path, home: &Path, load_by: Option<Instant>) -> Result<Self, Error> {
-        let deadline = Deadline::default();
+    fn load(
+        name: &str,
+        dir: &Path,
+        home: &Path,
+        clock: Arc<dyn Clock>,
+        load_by: Option<Instant>,
+    ) -> Result<Self, Error> {
+        let deadline = Deadline::new(Arc::clone(&clock));
         deadline.restore(load_by);
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),
@@ -366,6 +389,7 @@ impl Vm {
         let vm = Self {
             lua,
             name: name.to_owned(),
+            clock,
             deadline,
             http_tag,
             commands,
@@ -531,7 +555,8 @@ impl Vm {
         deadline: Option<Instant>,
     ) -> Result<setup::Poll, Error> {
         self.deadline.restore(deadline);
-        if expired(deadline) {
+        let now = self.clock.now();
+        if expired(deadline, now) {
             return Err(self.timed_out(callback, timeout));
         }
         let values = match thread.resume::<MultiValue>(args) {
@@ -555,8 +580,11 @@ impl Vm {
                     .unwrap_or(mlua::Value::Nil),
             ));
         }
+        // Remaining time on this clock, plus the grace, is what `host.http`
+        // may block for. On a fake clock that duration is the fake time left,
+        // which stays within the callback's timeout plus the grace.
         let grace = deadline.map(|at| {
-            at.saturating_duration_since(Instant::now())
+            at.saturating_duration_since(self.clock.now())
                 .saturating_add(GRACE)
         });
         Ok(setup::Poll::Http(self.http_request(&values, grace)?))

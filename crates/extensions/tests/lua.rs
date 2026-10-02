@@ -5,25 +5,45 @@
 
 mod common;
 
-use std::io::Write;
+use std::io::{Read, Write};
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{Setup, write};
 use contract::ErrorCode;
+use contract::clock::Clock;
 use extensions::{Error, LuaExtension};
+use fakes::clock::FakeClock;
 
 /// How long a test waits for one call before failing. Far past every timeout
 /// the fixture declares, so it fires only when a callback is never stopped.
 const WAIT: Duration = Duration::from_secs(10);
 
+/// Reading, compiling and running an entry script is bounded at 2 seconds
+/// (`docs/extensions.md`).
+const LOAD: Duration = Duration::from_secs(2);
+
+/// When the hook cannot stop the VM, the caller waits 1 second more
+/// (`docs/extensions.md`).
+const GRACE: Duration = Duration::from_secs(1);
+
 fn fixture() -> Arc<LuaExtension> {
-    Arc::new(LuaExtension::new(
+    extension(
         "fixture",
         fakes::lua_fixture(),
         "/nonexistent-fiber-home",
-    ))
+        FakeClock::new(),
+    )
+}
+
+fn extension(
+    name: &str,
+    dir: impl Into<std::path::PathBuf>,
+    home: impl Into<std::path::PathBuf>,
+    clock: Arc<FakeClock>,
+) -> Arc<LuaExtension> {
+    Arc::new(LuaExtension::new(name, dir, home, clock))
 }
 
 /// Runs one command on its own thread under `WAIT`, so a callback the runtime
@@ -37,6 +57,51 @@ fn call(ext: &Arc<LuaExtension>, command: &str, text: &str) -> Result<String, Er
         Ok(result) => result,
         Err(_) => panic!("`{command}` did not return within {WAIT:?}"),
     }
+}
+
+/// Starts `command` on `ext` on its own thread; the result arrives on the
+/// receiver.
+fn start(ext: &Arc<LuaExtension>, command: &'static str) -> mpsc::Receiver<Result<String, Error>> {
+    let (tx, rx) = mpsc::channel();
+    let ext = Arc::clone(ext);
+    std::thread::spawn(move || tx.send(ext.command(command, "")));
+    rx
+}
+
+/// Reads an HTTP head, through the blank line that ends it.
+fn read_head(sock: &mut impl Read) {
+    let mut buf = [0; 1];
+    let mut seen = Vec::new();
+    loop {
+        match sock.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => seen.push(buf[0]),
+        }
+        if seen.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+}
+
+/// True once `count` threads are parked in `wait_until` at `until`.
+fn parked_at(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let clock = Arc::clone(clock);
+    std::thread::spawn(move || {
+        while clock
+            .parked()
+            .iter()
+            .filter(|at| **at == Some(until))
+            .count()
+            < count
+        {
+            std::thread::yield_now();
+        }
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+    });
+    rx.recv_timeout(WAIT).is_ok()
 }
 
 #[test]
@@ -77,7 +142,7 @@ fn require_cannot_leave_the_extensions_directory() {
     std::os::unix::fs::symlink(&outside, dir.join("outside.lua")).unwrap();
 
     let err = call(
-        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        &extension("ext", dir, setup.home(), FakeClock::new()),
         "x",
         "",
     )
@@ -121,7 +186,7 @@ fn a_registration_without_a_timeout_is_an_error_at_its_line() {
         "-- no timeout\nfiber.command(\"x\", { run = function() end })\n",
     );
     let err = call(
-        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        &extension("ext", dir, setup.home(), FakeClock::new()),
         "x",
         "",
     )
@@ -143,7 +208,13 @@ fn a_command_the_extension_never_registered_is_unknown() {
 
 #[test]
 fn a_loop_is_stopped_at_its_timeout_in_a_callback_a_coroutine_and_under_pcall() {
-    let ext = fixture();
+    let clock = FakeClock::new();
+    let ext = extension(
+        "fixture",
+        fakes::lua_fixture(),
+        "/nonexistent-fiber-home",
+        clock.clone(),
+    );
     for command in [
         "spin",
         "spin_pcall",
@@ -151,7 +222,20 @@ fn a_loop_is_stopped_at_its_timeout_in_a_callback_a_coroutine_and_under_pcall() 
         "spin_wrap",
         "spin_nested",
     ] {
-        let err = call(&ext, command, "").unwrap_err();
+        let asked = clock.now();
+        let result = start(&ext, command);
+        let parked_at = asked + Duration::from_millis(50) + GRACE;
+        assert!(
+            clock.await_parked(parked_at, WAIT),
+            "waited for {command} to park at its grace"
+        );
+        // The hook stops the loop at the deadline. The grace is the caller's
+        // wait, and it has not run out.
+        clock.advance(Duration::from_millis(50));
+        let err = result
+            .recv_timeout(WAIT)
+            .expect("waited for the spinning callback")
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionFailed);
         let Error::Timeout {
             callback,
@@ -187,8 +271,25 @@ fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
 #[test]
 fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
     for command in ["spin_gc", "spin_find"] {
-        let ext = fixture();
-        let err = call(&ext, command, "").unwrap_err();
+        let clock = FakeClock::new();
+        let ext = extension(
+            "fixture",
+            fakes::lua_fixture(),
+            "/nonexistent-fiber-home",
+            clock.clone(),
+        );
+        let asked = clock.now();
+        let result = start(&ext, command);
+        let parked_at = asked + Duration::from_millis(50) + GRACE;
+        assert!(
+            clock.await_parked(parked_at, WAIT),
+            "waited for {command} to park at its grace"
+        );
+        clock.advance(Duration::from_millis(50) + GRACE);
+        let err = result
+            .recv_timeout(WAIT)
+            .expect("waited for the callback the hook cannot stop")
+            .unwrap_err();
         assert_eq!(err.code(), ErrorCode::ExtensionFailed);
         let Error::Abandoned { callback, .. } = &err else {
             panic!("{command}: {err:?}")
@@ -210,7 +311,11 @@ fn a_lua_error_releases_the_extensions_lock() {
     let other = Arc::clone(&ext);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(other.is_running()));
-    assert_eq!(rx.recv_timeout(WAIT), Ok(true));
+    assert_eq!(
+        rx.recv_timeout(WAIT)
+            .expect("waited for the lock to be taken"),
+        true
+    );
     assert_eq!(call(&ext, "echo", "free").unwrap(), "free");
 }
 
@@ -224,7 +329,7 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
         .unwrap();
 
     let err = call(
-        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        &extension("ext", dir, setup.home(), FakeClock::new()),
         "x",
         "",
     )
@@ -239,8 +344,9 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
     assert!(message.contains("memory cap"), "{message}");
 }
 
-/// Accepts one connection, signals, and answers only when `release` arrives
-/// or five seconds pass, so a parked `host.http` can be finished on purpose.
+/// Accepts one connection, reads its head, signals, and answers only when
+/// `release` arrives or five seconds pass, so a parked `host.http` can be
+/// finished on purpose.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn answer_when_released(
     listener: std::net::TcpListener,
@@ -248,6 +354,7 @@ fn answer_when_released(
     release: mpsc::Receiver<()>,
 ) {
     let mut sock = listener.accept().unwrap().0;
+    read_head(&mut sock);
     accepted.send(()).unwrap();
     match release.recv_timeout(Duration::from_secs(5)) {
         Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
@@ -272,24 +379,26 @@ fn a_second_command_waits_until_the_parked_command_finishes() {
              fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
         ),
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let first = Arc::clone(&ext);
-    let (first_tx, first_rx) = mpsc::channel();
-    std::thread::spawn(move || first_tx.send(first.command("first", "")));
+    let ext = extension("ext", dir, setup.home(), FakeClock::new());
+    let first = start(&ext, "first");
     accepted_rx
         .recv_timeout(WAIT)
-        .expect("the first command never reached the server");
+        .expect("waited for the first command to reach the server");
     assert_eq!(ext.provider_functions("p").unwrap(), ["sign"]);
-    let second = Arc::clone(&ext);
-    let (second_tx, second_rx) = mpsc::channel();
-    std::thread::spawn(move || second_tx.send(second.command("second", "")));
+    let second = start(&ext, "second");
     assert!(
-        second_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        second.recv_timeout(Duration::from_millis(200)).is_err(),
         "the second command started while the first was parked"
     );
     release_tx.send(()).unwrap();
-    let first = first_rx.recv_timeout(WAIT).unwrap().unwrap();
-    let second = second_rx.recv_timeout(WAIT).unwrap().unwrap();
+    let first = first
+        .recv_timeout(WAIT)
+        .expect("waited for the first command")
+        .unwrap();
+    let second = second
+        .recv_timeout(WAIT)
+        .expect("waited for the second command")
+        .unwrap();
     assert_eq!((first.as_str(), second.as_str()), ("ok", "second"));
     assert!(ext.is_running());
 }
@@ -312,19 +421,23 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
              fiber.command(\"after\", {{ timeout = 1000, run = function() return seen end }})\n"
         ),
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let slow = Arc::clone(&ext);
-    let slow = std::thread::spawn(move || slow.command("slow", ""));
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let slow = start(&ext, "slow");
     accepted_rx
         .recv_timeout(WAIT)
-        .expect("the slow command never reached the server");
-    let started = Instant::now();
-    let err = call(&ext, "quick", "").unwrap_err();
+        .expect("waited for the slow command to reach the server");
+    let asked = clock.now();
+    let quick = start(&ext, "quick");
     assert!(
-        started.elapsed() < Duration::from_millis(900),
-        "quick waited {:?}, not its own 300 ms",
-        started.elapsed()
+        clock.await_parked(asked + Duration::from_millis(300), WAIT),
+        "waited for quick to park at its timeout"
     );
+    clock.advance(Duration::from_millis(300));
+    let err = quick
+        .recv_timeout(WAIT)
+        .expect("waited for quick")
+        .unwrap_err();
     let Error::Timeout {
         callback,
         timeout_ms,
@@ -336,7 +449,11 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     assert_eq!((callback.as_str(), *timeout_ms), ("quick", 300));
     assert!(ext.is_running(), "the queued timeout stopped the extension");
     release_tx.send(()).unwrap();
-    assert!(slow.join().unwrap().is_ok());
+    assert!(
+        slow.recv_timeout(WAIT)
+            .expect("waited for the slow command")
+            .is_ok()
+    );
     assert_eq!(call(&ext, "after", "").unwrap(), "no");
 }
 
@@ -349,43 +466,48 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let work_url = format!("http://{}/", work.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
-    let (work_ok_tx, work_ok_rx) = mpsc::channel();
+    let (work_ok_tx, _work_ok_rx) = mpsc::channel();
     let (work_release_tx, work_release_rx) = mpsc::channel();
     std::thread::spawn(move || answer_when_released(reg, accepted_tx, release_rx));
     std::thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 2));
+    // A call that ignores time spent registering runs `work` and gets an
+    // answer at once, so the timeout assertion fails.
+    drop(work_release_tx);
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
         &format!(
             "host.http({{ url = \"{reg_url}\" }})\n\
-             fiber.command(\"work\", {{ timeout = 5000, run = function() return host.http({{ url = \"{work_url}\" }}).body end }})\n"
+             fiber.command(\"work\", {{ timeout = 1000, run = function() return host.http({{ url = \"{work_url}\" }}).body end }})\n"
         ),
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let first = Arc::clone(&ext);
-    let first = std::thread::spawn(move || first.command("work", ""));
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let asked = clock.now();
+    let first = start(&ext, "work");
     accepted_rx
         .recv_timeout(WAIT)
-        .expect("registration never reached the server");
-    let started = Instant::now();
-    let second = Arc::clone(&ext);
-    let second = std::thread::spawn(move || second.command("work", ""));
-    release_tx.send(()).unwrap();
-    for _ in 0..2 {
-        work_ok_rx
-            .recv_timeout(WAIT)
-            .expect("work never reached the server");
-        std::thread::sleep(Duration::from_millis(1200));
-        work_release_tx.send(()).unwrap();
-    }
-    assert_eq!(second.join().unwrap().unwrap(), "ok");
+        .expect("waited for registration to reach the server");
+    let second = start(&ext, "work");
+    // Both wait on the entry script's grace, which is later than the
+    // command's own timeout. Advancing that timeout does not abandon the VM.
     assert!(
-        started.elapsed() > Duration::from_secs(1),
-        "work returned in {:?}",
-        started.elapsed()
+        parked_at(&clock, asked + LOAD + GRACE, 2),
+        "waited for both calls to park on registration"
     );
-    assert!(first.join().unwrap().is_ok());
-    assert!(ext.is_running());
+    clock.advance(Duration::from_millis(1000));
+    release_tx.send(()).unwrap();
+    for waiter in [first, second] {
+        let err = waiter
+            .recv_timeout(WAIT)
+            .expect("waited for work")
+            .unwrap_err();
+        let Error::Timeout { timeout_ms, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(*timeout_ms, 1000);
+    }
+    assert!(ext.is_running(), "a queued timeout stopped the extension");
 }
 
 #[test]
@@ -410,33 +532,34 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
              fiber.command(\"quick\", {{ timeout = 400, run = function() return \"ran\" end }})\n"
         ),
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let held = Arc::clone(&ext);
-    let held = std::thread::spawn(move || held.command("hold", ""));
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let asked = clock.now();
+    let held = start(&ext, "hold");
     reg_ok_rx
         .recv_timeout(WAIT)
-        .expect("registration never reached the server");
-    let started = Instant::now();
-    let quick = Arc::clone(&ext);
-    let quick = std::thread::spawn(move || quick.command("quick", ""));
-    std::thread::sleep(Duration::from_millis(50));
-    reg_release_tx.send(()).unwrap();
-    hold_ok_rx
-        .recv_timeout(WAIT)
-        .expect("hold never reached the server");
-    let err = quick.join().unwrap().unwrap_err();
-    let elapsed = started.elapsed();
+        .expect("waited for registration to reach the server");
+    let quick = start(&ext, "quick");
     assert!(
-        elapsed > Duration::from_millis(300) && elapsed < Duration::from_millis(900),
-        "quick returned after {elapsed:?}"
+        parked_at(&clock, asked + LOAD + GRACE, 2),
+        "waited for hold and quick to park on registration"
     );
+    clock.advance(Duration::from_millis(400));
+    reg_release_tx.send(()).unwrap();
+    let err = quick
+        .recv_timeout(WAIT)
+        .expect("waited for quick")
+        .unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*timeout_ms, 400);
     assert!(ext.is_running());
+    hold_ok_rx
+        .recv_timeout(WAIT)
+        .expect("waited for hold to reach the server");
     hold_release_tx.send(()).unwrap();
-    assert!(held.join().unwrap().is_ok());
+    assert!(held.recv_timeout(WAIT).expect("waited for hold").is_ok());
 }
 
 #[test]
@@ -455,21 +578,32 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
              fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
         ),
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let started = Instant::now();
-    let ext_call = Arc::clone(&ext);
-    let ran = std::thread::spawn(move || ext_call.command("p.sign", ""));
-    ok_rx
-        .recv_timeout(WAIT)
-        .expect("p.sign never reached the server");
-    std::thread::sleep(Duration::from_millis(300));
-    release_tx.send(()).unwrap();
-    assert_eq!(ran.join().unwrap().unwrap(), "ok");
-    let elapsed = started.elapsed();
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let asked = clock.now();
+    let ran = start(&ext, "p.sign");
+    let grace = asked + Duration::from_millis(5000) + GRACE;
     assert!(
-        elapsed > Duration::from_millis(200) && elapsed < Duration::from_secs(2),
-        "p.sign took {elapsed:?}, not its own timeout"
+        clock.await_parked(grace, WAIT),
+        "waited for p.sign to park at its own grace"
     );
+    // The provider function's 50 ms would already have failed a parked call.
+    // Advancing wakes the caller; it parks again at the same grace.
+    clock.advance(Duration::from_millis(50));
+    assert!(
+        clock.await_parked(grace, WAIT),
+        "p.sign left its own deadline"
+    );
+    assert!(
+        ran.try_recv().is_err(),
+        "p.sign returned on the provider function's timeout"
+    );
+    release_tx.send(()).unwrap();
+    assert_eq!(
+        ran.recv_timeout(WAIT).expect("waited for p.sign").unwrap(),
+        "ok"
+    );
+    assert!(ok_rx.try_recv().is_ok(), "p.sign never reached the server");
 }
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
@@ -481,6 +615,7 @@ fn answer_n(
 ) {
     for _ in 0..times {
         let mut sock = listener.accept().unwrap().0;
+        read_head(&mut sock);
         accepted.send(()).unwrap();
         match release.recv_timeout(Duration::from_secs(8)) {
             Ok(())
@@ -503,7 +638,7 @@ fn a_module_exactly_the_memory_cap_is_read() {
 
     // Read and compiled: its zero bytes are not Lua.
     let err = call(
-        &Arc::new(LuaExtension::new("ext", dir, setup.home())),
+        &extension("ext", dir, setup.home(), FakeClock::new()),
         "x",
         "",
     )
@@ -512,15 +647,6 @@ fn a_module_exactly_the_memory_cap_is_read() {
         panic!("{err:?}")
     };
     assert!(message.starts_with("init.lua:1: big.lua:"), "{message}");
-}
-
-/// Starts `command` on `ext` on its own thread; the result arrives on the
-/// receiver.
-fn start(ext: &Arc<LuaExtension>, command: &'static str) -> mpsc::Receiver<Result<String, Error>> {
-    let (tx, rx) = mpsc::channel();
-    let ext = Arc::clone(ext);
-    std::thread::spawn(move || tx.send(ext.command(command, "")));
-    rx
 }
 
 /// The verify-3 hang: an entry script the hook cannot stop, with two calls
@@ -534,25 +660,27 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
         &dir.join("init.lua"),
         "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let started = Instant::now();
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let abandon = clock.now() + LOAD + GRACE;
     let waiters = [start(&ext, "a"), start(&ext, "b")];
+    assert!(
+        parked_at(&clock, abandon, 2),
+        "waited for both callers to park until the load grace"
+    );
+    clock.advance(LOAD + GRACE);
     for waiter in waiters {
-        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let err = waiter
+            .recv_timeout(WAIT)
+            .expect("waited for a caller of the entry script")
+            .unwrap_err();
         let Error::Abandoned { callback, .. } = &err else {
             panic!("{err:?}")
         };
         assert_eq!(callback, "init.lua");
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the waiters took {:?}",
-        started.elapsed()
-    );
     assert!(!ext.is_running());
-    let again = Instant::now();
     assert!(matches!(call(&ext, "a", ""), Err(Error::Abandoned { .. })));
-    assert!(again.elapsed() < Duration::from_millis(500));
 }
 
 /// An entry script that errors stops the extension with its error, for
@@ -570,16 +698,24 @@ fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
         &dir.join("init.lua"),
         &format!("host.http({{ url = \"{url}\" }})\nerror(\"bad\")\n"),
     );
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let abandon = clock.now() + LOAD + GRACE;
     let first = start(&ext, "a");
     accepted_rx
         .recv_timeout(WAIT)
-        .expect("registration never reached the server");
+        .expect("waited for registration to reach the server");
     let second = start(&ext, "b");
-    std::thread::sleep(Duration::from_millis(50));
+    assert!(
+        parked_at(&clock, abandon, 2),
+        "waited for both callers to park on registration"
+    );
     release_tx.send(()).unwrap();
     for waiter in [first, second] {
-        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let err = waiter
+            .recv_timeout(WAIT)
+            .expect("waited for a caller of the entry script")
+            .unwrap_err();
         let Error::Lua { message, .. } = &err else {
             panic!("{err:?}")
         };
@@ -596,19 +732,39 @@ fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(&dir.join("init.lua"), "while true do end\n");
-    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    for _ in 0..2 {
-        let err = call(&ext, "a", "").unwrap_err();
-        let Error::Timeout {
-            callback,
-            timeout_ms,
-            ..
-        } = &err
-        else {
-            panic!("{err:?}")
-        };
-        assert_eq!((callback.as_str(), *timeout_ms), ("init.lua", 2000));
-    }
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let abandon = clock.now() + LOAD + GRACE;
+    let first = start(&ext, "a");
+    assert!(
+        clock.await_parked(abandon, WAIT),
+        "waited for the caller to park until the load grace"
+    );
+    // The hook's deadline is the 2 second load bound, before the grace.
+    clock.advance(LOAD);
+    let err = first
+        .recv_timeout(WAIT)
+        .expect("waited for the entry script")
+        .unwrap_err();
+    let Error::Timeout {
+        callback,
+        timeout_ms,
+        ..
+    } = &err
+    else {
+        panic!("{err:?}")
+    };
+    assert_eq!((callback.as_str(), *timeout_ms), ("init.lua", 2000));
+    let err = call(&ext, "a", "").unwrap_err();
+    let Error::Timeout {
+        callback,
+        timeout_ms,
+        ..
+    } = &err
+    else {
+        panic!("{err:?}")
+    };
+    assert_eq!((callback.as_str(), *timeout_ms), ("init.lua", 2000));
     assert!(!ext.is_running());
 }
 
@@ -616,11 +772,12 @@ fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
 #[test]
 fn an_extension_whose_directory_is_gone_fails_every_call() {
     let setup = Setup::new();
-    let ext = Arc::new(LuaExtension::new(
+    let ext = extension(
         "ext",
         setup.home().join("gone"),
         setup.home(),
-    ));
+        FakeClock::new(),
+    );
     for _ in 0..2 {
         let err = call(&ext, "a", "").unwrap_err();
         assert!(matches!(err, Error::Io { .. }), "{err:?}");
