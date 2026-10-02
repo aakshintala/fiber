@@ -6,17 +6,18 @@
 use contract::events::{ArgumentRepair, Repair, RepairFix};
 use serde_json::{Map, Number, Value};
 
-/// The repair `schema` allows to `arguments`, or `None` when nothing needed
-/// one.
+/// The repair `schema` allows to `arguments`: the one distinct reading of
+/// them that passes the whole schema, or `None` when there is not exactly one
+/// or it needed no repair.
 pub(crate) fn repair(schema: &Value, arguments: &Value) -> Option<ArgumentRepair> {
-    let mut repaired = arguments.clone();
-    let mut repairs = Vec::new();
-    // An ambiguous `anyOf` is left as sent; the check then reports it.
-    fix(schema, &mut repaired, "", &mut repairs, false);
-    let Value::Object(repaired) = repaired else {
+    let mut passing = readings(schema, arguments, "")
+        .into_iter()
+        .filter(|(reading, _)| check(schema, reading).is_empty());
+    let (Value::Object(repaired), repairs) = passing.next()? else {
         return None;
     };
-    (!repairs.is_empty()).then_some(ArgumentRepair { repaired, repairs })
+    let one = passing.next().is_none() && !repairs.is_empty();
+    one.then_some(ArgumentRepair { repaired, repairs })
 }
 
 /// Every way `value` fails `schema`, one line per bad field.
@@ -26,121 +27,105 @@ pub(crate) fn check(schema: &Value, value: &Value) -> Vec<String> {
     errors
 }
 
-/// Repairs `value` where `schema` allows one reading, adding each fix to
-/// `repairs`. Returns whether it met an `anyOf` with more than one reading,
-/// which it leaves as it was; with `pick` it takes the first reading instead.
-fn fix(
-    schema: &Value,
-    value: &mut Value,
-    path: &str,
-    repairs: &mut Vec<Repair>,
-    pick: bool,
-) -> bool {
-    let mut ambiguous = plain(schema, value, path, repairs, pick);
-    if let Some(Value::Array(options)) = schema.get("anyOf")
-        && !check(schema, value).is_empty()
-    {
-        ambiguous |= any_of(schema, options, value, path, repairs, pick);
-    }
-    ambiguous
-}
+/// A reading of a value, with the repairs that make it from the value sent.
+type Reading = (Value, Vec<Repair>);
 
-/// Repairs `value` by reading each of `options`, the `anyOf` of `schema`.
-/// A branch's repair is a reading, kept only when it is the one distinct
-/// reading that passes the whole schema and no branch that could pass met an
-/// ambiguity of its own. Returns whether there was more than one reading.
-fn any_of(
-    schema: &Value,
-    options: &[Value],
-    value: &mut Value,
-    path: &str,
-    repairs: &mut Vec<Repair>,
-    pick: bool,
-) -> bool {
-    let mut readings: Vec<(Value, Vec<Repair>)> = Vec::new();
-    for option in options {
-        let mut reading = value.clone();
-        let mut made = Vec::new();
-        if fix(option, &mut reading, path, &mut made, pick) {
-            // The branch's readings count when they pass the whole schema,
-            // whichever branch they pass through.
-            // ponytail: the first reading stands for all of them, which is
-            // exact unless another branch constrains the ambiguous field;
-            // enumerate every reading if a real schema does that.
-            let mut first = value.clone();
-            fix(option, &mut first, path, &mut Vec::new(), true);
-            if check(schema, &first).is_empty() {
-                return true;
-            }
+/// Every distinct reading of `value` under `schema`, from every `anyOf`
+/// branch, nested ones included, whether or not it passes.
+fn readings(schema: &Value, value: &Value, path: &str) -> Vec<Reading> {
+    let mut all: Vec<Reading> = Vec::new();
+    for (read, made) in plain(schema, value, path) {
+        let Some(Value::Array(options)) = schema.get("anyOf") else {
+            add(&mut all, read, made);
             continue;
-        }
-        let new = !readings.iter().any(|(seen, _)| *seen == reading);
-        if !made.is_empty() && new && check(schema, &reading).is_empty() {
-            readings.push((reading, made));
+        };
+        for option in options {
+            for (inner, more) in readings(option, &read, path) {
+                add(&mut all, inner, made.iter().cloned().chain(more).collect());
+            }
         }
     }
-    match readings.as_mut_slice() {
-        [] => false,
-        [_, _, ..] if !pick => true,
-        [(reading, made), ..] => {
-            *value = std::mem::take(reading);
-            repairs.append(made);
-            false
-        }
+    all
+}
+
+/// Adds `value` to `all` unless an equal reading is already there.
+fn add(all: &mut Vec<Reading>, value: Value, made: Vec<Repair>) {
+    if !all.iter().any(|(seen, _)| *seen == value) {
+        all.push((value, made));
     }
 }
 
-/// Repairs `value` against every keyword of `schema` but `anyOf`. Returns
-/// whether a property or item met an ambiguous `anyOf`.
-fn plain(
-    schema: &Value,
-    value: &mut Value,
-    path: &str,
-    repairs: &mut Vec<Repair>,
-    pick: bool,
-) -> bool {
-    let mut ambiguous = false;
+/// The readings of `value` under every keyword of `schema` but `anyOf`.
+fn plain(schema: &Value, value: &Value, path: &str) -> Vec<Reading> {
     let allowed = types(schema);
     let wants = |name: &str| allowed.contains(&name);
-    let found = match value {
-        Value::String(text) if !wants("string") => parse(schema, text, &wants),
+    match value {
+        Value::String(text) if !wants("string") => match parse(schema, text, &wants) {
+            Some((parsed, fix)) => vec![(
+                parsed,
+                vec![Repair {
+                    path: path.to_owned(),
+                    fix,
+                }],
+            )],
+            None => vec![(value.clone(), Vec::new())],
+        },
         Value::Object(map) => {
             let required = required(schema);
+            let mut all = vec![(value.clone(), Vec::new())];
             for (key, property) in properties(schema) {
                 let at = format!("{path}/{}", escape(key));
                 let drop = map.get(key).is_some_and(Value::is_null)
                     && !required.contains(&key.as_str())
                     && !check(property, &Value::Null).is_empty();
                 if drop {
-                    map.remove(key);
-                    repairs.push(Repair {
-                        path: at,
-                        fix: RepairFix::NullDropped,
-                    });
-                } else if let Some(inner) = map.get_mut(key) {
-                    ambiguous |= fix(property, inner, &at, repairs, pick);
+                    for (reading, made) in &mut all {
+                        if let Value::Object(reading) = reading {
+                            reading.remove(key);
+                        }
+                        made.push(Repair {
+                            path: at.clone(),
+                            fix: RepairFix::NullDropped,
+                        });
+                    }
+                } else if let Some(inner) = map.get(key) {
+                    all = product(all, &readings(property, inner, &at), key.as_str());
                 }
             }
-            None
+            all
         }
         Value::Array(items) => {
+            let mut all = vec![(value.clone(), Vec::new())];
             if let Some(each) = schema.get("items") {
-                for (i, item) in items.iter_mut().enumerate() {
-                    ambiguous |= fix(each, item, &format!("{path}/{i}"), repairs, pick);
+                for (i, item) in items.iter().enumerate() {
+                    all = product(all, &readings(each, item, &format!("{path}/{i}")), i);
                 }
             }
-            None
+            all
         }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => None,
-    };
-    if let Some((parsed, how)) = found {
-        *value = parsed;
-        repairs.push(Repair {
-            path: path.to_owned(),
-            fix: how,
-        });
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
+            vec![(value.clone(), Vec::new())]
+        }
     }
-    ambiguous
+}
+
+/// Every reading in `all` with its part at `at` replaced by each of `inner`.
+fn product<I: serde_json::value::Index + Copy>(
+    all: Vec<Reading>,
+    inner: &[Reading],
+    at: I,
+) -> Vec<Reading> {
+    let mut out = Vec::with_capacity(all.len() * inner.len());
+    for (reading, made) in &all {
+        for (part, more) in inner {
+            let mut reading = reading.clone();
+            if let Some(slot) = reading.get_mut(at) {
+                *slot = part.clone();
+            }
+            out.push((reading, made.iter().chain(more).cloned().collect()));
+        }
+    }
+    out
 }
 
 /// The one value `text` reads as where `schema` does not take a string.

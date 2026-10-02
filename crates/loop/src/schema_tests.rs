@@ -314,3 +314,80 @@ fn readings_from_an_impossible_branch_still_count() {
         None
     );
 }
+
+#[test]
+fn a_call_no_reading_passes_is_not_repaired() {
+    // `limit` alone could be read, but `bogus` fails every reading.
+    let arguments = json!({"path": "/a", "limit": "5", "bogus": 1});
+    assert_eq!(fixes(&arguments), None);
+    assert_eq!(
+        check(&schema(), &arguments),
+        [
+            "`/bogus`: not allowed",
+            "`/limit`: expected integer, got a string"
+        ]
+    );
+}
+
+#[test]
+fn two_branches_yielding_one_reading_repair() {
+    // Both branches read `x` as `{a: 1, b: "2"}`; branch one's other reading
+    // fails both branches, so one reading passes.
+    let two = json!({"anyOf": [
+        {"type": "object", "properties": {"a": {"type": "integer"}}},
+        {"type": "object", "properties": {"b": {"type": "integer"}}}
+    ]});
+    let x = json!({
+        "type": "object",
+        "properties": {"a": {"type": "integer"}, "b": {"type": "string"}}
+    });
+    let schema = json!({"anyOf": [
+        {
+            "type": "object",
+            "required": ["missing"],
+            "properties": {"x": two, "y": {"type": "integer"}}
+        },
+        {"type": "object", "properties": {"x": x, "y": {"type": "integer"}}}
+    ]});
+    let made = repair(&schema, &json!({"x": {"a": "1", "b": "2"}, "y": "3"})).unwrap();
+    assert_eq!(
+        Value::Object(made.repaired),
+        json!({"x": {"a": 1, "b": "2"}, "y": 3})
+    );
+}
+
+#[test]
+fn a_reading_counts_whichever_branch_made_it() {
+    // Branch one makes `y: 3` but needs `missing`; only branch two passes it.
+    let schema = json!({"anyOf": [
+        {"type": "object", "required": ["missing"], "properties": {"y": {"type": "integer"}}},
+        {"type": "object", "properties": {"y": {"enum": [3]}}}
+    ]});
+    let made = repair(&schema, &json!({"y": "3"})).unwrap();
+    assert_eq!(made.repaired["y"], 3);
+}
+
+#[test]
+fn a_nested_any_of_with_one_reading_is_repaired() {
+    let n = json!({"anyOf": [{"type": "integer"}, {"type": "boolean"}]});
+    let schema = json!({
+        "type": "object",
+        "properties": {"x": {"anyOf": [
+            {"type": "object", "properties": {"n": n}},
+            {"type": "null"}
+        ]}}
+    });
+    let made = repair(&schema, &json!({"x": {"n": "3"}})).unwrap();
+    assert_eq!(made.repaired["x"], json!({"n": 3}));
+    assert_eq!(made.repairs[0].path, "/x/n");
+}
+
+#[test]
+fn each_item_is_read_on_its_own() {
+    let list = |each: Value| json!({"type": "object", "properties": {"l": {"type": "array", "items": each}}});
+    let one = list(json!({"anyOf": [{"type": "integer"}, {"type": "boolean"}]}));
+    let made = repair(&one, &json!({"l": ["3", "true", 4]})).unwrap();
+    assert_eq!(made.repaired["l"], json!([3, true, 4]));
+    let two = list(json!({"anyOf": [{"type": "integer"}, {"type": "string"}]}));
+    assert_eq!(repair(&two, &json!({"l": [1, "3"]})), None);
+}
