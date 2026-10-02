@@ -27,6 +27,15 @@ resolved review, and the orchestrator merges it without asking.
 The orchestrator judges an implementer's work from the diff and the gate's
 output, never from the implementer's account of it.
 
+An orchestrator may start other orchestrators, one per ticket. The one the
+owner started is the main orchestrator; the ones it starts are
+sub-orchestrators. A sub-orchestrator comments on tickets and opens
+`needs-owner` and follow-up issues itself. Before it opens an issue, it
+searches the tracker for an existing one. Its report to the orchestrator
+that started it lists every issue it opened or commented on. The main
+orchestrator keeps the conversation with the owner: what to ask, when, and
+in what order.
+
 ## Choosing models
 
 An implementer is chosen for the capability its ticket needs: a mechanical
