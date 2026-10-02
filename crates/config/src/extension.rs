@@ -136,7 +136,8 @@ pub struct Cost {
     pub tiers: Vec<Tier>,
 }
 
-/// One price tier when cost varies by request size.
+/// One price tier when cost varies by request size. A tier states all four
+/// prices.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 pub struct Tier {
     /// Input tokens above which this tier's prices apply to the whole call.
@@ -146,11 +147,9 @@ pub struct Tier {
     /// Output tokens.
     pub output: f64,
     /// Tokens read from the prompt cache.
-    #[serde(default)]
-    pub cache_read: Option<f64>,
+    pub cache_read: f64,
     /// Tokens written to the prompt cache.
-    #[serde(default)]
-    pub cache_write: Option<f64>,
+    pub cache_write: f64,
 }
 
 /// A wire protocol (`docs/model-routing.md`, "Protocols and providers").
