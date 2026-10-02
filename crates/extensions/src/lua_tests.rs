@@ -455,3 +455,12 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     assert!(!ext.is_running());
     std::fs::remove_dir_all(&dir).unwrap();
 }
+
+/// A call that finds no thread started fails rather than wait forever.
+#[test]
+fn a_call_on_an_extension_with_no_thread_is_stopped() {
+    let mut shared = Shared::default();
+    let id = shared.push(command("x"), Value::Null, Instant::now());
+    let err = returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap_err();
+    assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
+}

@@ -179,7 +179,9 @@ impl Shared {
             });
         }
         match &self.phase {
-            Phase::Idle => Gate::Wait(None),
+            // A caller starts the thread before it waits, so no thread is
+            // coming: failing beats waiting forever.
+            Phase::Idle => Gate::Stopped(stopped(name)),
             Phase::Registering { abandon_at } => Gate::Wait(*abandon_at),
             Phase::Ready(timeouts) => Gate::Ready(timeouts),
             Phase::Stopped(e) => Gate::Stopped(again(name, e)),
