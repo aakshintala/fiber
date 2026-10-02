@@ -38,6 +38,17 @@ fn command(argv: &[&str]) -> Option<CredentialSource> {
     ))
 }
 
+/// The real `opencode` package's providers, with their shared credential
+/// wiring as shipped.
+fn opencode_providers() -> Vec<ProviderData> {
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/opencode");
+    config::read_providers(&dir).unwrap()
+}
+
+fn named(providers: &[ProviderData], name: &str) -> ProviderData {
+    providers.iter().find(|p| p.name == name).unwrap().clone()
+}
+
 #[test]
 fn the_stored_credential_comes_first() {
     let setup = Setup::new();
@@ -170,17 +181,16 @@ fn no_key_anywhere_is_credential_missing_and_says_why() {
 
 #[test]
 fn one_stored_credential_serves_both_opencode_providers() {
-    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../providers/opencode");
-    let providers = config::read_providers(&dir).unwrap();
-    let go = providers.iter().find(|p| p.name == "opencode-go").unwrap();
-    let zen = providers.iter().find(|p| p.name == "opencode-zen").unwrap();
+    let providers = opencode_providers();
+    let go = named(&providers, "opencode-go");
+    let zen = named(&providers, "opencode-zen");
     assert_eq!(go.credential_name.as_deref(), Some("opencode"));
     assert_eq!(zen.credential_name.as_deref(), Some("opencode"));
     let setup = Setup::new();
     store_secret(&setup.home(), "opencode", &Secret::new("shared\n".into())).unwrap();
     let config = setup.load(&[]).unwrap();
-    assert_eq!(config.credential(go).unwrap().expose(), "shared");
-    assert_eq!(config.credential(zen).unwrap().expose(), "shared");
+    assert_eq!(config.credential(&go).unwrap().expose(), "shared");
+    assert_eq!(config.credential(&zen).unwrap().expose(), "shared");
 }
 
 #[test]
@@ -212,6 +222,80 @@ fn a_provider_naming_no_shared_credential_reads_its_own_name() {
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
     let message = err.to_string();
     assert!(message.contains("credentials/acme"), "{message}");
+}
+
+#[test]
+fn a_usable_shared_credential_wins_over_configured_and_declared_sources() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"mine": {"credential": {"command": ["printf", "configured"]}}}}"#,
+    );
+    store_secret(&setup.home(), "shared", &Secret::new("stored\n".into())).unwrap();
+    let config = setup.load(&[]).unwrap();
+    let key = config
+        .credential(&shared("mine", "shared", command(&["printf", "declared"])))
+        .unwrap();
+    assert_eq!(key.expose(), "stored");
+}
+
+#[test]
+fn an_empty_shared_credential_fails_without_falling_back() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"mine": {"credential": {"command": ["printf", "configured"]}}}}"#,
+    );
+    store_secret(&setup.home(), "shared", &Secret::new(" \n".into())).unwrap();
+    let config = setup.load(&[]).unwrap();
+    let err = config
+        .credential(&shared("mine", "shared", command(&["printf", "declared"])))
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    let message = err.to_string();
+    assert!(message.contains("credentials/shared is empty"), "{message}");
+}
+
+#[test]
+fn shared_providers_keep_independent_provider_keyed_overrides() {
+    let providers = opencode_providers();
+    let go = named(&providers, "opencode-go");
+    let zen = named(&providers, "opencode-zen");
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {
+            "opencode-go": {"credential": {"command": ["printf", "go-global"]}},
+            "opencode-zen": {"credential": {"command": ["printf", "zen-global"]}}
+        }}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {
+            "opencode-go": {"credential": {"command": ["printf", "go-project"]}}
+        }}"#,
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.credential(&go).unwrap().expose(), "go-project");
+    assert_eq!(config.credential(&zen).unwrap().expose(), "zen-global");
+}
+
+#[test]
+fn shared_providers_fall_back_to_their_declared_sources() {
+    // The real pair declares an environment variable, which a test cannot
+    // set without `unsafe` on this toolchain; the swapped-in commands
+    // exercise the same fall-through from the same names and shared wiring.
+    let providers = opencode_providers();
+    let mut go = named(&providers, "opencode-go");
+    let mut zen = named(&providers, "opencode-zen");
+    go.credential = command(&["printf", "go-declared"]);
+    zen.credential = command(&["printf", "zen-declared"]);
+    assert_eq!(go.credential_name.as_deref(), Some("opencode"));
+    assert_eq!(zen.credential_name.as_deref(), Some("opencode"));
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.credential(&go).unwrap().expose(), "go-declared");
+    assert_eq!(config.credential(&zen).unwrap().expose(), "zen-declared");
 }
 
 #[test]

@@ -236,7 +236,9 @@ command runs a program and a changed source sends the key elsewhere.
 
 Providers in one package that share a key read one stored credential: each
 names the stored file in its provider data (`credential_name`, defaulting to
-its own name), and one `fiber login <name>` serves them all.
+its own name). `fiber login <provider>` stores the key in the stored
+credential that provider reads, so `fiber login opencode-go` and
+`fiber login opencode-zen` both store `credentials/opencode`.
 
 ## When Fiber reads configuration
 
