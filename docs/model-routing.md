@@ -73,7 +73,7 @@ A first-party provider is one Fiber can probe and re-record. There are eleven:
 | Gemini API | `google-generative-ai` | key |
 | ChatGPT/codex | `openai-responses`, with its flags | subscription login |
 | OpenRouter | `anthropic-messages`, `openai-completions` | key |
-| OpenCode (Go and Zen) | `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai` | key, one for Go and Zen |
+| OpenCode: `opencode-go` and `opencode-zen` | `anthropic-messages`, `openai-completions`, `openai-responses`, `google-generative-ai` | key, one for both |
 | Databricks | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | muse (the Meta Model API) | `anthropic-messages`, `openai-completions`, `openai-responses` | key |
 | AWS Bedrock | `anthropic-messages` for Claude and `bedrock-converse` for other models, both with AWS framing | Bedrock API key, or SigV4 through `sign()` |
@@ -132,6 +132,11 @@ A `functionCall` that arrives without an `id` is logged with no `provider_id`
 (`docs/events.md`, `tool_call_requested`). Fiber pairs the call with its result
 by its action id, which stays local. Only an id the model emitted is sent back.
 
+Because a replayed `functionCall` needs the signature its own model gave it, a
+tool call and its result that another model reference made are sent to Gemini
+as plain text, not as `functionCall` and `functionResponse` parts
+(`docs/loop.md`, "What the model is sent").
+
 The Gemini API answers HTTP 404 "no longer available to new users" for
 `gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
 in September 2026.
@@ -144,11 +149,16 @@ measured, and is settled when Fiber adds them.
 
 Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
 
-- One `opencode` provider covers OpenCode Go and OpenCode Zen. The same key
-  works on both. Go is a subscription at `https://opencode.ai/zen/go`, and its
-  models declare `"subscription": true` beside their prices ("Cost"). Zen is
-  billed per token at `https://opencode.ai/zen`, and its models carry prices
-  only. Each model names its own base URL.
+- The `opencode` extension declares two providers, `opencode-go` and
+  `opencode-zen`, because Go and Zen serve many of the same model ids and bill
+  them differently: `opencode-go/gpt-6-luna` and `opencode-zen/gpt-6-luna` are
+  two models. The same key works on both, and both providers read it from
+  `OPENCODE_API_KEY`. A stored credential belongs to one provider
+  ("Credentials"), so a stored key is stored under both names.
+- `opencode-go` is a subscription at `https://opencode.ai/zen/go`, and its
+  models declare `"subscription": true` beside their prices ("Cost").
+  `opencode-zen` is billed per token at `https://opencode.ai/zen`, and its
+  models carry prices only.
 - Both serve `openai-responses` at `/v1/responses`, `openai-completions` at
   `/v1/chat/completions` and `anthropic-messages` at `/v1/messages`. Zen also
   serves `google-generative-ai` for its Gemini models.

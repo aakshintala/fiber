@@ -188,8 +188,9 @@ signed thinking blocks, OpenAI's encrypted reasoning and Gemini's thought
 signatures, is logged exactly as the provider returned it, and sent back
 unchanged to the model that produced it. The provider checks only the opaque
 part, the signature or encrypted content, and refuses a request in which it
-was changed. Leaving it out is accepted but loses the prompt cache from that
-point on. Reasoning is never sent back as plain assistant text, on any
+was changed. Leaving reasoning out is accepted but loses the prompt cache
+from that point on. Gemini is the exception for tool calls: it refuses a
+replayed `functionCall` that has no thought signature. Reasoning is never sent back as plain assistant text, on any
 protocol or after a model switch. What a provider cannot take in its own form
 is left out.
 
@@ -200,6 +201,14 @@ every item another one produced: both the opaque part and its readable text.
 A change of effort or thinking alone keeps the model, so its items are still
 sent. A fork keeps its parent's model and sends them unchanged. Probed on
 Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.
+
+Tool calls and their results are not reasoning, so they are always sent. Most
+protocols take a call another model reference made in its native form.
+`google-generative-ai` does not, because the call carries no thought signature
+from that model. On that protocol, a call and its result that another model
+reference made are sent as plain text: the tool's name, its arguments and the
+result. The model's own calls stay native and keep their signatures
+(`docs/model-routing.md`, "Google Generative AI wire facts").
 
 ## What the loop does not do
 
