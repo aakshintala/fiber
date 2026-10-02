@@ -476,10 +476,7 @@ fn hold_open(dir: &Path) -> mpsc::Receiver<()> {
     assert!(made.unwrap().success(), "mkfifo {path:?}");
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let held = std::fs::OpenOptions::new()
-            .write(true)
-            .open(&path)
-            .unwrap();
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
