@@ -59,6 +59,28 @@ fn what_json_cannot_hold_is_an_error() {
 }
 
 #[test]
+fn json_keeps_nulls_and_the_shape_of_arrays_and_objects() {
+    let lua = lua();
+    for (text, encoded) in [
+        ("[null]", "[null]"),
+        (r#"{"a":null}"#, r#"{"a":null}"#),
+        ("[]", "[]"),
+        ("{}", "{}"),
+        (
+            r#"{"a":[null,{"b":null}],"c":[]}"#,
+            r#"{"a":[null,{"b":null}],"c":[]}"#,
+        ),
+    ] {
+        lua.globals().set("text", text).unwrap();
+        let got: String = lua
+            .load("return json.encode(json.decode(text))")
+            .eval()
+            .unwrap();
+        assert_eq!(got, encoded, "{text}");
+    }
+}
+
+#[test]
 fn json_round_trips_through_lua() {
     let lua = lua();
     let value = serde_json::json!({ "a": [1, 2.5, "x", true], "b": { "c": "d" } });

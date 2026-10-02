@@ -4,7 +4,7 @@
 
 use std::path::PathBuf;
 
-use mlua::{Lua, LuaString, Table, Value as LuaValue};
+use mlua::{Lua, LuaSerdeExt, LuaString, Table, Value as LuaValue};
 use ring::{digest, hmac};
 use serde_json::{Map, Number, Value};
 use ureq::Agent;
@@ -46,14 +46,21 @@ pub(crate) fn install(lua: &Lua, deadline: &Deadline, home: PathBuf) -> mlua::Re
     let json = lua.create_table()?;
     json.set(
         "encode",
-        lua.create_function(|_, value: LuaValue| Ok(to_json(&value)?.to_string()))?,
+        lua.create_function(|lua, value: LuaValue| {
+            // mlua's serde keeps JSON null (a null lightuserdata) and an
+            // array's metatable, so `[]` and `{}` stay distinct.
+            let json: Value = lua
+                .from_value(value)
+                .map_err(|e| mlua::Error::RuntimeError(format!("json: {e}")))?;
+            Ok(json.to_string())
+        })?,
     )?;
     json.set(
         "decode",
         lua.create_function(|lua, text: LuaString| {
             let value: Value = serde_json::from_slice(&text.as_bytes())
                 .map_err(|e| mlua::Error::RuntimeError(format!("json.decode: {e}")))?;
-            to_lua(lua, &value)
+            lua.to_value(&value)
         })?,
     )?;
     let globals = lua.globals();
@@ -130,6 +137,10 @@ fn to_json_at(value: &LuaValue, depth: usize) -> mlua::Result<Value> {
     let fail = |why: String| mlua::Error::RuntimeError(format!("json: {why}"));
     Ok(match value {
         LuaValue::Nil => Value::Null,
+        // `Value::NULL`, the null lightuserdata mlua's serde uses, is a JSON
+        // null that occupies a table slot. Lua `nil` cannot: assigning it
+        // deletes the key, so `[null]` would become `[]`.
+        LuaValue::LightUserData(_) if value.is_null() => Value::Null,
         LuaValue::Boolean(b) => Value::Bool(*b),
         LuaValue::Integer(i) => Value::from(*i),
         LuaValue::Number(n) => Value::Number(
@@ -188,10 +199,11 @@ fn to_json_at(value: &LuaValue, depth: usize) -> mlua::Result<Value> {
     })
 }
 
-/// JSON as a Lua value; `null` is `nil`.
+/// JSON as a Lua value. `null` is [`LuaValue::NULL`], so a slot in an array
+/// or an object keeps the null.
 pub(crate) fn to_lua(lua: &Lua, value: &Value) -> mlua::Result<LuaValue> {
     Ok(match value {
-        Value::Null => LuaValue::Nil,
+        Value::Null => LuaValue::NULL,
         Value::Bool(b) => LuaValue::Boolean(*b),
         Value::Number(n) => match n.as_i64() {
             Some(i) => LuaValue::Integer(i),
