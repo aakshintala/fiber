@@ -11,3 +11,5 @@ The skills speak in terms of five canonical triage roles. This file maps those r
 | `wontfix`         | `wontfix`         | Will not be actioned                               |
 
 When a skill names a role, apply the label in the second column.
+
+Category label: `test-only` marks a ticket whose defect is in test code, such as a flaky test; it never carries `bug`.

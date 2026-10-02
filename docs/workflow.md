@@ -116,6 +116,11 @@ When the ticket carries the `bug` label, CI runs the pull request's new and
 changed tests against the base commit, and at least one must fail there
 (`docs/testing.md`, "Proving a test bites").
 
+A ticket whose defect is in test code, such as a flaky test, carries the
+`test-only` label, never `bug`. Its pull request states the root cause and
+the evidence that the fix holds, such as repeated runs under load, in place
+of a test that fails on the base commit.
+
 The orchestrator waits on `CI` with `gh-ci`. A failed check is fixed in a new
 commit. A failed run is never re-run until it passes; the one exception is
 CI's own retry of a binary-level test (`docs/testing.md`, "Flaky tests").
