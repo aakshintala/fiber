@@ -349,8 +349,10 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let work_url = format!("http://{}/", work.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
+    let (work_ok_tx, work_ok_rx) = mpsc::channel();
+    let (work_release_tx, work_release_rx) = mpsc::channel();
     std::thread::spawn(move || answer_when_released(reg, accepted_tx, release_rx));
-    std::thread::spawn(move || answer_after(work, Duration::from_millis(1200), 2));
+    std::thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 2));
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -369,6 +371,13 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let second = Arc::clone(&ext);
     let second = std::thread::spawn(move || second.command("work", ""));
     release_tx.send(()).unwrap();
+    for _ in 0..2 {
+        work_ok_rx
+            .recv_timeout(WAIT)
+            .expect("work never reached the server");
+        std::thread::sleep(Duration::from_millis(1200));
+        work_release_tx.send(()).unwrap();
+    }
     assert_eq!(second.join().unwrap().unwrap(), "ok");
     assert!(
         started.elapsed() > Duration::from_secs(1),
@@ -435,7 +444,9 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let setup = Setup::new();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
-    std::thread::spawn(move || answer_after(listener, Duration::from_millis(300), 1));
+    let (ok_tx, ok_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::spawn(move || answer_n(listener, ok_tx, release_rx, 1));
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -446,7 +457,14 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
     let started = Instant::now();
-    assert_eq!(call(&ext, "p.sign", "").unwrap(), "ok");
+    let ext_call = Arc::clone(&ext);
+    let ran = std::thread::spawn(move || ext_call.command("p.sign", ""));
+    ok_rx
+        .recv_timeout(WAIT)
+        .expect("p.sign never reached the server");
+    std::thread::sleep(Duration::from_millis(300));
+    release_tx.send(()).unwrap();
+    assert_eq!(ran.join().unwrap().unwrap(), "ok");
     let elapsed = started.elapsed();
     assert!(
         elapsed > Duration::from_millis(200) && elapsed < Duration::from_secs(2),
@@ -455,10 +473,19 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
 }
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
-fn answer_after(listener: std::net::TcpListener, delay: Duration, times: usize) {
+fn answer_n(
+    listener: std::net::TcpListener,
+    accepted: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+    times: usize,
+) {
     for _ in 0..times {
         let mut sock = listener.accept().unwrap().0;
-        std::thread::sleep(delay);
+        accepted.send(()).unwrap();
+        match release.recv_timeout(Duration::from_secs(8)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        }
         drop(
             sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
         );
