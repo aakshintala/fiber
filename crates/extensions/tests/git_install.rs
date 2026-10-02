@@ -17,7 +17,9 @@ use std::net::TcpListener;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use contract::clock::Clock;
 
 use common::{Setup, manifest, provider, write};
 use contract::ErrorCode;
@@ -29,7 +31,7 @@ const FIBER: &str = "0.1.0";
 /// Removes `typed` and what nothing else needs, as `fiber remove` does
 /// without a terminal, and returns the names removed.
 fn uninstall(home: &Path, typed: &str) -> Result<Vec<String>, Error> {
-    let removal = removal(home, typed)?;
+    let removal = removal(home, typed, &*fakes::clock::FakeClock::new())?;
     let names = removal.names.clone();
     removal.commit()?;
     Ok(names)
@@ -126,12 +128,13 @@ fn install(setup: &Setup, repos: &Repos, name: &str) -> Result<Vec<String>, Erro
         &Request::Install(name.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )?
     .commit()
 }
 
 fn versions(setup: &Setup) -> BTreeMap<String, String> {
-    list(&setup.home())
+    list(&setup.home(), &*fakes::clock::FakeClock::new())
         .unwrap()
         .into_iter()
         .map(|i| (i.name, i.version))
@@ -159,7 +162,7 @@ fn an_install_fetches_the_newest_tag_and_records_its_commit() {
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[("old.txt", "x")]);
     repos.tag(LIB, "", "v1.1.0", &manifest(LIB), &[]);
     assert_eq!(install(&setup, &repos, LIB).unwrap(), [LIB]);
-    let installed = list(&setup.home()).unwrap();
+    let installed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(installed.len(), 1);
     assert_eq!(installed[0].version, "v1.1.0");
     assert_eq!(commit(&installed[0]).unwrap(), repos.commit(LIB, "v1.1.0"));
@@ -238,7 +241,7 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
     install(&setup, &repos, a).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.2.0");
     assert!(
-        !list(&setup.home())
+        !list(&setup.home(), &*fakes::clock::FakeClock::new())
             .unwrap()
             .iter()
             .find(|i| i.name == dep)
@@ -251,6 +254,7 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
         &Request::Install(b.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let moved: Vec<_> = p.items().filter(|i| i.name == dep).collect();
@@ -258,7 +262,7 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
     assert_eq!(moved[0].changes, None);
     p.commit().unwrap();
     assert_eq!(versions(&setup)[dep], "v1.4.0");
-    let listed = list(&setup.home()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     let requested: Vec<_> = listed
         .iter()
         .map(|i| (i.name.as_str(), i.requested))
@@ -279,13 +283,14 @@ fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
         &Request::Install(dep.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     );
     first.unwrap().commit().unwrap();
     repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
     let top = "example.com/acme/top";
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.6")]), &[]);
     install(&setup, &repos, top).unwrap();
-    let listed = list(&setup.home()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     let dep_row = listed.iter().find(|i| i.name == dep).unwrap();
     assert_eq!(
         (dep_row.version.as_str(), dep_row.requested),
@@ -297,7 +302,12 @@ fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
 fn an_extensions_directory_that_cannot_be_listed_is_io_failed() {
     let setup = Setup::new();
     write(&setup.home().join("extensions"), "not a directory");
-    assert_eq!(list(&setup.home()).unwrap_err().code(), ErrorCode::IoFailed);
+    assert_eq!(
+        list(&setup.home(), &*fakes::clock::FakeClock::new())
+            .unwrap_err()
+            .code(),
+        ErrorCode::IoFailed
+    );
 }
 
 #[test]
@@ -343,7 +353,7 @@ fn an_installed_dependency_that_meets_the_minimum_is_not_changed() {
     install(&setup, &repos, top).unwrap();
     assert_eq!(versions(&setup)[dep], "v1.4.0");
     assert!(
-        list(&setup.home())
+        list(&setup.home(), &*fakes::clock::FakeClock::new())
             .unwrap()
             .iter()
             .find(|i| i.name == dep)
@@ -414,6 +424,7 @@ fn the_fetch_leaves_nothing_in_the_temporary_directory_or_home() {
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(p.items().count(), 1);
@@ -444,6 +455,7 @@ fn an_install_from_a_path_resolves_its_dependencies_from_git() {
         &Request::Path(source),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap()
     .commit()
@@ -466,6 +478,7 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let item = p.items().next().unwrap();
@@ -484,7 +497,7 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
     .unwrap();
     assert!(record.contains(&first), "{record}");
     p.commit().unwrap();
-    let now = list(&setup.home()).unwrap();
+    let now = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(now[0].version, "v1.1.0");
     assert_eq!(commit(&now[0]).unwrap(), repos.commit(LIB, "v1.1.0"));
 }
@@ -503,6 +516,7 @@ fn an_update_re_resolves_the_dependencies_and_an_uninstalled_name_is_refused() {
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     );
     assert!(matches!(err, Err(Error::NotInstalled { .. })));
     install(&setup, &repos, LIB).unwrap();
@@ -513,6 +527,7 @@ fn an_update_re_resolves_the_dependencies_and_an_uninstalled_name_is_refused() {
         &Request::Update(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap()
     .commit()
@@ -544,7 +559,11 @@ fn a_remove_deletes_the_extension_and_the_dependencies_nothing_else_uses() {
         [b, shared]
     );
     assert_eq!(uninstall(&setup.home(), b).unwrap(), [b, shared]);
-    assert!(list(&setup.home()).unwrap().is_empty());
+    assert!(
+        list(&setup.home(), &*fakes::clock::FakeClock::new())
+            .unwrap()
+            .is_empty()
+    );
     let err = uninstall(&setup.home(), b).unwrap_err();
     assert!(matches!(err, Error::NotInstalled { .. }));
 }
@@ -586,7 +605,7 @@ fn a_local_install_lists_its_manifest_version_and_no_commit() {
     let setup = Setup::new();
     let source = setup.source("local", &manifest("local"), &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
-    let listed = list(&setup.home()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(listed[0].version, "v1.0.0");
     assert!(matches!(&listed[0].provenance, Provenance::Path(p) if p.is_absolute()));
 }
@@ -595,7 +614,13 @@ fn a_local_install_lists_its_manifest_version_and_no_commit() {
 fn missing_git_fails_with_the_usage_code_and_says_to_install_it() {
     let setup = Setup::new();
     let origin = Origin::new("fiber-no-such-git-program", |repo| repo.to_owned());
-    let err = plan(&setup.home(), &Request::Install(LIB.into()), FIBER, &origin);
+    let err = plan(
+        &setup.home(),
+        &Request::Install(LIB.into()),
+        FIBER,
+        &origin,
+        &*fakes::clock::FakeClock::new(),
+    );
     let Err(err) = err else { panic!("planned") };
     assert!(matches!(err, Error::GitMissing));
     assert_eq!(err.code(), ErrorCode::Usage);
@@ -612,6 +637,7 @@ fn a_name_that_is_not_where_and_what_is_refused_before_any_fetch() {
         &Request::Install("nonsense".into()),
         FIBER,
         &origin,
+        &*fakes::clock::FakeClock::new(),
     ) else {
         panic!("planned")
     };
@@ -636,7 +662,12 @@ fn a_record_link_in_a_package_is_replaced_never_written_through() {
             .file_type()
             .is_symlink()
     );
-    assert_eq!(list(&setup.home()).unwrap().len(), 1);
+    assert_eq!(
+        list(&setup.home(), &*fakes::clock::FakeClock::new())
+            .unwrap()
+            .len(),
+        1
+    );
 }
 
 #[test]
@@ -644,11 +675,14 @@ fn a_second_operation_while_one_holds_the_lock_fails_cleanly() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let clock = fakes::clock::FakeClock::new();
+    let started = clock.now();
     let held = plan(
         &setup.home(),
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*clock,
     )
     .unwrap();
     let Err(err) = plan(
@@ -656,18 +690,33 @@ fn a_second_operation_while_one_holds_the_lock_fails_cleanly() {
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*clock,
     ) else {
         panic!("a second plan")
     };
+    // Fifty tries, ten milliseconds apart, and the first plan took the lock
+    // without waiting.
+    assert_eq!(
+        clock.now().saturating_duration_since(started),
+        Duration::from_millis(500)
+    );
     assert!(matches!(err, Error::Busy), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
-    assert!(matches!(removal(&setup.home(), LIB), Err(Error::Busy)));
+    assert!(matches!(
+        removal(&setup.home(), LIB, &*fakes::clock::FakeClock::new()),
+        Err(Error::Busy)
+    ));
     // A list from another thread of this process waits for the lock too,
     // so it never reads a set the plan is part way through committing.
     let home = setup.home();
-    let listed = std::thread::spawn(move || list(&home)).join().unwrap();
+    let listed = std::thread::spawn(move || list(&home, &*fakes::clock::FakeClock::new()))
+        .join()
+        .unwrap();
     assert!(matches!(listed, Err(Error::Busy)), "{listed:?}");
-    assert!(matches!(list(&setup.home()), Err(Error::Busy)));
+    assert!(matches!(
+        list(&setup.home(), &*fakes::clock::FakeClock::new()),
+        Err(Error::Busy)
+    ));
     assert!(setup.home().join("extensions/.lock").is_file());
     assert!(!setup.home().join(".extensions.lock").exists());
     // The first plan is untouched by the second's refusal.
@@ -686,6 +735,7 @@ fn a_plan_that_is_dropped_releases_the_lock_and_removes_what_it_fetched() {
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let staged = first.items().next().unwrap().staged().to_path_buf();
@@ -859,6 +909,7 @@ fn updating_a_dependency_an_installed_dependent_pins_to_an_older_major_stops() {
         &Request::Update(dep.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     ) else {
         panic!("planned")
     };
@@ -884,7 +935,7 @@ fn a_local_record_holds_the_absolute_path_and_an_update_checks_the_name() {
     let source = setup.source("local", &manifest("acme"), &[]);
     let roundabout = source.join("../local");
     common::install(&setup.home(), &roundabout, FIBER).unwrap();
-    let listed = list(&setup.home()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(
         listed[0].provenance,
         Provenance::Path(fs::canonicalize(&source).unwrap())
@@ -899,6 +950,7 @@ fn a_local_record_holds_the_absolute_path_and_an_update_checks_the_name() {
         &Request::Update("acme".into()),
         FIBER,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     ) else {
         panic!("planned")
     };
@@ -913,6 +965,7 @@ fn a_local_record_holds_the_absolute_path_and_an_update_checks_the_name() {
         &Request::Update("acme".into()),
         FIBER,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap()
     .commit()
@@ -937,13 +990,13 @@ fn a_listing_names_the_file_it_cannot_read() {
     ] {
         let kept = fs::read_to_string(dir.join(file)).unwrap();
         write(&dir.join(file), text);
-        let err = list(&setup.home()).unwrap_err();
+        let err = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap_err();
         assert_eq!(err.code(), code, "{err}");
         assert!(err.to_string().contains(file), "{err}");
         write(&dir.join(file), &kept);
     }
     fs::remove_file(dir.join(".fiber.json")).unwrap();
-    let err = list(&setup.home()).unwrap_err();
+    let err = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap_err();
     assert!(matches!(err, Error::BadRecord { .. }), "{err}");
     assert!(err.to_string().contains(".fiber.json"), "{err}");
 }
@@ -966,7 +1019,12 @@ fn a_remove_lists_and_then_deletes_the_data_and_settings_of_what_it_removes() {
     for file in mine.iter().chain([&theirs]) {
         write(file, "x");
     }
-    let r = removal(&home, "example.com/acme/x").unwrap();
+    let r = removal(
+        &home,
+        "example.com/acme/x",
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
     assert_eq!(r.names, ["example.com/acme/x"]);
     let mut shown = r.data.clone();
     shown.sort();
@@ -983,10 +1041,14 @@ fn a_remove_lists_and_then_deletes_the_data_and_settings_of_what_it_removes() {
         mine.iter().all(|f| f.exists()),
         "dropping a removal deletes nothing"
     );
-    removal(&home, "example.com/acme/x")
-        .unwrap()
-        .commit()
-        .unwrap();
+    removal(
+        &home,
+        "example.com/acme/x",
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
     assert!(mine.iter().all(|f| !f.exists()));
     assert!(!home.join("data/example.com-acme-x").exists());
     assert!(theirs.exists());
@@ -1013,6 +1075,7 @@ fn an_install_step_runs_after_the_plan_in_the_staged_directory_and_again_on_upda
         &Request::Path(source),
         FIBER,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert!(!marker.exists(), "the step must wait for the approval");
@@ -1027,6 +1090,7 @@ fn an_install_step_runs_after_the_plan_in_the_staged_directory_and_again_on_upda
         &Request::Update("acme".into()),
         FIBER,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap()
     .commit()
@@ -1048,6 +1112,7 @@ fn a_failing_install_step_aborts_with_nothing_installed_even_of_the_dependencies
         &Request::Path(source),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap()
     .commit()
@@ -1066,6 +1131,7 @@ fn a_failing_install_step_aborts_with_nothing_installed_even_of_the_dependencies
         &Request::Path(missing),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap()
     .commit()
@@ -1075,36 +1141,50 @@ fn a_failing_install_step_aborts_with_nothing_installed_even_of_the_dependencies
     assert!(dirs(&setup).is_empty());
 }
 
-/// Serves `body` once on a local port, and returns the URL. The thread gives
-/// up after a deadline.
-fn serve_once(body: &'static [u8]) -> (String, std::thread::JoinHandle<bool>) {
+/// Serves `body` once. The receiver gets whether a request arrived and was
+/// answered. A request that never comes leaves the thread blocked in
+/// `accept`; dropping the receiver does not unblock it.
+fn serve_once(body: &'static [u8]) -> (String, std::sync::mpsc::Receiver<bool>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    listener.set_nonblocking(true).unwrap();
     let url = format!("http://{}/tool-1.0", listener.local_addr().unwrap());
-    let handle = std::thread::spawn(move || {
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while Instant::now() < deadline {
-            if let Ok((mut stream, _)) = listener.accept() {
-                stream.set_nonblocking(false).unwrap();
-                let mut seen = Vec::new();
-                let mut buf = [0; 512];
-                while !seen.ends_with(b"\r\n\r\n") {
-                    let n = stream.read(&mut buf).unwrap();
-                    seen.extend_from_slice(&buf[..n]);
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut stream = match listener.accept() {
+            Ok((stream, _)) => stream,
+            Err(_) => {
+                match tx.send(false) {
+                    Ok(()) | Err(std::sync::mpsc::SendError(_)) => {}
                 }
-                let head = format!(
-                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
-                    body.len()
-                );
-                stream.write_all(head.as_bytes()).unwrap();
-                stream.write_all(body).unwrap();
-                return true;
+                return;
             }
-            std::thread::sleep(Duration::from_millis(5));
+        };
+        let mut seen = Vec::new();
+        let mut buf = [0; 512];
+        while !seen.ends_with(b"\r\n\r\n") {
+            let n = match stream.read(&mut buf) {
+                Ok(0) | Err(_) => {
+                    match tx.send(false) {
+                        Ok(()) | Err(std::sync::mpsc::SendError(_)) => {}
+                    }
+                    return;
+                }
+                Ok(n) => n,
+            };
+            seen.extend_from_slice(&buf[..n]);
         }
-        false
+        let head = format!(
+            "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+            body.len()
+        );
+        let sent = stream
+            .write_all(head.as_bytes())
+            .and_then(|()| stream.write_all(body))
+            .is_ok();
+        match tx.send(sent) {
+            Ok(()) | Err(std::sync::mpsc::SendError(_)) => {}
+        }
     });
-    (url, handle)
+    (url, rx)
 }
 
 fn sha256(bytes: &[u8]) -> String {
@@ -1133,7 +1213,11 @@ fn this_platforms_binary_is_downloaded_checked_and_made_executable() {
     );
     let source = setup.source("local", &m, &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
-    assert!(served.join().unwrap());
+    assert!(
+        served
+            .recv_timeout(Duration::from_secs(10))
+            .expect("waited for the binary to be downloaded")
+    );
     let file = setup.home().join("extensions/acme/bin/tool-1.0");
     assert_eq!(fs::read(&file).unwrap(), b"#!/bin/sh\necho hi\n");
     assert_eq!(
@@ -1151,7 +1235,11 @@ fn a_binary_whose_checksum_differs_aborts_with_nothing_installed() {
     let err = common::install(&setup.home(), &source, FIBER).unwrap_err();
     assert!(matches!(err, Error::BinaryChecksum { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
-    assert!(served.join().unwrap());
+    assert!(
+        served
+            .recv_timeout(Duration::from_secs(10))
+            .expect("waited for the binary download")
+    );
     assert!(dirs(&setup).is_empty());
 }
 
@@ -1197,6 +1285,7 @@ fn what_a_package_carries_is_listed_from_its_files_and_manifest() {
         &Request::Path(source),
         FIBER,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let carries = p.items().next().unwrap().carries();
@@ -1228,7 +1317,7 @@ fn a_projects_directory_that_cannot_be_listed_fails_the_removal() {
     let source = setup.source("local", &manifest("acme"), &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
     write(&setup.home().join("projects"), "not a directory");
-    let Err(err) = removal(&setup.home(), "acme") else {
+    let Err(err) = removal(&setup.home(), "acme", &*fakes::clock::FakeClock::new()) else {
         panic!("planned")
     };
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
@@ -1244,6 +1333,7 @@ fn an_items_source_is_its_path_or_its_name() {
         &Request::Install(LIB.into()),
         FIBER,
         &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     assert_eq!(p.items().next().unwrap().source(), LIB);
@@ -1254,6 +1344,7 @@ fn an_items_source_is_its_path_or_its_name() {
         &Request::Path(source.clone()),
         FIBER,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     )
     .unwrap();
     let shown = fs::canonicalize(&source).unwrap().display().to_string();
@@ -1286,7 +1377,7 @@ fn a_listing_rolls_back_a_commit_that_stopped_halfway() {
     write(&ext.join("marker"), "new");
     write(&fresh.join("marker"), "staged");
     plant(&setup.home(), false, &ext, &saved, &fresh, true);
-    list(&setup.home()).unwrap();
+    list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(
         fs::read_to_string(setup.home().join("extensions/acme/marker")).unwrap(),
         "old"
@@ -1309,7 +1400,7 @@ fn a_listing_drops_backups_once_a_commit_has_finished() {
     write(&saved.join("marker"), "backup");
     write(&fresh.join("marker"), "staged");
     plant(&setup.home(), true, &ext, &saved, &fresh, true);
-    list(&setup.home()).unwrap();
+    list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
     assert_eq!(fs::read_to_string(ext.join("marker")).unwrap(), "kept");
     assert!(!saved.exists());
     assert!(!fresh.exists());
@@ -1339,7 +1430,10 @@ fn a_remove_treats_only_not_found_as_already_gone() {
     let data = home.join("data/acme");
 
     common::install(&home, &source, FIBER).unwrap();
-    removal(&home, "acme").unwrap().commit().unwrap();
+    removal(&home, "acme", &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .commit()
+        .unwrap();
     assert!(
         !ext.exists(),
         "no data directory still removes the extension"
@@ -1347,7 +1441,7 @@ fn a_remove_treats_only_not_found_as_already_gone() {
 
     common::install(&home, &source, FIBER).unwrap();
     write(&data.join("x"), "x");
-    let planned = removal(&home, "acme").unwrap();
+    let planned = removal(&home, "acme", &*fakes::clock::FakeClock::new()).unwrap();
     assert!(planned.data.iter().any(|path| path == &data));
     fs::remove_dir_all(&data).unwrap();
     planned.commit().unwrap();
@@ -1360,7 +1454,7 @@ fn a_remove_treats_only_not_found_as_already_gone() {
     let mut perms = fs::metadata(&parent).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&parent, perms).unwrap();
-    let err = match removal(&home, "acme") {
+    let err = match removal(&home, "acme", &*fakes::clock::FakeClock::new()) {
         Ok(_) => panic!("a metadata error was treated as absence"),
         Err(err) => err,
     };
@@ -1375,7 +1469,7 @@ fn a_remove_treats_only_not_found_as_already_gone() {
     perms.set_mode(0o755);
     fs::set_permissions(&parent, perms).unwrap();
     write(&data.join("x"), "x");
-    let planned = removal(&home, "acme").unwrap();
+    let planned = removal(&home, "acme", &*fakes::clock::FakeClock::new()).unwrap();
     let mut perms = fs::metadata(&parent).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&parent, perms).unwrap();
@@ -1404,7 +1498,10 @@ fn a_data_directory_that_cannot_be_removed_fails_naming_it() {
     let mut perms = fs::metadata(&inner).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&inner, perms).unwrap();
-    let err = removal(&home, "acme").unwrap().commit().unwrap_err();
+    let err = removal(&home, "acme", &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .commit()
+        .unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(
         err.to_string().contains(&data.display().to_string()),

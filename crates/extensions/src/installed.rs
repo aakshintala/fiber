@@ -3,8 +3,9 @@
 use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::thread;
 use std::time::Duration;
+
+use contract::clock::Clock;
 
 use crate::Error;
 use crate::git::full_name;
@@ -40,10 +41,10 @@ pub(crate) struct Lock {
 
 /// Takes the one lock over `extensions/` that every install, update, remove
 /// and list holds from its first read to its last write. The file is
-/// `extensions/.lock`. A second operation waits half a second, then fails
-/// with [`Error::Busy`]. A commit that stopped halfway is finished before
-/// the lock is returned.
-pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
+/// `extensions/.lock`. A second operation waits half a second on `clock`,
+/// then fails with [`Error::Busy`]. A commit that stopped halfway is
+/// finished before the lock is returned.
+pub(crate) fn lock(home: &Path, clock: &dyn Clock) -> Result<Lock, Error> {
     let root = home.join("extensions");
     fs::create_dir_all(&root).map_err(io(&root))?;
     let path = root.join(".lock");
@@ -58,7 +59,7 @@ pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
                 recover(&root)?;
                 return Ok(Lock { file });
             }
-            Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(10)),
+            Err(TryLockError::WouldBlock) => clock.sleep(Duration::from_millis(10)),
             Err(TryLockError::Error(e)) => return Err(io(&path)(e)),
         }
     }
@@ -68,12 +69,12 @@ pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
 /// The installed extensions, by name. A manifest or record that cannot be
 /// read is an error naming the file. A commit that stopped halfway is
 /// finished first, under the same lock every other operation takes.
-pub fn list(home: &Path) -> Result<Vec<Installed>, Error> {
+pub fn list(home: &Path, clock: &dyn Clock) -> Result<Vec<Installed>, Error> {
     let root = home.join("extensions");
     if !root.try_exists().map_err(io(&root))? {
         return Ok(Vec::new());
     }
-    let _lock = lock(home)?;
+    let _lock = lock(home, clock)?;
     read(home)
 }
 
@@ -158,8 +159,8 @@ fn present(path: &Path) -> Result<bool, Error> {
 
 /// Works out what removing `typed` deletes (`docs/state.md`, "Extension
 /// data"; `docs/configuration.md`, "Extension settings").
-pub fn removal(home: &Path, typed: &str) -> Result<Removal, Error> {
-    let lock = lock(home)?;
+pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, Error> {
+    let lock = lock(home, clock)?;
     let name = full_name(typed);
     let mut left = read(home)?;
     if !left.iter().any(|i| i.name == name) {

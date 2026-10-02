@@ -75,6 +75,7 @@ impl Setup {
             &extensions::Request::Path(source),
             "0.0.0",
             &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
         )
         .unwrap()
         .commit()

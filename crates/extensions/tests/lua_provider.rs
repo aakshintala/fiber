@@ -12,15 +12,18 @@
 
 mod common;
 
+use std::io::Read;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
 use common::{Setup, write};
 use config::{Secret, store_secret};
 use contract::ErrorCode;
+use contract::clock::Clock;
 use contract::signing::{SignRequest, Signer};
 use extensions::{Error, LuaExtension, LuaProvider, REFRESH_BEFORE};
+use fakes::clock::FakeClock;
 use fakes::{ProviderServer, Response};
 use serde_json::json;
 
@@ -39,10 +42,19 @@ fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
 /// The fixture's provider, with its server's address and key stored as
 /// secrets in a fresh Fiber home.
 fn fixture(setup: &Setup, server: &ProviderServer) -> Arc<LuaProvider> {
+    fixture_on(setup, server, FakeClock::new())
+}
+
+fn fixture_on(setup: &Setup, server: &ProviderServer, clock: Arc<FakeClock>) -> Arc<LuaProvider> {
     let home = setup.home();
     store_secret(&home, "fixture.url", &Secret::new(server.url())).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
-    let extension = Arc::new(LuaExtension::new("fixture", fakes::lua_fixture(), &home));
+    let extension = Arc::new(LuaExtension::new(
+        "fixture",
+        fakes::lua_fixture(),
+        &home,
+        clock,
+    ));
     LuaProvider::new(extension, "fixture")
 }
 
@@ -55,7 +67,8 @@ fn listing(ids: &[&str]) -> Response {
 }
 
 fn token(value: &str, expires_in: Duration) -> Response {
-    let expires = SystemTime::now().duration_since(UNIX_EPOCH).unwrap() + expires_in;
+    // A fresh fake clock's wall is the extension's wall until a test advances it.
+    let expires = FakeClock::new().wall().duration_since(UNIX_EPOCH).unwrap() + expires_in;
     Response::status(
         200,
         json!({ "access_token": value, "expires_at": expires.as_secs() }).to_string(),
@@ -148,7 +161,6 @@ fn a_token_far_from_expiry_is_reused() {
         let provider = Arc::clone(&provider);
         assert_eq!(within(move || provider.token()).unwrap().expose(), "t1");
     }
-    std::thread::sleep(Duration::from_millis(50));
     assert_eq!(server.requests().len(), 1);
     let request = &server.requests()[0];
     assert_eq!(
@@ -163,25 +175,39 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     assert_eq!(REFRESH_BEFORE, Duration::from_secs(300));
     let setup = Setup::new();
     let server = ProviderServer::start([
-        token("t1", Duration::from_secs(240)),
+        token("t1", Duration::from_secs(3600)),
         token("t2", Duration::from_secs(3600)),
     ])
     .unwrap();
-    let provider = fixture(&setup, &server);
+    let clock = FakeClock::new();
+    let provider = fixture_on(&setup, &server, clock.clone());
     let first = Arc::clone(&provider);
     assert_eq!(within(move || first.token()).unwrap().expose(), "t1");
-    // Inside the window: the token it has, at once, and a refresh behind it.
+    assert_eq!(server.requests().len(), 1);
+    // Into the refresh window, still short of expiry.
+    clock.advance(Duration::from_secs(3600) - REFRESH_BEFORE);
     let second = Arc::clone(&provider);
     assert_eq!(within(move || second.token()).unwrap().expose(), "t1");
-    let start = Instant::now();
-    loop {
-        let next = Arc::clone(&provider);
-        if within(move || next.token()).unwrap().expose() == "t2" {
-            break;
+    assert!(
+        server.await_requests(2, WAIT),
+        "waited for the refresh request"
+    );
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        loop {
+            match provider.token() {
+                Ok(secret) if secret.expose() == "t2" => {
+                    match tx.send(()) {
+                        Ok(()) | Err(mpsc::SendError(())) => {}
+                    }
+                    return;
+                }
+                _ => std::thread::yield_now(),
+            }
         }
-        assert!(start.elapsed() < WAIT, "the refresh never landed");
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    });
+    rx.recv_timeout(WAIT)
+        .expect("waited for the refreshed token");
     assert_eq!(server.requests().len(), 2);
 }
 
@@ -250,7 +276,12 @@ fn sign_returns_a_table_of_headers_or_nothing() {
         ));
     }
     write(&dir.join("init.lua"), &script);
-    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
     for (name, ok) in [
         ("empty", true),
         ("none", true),
@@ -323,23 +354,43 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
     let url = format!("http://{}", listener.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
     std::thread::spawn(move || {
-        if accepted_tx.send(listener.accept().map(|_| ())).is_err() {
+        let Ok((mut sock, _)) = listener.accept() else {
+            return;
+        };
+        let mut buf = [0; 1];
+        let mut seen = Vec::new();
+        loop {
+            match sock.read(&mut buf) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => seen.push(buf[0]),
+            }
+            if seen.ends_with(b"\r\n\r\n") {
+                break;
+            }
+        }
+        if accepted_tx.send(()).is_err() {
             return;
         }
-        std::thread::sleep(Duration::from_secs(30));
+        let (_hold_tx, hold_rx) = mpsc::channel::<()>();
+        match hold_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
+        }
     });
     let home = setup.home();
     store_secret(&home, "fixture.url", &Secret::new(url)).unwrap();
     store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
-    let extension = Arc::new(LuaExtension::new("fixture", fakes::lua_fixture(), &home));
+    let extension = Arc::new(LuaExtension::new(
+        "fixture",
+        fakes::lua_fixture(),
+        &home,
+        fakes::clock::FakeClock::new(),
+    ));
     let provider = LuaProvider::new(extension, "fixture");
     let refresh = provider.refresh_models();
     accepted_rx
         .recv_timeout(WAIT)
-        .expect("models() never reached the server")
-        .unwrap();
+        .expect("waited for models() to reach the server");
     let signer = Arc::clone(&provider);
-    let started = Instant::now();
     let headers = within(move || {
         signer.sign(&SignRequest {
             method: "POST",
@@ -349,11 +400,6 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
         })
     })
     .unwrap();
-    assert!(
-        started.elapsed() < Duration::from_millis(500),
-        "sign waited {:?}, behind the refresh",
-        started.elapsed()
-    );
     assert_eq!(headers.len(), 3);
     assert!(
         config::read_model_cache(&home, "fixture")
@@ -371,6 +417,7 @@ fn the_fixture_registers_each_provider_function() {
         "fixture",
         fakes::lua_fixture(),
         setup.home(),
+        fakes::clock::FakeClock::new(),
     ));
     let functions = within(move || extension.provider_functions("fixture")).unwrap();
     assert_eq!(functions, ["credential", "models", "sign"]);
@@ -384,7 +431,12 @@ fn a_function_the_provider_never_registered_is_extension_failed() {
         &dir.join("init.lua"),
         "fiber.provider(\"p\", { models = { timeout = 1000, run = function() return {} end } })\n",
     );
-    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
     let provider = LuaProvider::new(Arc::clone(&extension), "p");
     let tokens = Arc::clone(&provider);
     let err = within(move || tokens.token()).unwrap_err();
@@ -414,7 +466,12 @@ fn a_provider_function_without_a_timeout_or_an_unknown_one_is_an_error_at_its_li
             &dir.join("init.lua"),
             &format!("-- one\nfiber.provider(\"p\", {spec})\n"),
         );
-        let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+        let extension = Arc::new(LuaExtension::new(
+            "ext",
+            dir,
+            setup.home(),
+            fakes::clock::FakeClock::new(),
+        ));
         let err = within(move || extension.provider_functions("p")).unwrap_err();
         let Error::Lua { message, .. } = &err else {
             panic!("{err:?}")
@@ -442,17 +499,26 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
              fiber.command(\"ok\", {{ timeout = 1000, run = function() return \"ok\" end }})\n"
         ),
     );
-    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let started = Instant::now();
+    let clock = FakeClock::new();
+    let extension = Arc::new(LuaExtension::new("ext", dir, setup.home(), clock.clone()));
+    let asked = clock.now();
     let call = Arc::clone(&extension);
-    let err = within(move || call.command("get", "")).unwrap_err();
-    // The scheduler completes the callback at its deadline. Waiting out the
-    // caller's grace, about a second more, means it did not.
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send(call.command("get", "")));
+    // The caller waits out the grace. The extension thread fails a parked
+    // callback at the deadline, which is only the 200 ms.
     assert!(
-        started.elapsed() < Duration::from_secs(1),
-        "get returned after {:?}, past its deadline",
-        started.elapsed()
+        clock.await_parked(
+            asked + Duration::from_millis(200) + Duration::from_secs(1),
+            WAIT
+        ),
+        "waited for get to park at its grace"
     );
+    clock.advance(Duration::from_millis(200));
+    let err = rx
+        .recv_timeout(WAIT)
+        .expect("waited for get")
+        .unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };

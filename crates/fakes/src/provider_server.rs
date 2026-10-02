@@ -5,8 +5,9 @@
 use std::collections::VecDeque;
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
+use std::time::Duration;
 
 /// Header names whose values are credentials, lowercase. Their values are
 /// masked before a request is recorded, as is a `key` query parameter, which
@@ -101,6 +102,7 @@ struct State {
 pub struct ProviderServer {
     addr: SocketAddr,
     state: Arc<Mutex<State>>,
+    arrived: Arc<Condvar>,
     accept: Option<JoinHandle<()>>,
 }
 
@@ -114,13 +116,16 @@ impl ProviderServer {
             script: script.into_iter().collect(),
             ..State::default()
         }));
+        let arrived = Arc::new(Condvar::new());
         let shared = Arc::clone(&state);
+        let wake = Arc::clone(&arrived);
         let accept = thread::Builder::new()
             .name("fake-provider".to_owned())
-            .spawn(move || accept_loop(&listener, &shared))?;
+            .spawn(move || accept_loop(&listener, &shared, &wake))?;
         Ok(Self {
             addr,
             state,
+            arrived,
             accept: Some(accept),
         })
     }
@@ -136,6 +141,18 @@ impl ProviderServer {
     /// response the request is here.
     pub fn requests(&self) -> Vec<Request> {
         lock(&self.state).requests.clone()
+    }
+
+    /// Waits, at most `within` of real time, until at least `count` requests
+    /// are recorded. True once they are; false at the deadline. Dropping the
+    /// server ends no wait early.
+    pub fn await_requests(&self, count: usize, within: Duration) -> bool {
+        let guard = lock(&self.state);
+        let (guard, _) = self
+            .arrived
+            .wait_timeout_while(guard, within, |state| state.requests.len() < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.requests.len() >= count
     }
 }
 
@@ -162,13 +179,14 @@ fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {
     state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>) {
+fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>, arrived: &Arc<Condvar>) {
     for stream in listener.incoming() {
         if lock(state).stopping {
             return;
         }
         let Ok(stream) = stream else { continue };
         let state = Arc::clone(state);
+        let arrived = Arc::clone(arrived);
         // One thread per connection, so a client holding a connection open
         // never stalls another.
         let spawned = thread::Builder::new()
@@ -176,7 +194,7 @@ fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>) {
             .spawn(move || {
                 // A connection that breaks mid-request has already failed its
                 // client, and there is no complete request to record.
-                match serve(stream, &state) {
+                match serve(stream, &state, &arrived) {
                     Ok(()) | Err(_) => {}
                 }
             });
@@ -187,12 +205,13 @@ fn accept_loop(listener: &TcpListener, state: &Arc<Mutex<State>>) {
     }
 }
 
-fn serve(stream: TcpStream, state: &Mutex<State>) -> io::Result<()> {
+fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let (request, malformed) = read_request(&mut reader)?;
     let response = {
         let mut state = lock(state);
         state.requests.push(request);
+        arrived.notify_all();
         // A malformed body is the client's bug: it gets a 400 and the script
         // keeps its next response.
         match malformed {
