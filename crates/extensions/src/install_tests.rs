@@ -123,6 +123,7 @@ fn a_failed_second_move_puts_the_first_copy_back() {
             assert_eq!(v, "old", "{n} after failing move {fail_on}");
             assert!(!dirs.path(&format!("{n}-fresh")).exists(), "{n}");
         }
+        assert!(!dirs.root.join(".commit").exists());
     }
 }
 
@@ -135,6 +136,7 @@ fn every_staged_copy_goes_in_place_and_nothing_is_left_beside() {
         assert_eq!(v, "new");
         assert!(!dirs.path(&format!("{n}-old")).exists());
     }
+    assert!(!dirs.root.join(".commit").exists());
 }
 
 #[test]
@@ -159,9 +161,16 @@ fn a_copy_that_cannot_be_put_back_is_an_error_naming_it() {
     assert_eq!(stuck, &[dirs.path("a-target")]);
     assert_eq!(err.code(), contract::ErrorCode::IoFailed);
     assert!(err.to_string().contains("a-target"), "{err}");
-    // What could be put back was: b was never moved.
+    // `a` was removed and the restore rename failed, so the journal remains.
+    assert!(dirs.root.join(".commit").is_file());
+    assert!(!dirs.path("a-target").exists());
     let b = fs::read_to_string(dirs.path("b-target/v")).unwrap();
     assert_eq!(b, "old");
+    super::recover(&dirs.root).unwrap();
+    assert_eq!(fs::read_to_string(dirs.path("a-target/v")).unwrap(), "old");
+    assert_eq!(fs::read_to_string(dirs.path("b-target/v")).unwrap(), "old");
+    assert!(!dirs.path("a-old").exists());
+    assert!(!dirs.root.join(".commit").exists());
 }
 
 #[test]
@@ -186,4 +195,76 @@ fn staging_directories_differ_by_plan_id() {
     let two = stage(&home, 2, &source, "0.1.0", &record).unwrap().2;
     assert_ne!(one.fresh, two.fresh);
     assert!(one.fresh.is_dir() && two.fresh.is_dir());
+}
+
+fn journal(dir: &Path, committed: bool, steps: serde_json::Value) {
+    fs::write(
+        dir.join(".commit"),
+        serde_json::json!({ "committed": committed, "steps": steps }).to_string(),
+    )
+    .unwrap();
+}
+
+fn step<'a>(target: &'a Path, old: &'a Path, fresh: &'a Path, had_old: bool) -> serde_json::Value {
+    serde_json::json!({
+        "target": target.display().to_string(),
+        "old": old.display().to_string(),
+        "fresh": fresh.display().to_string(),
+        "had_old": had_old,
+    })
+}
+
+#[test]
+fn an_uncommitted_journal_removes_a_new_install_and_restores_a_replacement() {
+    let dirs = Dirs::new("journal-abort");
+    let installed = dirs.path("installed");
+    let backup = dirs.path("backup");
+    let leftover = dirs.path("leftover");
+    fs::create_dir_all(&installed).unwrap();
+    fs::write(installed.join("v"), "new").unwrap();
+    fs::create_dir_all(&leftover).unwrap();
+    let replaced = dirs.path("replaced");
+    fs::create_dir_all(&replaced).unwrap();
+    fs::write(replaced.join("v"), "new").unwrap();
+    fs::create_dir_all(&backup).unwrap();
+    fs::write(backup.join("v"), "old").unwrap();
+    fs::create_dir_all(dirs.path("replaced-fresh")).unwrap();
+    journal(
+        &dirs.root,
+        false,
+        serde_json::json!([
+            step(&installed, &dirs.path("no-backup"), &leftover, false),
+            step(&replaced, &backup, &dirs.path("replaced-fresh"), true),
+        ]),
+    );
+    super::recover(&dirs.root).unwrap();
+    assert!(!installed.exists(), "a new install is removed");
+    assert!(!leftover.exists());
+    assert_eq!(fs::read_to_string(replaced.join("v")).unwrap(), "old");
+    assert!(!backup.exists());
+    assert!(!dirs.path("replaced-fresh").exists());
+    assert!(!dirs.root.join(".commit").exists());
+}
+
+#[test]
+fn a_committed_journal_keeps_the_new_copy_and_drops_the_backup() {
+    let dirs = Dirs::new("journal-commit");
+    let target = dirs.path("target");
+    let backup = dirs.path("backup");
+    let fresh = dirs.path("fresh-left");
+    fs::create_dir_all(&target).unwrap();
+    fs::write(target.join("v"), "new").unwrap();
+    fs::create_dir_all(&backup).unwrap();
+    fs::write(backup.join("v"), "old").unwrap();
+    fs::create_dir_all(&fresh).unwrap();
+    journal(
+        &dirs.root,
+        true,
+        serde_json::json!([step(&target, &backup, &fresh, true)]),
+    );
+    super::recover(&dirs.root).unwrap();
+    assert_eq!(fs::read_to_string(target.join("v")).unwrap(), "new");
+    assert!(!backup.exists());
+    assert!(!fresh.exists());
+    assert!(!dirs.root.join(".commit").exists());
 }

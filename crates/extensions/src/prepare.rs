@@ -81,7 +81,7 @@ pub(crate) fn prepare(dir: &Path, manifest: &Manifest) -> Result<(), Error> {
                 why: format!("`{program}`: {e}"),
             })?;
         if !out.status.success() {
-            return Err(Error::InstallStep {
+            return Err(Error::InstallExited {
                 name: manifest.name.clone(),
                 why: format!(
                     "`{}` failed: {}",

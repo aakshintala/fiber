@@ -14,6 +14,7 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::{Duration, Instant};
@@ -652,7 +653,10 @@ fn a_second_operation_while_one_holds_the_lock_fails_cleanly() {
         panic!("a second plan")
     };
     assert!(matches!(err, Error::Busy), "{err}");
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(matches!(removal(&setup.home(), LIB), Err(Error::Busy)));
+    assert!(setup.home().join("extensions/.lock").is_file());
+    assert!(!setup.home().join(".extensions.lock").exists());
     // The first plan is untouched by the second's refusal.
     assert_eq!(held.commit().unwrap(), [LIB]);
     assert_eq!(versions(&setup).len(), 1);
@@ -723,6 +727,75 @@ fn a_dependency_cycle_ends() {
     repos.tag(a, "", "v1.0.0", &named(a, &[(b, "1.0")]), &[]);
     repos.tag(b, "", "v1.0.0", &named(b, &[(a, "1.0")]), &[]);
     assert_eq!(install(&setup, &repos, a).unwrap(), [a, b]);
+}
+
+/// Verify counterexample: `r→z1,zz1`, `z1→d1`, `zz1→z1.5,d2`, `z1.5→d2`.
+/// `d` sorts before `z`, so the 1-against-2 conflict is visible while `z` 1
+/// is still staged. It is not final: `z` 1.5 replaces that manifest first.
+#[test]
+fn a_stale_manifest_conflict_is_not_final_until_the_fixpoint() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let n = |s: &str| format!("example.com/acme/{s}");
+    let (r, z, zz, d) = (n("r"), n("z"), n("zz"), n("d"));
+    for tag in ["v1.0.0", "v2.0.0"] {
+        repos.tag(&d, "", tag, &manifest(&d), &[]);
+    }
+    repos.tag(&z, "", "v1.0.0", &named(&z, &[(&d, "1")]), &[]);
+    repos.tag(&z, "", "v1.5.0", &named(&z, &[(&d, "2")]), &[]);
+    repos.tag(
+        &zz,
+        "",
+        "v1.0.0",
+        &named(&zz, &[(&z, "1.5"), (&d, "2")]),
+        &[],
+    );
+    repos.tag(&r, "", "v1.0.0", &named(&r, &[(&z, "1"), (&zz, "1")]), &[]);
+    install(&setup, &repos, &r).unwrap();
+    let got = versions(&setup);
+    assert_eq!(got[&z], "v1.5.0", "{got:?}");
+    assert_eq!(got[&zz], "v1.0.0", "{got:?}");
+    assert_eq!(got[&d], "v2.0.0", "{got:?}");
+    assert_eq!(got[&r], "v1.0.0", "{got:?}");
+}
+
+/// Verify counterexample: `r→z1,zz1`, `z1→a` (missing), `zz1→z1.5`, `z1.5`
+/// has no dependencies. Fetching `a` fails before `zz` is fetched; `a` is
+/// not reachable once `z` 1.5 replaces `z` 1, so the failure is not reported.
+#[test]
+fn a_fetch_failure_of_an_unreachable_dependency_is_not_final() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let n = |s: &str| format!("example.com/acme/{s}");
+    let (r, z, zz, a) = (n("r"), n("z"), n("zz"), n("a"));
+    repos.tag(&z, "", "v1.0.0", &named(&z, &[(&a, "1")]), &[]);
+    repos.tag(&z, "", "v1.5.0", &manifest(&z), &[]);
+    repos.tag(&zz, "", "v1.0.0", &named(&zz, &[(&z, "1.5")]), &[]);
+    repos.tag(&r, "", "v1.0.0", &named(&r, &[(&z, "1"), (&zz, "1")]), &[]);
+    install(&setup, &repos, &r).unwrap();
+    let got = versions(&setup);
+    assert_eq!(got[&z], "v1.5.0", "{got:?}");
+    assert_eq!(got[&zz], "v1.0.0", "{got:?}");
+    assert!(!got.contains_key(&a), "{got:?}");
+}
+
+/// The same shape as the missing-repository case, except `a` exists and is
+/// fetched from the manifest `z` 1.5 then drops. It must not stay installed.
+#[test]
+fn a_dependency_fetched_from_a_replaced_manifest_is_not_installed() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let n = |s: &str| format!("example.com/acme/{s}");
+    let (r, z, zz, a) = (n("r"), n("z"), n("zz"), n("a"));
+    repos.tag(&a, "", "v1.0.0", &manifest(&a), &[]);
+    repos.tag(&z, "", "v1.0.0", &named(&z, &[(&a, "1")]), &[]);
+    repos.tag(&z, "", "v1.5.0", &manifest(&z), &[]);
+    repos.tag(&zz, "", "v1.0.0", &named(&zz, &[(&z, "1.5")]), &[]);
+    repos.tag(&r, "", "v1.0.0", &named(&r, &[(&z, "1"), (&zz, "1")]), &[]);
+    install(&setup, &repos, &r).unwrap();
+    let got = versions(&setup);
+    assert_eq!(got[&z], "v1.5.0", "{got:?}");
+    assert!(!got.contains_key(&a), "{got:?}");
 }
 
 #[test]
@@ -966,7 +1039,8 @@ fn a_failing_install_step_aborts_with_nothing_installed_even_of_the_dependencies
     .unwrap()
     .commit()
     .unwrap_err();
-    assert!(matches!(err, Error::InstallStep { .. }), "{err}");
+    assert!(matches!(err, Error::InstallExited { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::NonzeroExit, "{err}");
     assert!(err.to_string().contains("nope"), "{err}");
     assert!(dirs(&setup).is_empty());
     let missing = setup.source(
@@ -984,6 +1058,7 @@ fn a_failing_install_step_aborts_with_nothing_installed_even_of_the_dependencies
     .commit()
     .unwrap_err();
     assert!(matches!(err, Error::InstallStep { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(dirs(&setup).is_empty());
 }
 
@@ -1062,6 +1137,7 @@ fn a_binary_whose_checksum_differs_aborts_with_nothing_installed() {
     let source = setup.source("local", &m, &[]);
     let err = common::install(&setup.home(), &source, FIBER).unwrap_err();
     assert!(matches!(err, Error::BinaryChecksum { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(served.join().unwrap());
     assert!(dirs(&setup).is_empty());
 }
@@ -1169,4 +1245,135 @@ fn an_items_source_is_its_path_or_its_name() {
     .unwrap();
     let shown = fs::canonicalize(&source).unwrap().display().to_string();
     assert_eq!(p.items().next().unwrap().source(), shown);
+}
+
+fn plant(home: &Path, committed: bool, target: &Path, old: &Path, fresh: &Path, had_old: bool) {
+    let text = serde_json::json!({
+        "committed": committed,
+        "steps": [{
+            "target": target.display().to_string(),
+            "old": old.display().to_string(),
+            "fresh": fresh.display().to_string(),
+            "had_old": had_old,
+        }]
+    });
+    write(&home.join("extensions/.commit"), &text.to_string());
+}
+
+#[test]
+fn a_listing_rolls_back_a_commit_that_stopped_halfway() {
+    let setup = Setup::new();
+    let source = setup.source("local", &manifest("acme"), &[]);
+    write(&source.join("marker"), "old");
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let ext = setup.home().join("extensions/acme");
+    let saved = setup.home().join("extensions/.acme.saved");
+    let fresh = setup.home().join("extensions/.acme.fresh");
+    fs::rename(&ext, &saved).unwrap();
+    write(&ext.join("marker"), "new");
+    write(&fresh.join("marker"), "staged");
+    plant(&setup.home(), false, &ext, &saved, &fresh, true);
+    list(&setup.home()).unwrap();
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/acme/marker")).unwrap(),
+        "old"
+    );
+    assert!(!saved.exists());
+    assert!(!fresh.exists());
+    assert!(!setup.home().join("extensions/.commit").exists());
+    assert!(!setup.home().join(".extensions.lock").exists());
+}
+
+#[test]
+fn a_listing_drops_backups_once_a_commit_has_finished() {
+    let setup = Setup::new();
+    let source = setup.source("local", &manifest("acme"), &[]);
+    write(&source.join("marker"), "kept");
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let ext = setup.home().join("extensions/acme");
+    let saved = setup.home().join("extensions/.acme.saved");
+    let fresh = setup.home().join("extensions/.acme.fresh");
+    write(&saved.join("marker"), "backup");
+    write(&fresh.join("marker"), "staged");
+    plant(&setup.home(), true, &ext, &saved, &fresh, true);
+    list(&setup.home()).unwrap();
+    assert_eq!(fs::read_to_string(ext.join("marker")).unwrap(), "kept");
+    assert!(!saved.exists());
+    assert!(!fresh.exists());
+    assert!(!setup.home().join("extensions/.commit").exists());
+}
+
+/// Restores mode 0755 on drop so the temporary home can be removed.
+struct RestoreMode(PathBuf);
+
+impl Drop for RestoreMode {
+    fn drop(&mut self) {
+        let Ok(meta) = fs::metadata(&self.0) else {
+            return;
+        };
+        let mut perms = meta.permissions();
+        perms.set_mode(0o755);
+        fs::set_permissions(&self.0, perms).unwrap();
+    }
+}
+
+#[test]
+fn a_remove_treats_only_not_found_as_already_gone() {
+    let setup = Setup::new();
+    let source = setup.source("local", &manifest("acme"), &[]);
+    let home = setup.home();
+    let ext = home.join("extensions/acme");
+    let data = home.join("data/acme");
+
+    common::install(&home, &source, FIBER).unwrap();
+    removal(&home, "acme").unwrap().commit().unwrap();
+    assert!(
+        !ext.exists(),
+        "no data directory still removes the extension"
+    );
+
+    common::install(&home, &source, FIBER).unwrap();
+    write(&data.join("x"), "x");
+    let planned = removal(&home, "acme").unwrap();
+    assert!(planned.data.iter().any(|path| path == &data));
+    fs::remove_dir_all(&data).unwrap();
+    planned.commit().unwrap();
+    assert!(!ext.exists(), "a path that vanished is already gone");
+
+    common::install(&home, &source, FIBER).unwrap();
+    write(&data.join("x"), "x");
+    let parent = home.join("data");
+    let _restore = RestoreMode(parent.clone());
+    let mut perms = fs::metadata(&parent).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&parent, perms).unwrap();
+    let err = match removal(&home, "acme") {
+        Ok(_) => panic!("a metadata error was treated as absence"),
+        Err(err) => err,
+    };
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
+    assert!(
+        err.to_string().contains(&data.display().to_string()),
+        "{err}"
+    );
+    assert!(ext.exists(), "a metadata error removes nothing");
+
+    let mut perms = fs::metadata(&parent).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(&parent, perms).unwrap();
+    write(&data.join("x"), "x");
+    let planned = removal(&home, "acme").unwrap();
+    let mut perms = fs::metadata(&parent).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&parent, perms).unwrap();
+    let err = planned.commit().unwrap_err();
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
+    assert!(
+        err.to_string().contains(&data.display().to_string()),
+        "{err}"
+    );
+    assert!(
+        ext.exists(),
+        "commit stops before deleting when metadata fails"
+    );
 }

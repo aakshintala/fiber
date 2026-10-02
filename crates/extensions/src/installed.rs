@@ -1,14 +1,15 @@
 //! What is installed, and `fiber remove` (`docs/extensions.md`, "Installing").
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
 use crate::Error;
 use crate::git::full_name;
-use crate::install::{Provenance, Record, io, remove, slug};
+use crate::install::{Provenance, Record, io, recover, remove, slug};
 
 /// An installed extension.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -31,12 +32,36 @@ pub struct Installed {
 /// copy of the lock's file for a moment after its owner let go.
 const LOCK_TRIES: u32 = 50;
 
-/// Takes the one lock over `extensions/` that every install, update and
-/// remove holds from its first read to its last write. A second operation
-/// waits half a second, then fails with [`Error::Busy`].
-pub(crate) fn lock(home: &Path) -> Result<File, Error> {
-    fs::create_dir_all(home).map_err(io(home))?;
-    let path = home.join(".extensions.lock");
+/// The file lock over `extensions/.lock`, plus a process-local note that
+/// this process holds it. A plan keeps one across approval and then calls
+/// [`list`], which must not try to lock the file again.
+pub(crate) struct Lock {
+    /// Kept so dropping the lock releases it.
+    #[allow(dead_code, reason = "dropping the file releases the advisory lock")]
+    file: File,
+    path: PathBuf,
+}
+
+impl Drop for Lock {
+    fn drop(&mut self) {
+        holders().remove(&self.path);
+    }
+}
+
+fn holders() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
+    static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
+    HELD.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Takes the one lock over `extensions/` that every install, update, remove
+/// and list holds from its first read to its last write. The file is
+/// `extensions/.lock`. A second operation waits half a second, then fails
+/// with [`Error::Busy`]. A commit that stopped halfway is finished before
+/// the lock is returned.
+pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
+    let root = home.join("extensions");
+    fs::create_dir_all(&root).map_err(io(&root))?;
+    let path = root.join(".lock");
     let file = File::options()
         .create(true)
         .append(true)
@@ -44,7 +69,11 @@ pub(crate) fn lock(home: &Path) -> Result<File, Error> {
         .map_err(io(&path))?;
     for _ in 0..LOCK_TRIES {
         match file.try_lock() {
-            Ok(()) => return Ok(file),
+            Ok(()) => {
+                recover(&root)?;
+                holders().insert(path.clone());
+                return Ok(Lock { file, path });
+            }
             Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(10)),
             Err(TryLockError::Error(e)) => return Err(io(&path)(e)),
         }
@@ -53,8 +82,23 @@ pub(crate) fn lock(home: &Path) -> Result<File, Error> {
 }
 
 /// The installed extensions, by name. A manifest or record that cannot be
-/// read is an error naming the file.
+/// read is an error naming the file. A commit that stopped halfway is
+/// finished first, unless this process already holds the lock.
 pub fn list(home: &Path) -> Result<Vec<Installed>, Error> {
+    let root = home.join("extensions");
+    if !root.exists() {
+        return Ok(Vec::new());
+    }
+    if holders().contains(&root.join(".lock")) {
+        return read(home);
+    }
+    let _lock = lock(home)?;
+    read(home)
+}
+
+/// The installed extensions, without taking the lock. The caller holds it
+/// and has already finished any commit that stopped halfway.
+pub(crate) fn read(home: &Path) -> Result<Vec<Installed>, Error> {
     let root = home.join("extensions");
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
@@ -91,17 +135,20 @@ pub struct Removal {
     /// Their data directories and settings files that exist.
     pub data: Vec<PathBuf>,
     dirs: Vec<PathBuf>,
-    _lock: File,
+    _lock: Lock,
 }
 
 impl Removal {
     /// Deletes the extensions, their data directories and their settings.
     pub fn commit(self) -> Result<(), Error> {
+        for path in &self.data {
+            present(path)?;
+        }
         for dir in &self.dirs {
             remove(dir)?;
         }
         for path in &self.data {
-            if fs::symlink_metadata(path).is_err() {
+            if !present(path)? {
                 continue;
             }
             let gone = if path.is_dir() {
@@ -109,9 +156,23 @@ impl Removal {
             } else {
                 fs::remove_file(path)
             };
-            gone.map_err(io(path))?;
+            match gone {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(io(path)(e)),
+            }
         }
         Ok(())
+    }
+}
+
+/// Whether `path` is there. [`std::io::ErrorKind::NotFound`] is absence;
+/// any other metadata error fails, naming `path`.
+fn present(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(io(path)(e)),
     }
 }
 
@@ -120,7 +181,7 @@ impl Removal {
 pub fn removal(home: &Path, typed: &str) -> Result<Removal, Error> {
     let lock = lock(home)?;
     let name = full_name(typed);
-    let mut left = list(home)?;
+    let mut left = read(home)?;
     if !left.iter().any(|i| i.name == name) {
         return Err(Error::NotInstalled { name });
     }
@@ -155,7 +216,7 @@ pub fn removal(home: &Path, typed: &str) -> Result<Removal, Error> {
                 layer.join("data").join(&slug),
                 layer.join("config").join(format!("{slug}.json")),
             ] {
-                if fs::symlink_metadata(&path).is_ok() {
+                if present(&path)? {
                     data.push(path);
                 }
             }

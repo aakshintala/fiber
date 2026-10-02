@@ -163,12 +163,20 @@ pub enum Error {
         /// Why.
         why: String,
     },
-    /// An extension's install step failed.
+    /// An extension's install step could not be started.
     #[error("`{name}`: its install step failed: {why}")]
     InstallStep {
         /// The extension.
         name: String,
         /// Why.
+        why: String,
+    },
+    /// An extension's install step exited nonzero.
+    #[error("`{name}`: its install step failed: {why}")]
+    InstallExited {
+        /// The extension.
+        name: String,
+        /// Why, including what the step wrote.
         why: String,
     },
     /// A binary could not be downloaded.
@@ -309,6 +317,7 @@ impl Error {
             | Self::Download { .. }
             | Self::BinaryChecksum { .. }
             | Self::Rollback { .. } => ErrorCode::IoFailed,
+            Self::InstallExited { .. } => ErrorCode::NonzeroExit,
             // ponytail: docs/errors.md has no code for a dependency that
             // cannot be met; `config_invalid` stands in until the owner
             // names one.

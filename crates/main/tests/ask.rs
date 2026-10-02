@@ -1037,7 +1037,14 @@ fn install_takes_one_name_or_path() {
     }
     let run = setup.fiber(&["install", "/nonexistent"], None);
     assert_eq!(run.code, Some(1));
-    assert!(!setup.home().join("extensions").exists());
+    let root = setup.home().join("extensions");
+    let installed = fs::read_dir(&root).is_ok_and(|entries| {
+        entries
+            .filter_map(Result::ok)
+            .any(|entry| !entry.file_name().to_string_lossy().starts_with('.'))
+    });
+    assert!(!installed, "a refused install leaves no extension");
+    assert!(!setup.home().join(".extensions.lock").exists());
 }
 
 /// A live turn with `muse-spark-1.3-contributor`, opt in by naming the key

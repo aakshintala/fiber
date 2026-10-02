@@ -328,6 +328,7 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::NoTag { .. }
         | Error::BadRecord { .. }
         | Error::InstallStep { .. }
+        | Error::InstallExited { .. }
         | Error::Download { .. }
         | Error::BinaryChecksum { .. }
         | Error::Rollback { .. }

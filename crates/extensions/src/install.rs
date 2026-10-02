@@ -3,7 +3,7 @@
 //! home, and renamed into place only once every check has passed, so a
 //! failed install leaves nothing behind.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io::{self, ErrorKind, Write};
 use std::os::unix::fs::symlink;
 use std::path::{Path, PathBuf};
@@ -143,49 +143,183 @@ pub(crate) fn stage(
     }
 }
 
-/// Puts every staged copy in place, or none: a failed move puts back the
-/// copies already moved, and a copy that cannot be put back is an error
-/// naming it.
+/// One directory a commit moves. `had_old` is whether `target` existed
+/// before the commit, so a later process can tell a new install from a
+/// replacement after the backup is gone.
+#[derive(Clone)]
+struct Step {
+    target: PathBuf,
+    old: PathBuf,
+    fresh: PathBuf,
+    had_old: bool,
+}
+
+/// Puts every staged copy in place, or none. The journal `extensions/.commit`
+/// is written first. A restore that fails leaves that journal; the next
+/// install, update, remove or list finishes it (`recover`).
 pub(crate) fn commit_all(
     staged: &[Paths],
     rename: impl Fn(&Path, &Path) -> io::Result<()>,
 ) -> Result<(), Error> {
-    let mut done: Vec<&Paths> = Vec::new();
+    let Some(dir) = staged
+        .first()
+        .and_then(|p| p.target.parent())
+        .map(Path::to_path_buf)
+    else {
+        return Ok(());
+    };
+    let mut steps = Vec::new();
     for p in staged {
+        let had_old = match fs::symlink_metadata(&p.target) {
+            Ok(_) => true,
+            Err(e) if e.kind() == ErrorKind::NotFound => false,
+            Err(e) => return Err(io(&p.target)(e)),
+        };
+        steps.push(Step {
+            target: p.target.clone(),
+            old: p.old.clone(),
+            fresh: p.fresh.clone(),
+            had_old,
+        });
+    }
+    write_journal(&dir, false, &steps)?;
+    let mut done = Vec::new();
+    for (p, step) in staged.iter().zip(&steps) {
         if let Err(e) = swap(&p.fresh, &p.target, &p.old, &rename) {
             let mut stuck = Vec::new();
-            for d in done.iter().rev() {
-                let restored = remove(&d.target).and_then(|()| {
-                    if fs::symlink_metadata(&d.old).is_ok() {
-                        rename(&d.old, &d.target).map_err(io(&d.old))
-                    } else {
-                        Ok(())
-                    }
-                });
-                if restored.is_err() {
-                    stuck.push(d.target.clone());
+            for step in &done {
+                if abort_step(step, &rename).is_err() {
+                    stuck.push(step.target.clone());
                 }
             }
             for p in staged {
                 remove(&p.fresh).unwrap_or(());
             }
-            return Err(if stuck.is_empty() {
-                e
-            } else {
-                Error::Rollback {
-                    why: e.to_string(),
-                    stuck,
-                }
+            if stuck.is_empty() {
+                remove_journal(&dir)?;
+                return Err(e);
+            }
+            return Err(Error::Rollback {
+                why: e.to_string(),
+                stuck,
             });
         }
-        done.push(p);
+        done.push(step.clone());
     }
-    // The new copies are in place: a stale copy left behind is skipped by
-    // loading and removed by the next install of this extension.
-    for p in staged {
-        remove(&p.old).unwrap_or(());
+    write_journal(&dir, true, &steps)?;
+    recover(&dir)
+}
+
+/// Finishes `dir/.commit` if a commit stopped halfway. An uncommitted
+/// journal is rolled back; a committed one drops the backups.
+pub(crate) fn recover(dir: &Path) -> Result<(), Error> {
+    let Some((committed, steps)) = read_journal(dir)? else {
+        return Ok(());
+    };
+    if committed {
+        for step in &steps {
+            remove(&step.old)?;
+            remove(&step.fresh)?;
+        }
+    } else {
+        for step in &steps {
+            abort_step(step, &|from, to| fs::rename(from, to))?;
+        }
+    }
+    remove_journal(dir)
+}
+
+fn abort_step(step: &Step, rename: &impl Fn(&Path, &Path) -> io::Result<()>) -> Result<(), Error> {
+    if exists(&step.old)? {
+        if exists(&step.target)? {
+            remove(&step.target)?;
+        }
+        rename(&step.old, &step.target).map_err(io(&step.old))?;
+    } else if !step.had_old && exists(&step.target)? {
+        // A new install has no backup. Whatever landed at `target` goes.
+        remove(&step.target)?;
+    }
+    if exists(&step.fresh)? {
+        remove(&step.fresh)?;
     }
     Ok(())
+}
+
+fn exists(path: &Path) -> Result<bool, Error> {
+    match fs::symlink_metadata(path) {
+        Ok(_) => Ok(true),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(false),
+        Err(e) => Err(io(path)(e)),
+    }
+}
+
+fn write_journal(dir: &Path, committed: bool, steps: &[Step]) -> Result<(), Error> {
+    let path = dir.join(".commit");
+    let tmp = dir.join(".commit.new");
+    let body: Vec<serde_json::Value> = steps
+        .iter()
+        .map(|step| {
+            serde_json::json!({
+                "target": step.target.display().to_string(),
+                "old": step.old.display().to_string(),
+                "fresh": step.fresh.display().to_string(),
+                "had_old": step.had_old,
+            })
+        })
+        .collect();
+    let text = serde_json::json!({ "committed": committed, "steps": body }).to_string();
+    let mut file = File::create(&tmp).map_err(io(&tmp))?;
+    file.write_all(text.as_bytes()).map_err(io(&tmp))?;
+    file.sync_all().map_err(io(&tmp))?;
+    fs::rename(&tmp, &path).map_err(io(&path))
+}
+
+fn read_journal(dir: &Path) -> Result<Option<(bool, Vec<Step>)>, Error> {
+    let path = dir.join(".commit");
+    let text = match fs::read_to_string(&path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
+        Err(e) => return Err(io(&path)(e)),
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| io(&path)(io::Error::other(e)))?;
+    let bad = |why: &str| io(&path)(io::Error::other(why));
+    let committed = value
+        .get("committed")
+        .and_then(serde_json::Value::as_bool)
+        .ok_or_else(|| bad("no `committed`"))?;
+    let raw = value
+        .get("steps")
+        .and_then(serde_json::Value::as_array)
+        .ok_or_else(|| bad("no `steps`"))?;
+    let mut steps = Vec::new();
+    for step in raw {
+        let field = |key: &str| {
+            step.get(key)
+                .and_then(serde_json::Value::as_str)
+                .map(PathBuf::from)
+                .ok_or_else(|| bad("a step is missing a path"))
+        };
+        steps.push(Step {
+            target: field("target")?,
+            old: field("old")?,
+            fresh: field("fresh")?,
+            had_old: step
+                .get("had_old")
+                .and_then(serde_json::Value::as_bool)
+                .ok_or_else(|| bad("no `had_old`"))?,
+        });
+    }
+    Ok(Some((committed, steps)))
+}
+
+fn remove_journal(dir: &Path) -> Result<(), Error> {
+    let path = dir.join(".commit");
+    match fs::remove_file(&path) {
+        Ok(()) => Ok(()),
+        Err(e) if e.kind() == ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(io(&path)(e)),
+    }
 }
 
 /// Writes the record as a new file: a link a package carries under that name

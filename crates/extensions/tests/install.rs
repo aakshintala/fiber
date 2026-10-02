@@ -7,11 +7,24 @@
 mod common;
 
 use std::fs;
+use std::path::Path;
 
 use common::{Setup, install, manifest, provider, write};
 use contract::ErrorCode;
 use extensions::Error;
 use serde_json::json;
+
+fn installed_dirs(home: &Path) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(home.join("extensions")) else {
+        return Vec::new();
+    };
+    let mut found: Vec<String> = entries
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .filter(|name| !name.starts_with('.'))
+        .collect();
+    found.sort();
+    found
+}
 
 #[test]
 fn installing_copies_the_directory_into_its_slugged_name() {
@@ -30,11 +43,10 @@ fn installing_copies_the_directory_into_its_slugged_name() {
         "return 1"
     );
     assert!(target.join("providers/acme.json").is_file());
-    let left: Vec<_> = fs::read_dir(setup.home().join("extensions"))
-        .unwrap()
-        .map(|e| e.unwrap().file_name())
-        .collect();
-    assert_eq!(left, ["github.com-acme-fiber-acme"]);
+    assert_eq!(
+        installed_dirs(&setup.home()),
+        ["github.com-acme-fiber-acme"]
+    );
 }
 
 #[test]
@@ -48,12 +60,7 @@ fn installing_again_replaces_the_old_copy() {
     let target = setup.home().join("extensions/acme");
     assert!(!target.join("old.txt").exists());
     assert!(target.join("extension.json").is_file());
-    assert_eq!(
-        fs::read_dir(setup.home().join("extensions"))
-            .unwrap()
-            .count(),
-        1
-    );
+    assert_eq!(installed_dirs(&setup.home()), ["acme"]);
 }
 
 #[test]
@@ -120,13 +127,7 @@ fn a_name_that_does_not_slug_to_one_directory_is_refused() {
         let err = install(&setup.home(), &source, "0.1.0").unwrap_err();
         assert!(matches!(err, Error::BadName { .. }), "{bad:?}: {err:?}");
     }
-    assert!(
-        !setup.home().join("extensions").exists()
-            || fs::read_dir(setup.home().join("extensions"))
-                .unwrap()
-                .count()
-                == 0
-    );
+    assert!(installed_dirs(&setup.home()).is_empty());
 }
 
 #[test]
@@ -139,12 +140,7 @@ fn provider_data_that_does_not_read_installs_nothing() {
     );
     let err = install(&setup.home(), &source, "0.1.0").unwrap_err();
     assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{err:?}");
-    assert_eq!(
-        fs::read_dir(setup.home().join("extensions"))
-            .unwrap()
-            .count(),
-        0
-    );
+    assert!(installed_dirs(&setup.home()).is_empty());
 }
 
 #[test]

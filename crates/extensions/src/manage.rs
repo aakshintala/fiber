@@ -3,7 +3,7 @@
 //! puts everything in place or nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fs::{self, File};
+use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -12,7 +12,7 @@ use config::{Manifest, ProviderData};
 use crate::Error;
 use crate::git::{Origin, full_name, split};
 use crate::install::{Paths, Provenance, Record, commit_all, io, remove, slug, stage};
-use crate::installed::{Installed, list, lock};
+use crate::installed::{Installed, Lock, lock, read};
 use crate::prepare::prepare;
 use crate::resolve::{meets, newest, pick, root_meets};
 
@@ -60,8 +60,9 @@ impl Item {
     /// What it carries, one line each, such as `skills: a, b`: the
     /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file
     /// and the platforms it has binaries for.
-    // ponytail: docs/extensions.md names these kinds but not where they live;
-    // these directory names are a guess until it does.
+    // ponytail: #355 item 5 option A. The doc names these kinds and not the
+    // directories; `skills/`, `prompts/`, `themes/` and `tui/` stand until
+    // the owner picks.
     pub fn carries(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for (dir, label) in [
@@ -103,7 +104,7 @@ pub struct Plan {
     root: String,
     items: BTreeMap<String, Item>,
     scratch: PathBuf,
-    _lock: File,
+    _lock: Lock,
 }
 
 impl Plan {
@@ -146,7 +147,7 @@ pub fn plan(
     origin: &Origin,
 ) -> Result<Plan, Error> {
     let lock = lock(home)?;
-    let installed = list(home)?;
+    let installed = read(home)?;
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));
     remove(&scratch)?;
@@ -331,26 +332,14 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// Chooses each dependency's version until every minimum is met. Each
-    /// round starts from the manifests reachable from the request, so a
-    /// manifest that a newer version replaced neither conflicts nor keeps a
-    /// package in the plan; the rounds end when nothing changes, or when a
-    /// round repeats an earlier state.
+    /// Settles versions at a fixpoint. A round prunes what is no longer
+    /// reachable, replaces one superseded manifest, or fetches one missing
+    /// package. A conflict or a failed fetch is reported only when a round
+    /// changes nothing and that package is still reachable.
     fn resolve(&mut self, plan: &mut Plan) -> Result<(), Error> {
         let mut seen = BTreeSet::new();
-        loop {
-            let reach = reachable(plan);
-            let dropped: Vec<String> = plan
-                .items
-                .keys()
-                .filter(|n| !reach.contains(*n))
-                .cloned()
-                .collect();
-            for name in dropped {
-                if let Some(item) = plan.items.remove(&name) {
-                    remove(&item.paths.fresh)?;
-                }
-            }
+        'round: loop {
+            self.prune(plan)?;
             let state: Vec<(String, String)> = plan
                 .items
                 .iter()
@@ -360,37 +349,98 @@ impl Ctx<'_> {
                 return Err(Error::Unresolved);
             }
             let wants = self.wants(plan);
-            let mut changed = false;
-            for (dep, w) in &wants {
-                if !reach.contains(dep) {
+            let names: Vec<String> = reachable(plan)
+                .into_iter()
+                .filter(|name| name != &plan.root)
+                .collect();
+            let mut deferred: BTreeMap<String, Error> = BTreeMap::new();
+            for dep in &names {
+                let Some(have) = self.chosen(plan, dep).map(str::to_owned) else {
                     continue;
+                };
+                let w = wants.get(dep).cloned().unwrap_or_default();
+                match meets(dep, &have, &w) {
+                    Ok(true) => {}
+                    Ok(false) => match self.stage_dep(plan, dep, &w) {
+                        Ok(()) => continue 'round,
+                        Err(e) => {
+                            deferred.insert(dep.clone(), e);
+                        }
+                    },
+                    Err(e) => {
+                        deferred.insert(dep.clone(), e);
+                    }
                 }
-                let chosen = plan.items.get(dep).map(|i| i.version.as_str());
-                if dep == &plan.root {
-                    root_meets(dep, chosen.unwrap_or_default(), w)?;
-                    continue;
-                }
-                let have = chosen.or_else(|| {
-                    self.installed
-                        .iter()
-                        .find(|i| &i.name == dep)
-                        .map(|i| i.version.as_str())
-                });
-                if let Some(have) = have
-                    && meets(dep, have, w)?
-                {
-                    continue;
-                }
-                let (repo, _) = split(dep)?;
-                let tag = pick(dep, w, &self.origin.tags(repo)?)?;
-                self.add_git(plan, dep, Some(tag), false)?;
-                changed = true;
-                break;
             }
-            if !changed {
-                return Ok(());
+            for dep in &names {
+                if self.chosen(plan, dep).is_some() {
+                    continue;
+                }
+                let w = wants.get(dep).cloned().unwrap_or_default();
+                match self.stage_dep(plan, dep, &w) {
+                    Ok(()) => continue 'round,
+                    Err(e) => {
+                        deferred.insert(dep.clone(), e);
+                    }
+                }
+            }
+            if let Some(err) = deferred.into_values().next() {
+                return Err(err);
+            }
+            if let Some(w) = wants.get(&plan.root) {
+                let have = plan
+                    .items
+                    .get(&plan.root)
+                    .map(|item| item.version.clone())
+                    .unwrap_or_default();
+                root_meets(&plan.root, &have, w)?;
+            }
+            return Ok(());
+        }
+    }
+
+    /// The version staged for `dep`, or the installed one when this plan
+    /// leaves it alone.
+    fn chosen<'a>(&'a self, plan: &'a Plan, dep: &str) -> Option<&'a str> {
+        plan.items
+            .get(dep)
+            .map(|item| item.version.as_str())
+            .or_else(|| {
+                self.installed
+                    .iter()
+                    .find(|installed| installed.name == dep)
+                    .map(|installed| installed.version.as_str())
+            })
+    }
+
+    /// Drops staged packages nothing reachable depends on any more, and the
+    /// directories fetched for them.
+    fn prune(&self, plan: &mut Plan) -> Result<(), Error> {
+        let reach = reachable(plan);
+        let dropped: Vec<String> = plan
+            .items
+            .keys()
+            .filter(|name| !reach.contains(*name))
+            .cloned()
+            .collect();
+        for name in dropped {
+            if let Some(item) = plan.items.remove(&name) {
+                remove(&item.paths.fresh)?;
             }
         }
+        Ok(())
+    }
+
+    /// Stages the lowest tag of `dep` that meets `wants`.
+    fn stage_dep(
+        &mut self,
+        plan: &mut Plan,
+        dep: &str,
+        wants: &BTreeMap<String, String>,
+    ) -> Result<(), Error> {
+        let (repo, _) = split(dep)?;
+        let tag = pick(dep, wants, &self.origin.tags(repo)?)?;
+        self.add_git(plan, dep, Some(tag), false)
     }
 
     /// Each reachable extension's dependencies and, for an installed one the
