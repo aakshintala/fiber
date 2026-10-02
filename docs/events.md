@@ -752,7 +752,8 @@ Durable.
 | `tool_choice` | string | yes | the tool choice as sent |
 | `cache_lifetime` | string | yes | `5m` or `1h` |
 | `system_prompt` | string | yes | the system prompt text as sent |
-| `tools` | array | yes | each tool as sent: `name` (string), `deferred` (boolean) and `definition` (object, the definition in the protocol's own shape) |
+| `tools` | array | yes | each tool as sent: `name` (string), `registered_by` (string: `builtin` for Fiber's own tools, otherwise the name of the extension or MCP server that registered it), `deferred` (boolean) and `definition` (object, the definition in the protocol's own shape) |
+| `replaced` | array | no | each tool registered under a name already taken: `name` (string), `from` (string, the `registered_by` of the tool replaced) and `to` (string, the `registered_by` of the tool that replaced it); absent when no tool was replaced |
 
 #### `model_changed`
 
