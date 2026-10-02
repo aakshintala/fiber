@@ -198,9 +198,27 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
         body.insert(field.into(), json!(max));
     }
     let mut body = Value::Object(body);
+    normalize_markers(&mut body, &request.cache_lifetime);
     let markers = cap_markers(&mut body);
     let lifetime = write_lifetime(&markers, request.cache_lifetime);
     (body.to_string().into_bytes(), lifetime)
+}
+
+/// Rewrites every marker the request sends to the request's cache lifetime
+/// (`docs/prompt-cache.md`, "Usage"): model data may supply a marker with
+/// another lifetime, and the vendor reports one cache-write total, so a
+/// request never sends markers of two lifetimes. Every marker kept by
+/// [`cap_markers`] then carries the request's lifetime, and
+/// [`write_lifetime`] is exact by construction.
+fn normalize_markers(body: &mut Value, lifetime: &CacheLifetime) {
+    for place in marker_places(body) {
+        let Some(holder) = body.pointer_mut(&place).and_then(Value::as_object_mut) else {
+            continue;
+        };
+        if holder.contains_key("cache_control") {
+            holder.insert("cache_control".into(), cache_control(lifetime));
+        }
+    }
 }
 
 /// Where a cache marker may sit: on a message's content part (the system
@@ -248,16 +266,13 @@ fn cap_markers(body: &mut Value) -> Vec<Value> {
 }
 
 /// The lifetime a reported cache write is counted under. The vendor reports
-/// one `cache_write_tokens` total, so it is the lifetime of the markers the
-/// request sent: `1h` for a marker with `ttl: "1h"`, and Anthropic's default
-/// of 5 minutes for one without, such as a marker model data supplied
+/// one `cache_write_tokens` total, and [`normalize_markers`] gives every
+/// marker the request sends the request's lifetime, so it is that lifetime
+/// whenever the request sent a marker: `1h` for a marker with `ttl: "1h"`,
+/// and Anthropic's default of 5 minutes for one without
 /// (openrouter.ai/docs/guides/best-practices/prompt-caching: "By default,
 /// the cache expires after 5 minutes"). A request with no markers counts
 /// any write under its own cache lifetime.
-///
-/// ponytail: a request with markers of both lifetimes counts the whole
-/// write under the first marker's; split it if a vendor reports the two
-/// apart.
 fn write_lifetime(markers: &[Value], requested: CacheLifetime) -> CacheLifetime {
     match markers.first() {
         Some(marker) if marker.get("ttl") == Some(&json!("1h")) => CacheLifetime::OneHour,

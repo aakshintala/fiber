@@ -1215,7 +1215,8 @@ fn a_cache_write_counts_under_the_lifetime_of_the_markers_sent() {
         base_url: base_url.clone(),
         ..markers()
     };
-    // Only a marker model data supplied, with no `ttl`: Anthropic's default.
+    // Only a marker model data supplied, with no `ttl`: it takes the
+    // request's lifetime, five minutes here.
     let theirs = Endpoint {
         extra_body: json!({"tools": [{"type": "function", "function": {"name": "t"},
             "cache_control": {"type": "ephemeral"}}]})
@@ -1225,11 +1226,61 @@ fn a_cache_write_counts_under_the_lifetime_of_the_markers_sent() {
         ..endpoint(&server)
     };
     let mut keys = Vec::new();
-    for endpoint in [ours, theirs, endpoint(&server)] {
-        let reply = run(Box::new(Completions::new(endpoint).request(&hour)))
+    for (endpoint, request) in [
+        (ours, &hour),
+        (
+            theirs,
+            &ModelRequest {
+                cache_lifetime: CacheLifetime::FiveMinutes,
+                ..request()
+            },
+        ),
+        (endpoint(&server), &hour),
+    ] {
+        let reply = run(Box::new(Completions::new(endpoint).request(request)))
             .0
             .unwrap();
         keys.push(reply.tokens.cache_write.into_keys().collect::<Vec<_>>());
     }
     assert_eq!(keys, [["1h"], ["5m"], ["1h"]]);
+}
+
+#[test]
+fn a_model_data_marker_mixed_with_fibers_markers_sends_one_lifetime() {
+    let written = Response::stream(stream(&[
+        chunk(json!({"content": "hi"}), Some("stop")),
+        json!({"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 1,
+            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 8}}}),
+    ]));
+    let server = ProviderServer::start([written]).unwrap();
+    let request = ModelRequest {
+        conversation: four_turn_conversation(),
+        previous_end: Some(3),
+        cache_lifetime: CacheLifetime::OneHour,
+        ..request()
+    };
+    // Model data marks a tool with no `ttl` next to Fiber's 1-hour markers.
+    let declared = Endpoint {
+        base_url: endpoint(&server).base_url,
+        extra_body: json!({"tools": [{"type": "function", "function": {"name": "t"},
+            "cache_control": {"type": "ephemeral"}}]})
+        .as_object()
+        .unwrap()
+        .clone(),
+        ..markers()
+    };
+    let reply = run(Box::new(Completions::new(declared).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        reply.tokens.cache_write.into_keys().collect::<Vec<_>>(),
+        ["1h"]
+    );
+    let sent = sent_body(&server, 0).to_string();
+    assert_eq!(sent.matches("cache_control").count(), 4);
+    assert_eq!(
+        sent.matches("\"ttl\":\"1h\"").count(),
+        4,
+        "every marker sent carries the request's lifetime"
+    );
 }
