@@ -28,7 +28,8 @@ use fakes::{ProviderServer, Response};
 use serde_json::json;
 
 /// How long a test waits for one call, or for a background refresh.
-const WAIT: Duration = Duration::from_secs(10);
+/// Wall time, so the load soak's background priority still fits.
+const WAIT: Duration = Duration::from_secs(60);
 
 /// Runs `f` on its own thread under `WAIT`, so a call that never returns
 /// fails the test instead of hanging it.

@@ -8,6 +8,11 @@ use fakes::clock::FakeClock;
 use super::hub::Progress;
 use super::*;
 
+/// Wall-clock bound on a wait for the VM, a server, or a thread. The load
+/// soak runs this process at background priority, so a few seconds is not
+/// enough for the VM to reach a test server.
+const WAIT: Duration = Duration::from_secs(60);
+
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
 /// where it reaches the Rust caller past the `pcall`; Fiber's builds abort at
@@ -310,13 +315,13 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
     let caller = Arc::clone(&ext);
     thread::spawn(move || done_tx.send(caller.provider_functions("p")));
     let err = done_rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(WAIT)
         .expect("provider_functions never returned")
         .unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     // A hang guard only: without the wake the waiter never returns.
     woke_rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(WAIT)
         .expect("the other waiter was never woken");
 }
 
@@ -381,7 +386,7 @@ fn serve_after(
 /// Waits until `check` holds for the hub's state, or two seconds pass.
 fn until(hub: &Hub, check: impl Fn(&Shared) -> bool) -> bool {
     let shared = hub.lock();
-    hub.wait_for(shared, Duration::from_secs(2), check)
+    hub.wait_for(shared, WAIT, check)
 }
 
 fn stop(hub: &Hub) {
@@ -404,7 +409,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(&dir, "hold", &clock);
     accepted_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(WAIT)
         .expect("waited for hold to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
@@ -412,7 +417,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     )));
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
     stop(&hub);
-    done.recv_timeout(Duration::from_secs(2))
+    done.recv_timeout(WAIT)
         .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
@@ -443,7 +448,7 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         s.calls.get(&spin),
         Some(Progress::Done(_))
     )));
-    done.recv_timeout(Duration::from_secs(2))
+    done.recv_timeout(WAIT)
         .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
@@ -546,26 +551,26 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
     park_accepted
-        .recv_timeout(Duration::from_secs(3))
+        .recv_timeout(WAIT)
         .expect("waited for park to reach the server");
     run("models", |e| e.provider_call("p", "models", Value::Null));
     models_accepted
-        .recv_timeout(Duration::from_secs(3))
+        .recv_timeout(WAIT)
         .expect("waited for models to reach the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
-    held.recv_timeout(Duration::from_secs(3))
+    held.recv_timeout(WAIT)
         .expect("waited for sign to block past its clock checks");
     let abandon = asked + Duration::from_millis(50) + GRACE;
     assert!(
-        clock.await_parked(abandon, Duration::from_secs(2)),
+        clock.await_parked(abandon, WAIT),
         "waited for sign to park at its grace"
     );
     clock.advance(Duration::from_millis(50) + GRACE);
     let mut seen = BTreeMap::new();
     for _ in 0..4 {
         let (what, result) = rx
-            .recv_timeout(Duration::from_secs(5))
+            .recv_timeout(WAIT)
             .expect("waited for a waiter to return");
         seen.insert(what, result.unwrap_err());
     }

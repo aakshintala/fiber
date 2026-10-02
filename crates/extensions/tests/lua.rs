@@ -385,7 +385,7 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
 }
 
 /// Accepts one connection, reads its head, signals, and answers only when
-/// `release` arrives or five seconds pass, so a parked `host.http` can be
+/// `release` arrives or `WAIT` passes, so a parked `host.http` can be
 /// finished on purpose.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn answer_when_released(
@@ -396,7 +396,7 @@ fn answer_when_released(
     let mut sock = listener.accept().unwrap().0;
     read_head(&mut sock);
     accepted.send(()).unwrap();
-    match release.recv_timeout(Duration::from_secs(5)) {
+    match release.recv_timeout(WAIT) {
         Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
     }
     drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
@@ -657,7 +657,7 @@ fn answer_n(
         let mut sock = listener.accept().unwrap().0;
         read_head(&mut sock);
         accepted.send(()).unwrap();
-        match release.recv_timeout(Duration::from_secs(8)) {
+        match release.recv_timeout(WAIT) {
             Ok(())
             | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
         }
