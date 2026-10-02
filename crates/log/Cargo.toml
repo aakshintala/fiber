@@ -11,6 +11,7 @@ serde_json.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+fakes = { path = "../fakes" }
 proptest.workspace = true
 
 # The jigs (docs/testing.md, "Jigs"). `test = true` runs each jig's own tests

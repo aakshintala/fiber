@@ -29,7 +29,7 @@ proptest! {
         cut in any::<prop::sample::Index>(),
     ) {
         let tmp = TestDir::new("prop-cut");
-        let log = Log::create(tmp.path(), id("s_1")).unwrap();
+        let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
         let mut written: Vec<Envelope> = Vec::new();
         for d in &durable {
             let event = if *d { empty("step_started") } else { delta("x") };
@@ -48,7 +48,7 @@ proptest! {
 
         let dir = tmp.session(&id("s_1"));
         prop_assert_eq!(read(&dir).unwrap(), &written[..whole]);
-        let log = Log::open(tmp.path(), id("s_1")).unwrap();
+        let log = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
         let next = log.append(&empty("step_started"), None, None).unwrap();
         prop_assert_eq!(next.seq.map(|s| s.0), Some(u64::try_from(whole).unwrap()));
         let mut expected = written[..whole].to_vec();

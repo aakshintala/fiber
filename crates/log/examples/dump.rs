@@ -54,7 +54,7 @@ mod tests {
     #[test]
     fn it_prints_the_log_a_session_left_one_event_per_line() {
         let tmp = TestDir::new("dump");
-        let log = Log::create(tmp.path(), id("s_1")).unwrap();
+        let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
         log.append(&session_started(), None, None).unwrap();
         log.append(&delta("x"), None, None).unwrap();
         log.append(&empty("step_started"), None, None).unwrap();

@@ -7,9 +7,9 @@ use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
-use std::thread;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, UNIX_EPOCH};
 
+use contract::clock::Clock;
 use contract::events::{Class, Event};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
@@ -26,6 +26,7 @@ use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 /// truncates whatever part of a line the failure left.
 pub struct Log {
     inner: Mutex<Inner>,
+    clock: Arc<dyn Clock>,
 }
 
 struct Inner {
@@ -46,8 +47,9 @@ impl Log {
     /// Creates the session directory `id` in `sessions` (see
     /// [`crate::sessions_dir`]; an absolute path), holding `events.jsonl`,
     /// `session.lock` and `artifacts/` and nothing else, and takes its lock.
-    /// Refuses a session that already exists.
-    pub fn create(sessions: &Path, id: SessionId) -> Result<Self, Error> {
+    /// Refuses a session that already exists. `clock` stamps `ts` and spaces
+    /// the retries that name a holder who has not yet written a pid.
+    pub fn create(sessions: &Path, id: SessionId, clock: Arc<dyn Clock>) -> Result<Self, Error> {
         let dir = session_path(sessions, &id);
         let mut fsyncs = 0;
         // Each new directory's entry is fsynced in its parent, so a crash
@@ -62,7 +64,7 @@ impl Log {
             .mode(0o700)
             .create(&artifacts)
             .map_err(io_at(&artifacts))?;
-        let lock = lock(&dir, &id)?;
+        let lock = lock(&dir, &id, clock.as_ref())?;
         let path = dir.join(EVENTS);
         let events = OpenOptions::new()
             .append(true)
@@ -72,19 +74,20 @@ impl Log {
         sync_dir(&dir, &mut fsyncs)?;
         let mut inner = Inner::new(id, dir, events, lock, 0);
         inner.fsyncs = fsyncs;
-        Ok(Self::from(inner))
+        Ok(Self::from_parts(inner, clock))
     }
 
     /// Opens the existing session `id` in `sessions` for writing, taking its
     /// lock. A torn tail left by a crash or a failed write is truncated
-    /// first, and `seq` carries on from the last complete line.
-    pub fn open(sessions: &Path, id: SessionId) -> Result<Self, Error> {
+    /// first, and `seq` carries on from the last complete line. `clock` is
+    /// the same one [`Log::create`] takes.
+    pub fn open(sessions: &Path, id: SessionId, clock: Arc<dyn Clock>) -> Result<Self, Error> {
         let dir = session_path(sessions, &id);
         let path = dir.join(EVENTS);
         if !path.is_file() {
             return Err(Error::NotFound(dir));
         }
-        let lock = lock(&dir, &id)?;
+        let lock = lock(&dir, &id, clock.as_ref())?;
         let events = OpenOptions::new()
             .read(true)
             .append(true)
@@ -100,7 +103,10 @@ impl Log {
             Some(line) => line.seq.map_or(0, |s| s.0 + 1),
             None => 0,
         };
-        Ok(Self::from(Inner::new(id, dir, events, lock, next)))
+        Ok(Self::from_parts(
+            Inner::new(id, dir, events, lock, next),
+            clock,
+        ))
     }
 
     /// Emits `event` about `turn_id` and `action_id`, where they apply, and
@@ -124,7 +130,7 @@ impl Log {
         let mut line = Envelope {
             kind: event.kind().to_owned(),
             session_id: inner.session_id.clone(),
-            ts: now_ms(),
+            ts: now_ms(self.clock.as_ref()),
             schema_version: SCHEMA_VERSION,
             turn_id,
             action_id,
@@ -196,10 +202,11 @@ impl Log {
     }
 }
 
-impl From<Inner> for Log {
-    fn from(inner: Inner) -> Self {
+impl Log {
+    fn from_parts(inner: Inner, clock: Arc<dyn Clock>) -> Self {
         Self {
             inner: Mutex::new(inner),
+            clock,
         }
     }
 }
@@ -371,7 +378,7 @@ impl Drop for Lock {
 
 /// Takes the session's lock and writes the holder's pid into it, or names
 /// who holds it.
-fn lock(dir: &Path, id: &SessionId) -> Result<Lock, Error> {
+fn lock(dir: &Path, id: &SessionId, clock: &dyn Clock) -> Result<Lock, Error> {
     let path = dir.join(LOCK);
     let mut file = OpenOptions::new()
         .read(true)
@@ -389,7 +396,7 @@ fn lock(dir: &Path, id: &SessionId) -> Result<Lock, Error> {
         }
         Err(TryLockError::WouldBlock) => Err(Error::Held {
             session: id.0.clone(),
-            holder: holder(&path),
+            holder: holder(&path, clock),
         }),
         Err(TryLockError::Error(e)) => Err(io_at(&path)(e)),
     }
@@ -401,20 +408,21 @@ fn lock(dir: &Path, id: &SessionId) -> Result<Lock, Error> {
 /// Names the holder of the lock at `path`. A holder writes its pid just
 /// after taking the lock, so the file may still be empty; it is read again
 /// for up to 50 ms before giving up.
-fn holder(path: &Path) -> String {
+fn holder(path: &Path, clock: &dyn Clock) -> String {
     for _ in 0..50 {
         let pid = fs::read_to_string(path).unwrap_or_default();
         if !pid.trim().is_empty() {
             return format!("process {}", pid.trim());
         }
-        thread::sleep(Duration::from_millis(1));
+        clock.sleep(Duration::from_millis(1));
     }
     "a process whose pid is not yet recorded".to_owned()
 }
 
 /// Milliseconds since the epoch, for `ts`.
-fn now_ms() -> u64 {
-    SystemTime::now()
+fn now_ms(clock: &dyn Clock) -> u64 {
+    clock
+        .wall()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
 }

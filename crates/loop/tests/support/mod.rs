@@ -314,7 +314,8 @@ impl Session {
         let workspace = home.0.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let id = SessionId("s_test".into());
-        let log = Arc::new(Log::create(&home.0, id.clone()).unwrap());
+        let log =
+            Arc::new(Log::create(&home.0, id.clone(), fakes::clock::FakeClock::new()).unwrap());
         let mut watcher = log.watch();
         let (forward, lines) = mpsc::channel();
         thread::spawn(move || {

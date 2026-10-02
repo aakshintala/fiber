@@ -173,7 +173,7 @@ fn open(temp: &Temp, home: &str, out: &Shared) -> (Arc<Log>, PathBuf, Result<Ses
     let sessions = home.join("projects/p/sessions");
     let id = SessionId(mint("s_"));
     let dir = sessions.join(&id.0);
-    let log = Arc::new(Log::create(&sessions, id).unwrap());
+    let log = Arc::new(Log::create(&sessions, id, fakes::clock::FakeClock::new()).unwrap());
     let session = Session::open(&home, &dir, log.watch(), Box::new(out.clone()));
     (log, dir, session)
 }

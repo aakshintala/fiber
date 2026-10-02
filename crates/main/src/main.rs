@@ -46,6 +46,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> i32 {
+    let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
     let args: Vec<String> = match std::env::args_os()
         .skip(1)
         .map(|a| a.into_string())
@@ -55,7 +56,7 @@ fn run() -> i32 {
         Err(_) => return ask_failed(usage("An argument is not UTF-8 text.")),
     };
     match args.split_first() {
-        Some((door, rest)) if door == "ask" => ask(rest),
+        Some((door, rest)) if door == "ask" => ask(rest, clock),
         Some((command, rest)) if command == "install" || command == "update" => {
             install(command, rest)
         }
@@ -223,7 +224,7 @@ fn fail(e: Failure) -> i32 {
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.
-fn ask(args: &[String]) -> i32 {
+fn ask(args: &[String], clock: Arc<dyn contract::clock::Clock>) -> i32 {
     let (model, args) = match args {
         [flag, model, rest @ ..] if flag == "--model" => (Some(model.clone()), rest),
         [flag] if flag == "--model" => {
@@ -255,7 +256,7 @@ fn ask(args: &[String]) -> i32 {
     };
     let id = SessionId(doors::mint("s_"));
     let dir = parts.sessions.join(&id.0);
-    let log = match Log::create(&parts.sessions, id) {
+    let log = match Log::create(&parts.sessions, id, clock) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
