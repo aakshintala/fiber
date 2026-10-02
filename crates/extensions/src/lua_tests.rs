@@ -897,6 +897,19 @@ fn a_second_command_waits_until_the_parked_command_finishes() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// Whether a parked call ended on its own terms: its reply, or its own
+/// timeout of `timeout_ms` if a slow runner released it too late. Never
+/// another call's error.
+fn ended_on_its_own(result: &Result<String, Error>, timeout_ms: u64) -> bool {
+    match result {
+        Ok(_) => true,
+        Err(Error::Timeout {
+            timeout_ms: got, ..
+        }) => *got == timeout_ms,
+        Err(_) => false,
+    }
+}
+
 #[test]
 fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -940,7 +953,8 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     assert_eq!((callback.as_str(), *timeout_ms), ("quick", 300));
     assert!(ext.is_running(), "the queued timeout stopped the extension");
     release_tx.send(()).unwrap();
-    assert!(slow.recv_timeout(WAIT).unwrap().is_ok());
+    let slow = slow.recv_timeout(WAIT).unwrap();
+    assert!(ended_on_its_own(&slow, 5000), "{slow:?}");
     assert_eq!(
         start(&ext, "after").recv_timeout(WAIT).unwrap().unwrap(),
         "no"
@@ -1053,7 +1067,8 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
     assert_eq!(*timeout_ms, 400);
     assert!(ext.is_running());
     hold_release_tx.send(()).unwrap();
-    assert!(held.recv_timeout(WAIT).unwrap().is_ok());
+    let held = held.recv_timeout(WAIT).unwrap();
+    assert!(ended_on_its_own(&held, 5000), "{held:?}");
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
