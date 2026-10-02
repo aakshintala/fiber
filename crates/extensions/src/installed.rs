@@ -86,7 +86,7 @@ pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
 /// finished first, unless this process already holds the lock.
 pub fn list(home: &Path) -> Result<Vec<Installed>, Error> {
     let root = home.join("extensions");
-    if !root.exists() {
+    if !root.try_exists().map_err(io(&root))? {
         return Ok(Vec::new());
     }
     if holders().contains(&root.join(".lock")) {
@@ -148,9 +148,8 @@ impl Removal {
             remove(dir)?;
         }
         for path in &self.data {
-            if !present(path)? {
-                continue;
-            }
+            // `present` already ran. A path that vanished since then is
+            // already gone; any other failure names the path.
             let gone = if path.is_dir() {
                 fs::remove_dir_all(path)
             } else {
@@ -228,4 +227,36 @@ pub fn removal(home: &Path, typed: &str) -> Result<Removal, Error> {
         dirs,
         _lock: lock,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, reason = "a failure is the test's")]
+mod tests {
+    use std::fs;
+    use std::path::PathBuf;
+
+    use super::read;
+
+    fn home(name: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("fiber-read-{}-{name}", std::process::id()));
+        fs::remove_dir_all(&root).unwrap_or(());
+        fs::create_dir_all(&root).unwrap();
+        root
+    }
+
+    #[test]
+    fn a_missing_extensions_directory_lists_nothing() {
+        let home = home("missing");
+        assert!(read(&home).unwrap().is_empty());
+        fs::remove_dir_all(&home).unwrap();
+    }
+
+    #[test]
+    fn an_extensions_path_that_is_not_a_directory_is_an_error() {
+        let home = home("file");
+        fs::write(home.join("extensions"), "nope").unwrap();
+        let err = read(&home).unwrap_err();
+        assert!(err.to_string().contains("extensions"), "{err}");
+        fs::remove_dir_all(&home).unwrap();
+    }
 }

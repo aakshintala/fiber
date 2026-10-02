@@ -4,6 +4,7 @@
 use std::cell::Cell;
 use std::fs;
 use std::io;
+use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use super::{Paths, commit_all, swap};
@@ -174,6 +175,29 @@ fn a_copy_that_cannot_be_put_back_is_an_error_naming_it() {
 }
 
 #[test]
+fn a_copy_whose_own_put_back_fails_is_put_back_by_the_rollback() {
+    // Moves: a aside, a in place, b aside, b in place (fails), b back
+    // (fails), then the rollback: a back, b back.
+    let (dirs, paths) = pair("own-put-back");
+    let calls = Cell::new(0);
+    commit_all(&paths, |from, to| {
+        calls.set(calls.get() + 1);
+        if matches!(calls.get(), 4 | 5) {
+            Err(io::Error::other("injected"))
+        } else {
+            fs::rename(from, to)
+        }
+    })
+    .unwrap_err();
+    for n in ["a", "b"] {
+        let v = fs::read_to_string(dirs.path(&format!("{n}-target/v"))).unwrap();
+        assert_eq!(v, "old", "{n}");
+        assert!(!dirs.path(&format!("{n}-old")).exists(), "{n}");
+    }
+    assert!(!dirs.root.join(".commit").exists());
+}
+
+#[test]
 fn staging_directories_differ_by_plan_id() {
     use super::{Provenance, Record, stage};
     let dirs = Dirs::new("ids");
@@ -244,6 +268,76 @@ fn an_uncommitted_journal_removes_a_new_install_and_restores_a_replacement() {
     assert!(!backup.exists());
     assert!(!dirs.path("replaced-fresh").exists());
     assert!(!dirs.root.join(".commit").exists());
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+/// Puts the directory back to `0o755` so the temporary tree can be removed.
+struct Open(PathBuf);
+
+impl Drop for Open {
+    fn drop(&mut self) {
+        if fs::metadata(&self.0).is_ok() {
+            set_mode(&self.0, 0o755);
+        }
+    }
+}
+
+#[test]
+fn a_target_that_cannot_be_stated_stops_before_any_move() {
+    let (dirs, paths) = pair("meta");
+    let _open = Open(dirs.root.clone());
+    set_mode(&dirs.root, 0);
+    let err = commit_all(&paths, |from, to| fs::rename(from, to)).unwrap_err();
+    set_mode(&dirs.root, 0o755);
+    assert!(err.to_string().contains("a-target"), "{err}");
+    assert!(!dirs.root.join(".commit").exists());
+    assert_eq!(fs::read_to_string(dirs.path("a-target/v")).unwrap(), "old");
+}
+
+#[test]
+fn a_path_whose_metadata_fails_is_an_error_naming_it() {
+    let dirs = Dirs::new("exists");
+    let hidden = dirs.path("hidden");
+    fs::create_dir(&hidden).unwrap();
+    fs::write(hidden.join("f"), "x").unwrap();
+    let _open = Open(hidden.clone());
+    set_mode(&hidden, 0);
+    let err = super::exists(&hidden.join("f")).unwrap_err();
+    set_mode(&hidden, 0o755);
+    assert!(
+        err.to_string().contains("hidden/f") || err.to_string().contains("f"),
+        "{err}"
+    );
+}
+
+#[test]
+fn a_journal_that_cannot_be_read_is_an_error_naming_it() {
+    let dirs = Dirs::new("journal-dir");
+    fs::create_dir(dirs.root.join(".commit")).unwrap();
+    let Err(err) = super::read_journal(&dirs.root) else {
+        panic!("a directory was read as a journal");
+    };
+    assert!(err.to_string().contains(".commit"), "{err}");
+}
+
+#[test]
+fn removing_a_missing_journal_succeeds() {
+    let dirs = Dirs::new("journal-missing");
+    super::remove_journal(&dirs.root).unwrap();
+}
+
+#[test]
+fn removing_a_journal_that_is_a_directory_fails_naming_it() {
+    let dirs = Dirs::new("journal-not-file");
+    fs::create_dir(dirs.root.join(".commit")).unwrap();
+    let err = super::remove_journal(&dirs.root).unwrap_err();
+    assert!(err.to_string().contains(".commit"), "{err}");
+    assert!(dirs.root.join(".commit").is_dir());
 }
 
 #[test]

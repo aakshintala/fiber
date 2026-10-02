@@ -1377,3 +1377,28 @@ fn a_remove_treats_only_not_found_as_already_gone() {
         "commit stops before deleting when metadata fails"
     );
 }
+
+#[test]
+fn a_data_directory_that_cannot_be_removed_fails_naming_it() {
+    let setup = Setup::new();
+    let source = setup.source("local", &manifest("acme"), &[]);
+    let home = setup.home();
+    common::install(&home, &source, FIBER).unwrap();
+    let data = home.join("data/acme");
+    let inner = data.join("inner");
+    write(&inner.join("x"), "x");
+    let _restore = RestoreMode(inner.clone());
+    let mut perms = fs::metadata(&inner).unwrap().permissions();
+    perms.set_mode(0o000);
+    fs::set_permissions(&inner, perms).unwrap();
+    let err = removal(&home, "acme").unwrap().commit().unwrap_err();
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
+    assert!(
+        err.to_string().contains(&data.display().to_string()),
+        "{err}"
+    );
+    assert!(
+        inner.exists(),
+        "the directory that could not be removed stays"
+    );
+}

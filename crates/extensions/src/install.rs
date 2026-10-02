@@ -185,6 +185,9 @@ pub(crate) fn commit_all(
     write_journal(&dir, false, &steps)?;
     let mut done = Vec::new();
     for (p, step) in staged.iter().zip(&steps) {
+        // The step that fails is rolled back too: its own put-back may
+        // have failed.
+        done.push(step.clone());
         if let Err(e) = swap(&p.fresh, &p.target, &p.old, &rename) {
             let mut stuck = Vec::new();
             for step in &done {
@@ -204,7 +207,6 @@ pub(crate) fn commit_all(
                 stuck,
             });
         }
-        done.push(step.clone());
     }
     write_journal(&dir, true, &steps)?;
     recover(&dir)
@@ -347,7 +349,7 @@ fn swap(
     old: &Path,
     rename: impl Fn(&Path, &Path) -> io::Result<()>,
 ) -> Result<(), Error> {
-    let replacing = fs::symlink_metadata(target).is_ok();
+    let replacing = exists(target)?;
     if replacing {
         rename(target, old).map_err(io(target))?;
     }
