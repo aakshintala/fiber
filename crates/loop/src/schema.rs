@@ -1,23 +1,21 @@
 //! Tool arguments against their input schema (`docs/tools.md`, "Before a call
-//! runs"): the repair made where the schema allows exactly one reading, and
-//! the check. The schema is the subset `docs/dependencies.md`, "Written
-//! ourselves", names; any other keyword is skipped.
+//! runs"): the repairs made where a property's schema names a single type,
+//! and the check. The check covers the subset `docs/dependencies.md`,
+//! "Written ourselves", names; any other keyword is skipped.
 
 use contract::events::{ArgumentRepair, Repair, RepairFix};
 use serde_json::{Map, Number, Value};
 
-/// The repair `schema` allows to `arguments`: the one distinct reading of
-/// them that passes the whole schema, or `None` when there is not exactly one
-/// or it needed no repair.
+/// The repairs `schema` allows to `arguments`, or `None` when none applied.
+/// One pass over the arguments.
 pub(crate) fn repair(schema: &Value, arguments: &Value) -> Option<ArgumentRepair> {
-    let mut passing = readings(schema, arguments, "")
-        .into_iter()
-        .filter(|(reading, _)| check(schema, reading).is_empty());
-    let (Value::Object(repaired), repairs) = passing.next()? else {
+    let mut repaired = arguments.clone();
+    let mut repairs = Vec::new();
+    fix(schema, schema, &mut repaired, "", &mut repairs);
+    let Value::Object(repaired) = repaired else {
         return None;
     };
-    let one = passing.next().is_none() && !repairs.is_empty();
-    one.then_some(ArgumentRepair { repaired, repairs })
+    (!repairs.is_empty()).then_some(ArgumentRepair { repaired, repairs })
 }
 
 /// Every way `value` fails `schema`, one line per bad field.
@@ -27,142 +25,138 @@ pub(crate) fn check(schema: &Value, value: &Value) -> Vec<String> {
     errors
 }
 
-/// A reading of a value, with the repairs that make it from the value sent.
-type Reading = (Value, Vec<Repair>);
-
-/// Every distinct reading of `value` under `schema`, from every `anyOf`
-/// branch, nested ones included, whether or not it passes.
-fn readings(schema: &Value, value: &Value, path: &str) -> Vec<Reading> {
-    let mut all: Vec<Reading> = Vec::new();
-    for (read, made) in plain(schema, value, path) {
-        let Some(Value::Array(options)) = schema.get("anyOf") else {
-            add(&mut all, read, made);
-            continue;
-        };
-        for option in options {
-            for (inner, more) in readings(option, &read, path) {
-                add(&mut all, inner, made.iter().cloned().chain(more).collect());
-            }
-        }
+/// Repairs `value` against `schema`, part of `root`, adding each fix to
+/// `repairs`. Nothing under an `anyOf` or `oneOf` is repaired.
+fn fix(root: &Value, schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>) {
+    let Some(schema) = resolve(root, schema) else {
+        return;
+    };
+    if choice(schema) {
+        return;
     }
-    all
-}
-
-/// Adds `value` to `all` unless an equal reading is already there.
-fn add(all: &mut Vec<Reading>, value: Value, made: Vec<Repair>) {
-    if !all.iter().any(|(seen, _)| *seen == value) {
-        all.push((value, made));
-    }
-}
-
-/// The readings of `value` under every keyword of `schema` but `anyOf`.
-fn plain(schema: &Value, value: &Value, path: &str) -> Vec<Reading> {
-    let allowed = types(schema);
-    let wants = |name: &str| allowed.contains(&name);
     match value {
-        Value::String(text) if !wants("string") => match parse(schema, text, &wants) {
-            Some((parsed, fix)) => vec![(
-                parsed,
-                vec![Repair {
-                    path: path.to_owned(),
-                    fix,
-                }],
-            )],
-            None => vec![(value.clone(), Vec::new())],
-        },
         Value::Object(map) => {
             let required = required(schema);
-            let mut all = vec![(value.clone(), Vec::new())];
             for (key, property) in properties(schema) {
                 let at = format!("{path}/{}", escape(key));
-                let drop = map.get(key).is_some_and(Value::is_null)
+                let Some(inner) = map.get_mut(key) else {
+                    continue;
+                };
+                let drop = inner.is_null()
                     && !required.contains(&key.as_str())
-                    && !check(property, &Value::Null).is_empty();
+                    && resolve(root, property)
+                        .and_then(single)
+                        .is_some_and(|kind| kind != "null");
                 if drop {
-                    for (reading, made) in &mut all {
-                        if let Value::Object(reading) = reading {
-                            reading.remove(key);
-                        }
-                        made.push(Repair {
-                            path: at.clone(),
-                            fix: RepairFix::NullDropped,
-                        });
-                    }
-                } else if let Some(inner) = map.get(key) {
-                    all = product(all, &readings(property, inner, &at), key.as_str());
+                    map.remove(key);
+                    repairs.push(Repair {
+                        path: at,
+                        fix: RepairFix::NullDropped,
+                    });
+                } else {
+                    fix(root, property, inner, &at, repairs);
                 }
             }
-            all
         }
         Value::Array(items) => {
-            let mut all = vec![(value.clone(), Vec::new())];
             if let Some(each) = schema.get("items") {
-                for (i, item) in items.iter().enumerate() {
-                    all = product(all, &readings(each, item, &format!("{path}/{i}")), i);
+                for (i, item) in items.iter_mut().enumerate() {
+                    fix(root, each, item, &format!("{path}/{i}"), repairs);
                 }
             }
-            all
         }
-        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => {
-            vec![(value.clone(), Vec::new())]
-        }
-    }
-}
-
-/// Every reading in `all` with its part at `at` replaced by each of `inner`.
-fn product<I: serde_json::value::Index + Copy>(
-    all: Vec<Reading>,
-    inner: &[Reading],
-    at: I,
-) -> Vec<Reading> {
-    let mut out = Vec::with_capacity(all.len() * inner.len());
-    for (reading, made) in &all {
-        for (part, more) in inner {
-            let mut reading = reading.clone();
-            if let Some(slot) = reading.get_mut(at) {
-                *slot = part.clone();
+        Value::String(text) => {
+            let Some(kind) = single(schema) else {
+                return;
+            };
+            let read = match kind {
+                "integer" | "number" => number(text, kind == "integer")
+                    .map(|n| (Value::Number(n), RepairFix::StringToNumber)),
+                "boolean" => match text.as_str() {
+                    "true" => Some((Value::Bool(true), RepairFix::StringToBoolean)),
+                    "false" => Some((Value::Bool(false), RepairFix::StringToBoolean)),
+                    _ => None,
+                },
+                "array" | "object" => parse(root, schema, kind, text, path, repairs),
+                _ => None,
+            };
+            if let Some((read, how)) = read {
+                *value = read;
+                repairs.push(Repair {
+                    path: path.to_owned(),
+                    fix: how,
+                });
             }
-            out.push((reading, made.iter().chain(more).cloned().collect()));
         }
+        Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
-    out
 }
 
-/// The one value `text` reads as where `schema` does not take a string.
-fn parse(schema: &Value, text: &str, wants: &dyn Fn(&str) -> bool) -> Option<(Value, RepairFix)> {
-    let trimmed = text.trim();
-    if wants("integer") || wants("number") {
-        let number = trimmed
-            .parse::<i64>()
-            .map(Number::from)
-            .or_else(|_| trimmed.parse::<u64>().map(Number::from))
-            .ok()
-            .or_else(|| {
-                trimmed
-                    .parse::<f64>()
-                    .ok()
-                    .filter(|_| wants("number"))
-                    .and_then(Number::from_f64)
-            });
-        if let Some(number) = number {
-            return Some((Value::Number(number), RepairFix::StringToNumber));
-        }
+/// `text` parsed as the `kind` (array or object) `schema` names, repaired
+/// inside, where the result passes `schema`. The repairs inside go to
+/// `repairs` only then.
+fn parse(
+    root: &Value,
+    schema: &Value,
+    kind: &str,
+    text: &str,
+    path: &str,
+    repairs: &mut Vec<Repair>,
+) -> Option<(Value, RepairFix)> {
+    let mut parsed: Value = serde_json::from_str(text).ok()?;
+    if !is(&parsed, kind) {
+        return None;
     }
-    if wants("boolean") {
-        match trimmed {
-            "true" => return Some((Value::Bool(true), RepairFix::StringToBoolean)),
-            "false" => return Some((Value::Bool(false), RepairFix::StringToBoolean)),
-            _ => {}
-        }
+    let mut inside = Vec::new();
+    fix(root, schema, &mut parsed, path, &mut inside);
+    if !check(schema, &parsed).is_empty() {
+        return None;
     }
-    if wants("object") || wants("array") {
-        let parsed: Value = serde_json::from_str(trimmed).ok()?;
-        // Whether it then passes is the whole schema's to say (`repair`).
-        if matches!(&parsed, Value::Object(_) | Value::Array(_)) {
-            return Some((parsed, RepairFix::StringParsed));
-        }
+    repairs.append(&mut inside);
+    Some((parsed, RepairFix::StringParsed))
+}
+
+/// `text` as a plain JSON number, whole where `integer` is asked for.
+fn number(text: &str, integer: bool) -> Option<Number> {
+    // JSON allows whitespace around a number; a repair does not.
+    if text.trim() != text {
+        return None;
     }
-    None
+    let number: Number = serde_json::from_str(text).ok()?;
+    if !integer || number.is_i64() || number.is_u64() {
+        return Some(number);
+    }
+    let whole = number.as_f64().filter(|f| f.fract() == 0.0)?;
+    format!("{whole:.0}").parse::<i64>().ok().map(Number::from)
+}
+
+/// The one type `schema` names, where it names one and has no `anyOf` or
+/// `oneOf`.
+fn single(schema: &Value) -> Option<&str> {
+    match types(schema).as_slice() {
+        [one] if !choice(schema) => Some(one),
+        _ => None,
+    }
+}
+
+/// Whether `schema` offers a choice of shapes, under which nothing is
+/// repaired.
+fn choice(schema: &Value) -> bool {
+    schema.get("anyOf").is_some() || schema.get("oneOf").is_some()
+}
+
+/// `schema` with each local `$ref` followed, or `None` for a `$ref` that
+/// cannot be followed or leads back to itself.
+fn resolve<'a>(root: &'a Value, mut schema: &'a Value) -> Option<&'a Value> {
+    let mut seen = Vec::new();
+    while let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        if seen.contains(&reference) {
+            return None;
+        }
+        seen.push(reference);
+        schema = root.pointer(reference.strip_prefix('#')?)?;
+    }
+    Some(schema)
 }
 
 fn walk(schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
