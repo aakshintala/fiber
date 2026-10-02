@@ -20,10 +20,47 @@ use crate::secret::CredentialSource;
 pub struct Manifest {
     /// The extension's name, which is also where it is fetched from.
     pub name: String,
+    /// The extension's own version, such as `v1.4.0`.
+    pub version: String,
     /// The lowest Fiber version it runs on, such as `0.3.0`.
     pub fiber: String,
     /// The extension API's major version it was written for.
     pub api: u64,
+    /// The other extensions it depends on, each with a minimum version.
+    #[serde(default)]
+    pub depends: BTreeMap<String, String>,
+    /// The native binaries it ships, by platform such as `darwin-arm64`.
+    #[serde(default)]
+    pub binaries: BTreeMap<String, Binary>,
+    /// For a process extension, the program it runs.
+    #[serde(default)]
+    pub process: Option<Process>,
+    /// The command Fiber runs in the extension's directory at install and at
+    /// every update, such as `["npm", "ci"]`.
+    #[serde(default)]
+    pub install: Option<Vec<String>>,
+    /// A file in the package whose text goes in the system prompt.
+    #[serde(default)]
+    pub prompt: Option<String>,
+}
+
+/// One platform's binary: where it is downloaded from and its checksum.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Binary {
+    /// The download URL.
+    pub url: String,
+    /// The lowercase hex SHA-256 of the file.
+    pub sha256: String,
+}
+
+/// A process extension's program.
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Process {
+    /// The program.
+    pub program: String,
+    /// Its arguments.
+    #[serde(default)]
+    pub args: Vec<String>,
 }
 
 /// `providers/<name>.json`: one provider an extension registers as data.

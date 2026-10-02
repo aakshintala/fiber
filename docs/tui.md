@@ -6,7 +6,7 @@ is true now, not a plan. It is settled by
 and [Terminal: a control center over many sessions](https://github.com/aakshintala/fiber/issues/258);
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Session, turn, step, step boundary, action, tool
+Vocabulary is `GLOSSARY.md`. Session, turn, step, step boundary, action, tool
 call, job, delegate, handoff, steering message, client and driver mean what it
 says there and nothing else. The events the terminal reads are
 `docs/events.md`; the commands it sends are `docs/invocation.md`, "Driver

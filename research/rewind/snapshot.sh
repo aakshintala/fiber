@@ -19,4 +19,4 @@ s=time.perf_counter(); subprocess.run('git add -A && git write-tree',shell=True,
 print(sys.argv[1], round((time.perf_counter()-s)*1000), 'ms')" "$1"; }
 t first-snapshot; t second-no-change; t third-no-change
 echo z > nm/p5/f500.js; t after-untracked-change
-echo q >> CONTEXT.md; t after-tracked-change
+echo q >> GLOSSARY.md; t after-tracked-change

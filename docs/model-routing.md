@@ -1,6 +1,6 @@
 # Model routing
 
-How Fiber reaches a model, and how one is chosen. Vocabulary is `CONTEXT.md`.
+How Fiber reaches a model, and how one is chosen. Vocabulary is `GLOSSARY.md`.
 The provider seam is `docs/architecture.md`, and the extension runtime is
 `docs/extensions.md`. The reasoning behind the protocol and provider split is
 [ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md). pi is the

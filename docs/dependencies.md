@@ -171,7 +171,7 @@ it connects through the fallback.
 
 ## Programs Fiber runs
 
-Fiber needs no program installed beyond the operating system's own, with two
+Fiber needs no program installed beyond the operating system's own, with three
 exceptions:
 
 - The shell tool runs `/bin/bash`, or `sh` where bash does not exist
@@ -179,6 +179,10 @@ exceptions:
 - Reading a PDF for a provider that cannot take one natively renders its
   pages with poppler's `pdftoppm`. It is optional: without it, that one call
   fails and names the package (`docs/tools.md`, "read").
+- Installing, updating or fetching an extension runs the system `git`, so a
+  person's SSH keys and credential helpers apply (`docs/extensions.md`,
+  "Names"). Without it the command fails with `usage` and says to install git
+  (`docs/errors.md`).
 
 `grep` and `find` in the shell tool run Fiber's own search, not a system
 program (`docs/tools.md`, "Search").

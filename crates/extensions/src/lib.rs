@@ -1,6 +1,6 @@
 //! Installs extensions into Fiber home and registers what they provide
 //! (`docs/extensions.md`). It holds only what a data-only provider needs:
-//! installing from a local path, reading each installed provider's data
+//! installing from a local path or from git by name, reading each installed provider's data
 //! through `config`, and choosing the session's model from them
 //! (`docs/model-routing.md`, "Naming a model" and "Choosing the model"). It
 //! also hosts the Lua runtime a Lua extension runs in (`docs/extensions.md`,
@@ -8,11 +8,16 @@
 //! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
 //! and "Credentials").
 
+mod git;
 mod host;
 mod install;
+mod installed;
 mod lua;
 mod lua_provider;
+mod manage;
+mod prepare;
 mod providers;
+mod resolve;
 
 use std::io;
 use std::path::PathBuf;
@@ -20,9 +25,13 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
-pub use install::install;
+pub use git::{Origin, SHORT_NAMES, full_name, is_path};
+pub use install::Provenance;
+pub use installed::{Installed, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
+pub use manage::{Item, Plan, Request, plan};
+pub use prepare::platform;
 pub use providers::{Model, Providers};
 
 /// The extension API's major version this Fiber speaks
@@ -80,6 +89,119 @@ pub enum Error {
     BadName {
         /// The name.
         name: String,
+    },
+    /// `git` is not on the `PATH`.
+    #[error("`git` is not installed. Install git, then run the command again.")]
+    GitMissing,
+    /// A `git` command failed, such as a fetch of an unknown repository.
+    #[error("`git {command}` failed: {why}")]
+    Git {
+        /// The arguments.
+        command: String,
+        /// What `git` said.
+        why: String,
+    },
+    /// Dependents that need different major versions of one extension.
+    #[error("{a} `{name}` and {b} `{name}`: two major versions cannot both be installed.")]
+    MajorConflict {
+        /// The dependency.
+        name: String,
+        /// A dependent and the minimum it states, as "`x` needs 1.2".
+        a: String,
+        /// A dependent of another major version, likewise.
+        b: String,
+    },
+    /// No tag meets the minimums.
+    #[error("No version of `{name}` is {needs} or later.")]
+    NoVersion {
+        /// The dependency.
+        name: String,
+        /// The highest minimum asked.
+        needs: String,
+    },
+    /// The dependencies' versions kept changing one another.
+    #[error("The dependencies' versions could not be settled.")]
+    Unresolved,
+    /// An extension that is not installed.
+    #[error("`{name}` is not installed.")]
+    NotInstalled {
+        /// The name.
+        name: String,
+    },
+    /// A fetched manifest names another extension than the one asked for.
+    #[error("Fetched `{asked}`, but its manifest names `{found}`.")]
+    WrongName {
+        /// The name asked for.
+        asked: String,
+        /// The name in the manifest.
+        found: String,
+    },
+    /// Another install, update or remove holds the lock over `extensions/`.
+    #[error(
+        "Another `fiber install`, `update` or `remove` is running. Run the command again when it ends."
+    )]
+    Busy,
+    /// Two names whose directory is the same.
+    #[error("`{name}` and `{other}` would both be installed at `extensions/{}`.", name.replace('/', "-"))]
+    SlugTaken {
+        /// The name being installed.
+        name: String,
+        /// The name that has the directory.
+        other: String,
+    },
+    /// A repository with no version tag.
+    #[error("`{name}` has no version tag, such as `v1.0.0`. A version is a git tag.")]
+    NoTag {
+        /// The name.
+        name: String,
+    },
+    /// An install record that is missing or does not read.
+    #[error("{}: {why}", path.display())]
+    BadRecord {
+        /// The record file.
+        path: PathBuf,
+        /// Why.
+        why: String,
+    },
+    /// An extension's install step could not be started.
+    #[error("`{name}`: its install step failed: {why}")]
+    InstallStep {
+        /// The extension.
+        name: String,
+        /// Why.
+        why: String,
+    },
+    /// An extension's install step exited nonzero.
+    #[error("`{name}`: its install step failed: {why}")]
+    InstallExited {
+        /// The extension.
+        name: String,
+        /// Why, including what the step wrote.
+        why: String,
+    },
+    /// A binary could not be downloaded.
+    #[error("`{name}`: its binary could not be downloaded: {why}")]
+    Download {
+        /// The extension.
+        name: String,
+        /// Why.
+        why: String,
+    },
+    /// A binary whose SHA-256 is not the manifest's.
+    #[error("`{name}`: the binary at {url} does not match the sha256 in its manifest.")]
+    BinaryChecksum {
+        /// The extension.
+        name: String,
+        /// Where it was downloaded from.
+        url: String,
+    },
+    /// A move failed and some extensions could not be put back.
+    #[error("The install failed ({why}) and these could not be put back: {}", stuck.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join(", "))]
+    Rollback {
+        /// What failed first.
+        why: String,
+        /// The directories left as they are.
+        stuck: Vec<PathBuf>,
     },
     /// A model reference whose provider is not installed.
     #[error("The provider `{provider}` is not installed. Run `fiber install {provider}`.")]
@@ -187,7 +309,25 @@ impl Error {
         match self {
             Self::Config(e) => e.code(),
             Self::Io { .. } => ErrorCode::IoFailed,
-            Self::Overlaps { .. } => ErrorCode::Usage,
+            Self::Overlaps { .. } | Self::GitMissing => ErrorCode::Usage,
+            Self::Git { .. }
+            | Self::Busy
+            | Self::BadRecord { .. }
+            | Self::InstallStep { .. }
+            | Self::Download { .. }
+            | Self::BinaryChecksum { .. }
+            | Self::Rollback { .. } => ErrorCode::IoFailed,
+            Self::InstallExited { .. } => ErrorCode::NonzeroExit,
+            // ponytail: docs/errors.md has no code for a dependency that
+            // cannot be met; `config_invalid` stands in until the owner
+            // names one.
+            Self::MajorConflict { .. }
+            | Self::NoVersion { .. }
+            | Self::Unresolved
+            | Self::WrongName { .. }
+            | Self::SlugTaken { .. }
+            | Self::NoTag { .. } => ErrorCode::ConfigInvalid,
+            Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
             // ponytail: docs/errors.md has no code for an extension this
             // Fiber cannot run; `usage` stands in until the owner names one.
             Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => ErrorCode::Usage,
