@@ -61,6 +61,8 @@ pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by
     };
     let mut parked = Vec::new();
     while let Some(work) = next(name, hub, &mut parked) {
+        // The call has started or resumed.
+        hub.notify();
         let (id, step) = match work {
             Work::Start(job, timeout, deadline) => {
                 let step = vm.step(&job.target, &job.arg, timeout, deadline);
@@ -190,4 +192,5 @@ fn settle(
             parked: true,
         };
     }
+    hub.notify();
 }

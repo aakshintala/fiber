@@ -355,7 +355,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
 fn the_thread_quits_after_the_running_callback_once_stopped() {
     let dir = extension(
         "running",
-        "fiber.command(\"spin\", { timeout = 300, run = function() while true do end end })\n\
+        "fiber.command(\"spin\", { timeout = 1000, run = function() while true do end end })\n\
          fiber.command(\"later\", { timeout = 5000, run = function() return \"later\" end })\n",
     );
     let (hub, spin, handle) = serve_after(&dir, "spin");
