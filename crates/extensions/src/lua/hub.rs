@@ -301,6 +301,20 @@ fn again(name: &str, e: &Error) -> Error {
             extension: extension.clone(),
             callback: callback.clone(),
         },
-        _ => stopped(name),
+        Error::Stopped { .. }
+        | Error::Config(_)
+        | Error::Overlaps { .. }
+        | Error::NeedsNewerFiber { .. }
+        | Error::ApiVersion { .. }
+        | Error::BadVersion { .. }
+        | Error::BadName { .. }
+        | Error::ProviderMissing { .. }
+        | Error::ModelMissing { .. }
+        | Error::UnknownModel { .. }
+        | Error::Ambiguous { .. }
+        | Error::UnknownCommand { .. }
+        | Error::UnknownCallback { .. }
+        | Error::BadReturn { .. }
+        | Error::NoModel => stopped(name),
     }
 }

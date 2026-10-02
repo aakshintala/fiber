@@ -29,7 +29,8 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         .load(r#"local ok, e = pcall(boom) return tostring(ok) .. " " .. tostring(e)"#)
         .into_function()
         .unwrap();
-    vm.deadline.restore(Instant::now().checked_add(LOAD_TIMEOUT));
+    vm.deadline
+        .restore(Instant::now().checked_add(LOAD_TIMEOUT));
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         vm.resume(f, "boom", LOAD_TIMEOUT, mlua::Value::Nil)
     }));
@@ -64,7 +65,9 @@ fn returned(next: Next) -> Result<Value, Error> {
 }
 
 fn ago(ms: u64) -> Instant {
-    Instant::now() - Duration::from_millis(ms)
+    Instant::now()
+        .checked_sub(Duration::from_millis(ms))
+        .unwrap()
 }
 
 /// A call waiting on registration sleeps until the entry script's grace
@@ -87,8 +90,8 @@ fn a_call_waiting_on_registration_sleeps_until_the_entry_scripts_grace_ends() {
 #[test]
 fn every_call_waiting_on_an_abandoned_registration_gets_abandoned() {
     let mut shared = in_phase(Phase::Registering {
-            abandon_at: Some(ago(1)),
-        });
+        abandon_at: Some(ago(1)),
+    });
     let first = shared.push(command("a"), Value::Null, ago(5));
     let second = shared.push(command("b"), Value::Null, ago(5));
     for (id, name) in [(first, "a"), (second, "b")] {
@@ -115,7 +118,10 @@ fn a_queued_call_past_its_own_timeout_times_out_and_the_vm_stays() {
         "{err:?}"
     );
     assert!(matches!(shared.phase, Phase::Ready(_)));
-    assert_eq!(shared.queue.iter().map(|job| job.id).collect::<Vec<_>>(), [slow]);
+    assert_eq!(
+        shared.queue.iter().map(|job| job.id).collect::<Vec<_>>(),
+        [slow]
+    );
     let Next::Sleep(until) = shared.judge("ext", slow, &command("slow"), ago(150)) else {
         panic!("slow returned")
     };
@@ -148,7 +154,16 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
         },
     );
     let err = returned(shared.judge("ext", id, &command("park"), ago(2000))).unwrap_err();
-    assert!(matches!(err, Error::Timeout { timeout_ms: 100, .. }), "{err:?}");
+    assert!(
+        matches!(
+            err,
+            Error::Timeout {
+                timeout_ms: 100,
+                ..
+            }
+        ),
+        "{err:?}"
+    );
     assert!(matches!(shared.phase, Phase::Ready(_)));
 }
 
@@ -178,7 +193,10 @@ fn a_running_call_past_its_grace_abandons_the_vm() {
     );
     let err = returned(shared.judge("ext", id, &command("spin"), ago(1200))).unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
-    assert!(matches!(shared.phase, Phase::Stopped(Error::Stopped { .. })));
+    assert!(matches!(
+        shared.phase,
+        Phase::Stopped(Error::Stopped { .. })
+    ));
 }
 
 /// Every waiter on a stopped extension gets the error that stopped it, at
@@ -230,15 +248,14 @@ fn a_finished_call_returns_its_result() {
 /// An extension dropped while running is stopped, so its thread quits.
 #[test]
 fn dropping_the_extension_stops_it() {
-    let ext = LuaExtension::new(
-        "fixture",
-        fakes::lua_fixture(),
-        "/nonexistent-fiber-home",
-    );
+    let ext = LuaExtension::new("fixture", fakes::lua_fixture(), "/nonexistent-fiber-home");
     assert_eq!(ext.command("echo", "hi").unwrap(), "hi");
     let hub = Arc::clone(&ext.hub);
     drop(ext);
-    assert!(matches!(hub.lock().phase, Phase::Stopped(Error::Stopped { .. })));
+    assert!(matches!(
+        hub.lock().phase,
+        Phase::Stopped(Error::Stopped { .. })
+    ));
 }
 
 /// An extension directory in a fresh temporary directory, with `init`.
@@ -325,7 +342,10 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(handle.is_finished(), "the thread kept running once stopped");
-    assert!(matches!(hub.lock().calls.get(&later), Some(Progress::Queued)));
+    assert!(matches!(
+        hub.lock().calls.get(&later),
+        Some(Progress::Queued)
+    ));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -347,13 +367,19 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         Some(Progress::Started { parked: false, .. })
     )));
     stop(&hub);
-    assert!(until(&hub, |s| matches!(s.calls.get(&spin), Some(Progress::Done(_)))));
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&spin),
+        Some(Progress::Done(_))
+    )));
     let end = Instant::now() + Duration::from_secs(2);
     while !handle.is_finished() && Instant::now() < end {
         thread::sleep(Duration::from_millis(10));
     }
     assert!(handle.is_finished(), "the thread kept running once stopped");
-    assert!(matches!(hub.lock().calls.get(&later), Some(Progress::Queued)));
+    assert!(matches!(
+        hub.lock().calls.get(&later),
+        Some(Progress::Queued)
+    ));
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -399,7 +425,9 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     run("park", |e| e.command("park", "").map(Value::String));
     park_accepted.recv_timeout(Duration::from_secs(3)).unwrap();
     run("models", |e| e.provider_call("p", "models", Value::Null));
-    models_accepted.recv_timeout(Duration::from_secs(3)).unwrap();
+    models_accepted
+        .recv_timeout(Duration::from_secs(3))
+        .unwrap();
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
     let mut seen = BTreeMap::new();
@@ -412,9 +440,17 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         "the waiters took {:?}, not the abandonment",
         started.elapsed()
     );
-    assert!(matches!(seen["sign"], Error::Abandoned { .. }), "{:?}", seen["sign"]);
+    assert!(
+        matches!(seen["sign"], Error::Abandoned { .. }),
+        "{:?}",
+        seen["sign"]
+    );
     for what in ["park", "models", "queued"] {
-        assert!(matches!(seen[what], Error::Stopped { .. }), "{what}: {:?}", seen[what]);
+        assert!(
+            matches!(seen[what], Error::Stopped { .. }),
+            "{what}: {:?}",
+            seen[what]
+        );
     }
     assert!(!ext.is_running());
     std::fs::remove_dir_all(&dir).unwrap();

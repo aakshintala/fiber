@@ -115,9 +115,10 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
             .iter()
             .position(|job| !(command_parked && matches!(job.target, Target::Command(_))));
         if let Some(job) = startable.and_then(|pos| shared.queue.remove(pos)) {
-            let declared = match &shared.phase {
-                Phase::Ready(timeouts) => timeouts.timeout(&job.target),
-                _ => None,
+            let declared = if let Phase::Ready(timeouts) = &shared.phase {
+                timeouts.timeout(&job.target)
+            } else {
+                None
             };
             let Some(timeout) = declared else {
                 shared.finish(job.id, Err(not_registered(name, &job.target)));
@@ -143,7 +144,11 @@ fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
 fn settle(
     name: &str,
     dir: &Path,
-    hub: &Arc<Hub>, parked: &mut Vec<Parked>, id: u64, step: Result<Step, Error>) {
+    hub: &Arc<Hub>,
+    parked: &mut Vec<Parked>,
+    id: u64,
+    step: Result<Step, Error>,
+) {
     let (thread, target, deadline, timeout, request) = match step {
         Ok(Step::Done(value)) => return hub.finish(id, Ok(value)),
         Err(e) => return hub.finish(id, Err(e)),
