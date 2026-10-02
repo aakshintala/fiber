@@ -41,19 +41,21 @@ fn the_worker_quits_once_a_caller_stops_waiting() {
     let (later, answers) = mpsc::channel();
     for reply in [gone, later] {
         inbox
-            .send(Job {
+            .send(schedule::Msg::Job(Job {
                 target: Target::Command("echo".to_owned()),
                 arg: Value::String("x".to_owned()),
                 reply,
-            })
+            }))
             .unwrap();
     }
+    let http = inbox.clone();
     drop(inbox);
-    serve(
+    schedule::serve(
         "fixture",
         &fakes::lua_fixture(),
         Path::new("/nonexistent-fiber-home"),
         &jobs,
+        &http,
     );
     // Dropping the inbox drops the job left in it, and its reply sender.
     drop(jobs);

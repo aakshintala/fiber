@@ -3,21 +3,36 @@
 //! `json`, and converting between Lua values and JSON.
 
 use std::path::PathBuf;
+use std::time::Duration;
 
-use mlua::{Lua, LuaSerdeExt, LuaString, Table, Value as LuaValue};
+use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
 use ring::{digest, hmac};
 use serde_json::{Map, Number, Value};
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
-use crate::lua::Deadline;
+/// `host.http` yields this tag and the request table. The extension's thread
+/// runs the request off to the side and resumes the coroutine with the reply
+/// (`docs/extensions.md`, "A host call suspends the code that made it").
+const HTTP: &str = r#"
+local host, tag = ...
+function host.http(opts)
+  if type(opts) ~= "table" or type(opts.url) ~= "string" then
+    error("host.http: `url` must be a string", 2)
+  end
+  local status, body = coroutine.yield(tag, opts)
+  if status == nil then error(body, 0) end
+  return { status = status, body = body }
+end
+"#;
 
 /// How deep a Lua table may nest to become JSON. Deeper, such as a table
 /// that holds itself, is an error rather than a stack overflow.
 const MAX_DEPTH: usize = 128;
 
-/// Sets the `host` and `json` globals.
-pub(crate) fn install(lua: &Lua, deadline: &Deadline, home: PathBuf) -> mlua::Result<()> {
+/// Sets the `host` and `json` globals. The returned tag is what `host.http`
+/// yields, so the scheduler can tell that yield from any other.
+pub(crate) fn install(lua: &Lua, home: PathBuf) -> mlua::Result<LuaValue> {
     let host = lua.create_table()?;
     host.set(
         "secret",
@@ -27,11 +42,10 @@ pub(crate) fn install(lua: &Lua, deadline: &Deadline, home: PathBuf) -> mlua::Re
                 .map_err(mlua::Error::external)
         })?,
     )?;
-    let deadline = deadline.clone();
-    host.set(
-        "http",
-        lua.create_function(move |lua, opts: Table| http(lua, &opts, &deadline))?,
-    )?;
+    let tag = lua.create_table()?;
+    lua.load(HTTP)
+        .set_name("=host.http")
+        .call::<()>((host.clone(), tag.clone()))?;
     host.set(
         "sha256",
         lua.create_function(|_, bytes: LuaString| Ok(sha256_hex(&bytes.as_bytes())))?,
@@ -65,7 +79,8 @@ pub(crate) fn install(lua: &Lua, deadline: &Deadline, home: PathBuf) -> mlua::Re
     )?;
     let globals = lua.globals();
     globals.set("host", host)?;
-    globals.set("json", json)
+    globals.set("json", json)?;
+    Ok(LuaValue::Table(tag))
 }
 
 /// SHA-256 of `bytes`, as lowercase hex.
@@ -77,18 +92,43 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
         .collect()
 }
 
-/// `host.http({ url, method, headers, body })`: one request, which gives up
-/// at the callback's deadline. Returns `{ status, body }`; a status other
-/// than 2xx is a reply, not an error.
-// ponytail: blocks the extension's thread rather than suspending the
-// coroutine (docs/extensions.md, "A host call suspends the code that made
-// it"); one callback runs at a time until the timers that need it arrive.
-fn http(lua: &Lua, opts: &Table, deadline: &Deadline) -> mlua::Result<Table> {
+/// One `host.http` call, copied out of Lua so it can run off the extension's
+/// thread. `timeout` is the callback's own deadline, plus a grace so the
+/// scheduler, not this request, is what stops the callback.
+pub(crate) struct HttpRequest {
+    method: String,
+    url: String,
+    headers: Vec<(String, String)>,
+    body: Option<Vec<u8>>,
+    timeout: Option<Duration>,
+}
+
+/// Reads the request `host.http` yielded.
+pub(crate) fn request_from(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpRequest> {
     let url: String = opts.get("url")?;
     let method = opts
         .get::<Option<String>>("method")?
         .unwrap_or_else(|| "GET".to_owned());
     let body: Option<LuaString> = opts.get("body")?;
+    let mut headers = Vec::new();
+    if let Some(table) = opts.get::<Option<Table>>("headers")? {
+        for pair in table.pairs::<String, String>() {
+            headers.push(pair?);
+        }
+    }
+    Ok(HttpRequest {
+        method,
+        url,
+        headers,
+        body: body.map(|b| b.as_bytes().to_vec()),
+        timeout,
+    })
+}
+
+/// Runs `request`. A status other than 2xx is a reply, not an error. The
+/// error string is what `host.http` raises.
+pub(crate) fn perform(request: &HttpRequest) -> Result<(u16, Vec<u8>), String> {
+    let fail = |e: &dyn std::fmt::Display| format!("host.http: {e}");
     let config = Agent::config_builder()
         .tls_config(
             TlsConfig::builder()
@@ -97,33 +137,38 @@ fn http(lua: &Lua, opts: &Table, deadline: &Deadline) -> mlua::Result<Table> {
         )
         .http_status_as_error(false)
         .max_redirects(0)
-        .timeout_global(deadline.remaining())
+        .timeout_global(request.timeout)
         .build();
     let agent: Agent = config.into();
-    let mut request = ureq::http::Request::builder()
-        .method(method.as_str())
-        .uri(&url);
-    if let Some(headers) = opts.get::<Option<Table>>("headers")? {
-        for pair in headers.pairs::<String, String>() {
-            let (name, value) = pair?;
-            request = request.header(name, value);
-        }
+    let mut builder = ureq::http::Request::builder()
+        .method(request.method.as_str())
+        .uri(&request.url);
+    for (name, value) in &request.headers {
+        builder = builder.header(name, value);
     }
-    let fail = |e: &dyn std::fmt::Display| mlua::Error::RuntimeError(format!("host.http: {e}"));
-    let response = match body {
-        Some(body) => agent.run(
-            request
-                .body(body.as_bytes().to_vec())
-                .map_err(|e| fail(&e))?,
-        ),
-        None => agent.run(request.body(()).map_err(|e| fail(&e))?),
+    let response = match &request.body {
+        Some(body) => agent.run(builder.body(body.clone()).map_err(|e| fail(&e))?),
+        None => agent.run(builder.body(()).map_err(|e| fail(&e))?),
     };
     let mut response = response.map_err(|e| fail(&e))?;
     let bytes = response.body_mut().read_to_vec().map_err(|e| fail(&e))?;
-    let reply = lua.create_table()?;
-    reply.set("status", response.status().as_u16())?;
-    reply.set("body", lua.create_string(bytes)?)?;
-    Ok(reply)
+    Ok((response.status().as_u16(), bytes))
+}
+
+/// The values `coroutine.yield` returns to `host.http`: a status and a body,
+/// or nil and the error text.
+pub(crate) fn resume_values(
+    lua: &Lua,
+    result: Result<(u16, Vec<u8>), String>,
+) -> mlua::Result<MultiValue> {
+    let (status, body) = match result {
+        Ok((status, bytes)) => (
+            LuaValue::Integer(i64::from(status)),
+            lua.create_string(bytes)?,
+        ),
+        Err(message) => (LuaValue::Nil, lua.create_string(message)?),
+    };
+    Ok(MultiValue::from_vec(vec![status, LuaValue::String(body)]))
 }
 
 /// A Lua value as JSON. A table whose keys are exactly 1 to its length is an

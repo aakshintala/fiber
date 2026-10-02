@@ -2,12 +2,7 @@ use super::*;
 
 fn lua() -> Lua {
     let lua = Lua::new();
-    install(
-        &lua,
-        &Deadline::default(),
-        PathBuf::from("/nonexistent-fiber-home"),
-    )
-    .unwrap();
+    install(&lua, PathBuf::from("/nonexistent-fiber-home")).unwrap();
     lua
 }
 

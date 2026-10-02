@@ -313,6 +313,57 @@ fn sign_sees_the_bodys_hash_never_the_body_and_adds_headers() {
     assert_eq!(headers.len(), 3);
 }
 
+/// A background `models()` stuck in `host.http` must not hold the extension's
+/// thread: `sign()` returns inside its own deadline (`docs/extensions.md`,
+/// "A host call suspends the code that made it").
+#[test]
+fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
+    let setup = Setup::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        if accepted_tx.send(listener.accept().map(|_| ())).is_err() {
+            return;
+        }
+        std::thread::sleep(Duration::from_secs(30));
+    });
+    let home = setup.home();
+    store_secret(&home, "fixture.url", &Secret::new(url)).unwrap();
+    store_secret(&home, "fixture.api_key", &Secret::new("k1".into())).unwrap();
+    let extension = Arc::new(LuaExtension::new("fixture", fakes::lua_fixture(), &home));
+    let provider = LuaProvider::new(extension, "fixture");
+    let refresh = provider.refresh_models();
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("models() never reached the server")
+        .unwrap();
+    let signer = Arc::clone(&provider);
+    let started = Instant::now();
+    let headers = within(move || {
+        signer.sign(&SignRequest {
+            method: "POST",
+            url: "http://127.0.0.1/v1/responses",
+            headers: &[],
+            body: b"{}",
+        })
+    })
+    .unwrap();
+    assert!(
+        started.elapsed() < Duration::from_millis(500),
+        "sign waited {:?}, behind the refresh",
+        started.elapsed()
+    );
+    assert_eq!(headers.len(), 3);
+    assert!(
+        config::read_model_cache(&home, "fixture")
+            .unwrap()
+            .is_none(),
+        "the refresh is still suspended"
+    );
+    drop(refresh);
+}
+
 #[test]
 fn the_fixture_registers_each_provider_function() {
     let setup = Setup::new();
