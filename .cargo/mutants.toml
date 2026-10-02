@@ -1,0 +1,6 @@
+# Mutation testing (docs/testing.md, "Proving a test bites").
+#
+# System::sleep blocks on the wall clock. A test of it would sleep, which
+# no test may do (docs/testing.md, "Values that change every run"), so this
+# function is exempt. It is the real clock's sleep and nothing else.
+exclude_re = ["System::sleep"]

@@ -3,6 +3,7 @@
 //! dependency of the crates that use it; no release binary contains it
 //! (`docs/architecture.md`, "The call rules").
 
+pub mod clock;
 mod provider_server;
 mod scripted_provider;
 
