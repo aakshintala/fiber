@@ -19,3 +19,21 @@ should change".
 
 Plans, specs and backlogs live on GitHub Issues, never in files in the
 repository.
+
+## Agent skills
+
+### Issue tracker
+
+GitHub Issues on `aakshintala/fiber`, through `gh`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The default role names, except `needs-info` and `ready-for-human`, which both use `needs-owner`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` and `docs/adr/` at the root. See `docs/agents/domain.md`.
+
+### Workflow
+
+`docs/workflow.md`. It wins wherever it speaks; skills use their own defaults where it is silent. See `docs/agents/workflow.md`.
