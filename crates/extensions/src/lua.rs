@@ -125,8 +125,7 @@ pub struct LuaExtension {
     home: PathBuf,
     state: Mutex<State>,
     /// Declared timeouts, published when the entry script finishes. Commands
-    /// and provider functions are separate maps (`docs/extensions.md`, "How
-    /// an extension runs").
+    /// and provider functions are separate maps.
     timeouts: Arc<Mutex<CallbackTimeouts>>,
 }
 
@@ -271,13 +270,15 @@ impl LuaExtension {
                         }
                         (until, Some(timeout))
                     }
-                    // Not a deadline: registration has not published one yet.
-                    Budget::Pending => (Some(Instant::now() + Duration::from_millis(20)), None),
+                    Budget::Pending => (None, None),
                 }
             };
-            let answer = match limit {
-                Some(at) => answers.recv_timeout(at.saturating_duration_since(Instant::now())),
-                None => answers.recv().map_err(|_| RecvTimeoutError::Disconnected),
+            let answer = if let Some(at) = limit {
+                answers.recv_timeout(at.saturating_duration_since(Instant::now()))
+            } else if !started {
+                answers.recv_timeout(Duration::from_millis(20))
+            } else {
+                answers.recv().map_err(|_| RecvTimeoutError::Disconnected)
             };
             match answer {
                 Ok(Reply::Deadline(at)) => {
@@ -388,8 +389,7 @@ struct Job {
     asked: Instant,
 }
 
-/// Timeouts the entry script declared. Commands and provider functions live
-/// in different maps so their names cannot collide.
+/// Commands and provider functions, in separate maps so a shared name cannot collide.
 #[derive(Default)]
 struct CallbackTimeouts {
     commands: BTreeMap<String, Duration>,
