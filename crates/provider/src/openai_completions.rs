@@ -343,7 +343,9 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::User { text } => {
                 out.push(message(json!({"role": "user", "content": text})));
             }
-            Input::ToolResult { action_id, text } => {
+            Input::ToolResult {
+                action_id, text, ..
+            } => {
                 out.push(message(json!({
                     "role": "tool",
                     "tool_call_id": call_id(action_id),
