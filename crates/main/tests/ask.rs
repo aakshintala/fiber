@@ -1348,7 +1348,6 @@ fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
             assert_eq!(model.protocol, protocol, "{}", model.id);
             assert_eq!(model.base_url, url, "{}", model.id);
             assert!(!model.input.is_empty(), "{}", model.id);
-            assert!(!model.input.is_empty(), "{}", model.id);
             let cost = model.cost.as_ref().unwrap();
             assert!(cost.input > 0.0 && cost.output > 0.0, "{}", model.id);
             if name == "openai" {
