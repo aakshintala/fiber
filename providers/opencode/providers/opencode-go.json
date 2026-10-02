@@ -3,6 +3,7 @@
   "credential": {
     "env": "OPENCODE_API_KEY"
   },
+  "credential_name": "opencode",
   "models": [
     {
       "id": "muse-spark-1.3-contributor",

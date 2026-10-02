@@ -234,6 +234,12 @@ one of:
 A command runs once per process. A repository can never set this, because a
 command runs a program and a changed source sends the key elsewhere.
 
+Providers in one package that share a key read one stored credential: each
+names the stored file in its provider data (`credential_name`, defaulting to
+its own name). `fiber login <provider>` stores the key in the stored
+credential that provider reads, so `fiber login opencode-go` and
+`fiber login opencode-zen` both store `credentials/opencode`.
+
 ## When Fiber reads configuration
 
 Only the `config` crate reads these files (`docs/architecture.md`). It reads
@@ -357,9 +363,12 @@ provider extension declares") lists:
 ```
 
 - `credential` says how the key is found: `env`, `file` or `command` as in
-  "Secrets". A stored credential in `credentials/<name>` always comes first
-  (`docs/model-routing.md`, "Credentials"). A provider whose token expires,
-  such as an OAuth login, declares a Lua `credential()` function instead.
+  "Secrets". A stored credential always comes first
+  (`docs/model-routing.md`, "Credentials"): the provider reads the file its
+  `credential_name` names, or `credentials/<name>` when it names none, so
+  providers in one package that share a key name the same file. A provider
+  whose token expires, such as an OAuth login, declares a Lua `credential()`
+  function instead.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
   guesses a flag, and a flag that is absent is not set:
 

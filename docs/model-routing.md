@@ -162,8 +162,8 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   `opencode-zen`, because Go and Zen serve many of the same model ids and bill
   them differently: `opencode-go/gpt-6-luna` and `opencode-zen/gpt-6-luna` are
   two models. The same key works on both, and both providers read it from
-  `OPENCODE_API_KEY`. A stored credential belongs to one provider
-  ("Credentials"), so a stored key is stored under both names.
+  `OPENCODE_API_KEY`. Both providers name one stored credential
+  ("Credentials"), so one stored key serves both.
 - `opencode-go` is a subscription at `https://opencode.ai/zen/go`, and its
   models declare `"subscription": true` beside their prices ("Cost").
   `opencode-zen` is billed per token at `https://opencode.ai/zen`, and its
@@ -425,7 +425,8 @@ extension, which a person approves before it loads.
 ## Credentials
 
 Each provider has one credential, stored in a file only the owner can read
-(mode 0600) in [Fiber home](state.md) at `credentials/<provider>`.
+(mode 0600) in [Fiber home](state.md) at `credentials/<name>`: its own name,
+unless its provider data names a shared credential.
 A key can come from:
 
 - the stored credential
