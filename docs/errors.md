@@ -70,11 +70,14 @@ asked for the session.
 | `config_invalid` | invalid JSON or a value of the wrong type in a configuration file (`docs/configuration.md`) | 1 |
 | `io_failed` | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
-| `no_model` | nothing chose a model (`docs/model-routing.md`, "Choosing the model") | 1 |
+| `no_model` | nothing chose a model, or an installed provider lacks the named model (`docs/model-routing.md`, "Choosing the model") | 1 |
+| `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
 | `credential_missing` | the session model's credential cannot be found | 1 |
+| `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
 | `extension_missing` | the session model's provider is not installed | 1 |
+| `protocol_unsupported` | the session model's protocol is one this Fiber does not speak yet | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
 | `mcp_server_unapproved` | the repository declares an MCP server nobody approved | 1 |
@@ -84,8 +87,17 @@ separates "called it wrong" from "ran and failed".
 
 The credential check happens at startup, before `fiber_started`, so a headless
 caller learns in milliseconds rather than at the first model call.
-`credential_missing` means no key was found. `authentication_failed` means the
-provider saw a key and rejected it.
+`credential_missing` means no key was found. `credential_failed` means Fiber
+found one and could not use it. `authentication_failed` means the provider saw a
+key and rejected it.
+
+Each code names one fix. `no_model` means nothing chose a model: choose one.
+`model_ambiguous` means the id matches several providers: prefix the provider,
+as `provider/model`. `no_model` also covers an installed provider that lacks the
+named model: name another model. `extension_missing` means the provider is not
+installed: install it. `protocol_unsupported` means the provider is installed
+but Fiber cannot speak its protocol: pick another model. None of these is
+retried.
 
 ## A failed model call
 
@@ -186,8 +198,10 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
+| `credential_failed` | exit | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
+| `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit | the session model's provider is not installed |
 | `extension_required_failed` | exit | a required extension failed to start |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
@@ -205,16 +219,18 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call | the target session's `before_message` refused a session message |
+| `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
-| `no_model` | exit, notice | nothing chose a model |
+| `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
 | `not_found` | tool call | the path `read` or `edit` names does not exist |
 | `orphaned` | job | the process that ran the job died |
 | `output_cap` | job | a job's output file passed 5 GB |
 | `output_truncated` | tool call, turn | a reply was cut off by the output-token limit, so its calls did not run |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the write |
+| `protocol_unsupported` | exit | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
 | `rate_limited` | model call, turn | the provider rate-limited the request |
@@ -241,6 +257,7 @@ Notices, for a failure outside any action:
 | `command_conflict` | two extensions registered the same command name |
 | `config_key_ignored` | an unknown key, or a key a repository may not set |
 | `extension_failed` | an extension failed to start or missed its deadline |
+| `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |

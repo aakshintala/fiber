@@ -264,7 +264,9 @@ A provider runs Lua in four functions at most: `models()`, `quota()`,
 
 A provider may declare a Lua `sign()` function for a scheme that signs each
 request, such as AWS SigV4. It receives the method, the URL, the headers and
-the SHA-256 of the body, and returns headers to add. It cannot change the body.
+the SHA-256 of the body, and returns headers to add. It cannot change the body. If `sign()` fails or
+returns headers Fiber cannot use, the call fails with `credential_failed`, and
+is not retried.
 SigV4's chain of HMACs uses the `host.hmac_sha256` host call
 (`docs/extensions.md`, "Host calls").
 It declares a timeout like every callback (`docs/extensions.md`, "How an
@@ -379,7 +381,9 @@ When a person types a model:
    `minimal`, `low`, `medium`, `high`, `xhigh` or `max`), Fiber strips the
    suffix, matches the rest and applies that thinking level.
 3. A bare model id works if exactly one installed provider has it. Two matches
-   are an error that lists both.
+   are the error `model_ambiguous`, which lists every match. Prefix the
+   provider, as `provider/model`. A provider that is installed but lacks the
+   named model is `no_model`.
 
 The exact match comes first because OpenRouter model ids contain colons.
 
@@ -432,7 +436,9 @@ It does not fall back to an environment variable.
 
 Fiber looks for the session model's credential at startup, before the session
 starts. A run with none fails there with `credential_missing`
-(`docs/errors.md`, "Before a session exists").
+(`docs/errors.md`, "Before a session exists"). A credential that is stored but
+cannot be used, or a `credential()` call that errors, fails with
+`credential_failed`. Neither is retried.
 
 Most first-party providers use a key. The table in
 [Protocols and providers](#protocols-and-providers) says which use something

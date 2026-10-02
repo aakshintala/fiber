@@ -348,7 +348,8 @@ A provider may have four pieces of Lua:
   (`docs/model-routing.md`, "Signing a request")
 
 Only `sign()` runs while a request is being sent. It sees the body's SHA-256,
-never the body. Here is a provider for a gateway that lists its models at
+never the body. A `sign()` that errors or returns unusable headers fails the
+call with `credential_failed` (`docs/errors.md`). Here is a provider for a gateway that lists its models at
 `/models`:
 
 ```lua
@@ -705,7 +706,8 @@ together.
   raises its manifest's lowest Fiber version.
 - **A removal or a rename raises it.** Fiber loads an extension only when its
   `api` is Fiber's own. Otherwise the extension is not loaded, and a `notice`
-  names it and both numbers. `fiber install` refuses it the same way.
+  with the code `extension_incompatible` names it and both numbers. `fiber
+  install` refuses it with the same code.
 
 The API starts at 1.
 
@@ -765,7 +767,8 @@ diff since the installed version. Without a terminal they go
 ahead without asking, so scripts can set up a machine.
 
 Install refuses an extension whose manifest needs a newer Fiber than the one
-running.
+running, or a different extension API version, with `extension_incompatible`.
+Update `fiber`, or install a version of the extension that fits.
 
 Installed extensions live in [Fiber home](state.md), one directory each, at
 `extensions/<name>/`.

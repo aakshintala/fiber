@@ -50,6 +50,9 @@ codes! {
     ConnectionFailed,
     /// The request does not fit the context window.
     ContextOverflow,
+    /// A stored credential cannot be used, or the provider's `credential()` or
+    /// `sign()` failed.
+    CredentialFailed,
     /// No credential was found for the session's model.
     CredentialMissing,
     /// A command named a delegate's session.
@@ -58,6 +61,8 @@ codes! {
     DepthExceeded,
     /// An extension failed to start or missed its deadline.
     ExtensionFailed,
+    /// An extension needs a newer `fiber` or a different extension API version.
+    ExtensionIncompatible,
     /// The session model's provider is not installed.
     ExtensionMissing,
     /// A required extension failed to start.
@@ -96,6 +101,8 @@ codes! {
     McpToolRemoved,
     /// The target session's `before_message` refused a session message.
     MessageRefused,
+    /// A bare model id matches models of two or more installed providers.
+    ModelAmbiguous,
     /// The provider does not know the model.
     ModelNotFound,
     /// `name_session` was called while the person's name pins the session.
@@ -120,6 +127,8 @@ codes! {
     OutputTruncated,
     /// A symbolic link changed between the permission decision and the write.
     PathChanged,
+    /// The model's protocol is one this Fiber does not speak yet.
+    ProtocolUnsupported,
     /// A provider server error or overload.
     ProviderUnavailable,
     /// A quota, billing or subscription limit.
