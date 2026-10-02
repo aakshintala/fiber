@@ -427,11 +427,13 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
         ),
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    // `hold` is in the entry script before `quick` is asked, so `quick` is
+    // queued behind it. Starting both at once lets `quick` win the queue.
     let held = start(&ext, "hold");
-    let quick = start(&ext, "quick");
     reg_ok_rx
         .recv_timeout(WAIT)
         .expect("registration never reached the server");
+    let quick = start(&ext, "quick");
     reg_release_tx.send(()).unwrap();
     hold_ok_rx
         .recv_timeout(WAIT)
