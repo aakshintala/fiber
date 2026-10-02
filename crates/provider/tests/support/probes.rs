@@ -15,6 +15,12 @@
 //!   (`anthropic-messages-probe`); its stream is rebuilt as one
 //!   `content_block_start` and `content_block_stop` per content block, then
 //!   `message_delta` and `message_stop`
+//! - a wrapper with the stream as `events`, each a parsed chunk, the string
+//!   `[DONE]`, or `RAW:` and a line sent as it was, such as a comment
+//!   (`openai-completions-probe`)
+//! - a non-streamed `chat.completion` object in `body`
+//!   (`openai-completions-probe`); its stream is rebuilt as one chunk
+//!   carrying the whole message, one carrying the usage, then `[DONE]`
 //!
 //! A file holds one wrapper or a list of them.
 
@@ -96,17 +102,28 @@ fn response(wrapper: &Value) -> Option<Recorded> {
         });
     }
     if let Some(body @ Value::Object(_)) = wrapper.get("body") {
-        return Some(if status == 200 {
-            Recorded::Stream(anthropic_message_stream(body))
-        } else {
+        return Some(if status != 200 {
             Recorded::Status(status, body.to_string().into_bytes())
+        } else if body.get("object").and_then(Value::as_str) == Some("chat.completion") {
+            Recorded::Stream(chat_completion_stream(body))
+        } else {
+            Recorded::Stream(anthropic_message_stream(body))
         });
     }
     if let Some(Value::Array(events)) = wrapper.get("events") {
         let mut stream = String::new();
         for event in events {
-            let name = event.get("event")?.as_str()?;
-            stream.push_str(&format!("event: {name}\ndata: {}\n\n", event.get("data")?));
+            if let Value::String(raw) = event {
+                match raw.strip_prefix("RAW:") {
+                    Some(line) => stream.push_str(&format!("{line}\n\n")),
+                    None => stream.push_str(&format!("data: {raw}\n\n")),
+                }
+            } else if let Some(name) = event.get("event") {
+                let name = name.as_str()?;
+                stream.push_str(&format!("event: {name}\ndata: {}\n\n", event.get("data")?));
+            } else {
+                stream.push_str(&format!("data: {event}\n\n"));
+            }
         }
         return Some(Recorded::Stream(stream.into_bytes()));
     }
@@ -155,5 +172,39 @@ fn anthropic_message_stream(message: &Value) -> Vec<u8> {
     });
     stream.push_str(&format!("data: {delta}\n\n"));
     stream.push_str("data: {\"type\": \"message_stop\"}\n\n");
+    stream.into_bytes()
+}
+
+/// Rebuilds a non-streamed `chat.completion` object as the stream it would
+/// have sent: one chunk whose delta is the whole message (each tool call
+/// given its `index`), one with the usage and no choices, then `[DONE]`.
+fn chat_completion_stream(completion: &Value) -> Vec<u8> {
+    let Some(mut chunk) = completion.as_object().cloned() else {
+        return Vec::new();
+    };
+    chunk.insert("object".into(), json!("chat.completion.chunk"));
+    if let Some(choices) = chunk.get_mut("choices").and_then(Value::as_array_mut) {
+        for choice in choices {
+            let Some(Value::Object(mut message)) = choice.get_mut("message").map(Value::take)
+            else {
+                continue;
+            };
+            if let Some(Value::Array(calls)) = message.get_mut("tool_calls") {
+                for (index, call) in calls.iter_mut().enumerate() {
+                    if let Some(call) = call.as_object_mut() {
+                        call.insert("index".into(), json!(index));
+                    }
+                }
+            }
+            if let Some(choice) = choice.as_object_mut() {
+                choice.remove("message");
+                choice.insert("delta".into(), Value::Object(message));
+            }
+        }
+    }
+    let usage = chunk.remove("usage");
+    let mut stream = format!("data: {}\n\n", Value::Object(chunk));
+    let tail = json!({"id": completion.get("id"), "choices": [], "usage": usage});
+    stream.push_str(&format!("data: {tail}\n\ndata: [DONE]\n\n"));
     stream.into_bytes()
 }

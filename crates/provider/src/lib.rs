@@ -9,6 +9,7 @@
 pub mod anthropic_messages;
 mod error;
 mod http;
+pub mod openai_completions;
 pub mod openai_responses;
 mod sse;
 mod strict;
@@ -56,4 +57,39 @@ impl Endpoint {
 pub struct Compat {
     /// `store`, sent when declared; absent, the request has no `store` key.
     pub store: Option<bool>,
+    /// `openai-completions`: the output limit goes in `max_tokens`, not
+    /// `max_completion_tokens`. OpenAI's `gpt-6-luna` rejects `max_tokens`
+    /// (`docs/model-routing.md`, "openai-completions facts").
+    pub max_tokens: bool,
+    /// `openai-completions`: the effort goes in `reasoning: {effort}`, as
+    /// OpenRouter takes it, not in `reasoning_effort`.
+    pub reasoning_object: bool,
+    /// `openai-completions`: the model is Anthropic's, reached through a
+    /// gateway such as OpenRouter. It takes Anthropic's `cache_control`
+    /// markers on content parts, which OpenRouter passes through
+    /// (`research/openai-completions-probe`), and Anthropic's strict-tool
+    /// limits apply.
+    pub anthropic: bool,
+    /// `openai-completions`: the body field that also carries the cache key,
+    /// such as OpenRouter's `session_id` (`docs/prompt-cache.md`, "Cache
+    /// markers and keys").
+    pub cache_key_field: Option<String>,
+}
+
+impl Compat {
+    /// The flags a model's `compat` object declares. A flag that is absent,
+    /// or not a boolean, is not set.
+    pub fn from_data(data: &Map<String, Value>) -> Self {
+        let flag = |name: &str| data.get(name).and_then(Value::as_bool);
+        Self {
+            store: flag("store"),
+            max_tokens: flag("max_tokens").unwrap_or(false),
+            reasoning_object: flag("reasoning_object").unwrap_or(false),
+            anthropic: flag("anthropic").unwrap_or(false),
+            cache_key_field: data
+                .get("cache_key_field")
+                .and_then(Value::as_str)
+                .map(str::to_owned),
+        }
+    }
 }
