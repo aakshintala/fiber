@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::sync::Mutex;
 use std::sync::mpsc;
 
 use super::hub::Progress;
@@ -451,6 +452,7 @@ fn serve_after(dir: &Path, first: &str) -> (Arc<Hub>, u64, thread::JoinHandle<()
             Path::new("/nonexistent-fiber-home"),
             &thread_hub,
             Instant::now().checked_add(LOAD_TIMEOUT),
+            &Instant::now,
         );
     });
     (hub, id, handle)
@@ -809,6 +811,9 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
 
 #[test]
 fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
+    // The scheduler assigns the deadline. A shorter one fails here, before
+    // the public call below waits out the real five seconds.
+    scheduler_keeps_the_deadline_declared_while_registering();
     let reg = TcpListener::bind("127.0.0.1:0").unwrap();
     let work = TcpListener::bind("127.0.0.1:0").unwrap();
     let reg_url = format!("http://{}/", reg.local_addr().unwrap());
@@ -816,9 +821,10 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
     let (accepted_tx, accepted_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let (work_ok_tx, work_ok_rx) = mpsc::channel();
+    // Held open: dropping it closes the socket, and the call fails before its timeout.
     let (work_release_tx, work_release_rx) = mpsc::channel();
     thread::spawn(move || answer_n(reg, accepted_tx, release_rx, 1));
-    thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 2));
+    thread::spawn(move || answer_n(work, work_ok_tx, work_release_rx, 1));
     let dir = extension(
         "reg-timeout",
         &format!(
@@ -840,15 +846,19 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
         .recv_timeout(WAIT)
         .expect("registration never reached the server");
     release_tx.send(()).unwrap();
-    for _ in 0..2 {
-        work_ok_rx
-            .recv_timeout(WAIT)
-            .expect("work never reached the server");
-        work_release_tx.send(()).unwrap();
+    work_ok_rx
+        .recv_timeout(WAIT)
+        .expect("work never reached the server");
+    // The reply stays unsent. A shorter timeout comes back as that timeout.
+    for waiter in [first, second] {
+        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let Error::Timeout { timeout_ms, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(*timeout_ms, 5000);
     }
-    assert_eq!(first.recv_timeout(WAIT).unwrap().unwrap(), "ok");
-    assert_eq!(second.recv_timeout(WAIT).unwrap().unwrap(), "ok");
     assert!(ext.is_running());
+    drop(work_release_tx);
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
@@ -980,4 +990,302 @@ fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
     let err = start(&ext, "a").recv_timeout(WAIT).unwrap().unwrap_err();
     assert!(matches!(err, Error::Lua { .. }), "{err:?}");
     std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// The command `p.sign` runs through `LuaExtension::command` and returns what
+/// it ran. Its 5 s timeout is not the provider function's 50 ms.
+#[test]
+fn a_command_named_like_a_provider_function_returns_what_it_ran() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (ok_tx, ok_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    thread::spawn(move || answer_n(listener, ok_tx, release_rx, 1));
+    let dir = extension(
+        "collide-public",
+        &format!(
+            "fiber.command(\"p.sign\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    let ran = start(&ext, "p.sign");
+    ok_rx
+        .recv_timeout(WAIT)
+        .expect("the command never reached the server");
+    release_tx.send(()).unwrap();
+    assert_eq!(ran.recv_timeout(WAIT).unwrap().unwrap(), "ok");
+    assert!(ext.is_running());
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// A parked `host.http` callback ends when `next` sees its deadline. That
+/// instant is still inside the caller's grace, so a grace delay leaves it
+/// running. A millisecond later also ends it.
+#[test]
+fn a_parked_http_call_ends_at_its_deadline_not_its_grace() {
+    let (dir, vm, hub) = loaded(
+        "park-deadline",
+        "fiber.command(\"hold\", { timeout = 60000, run = function() return host.http({ url = \"http://127.0.0.1:9/\" }).body end })\n\
+         fiber.command(\"later\", { timeout = 60000, run = function() return host.http({ url = \"http://127.0.0.1:9/\" }).body end })\n",
+    );
+    let asked = Instant::now();
+    publish(&hub, &vm);
+    enqueue(&hub, command("hold"), asked);
+    enqueue(&hub, command("later"), asked);
+    let hold = park_next(&hub, &vm, 60_000);
+    let later = park_next(&hub, &vm, 60_000);
+    let hold_deadline = hold.deadline.expect("hold has a deadline");
+    let later_deadline = later.deadline.expect("later has a deadline");
+    waits_until(
+        &hub,
+        hold,
+        hold_deadline
+            .checked_sub(Duration::from_millis(1))
+            .expect("before the deadline"),
+        hold_deadline,
+        60_000,
+    );
+    publish(&hub, &vm);
+    ends_at(
+        &hub,
+        later,
+        later_deadline
+            .checked_add(Duration::from_millis(1))
+            .expect("after the deadline"),
+        60_000,
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// `p.sign` the command and `p.sign` the provider function each end on the
+/// timeout they declared. A second after they were asked, only the 50 ms
+/// function is past its deadline.
+#[test]
+fn a_command_and_a_provider_function_that_share_a_name_end_on_their_own_deadlines() {
+    let (dir, vm, hub) = loaded(
+        "name-deadlines",
+        "fiber.command(\"p.sign\", { timeout = 60000, run = function() return host.http({ url = \"http://127.0.0.1:9/\" }).body end })\n\
+         fiber.provider(\"p\", { sign = { timeout = 50, run = function() return host.http({ url = \"http://127.0.0.1:9/\" }).body end } })\n",
+    );
+    let asked = Instant::now();
+    publish(&hub, &vm);
+    enqueue(&hub, command("p.sign"), asked);
+    enqueue(
+        &hub,
+        Target::Provider {
+            name: "p".to_owned(),
+            function: "sign",
+        },
+        asked,
+    );
+    let command_parked = park_next(&hub, &vm, 60_000);
+    let provider_parked = park_next(&hub, &vm, 50);
+    let command_deadline = command_parked.deadline.expect("the command has a deadline");
+    ends_at(
+        &hub,
+        provider_parked,
+        asked
+            .checked_add(Duration::from_secs(1))
+            .expect("a second later"),
+        50,
+    );
+    publish(&hub, &vm);
+    waits_until(
+        &hub,
+        command_parked,
+        command_deadline
+            .checked_sub(Duration::from_millis(1))
+            .expect("before the command's deadline"),
+        command_deadline,
+        60_000,
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+/// Asked while the entry script is still running. The deadline `next` stores
+/// is that instant plus the 5 s the command declares: a shorter deadline has
+/// already ended a millisecond early, and the deadline itself has ended while
+/// the caller's grace has not.
+fn scheduler_keeps_the_deadline_declared_while_registering() {
+    let (dir, vm, hub) = loaded(
+        "reg-deadline",
+        "fiber.command(\"work\", { timeout = 5000, run = function() return host.http({ url = \"http://127.0.0.1:9/\" }).body end })\n",
+    );
+    let asked = ago(1000);
+    {
+        let mut shared = hub.lock();
+        shared.phase = Phase::Registering { abandon_at: None };
+        shared.push(command("work"), Value::Null, asked);
+    }
+    publish(&hub, &vm);
+    let parked = park_next(&hub, &vm, 5_000);
+    waits_until(
+        &hub,
+        parked,
+        asked
+            .checked_add(Duration::from_millis(4_999))
+            .expect("before the declared deadline"),
+        asked
+            .checked_add(Duration::from_millis(5_000))
+            .expect("the declared deadline"),
+        5_000,
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+fn loaded(tag: &str, script: &str) -> (PathBuf, Vm, Arc<Hub>) {
+    let dir = extension(tag, script);
+    let vm = Vm::load(
+        "ext",
+        &dir,
+        Path::new("/nonexistent-fiber-home"),
+        Instant::now().checked_add(LOAD_TIMEOUT),
+    )
+    .unwrap();
+    (dir, vm, Arc::<Hub>::default())
+}
+
+fn publish(hub: &Hub, vm: &Vm) {
+    hub.lock().phase = Phase::Ready(vm.declared());
+}
+
+fn enqueue(hub: &Hub, target: Target, asked: Instant) {
+    hub.lock().push(target, Value::Null, asked);
+}
+
+/// Starts the queued call and parks it where `settle` would. The deadline is
+/// the one `next` assigned from when the call was asked.
+fn park_next(hub: &Hub, vm: &Vm, timeout_ms: u64) -> schedule::Parked {
+    let mut parked = Vec::new();
+    let Some(work) = schedule::next("ext", hub, &mut parked, &Instant::now) else {
+        panic!("the scheduler did not start the queued call");
+    };
+    let schedule::Work::Start(job, timeout, deadline) = work else {
+        panic!("the scheduler resumed a parked call");
+    };
+    assert!(parked.is_empty());
+    assert_eq!(timeout, Duration::from_millis(timeout_ms));
+    assert_eq!(
+        deadline,
+        job.asked.checked_add(Duration::from_millis(timeout_ms))
+    );
+    let step = vm
+        .step(&job.target, &job.arg, timeout, deadline)
+        .expect("the callback failed");
+    let Step::Suspend {
+        thread,
+        target,
+        deadline,
+        timeout,
+        ..
+    } = step
+    else {
+        panic!("host.http returned instead of suspending");
+    };
+    let id = job.id;
+    hub.lock().calls.insert(
+        id,
+        Progress::Started {
+            deadline,
+            parked: true,
+        },
+    );
+    schedule::Parked {
+        id,
+        thread,
+        target,
+        deadline,
+        timeout,
+    }
+}
+
+fn assert_timed_out(shared: &Shared, id: u64, timeout_ms: u64) {
+    match shared.calls.get(&id) {
+        Some(Progress::Done(Err(Error::Timeout {
+            timeout_ms: got, ..
+        }))) => assert_eq!(*got, timeout_ms),
+        Some(Progress::Done(Err(err))) => panic!("the call failed another way: {err:?}"),
+        Some(Progress::Done(Ok(_))) => panic!("the call returned a value"),
+        Some(Progress::Started { .. }) => panic!("the call was still running"),
+        Some(Progress::Queued) => panic!("the call was still queued"),
+        None => panic!("the call was dropped"),
+    }
+}
+
+/// `next` runs on this thread. `check` runs once the scheduler has read the
+/// clock, and stopping the hub on the way out — panic included — makes `next`
+/// return.
+fn watch(
+    hub: &Arc<Hub>,
+    parked: schedule::Parked,
+    clock: Arc<Mutex<Instant>>,
+    check: impl FnOnce(&mpsc::Receiver<()>, &Arc<Hub>) + Send + 'static,
+) {
+    let (saw_tx, saw_rx) = mpsc::channel();
+    let now = move || {
+        let at = *clock.lock().unwrap();
+        match saw_tx.send(()) {
+            Ok(()) => at,
+            Err(mpsc::SendError(())) => at,
+        }
+    };
+    let watched = Arc::clone(hub);
+    let handle = thread::spawn(move || {
+        let _stop = StopOnDrop {
+            hub: Arc::clone(&watched),
+        };
+        check(&saw_rx, &watched);
+    });
+    let mut parked = vec![parked];
+    assert!(schedule::next("ext", hub, &mut parked, &now).is_none());
+    match handle.join() {
+        Ok(()) => {}
+        Err(payload) => std::panic::resume_unwind(payload),
+    }
+}
+
+struct StopOnDrop {
+    hub: Arc<Hub>,
+}
+
+impl Drop for StopOnDrop {
+    fn drop(&mut self) {
+        stop(&self.hub);
+    }
+}
+
+fn ends_at(hub: &Arc<Hub>, parked: schedule::Parked, at: Instant, timeout_ms: u64) {
+    let id = parked.id;
+    watch(hub, parked, Arc::new(Mutex::new(at)), move |saw, hub| {
+        saw.recv_timeout(Duration::from_secs(5))
+            .expect("the scheduler never read the clock");
+        assert_timed_out(&hub.lock(), id, timeout_ms);
+    });
+}
+
+fn waits_until(
+    hub: &Arc<Hub>,
+    parked: schedule::Parked,
+    early: Instant,
+    late: Instant,
+    timeout_ms: u64,
+) {
+    let id = parked.id;
+    let clock = Arc::new(Mutex::new(early));
+    let move_clock = Arc::clone(&clock);
+    watch(hub, parked, clock, move |saw, hub| {
+        saw.recv_timeout(Duration::from_secs(5))
+            .expect("the scheduler never read the clock");
+        let waiting = matches!(
+            hub.lock().calls.get(&id),
+            Some(Progress::Started { parked: true, .. })
+        );
+        assert!(waiting, "the call ended before its deadline");
+        *move_clock.lock().unwrap() = late;
+        hub.notify();
+        saw.recv_timeout(Duration::from_secs(5))
+            .expect("the scheduler did not read the moved clock");
+        assert_timed_out(&hub.lock(), id, timeout_ms);
+    });
 }

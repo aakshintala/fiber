@@ -169,7 +169,7 @@ impl Shared {
     /// abandons it.
     pub(super) fn gate(&mut self, name: &str) -> Gate<'_> {
         if let Phase::Registering { abandon_at } = self.phase
-            && expired(abandon_at)
+            && expired(abandon_at, &Instant::now)
         {
             // ponytail: the abandoned thread is leaked, still running, until
             // the process exits; Rust cannot stop a thread.
@@ -223,7 +223,7 @@ impl Shared {
             }
             _ => (asked.checked_add(timeout), false),
         };
-        if !expired(until) {
+        if !expired(until, &Instant::now) {
             return Next::Sleep(until);
         }
         self.forget(id);

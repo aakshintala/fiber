@@ -20,23 +20,30 @@ use super::hub::{HttpResult, Hub, Job, Phase, Progress, not_registered, timed_ou
 use super::{Step, Target, Vm, expired};
 
 /// A callback suspended on `host.http`. Its deadline keeps running.
-struct Parked {
-    id: u64,
-    thread: Thread,
-    target: Target,
-    deadline: Option<Instant>,
-    timeout: Duration,
+pub(super) struct Parked {
+    pub(super) id: u64,
+    pub(super) thread: Thread,
+    pub(super) target: Target,
+    pub(super) deadline: Option<Instant>,
+    pub(super) timeout: Duration,
 }
 
 /// What the thread does next, outside the lock.
-enum Work {
+pub(super) enum Work {
     Start(Job, Duration, Option<Instant>),
     Resume(Parked, HttpResult),
 }
 
 /// Runs the entry script, under the deadline `load_by`, then serves calls
 /// until the extension is stopped.
-pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by: Option<Instant>) {
+pub(super) fn serve(
+    name: &str,
+    dir: &Path,
+    home: &Path,
+    hub: &Arc<Hub>,
+    load_by: Option<Instant>,
+    now: &impl Fn() -> Instant,
+) {
     let loaded = Vm::load(name, dir, home, load_by);
     let vm = {
         let mut shared = hub.lock();
@@ -60,7 +67,7 @@ pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by
         return;
     };
     let mut parked = Vec::new();
-    while let Some(work) = next(name, hub, &mut parked) {
+    while let Some(work) = next(name, hub, &mut parked, now) {
         // The call has started or resumed.
         hub.notify();
         let (id, step) = match work {
@@ -81,14 +88,20 @@ pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by
 
 /// Waits for the next thing to do: a parked callback past its deadline is
 /// failed here, a `host.http` reply resumes its callback, and a queued call
-/// starts if it may. None once the extension is stopped.
-fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
+/// starts if it may. `now` is the clock, so a test can move a deadline
+/// without sleeping. None once the extension is stopped.
+pub(super) fn next(
+    name: &str,
+    hub: &Hub,
+    parked: &mut Vec<Parked>,
+    now: &impl Fn() -> Instant,
+) -> Option<Work> {
     let mut shared = hub.lock();
     loop {
         if !matches!(shared.phase, Phase::Ready(_)) {
             return None;
         }
-        if let Some(pos) = parked.iter().position(|p| expired(p.deadline)) {
+        if let Some(pos) = parked.iter().position(|p| expired(p.deadline, now)) {
             let p = parked.swap_remove(pos);
             shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout)));
             hub.notify();

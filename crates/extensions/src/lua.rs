@@ -244,7 +244,7 @@ impl LuaExtension {
         let hub = Arc::clone(&self.hub);
         thread::Builder::new()
             .name(format!("lua {}", self.name))
-            .spawn(move || schedule::serve(&name, &dir, &home, &hub, load_by))
+            .spawn(move || schedule::serve(&name, &dir, &home, &hub, load_by, &Instant::now))
             .map_err(|source| Error::Io {
                 path: self.dir.clone(),
                 source,
@@ -293,8 +293,9 @@ impl std::fmt::Display for Target {
     }
 }
 
-fn expired(at: Option<Instant>) -> bool {
-    at.is_some_and(|at| Instant::now() >= at)
+/// `now` is the clock. Production passes [`Instant::now`]; a test passes its own.
+fn expired(at: Option<Instant>, now: &impl Fn() -> Instant) -> bool {
+    at.is_some_and(|at| now() >= at)
 }
 
 fn timeout_ms(timeout: Duration) -> u64 {
@@ -531,7 +532,7 @@ impl Vm {
         deadline: Option<Instant>,
     ) -> Result<setup::Poll, Error> {
         self.deadline.restore(deadline);
-        if expired(deadline) {
+        if expired(deadline, &Instant::now) {
             return Err(self.timed_out(callback, timeout));
         }
         let values = match thread.resume::<MultiValue>(args) {
