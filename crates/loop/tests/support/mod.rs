@@ -14,9 +14,9 @@
 use std::hash::BuildHasher as _;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::events::{
     ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
@@ -88,6 +88,50 @@ pub(crate) fn calls_reply(text: &str, calls: &[(&str, Value)]) -> Scripted {
     }
 }
 
+/// Notes shared by the tools in one step, and a signal when one is added.
+/// A tool that waits for another blocks here instead of polling.
+pub(crate) struct Trace {
+    notes: Mutex<Vec<String>>,
+    changed: Condvar,
+}
+
+impl Default for Trace {
+    fn default() -> Self {
+        Self {
+            notes: Mutex::default(),
+            changed: Condvar::new(),
+        }
+    }
+}
+
+impl Trace {
+    pub(crate) fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<String>>> {
+        self.notes.lock()
+    }
+
+    fn push(&self, line: String) {
+        let mut notes = self.notes.lock().unwrap();
+        notes.push(line);
+        self.changed.notify_all();
+    }
+
+    /// Blocks until `line` has been pushed, and fails the test at [`DEADLINE`].
+    fn wait_for(&self, line: &str) {
+        let mut notes = self.notes.lock().unwrap();
+        let deadline = Instant::now() + DEADLINE;
+        while !notes.iter().any(|note| note == line) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "timed out waiting for {line}");
+            let (guard, result) = self.changed.wait_timeout(notes, remaining).unwrap();
+            notes = guard;
+            assert!(
+                !(result.timed_out() && !notes.iter().any(|note| note == line)),
+                "timed out waiting for {line}"
+            );
+        }
+    }
+}
+
 /// A test tool registered through the tool seam, standing in for a built-in.
 /// Its schema takes a required string `city` and an optional integer `days`.
 pub(crate) struct TestTool {
@@ -103,7 +147,7 @@ pub(crate) struct TestTool {
     pub(crate) after: Option<&'static str>,
     /// What happened, in order, shared between tools: `effects <name>`,
     /// `run <name>`, `done <name>`.
-    pub(crate) trace: Arc<Mutex<Vec<String>>>,
+    pub(crate) trace: Arc<Trace>,
     /// The arguments each call ran with.
     pub(crate) ran: Mutex<Vec<Map<String, Value>>>,
 }
@@ -157,10 +201,7 @@ impl TestTool {
     }
 
     fn note(&self, what: &str) {
-        self.trace
-            .lock()
-            .unwrap()
-            .push(format!("{what} {}", self.name));
+        self.trace.push(format!("{what} {}", self.name));
     }
 }
 
@@ -195,10 +236,7 @@ impl Tool for TestTool {
         self.note("run");
         self.ran.lock().unwrap().push(arguments.clone());
         if let Some(other) = self.after {
-            let done = format!("done {other}");
-            while !self.trace.lock().unwrap().contains(&done) {
-                thread::sleep(Duration::from_millis(1));
-            }
+            self.trace.wait_for(&format!("done {other}"));
         }
         if let Some(barrier) = &self.barrier {
             barrier.wait();

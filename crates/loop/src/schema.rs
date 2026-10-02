@@ -217,22 +217,33 @@ fn check_object(
     }
     for (key, child) in map {
         let at = format!("{pointer}/{}", escape(key));
-        let mut child_schemas = Vec::new();
         for schema in schemas {
-            match (property(schema, key), schema.get("additionalProperties")) {
-                (Some(property), _) => child_schemas.push(property),
-                (None, Some(Value::Bool(false))) => {
-                    errors.push(format!("`{at}`: not allowed"));
-                }
-                (None, Some(extra @ Value::Object(_))) => child_schemas.push(extra),
-                (None, _) => {}
+            if property(schema, key).is_none()
+                && matches!(schema.get("additionalProperties"), Some(Value::Bool(false)))
+            {
+                errors.push(format!("`{at}`: not allowed"));
             }
         }
-        if !child_schemas.is_empty() {
+        let children = child_schemas(schemas, key);
+        if !children.is_empty() {
             // A property is a new position: its guard starts empty.
-            examine(root, &child_schemas, child, &at, errors);
+            examine(root, &children, child, &at, errors);
         }
     }
+}
+
+/// The schemas that reach `key` from `schemas`: a `properties` entry, or
+/// `additionalProperties` when that is a schema and the key is not named.
+fn child_schemas<'a>(schemas: &[&'a Value], key: &str) -> Vec<&'a Value> {
+    let mut children = Vec::new();
+    for schema in schemas {
+        if let Some(property) = property(schema, key) {
+            children.push(property);
+        } else if let Some(extra @ Value::Object(_)) = schema.get("additionalProperties") {
+            children.push(extra);
+        }
+    }
+    children
 }
 
 fn check_items(
@@ -320,18 +331,13 @@ fn repair_object(
     repairs: &mut Vec<Repair>,
 ) {
     let required_keys = union_required(list);
-    let mut by_key: std::collections::BTreeMap<String, Vec<&Value>> =
-        std::collections::BTreeMap::new();
-    for schema in list {
-        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+    // Owned keys, so a null can be removed from `map` while the rest are repaired.
+    let keys: Vec<String> = map.keys().cloned().collect();
+    for key in keys {
+        let subs = child_schemas(list, &key);
+        if subs.is_empty() {
             continue;
-        };
-        for (key, property) in properties {
-            by_key.entry(key.clone()).or_default().push(property);
         }
-    }
-    let keys: Vec<(String, Vec<&Value>)> = by_key.into_iter().collect();
-    for (key, subs) in keys {
         let at = format!("{pointer}/{}", escape(&key));
         let drop_null = map.get(&key).is_some_and(|inner| inner.is_null())
             && !required_keys.contains(&key.as_str())

@@ -65,10 +65,7 @@ impl Loop {
     ) -> Result<(), Error> {
         let decided: Vec<(ActionId, Result<Approved, Box<ToolCallCompleted>>)> = calls
             .into_iter()
-            .map(|(id, call)| {
-                let decision = self.decide(&call);
-                (id, decision)
-            })
+            .map(|(id, call)| (id, self.decide(&call)))
             .collect();
         thread::scope(|scope| {
             let mut running = Vec::new();

@@ -647,6 +647,21 @@ fn properties_beside_a_ref_are_repaired() {
 }
 
 #[test]
+fn an_additional_properties_schema_reaches_the_key() {
+    // `n` is an integer beside the `$ref`, and an additional property of the
+    // object that `$ref` reaches, whose schema is `anyOf`. The check sees
+    // that `anyOf`, so the repair must not read `"3"`.
+    let schema = with_defs(
+        json!({"o": {"type": "object", "additionalProperties": {"anyOf": [{}]}}}),
+        json!({"$ref": "#/$defs/o", "properties": {"n": {"type": "integer"}}}),
+    );
+    let (errors, made) = within(&schema, &json!({"x": {"n": "3"}}));
+    assert_eq!(errors, ["`/x/n`: expected integer, got a string"]);
+    assert_eq!(made, None);
+    assert!(check(&schema, &json!({"x": {"n": 3}})).is_empty());
+}
+
+#[test]
 fn required_beside_a_ref_keeps_a_null() {
     let schema = with_defs(
         json!({"o": {"type": "object", "properties": {"n": {"type": "integer"}}}}),
