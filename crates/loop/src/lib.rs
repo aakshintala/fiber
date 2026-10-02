@@ -16,11 +16,12 @@ use std::sync::mpsc::Receiver;
 
 use contract::events::{
     AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, InputItem, MessageOutcome,
-    SessionStarted, SteeringApplied, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    SessionStarted, SteeringApplied, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
+    UsageRecorded,
 };
 use contract::inbox::Message;
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
+    CallError, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
 };
 use contract::shapes::Failure;
 use contract::tool::Tool;
@@ -76,8 +77,12 @@ pub struct Loop {
     conversation: Vec<Input>,
     /// How much of `conversation` the previous request sent.
     sent: Option<usize>,
-    /// The registered tools by name, each with its definition.
-    tools: BTreeMap<String, (Arc<dyn Tool>, ToolDefinition)>,
+    /// The registered tools by name.
+    tools: BTreeMap<String, calls::Registered>,
+    /// Each tool registered under a name already taken. #304 records it on
+    /// `preamble_built`, with each tool's `registered_by`.
+    #[expect(dead_code, reason = "read when #304 writes preamble_built")]
+    replaced: Vec<ToolReplaced>,
     /// The workspace, symlinks resolved.
     workspace: PathBuf,
     /// Whether this turn's previous reply was cut off by the output limit.
@@ -86,8 +91,9 @@ pub struct Loop {
 
 impl Loop {
     /// Starts a new session's loop, writing `session_started`. `tools` are
-    /// registered by name; a later one replaces an earlier one of the same
-    /// name (`docs/architecture.md`, "Tool seam").
+    /// registered by name, each with who registered it: `builtin`, or the
+    /// extension or MCP server. A later one replaces an earlier one of the
+    /// same name (`docs/architecture.md`, "Tool seam").
     pub fn start(
         log: Arc<Log>,
         provider: Arc<dyn Provider>,
@@ -95,8 +101,9 @@ impl Loop {
         system_prompt: String,
         inbox: Receiver<Message>,
         workspace: String,
-        tools: Vec<Arc<dyn Tool>>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
     ) -> Result<Self, Error> {
+        let (tools, replaced) = calls::register(tools);
         let resolved = PathBuf::from(&workspace);
         let resolved = resolved.canonicalize().unwrap_or(resolved);
         let started = log.append(
@@ -122,15 +129,8 @@ impl Loop {
             waiting: None,
             conversation: Vec::new(),
             sent: None,
-            // ponytail: a later tool of the same name replaces an earlier one
-            // unrecorded; no event records a replacement yet (#336).
-            tools: tools
-                .into_iter()
-                .map(|tool| {
-                    let definition = tool.definition();
-                    (definition.name.clone(), (tool, definition))
-                })
-                .collect(),
+            tools,
+            replaced,
             workspace: resolved,
             cut_off: false,
         })
@@ -208,7 +208,7 @@ impl Loop {
         }
         let request = ModelRequest {
             system_prompt: self.system_prompt.clone(),
-            tools: self.tools.values().map(|(_, d)| d.clone()).collect(),
+            tools: self.tools.values().map(|(_, _, d)| d.clone()).collect(),
             effort: None,
             // ponytail: fixed until the preamble is built and logged
             // (`docs/prompt-cache.md`, "The preamble").

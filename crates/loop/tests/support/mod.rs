@@ -299,7 +299,10 @@ impl Session {
             "You are terse.".into(),
             rx,
             workspace.display().to_string(),
-            tools,
+            tools
+                .into_iter()
+                .map(|tool| ("builtin".to_owned(), tool))
+                .collect(),
         )
         .unwrap();
         Self {

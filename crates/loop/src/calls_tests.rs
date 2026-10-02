@@ -1,9 +1,78 @@
 use std::hash::BuildHasher as _;
 use std::path::PathBuf;
 
-use contract::shapes::{DeclaredEffects, Effect};
+use std::sync::Arc;
 
-use super::fast_path;
+use contract::events::ToolReplaced;
+use contract::provider::ToolDefinition;
+use contract::shapes::{DeclaredEffects, Effect};
+use contract::tool::{Effects, EffectsError, Output, Tool};
+use serde_json::{Map, Value, json};
+
+use super::{fast_path, register};
+
+/// A tool known only by its name and description.
+struct Named(&'static str, &'static str);
+
+impl Tool for Named {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.0.to_owned(),
+            description: self.1.to_owned(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        unreachable!("registration never asks for effects")
+    }
+
+    fn run(&self, _: &Map<String, Value>) -> Output {
+        unreachable!("registration never runs a tool")
+    }
+}
+
+fn by(registered_by: &str, tool: Named) -> (String, Arc<dyn Tool>) {
+    (registered_by.to_owned(), Arc::new(tool))
+}
+
+#[test]
+fn each_tool_is_registered_with_who_registered_it() {
+    let (tools, replaced) = register(vec![
+        by("builtin", Named("read", "Reads.")),
+        by("github", Named("mcp__github__search", "Searches.")),
+    ]);
+    let owners: Vec<(&str, &str)> = tools
+        .iter()
+        .map(|(name, (by, _, _))| (name.as_str(), by.as_str()))
+        .collect();
+    assert_eq!(
+        owners,
+        [("mcp__github__search", "github"), ("read", "builtin")]
+    );
+    assert!(replaced.is_empty());
+}
+
+#[test]
+fn a_later_tool_of_a_taken_name_replaces_the_earlier_and_is_recorded() {
+    let (tools, replaced) = register(vec![
+        by("builtin", Named("read", "Reads.")),
+        by("lint", Named("read", "Reads, linted.")),
+        by("builtin", Named("write", "Writes.")),
+        by("audit", Named("read", "Reads, audited.")),
+    ]);
+    let (owner, _, definition) = &tools["read"];
+    assert_eq!(owner, "audit");
+    assert_eq!(definition.description, "Reads, audited.");
+    assert_eq!(tools.len(), 2);
+    let step = |from: &str, to: &str| ToolReplaced {
+        name: "read".to_owned(),
+        from: from.to_owned(),
+        to: to.to_owned(),
+    };
+    assert_eq!(replaced, [step("builtin", "lint"), step("lint", "audit")]);
+}
 
 /// A fresh workspace, symlinks resolved, holding `real/` and a link `out`
 /// to a directory outside it.

@@ -3,11 +3,15 @@
 //! thread each, and their results are written in the order the model asked
 //! for them (`docs/architecture.md`, "Tool calls in a step").
 
+use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
-use contract::events::{CallStatus, Event, ToolCallCompleted, ToolCallRequested, ToolCallStarted};
+use contract::events::{
+    CallStatus, Event, ToolCallCompleted, ToolCallRequested, ToolCallStarted, ToolReplaced,
+};
+use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Bound, Output, Tool};
 use contract::{ActionId, ErrorCode, TurnId};
@@ -19,11 +23,34 @@ use crate::{Error, Loop, schema};
 /// it declared.
 type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
 
+/// A registered tool: who registered it (`builtin`, or the extension or MCP
+/// server), the tool, and its definition.
+pub(crate) type Registered = (String, Arc<dyn Tool>, ToolDefinition);
+
+/// `tools`, each paired with who registered it, by name. A later tool of a
+/// name already taken replaces the earlier one, and each replacement is
+/// returned (`docs/architecture.md`, "Tool seam").
+pub(crate) fn register(
+    tools: Vec<(String, Arc<dyn Tool>)>,
+) -> (BTreeMap<String, Registered>, Vec<ToolReplaced>) {
+    let mut registered = BTreeMap::new();
+    let mut replaced = Vec::new();
+    for (by, tool) in tools {
+        let definition = tool.definition();
+        let name = definition.name.clone();
+        if let Some((from, _, _)) = registered.insert(name.clone(), (by.clone(), tool, definition))
+        {
+            replaced.push(ToolReplaced { name, from, to: by });
+        }
+    }
+    (registered, replaced)
+}
+
 impl Loop {
     /// `call` with the repair its tool's schema allows, if any
     /// (`docs/tools.md`, "Before a call runs").
     pub(crate) fn repaired(&self, mut call: ToolCallRequested) -> ToolCallRequested {
-        if let Some((_, definition)) = self.tools.get(&call.name) {
+        if let Some((_, _, definition)) = self.tools.get(&call.name) {
             call.repair = schema::repair(&definition.input_schema, &call.arguments);
         }
         call
@@ -83,7 +110,7 @@ impl Loop {
     /// Checks `call` and decides whether it runs (`docs/loop.md`, "Tool
     /// calls that do not run").
     fn decide(&self, call: &ToolCallRequested) -> Result<Approved, Box<ToolCallCompleted>> {
-        let Some((tool, definition)) = self.tools.get(&call.name) else {
+        let Some((_, tool, definition)) = self.tools.get(&call.name) else {
             let names: Vec<String> = self.tools.keys().map(|n| format!("`{n}`")).collect();
             let exist = if names.is_empty() {
                 "You have no tools.".to_owned()
