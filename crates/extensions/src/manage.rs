@@ -16,7 +16,7 @@ use crate::install::{Paths, RECORD, Record, commit_all, io, remove, slug, stage}
 use crate::resolve::{meets, newest, pick};
 
 /// More rounds of choosing versions than any real set of dependencies needs.
-const ROUNDS: usize = 64;
+const ROUNDS: usize = 10;
 
 /// What is asked for.
 pub enum Request {
@@ -274,9 +274,6 @@ impl Ctx<'_> {
                 }
                 let (repo, _) = split(dep)?;
                 let tag = pick(dep, w, &self.origin.tags(repo)?)?;
-                if plan.items.get(dep).is_some_and(|i| i.version == tag) {
-                    continue;
-                }
                 self.add_git(plan, dep, Some(tag), false)?;
                 changed = true;
             }
