@@ -47,6 +47,9 @@ pub enum Error {
     /// The provider declined to answer on policy grounds.
     #[error("declined to answer: {0}.")]
     Refused(String),
+    /// The request could not be signed, so it was never sent.
+    #[error("could not be signed: {0}")]
+    Sign(contract::signing::Error),
 }
 
 impl Error {
@@ -60,6 +63,9 @@ impl Error {
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
             Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
+            // ponytail: #322 has not named the code a failed `sign()` reports,
+            // so this is `connection_failed` until it does. It is not retried.
+            Self::Sign(_) => ErrorCode::ConnectionFailed,
         }
     }
 
@@ -68,6 +74,9 @@ impl Error {
     pub fn should_retry(&self) -> Option<bool> {
         match self {
             Self::Status { should_retry, .. } => *should_retry,
+            // A failed signature is not a transport failure, so the retry
+            // policy's default for `connection_failed` does not apply.
+            Self::Sign(_) => Some(false),
             Self::Connection(_)
             | Self::StreamIncomplete(_)
             | Self::ReplyFailed { .. }
@@ -92,7 +101,8 @@ impl Error {
             | Self::StreamIncomplete(_)
             | Self::UnknownStopReason(_)
             | Self::ContextOverflow(_)
-            | Self::Refused(_) => (None, None),
+            | Self::Refused(_)
+            | Self::Sign(_) => (None, None),
         };
         let message =
             if let (Self::Status { status, .. }, ErrorCode::AuthenticationFailed) = (self, &code) {

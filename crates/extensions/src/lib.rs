@@ -4,10 +4,14 @@
 //! through `config`, and choosing the session's model from them
 //! (`docs/model-routing.md`, "Naming a model" and "Choosing the model"). It
 //! also hosts the Lua runtime a Lua extension runs in (`docs/extensions.md`,
-//! "Lua extensions").
+//! "Lua extensions"), and a provider's Lua: `models()`, `credential()` and
+//! `sign()` (`docs/model-routing.md`, "Model discovery", "Signing a request"
+//! and "Credentials").
 
+mod host;
 mod install;
 mod lua;
+mod lua_provider;
 mod providers;
 
 use std::io;
@@ -18,6 +22,7 @@ use contract::ErrorCode;
 
 pub use install::install;
 pub use lua::{LuaExtension, MEMORY_CAP};
+pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
 pub use providers::{Model, Providers};
 
 /// The extension API's major version this Fiber speaks
@@ -120,7 +125,8 @@ pub enum Error {
     Timeout {
         /// The extension.
         extension: String,
-        /// The callback: a command's name, or the entry script.
+        /// The callback: a command's name, `<provider>.<function>`, or the
+        /// entry script.
         callback: String,
         /// The timeout it declared.
         timeout_ms: u64,
@@ -132,6 +138,25 @@ pub enum Error {
         extension: String,
         /// The command asked for.
         command: String,
+    },
+    /// A provider function the extension never registered.
+    #[error("`{extension}` registered no `{callback}`.")]
+    UnknownCallback {
+        /// The extension.
+        extension: String,
+        /// `<provider>.<function>`.
+        callback: String,
+    },
+    /// A provider function returned something other than what Fiber asked
+    /// for, such as a `credential()` with no token.
+    #[error("`{extension}`: `{callback}` returned {why}.")]
+    BadReturn {
+        /// The extension.
+        extension: String,
+        /// `<provider>.<function>`.
+        callback: String,
+        /// What was wrong.
+        why: String,
     },
     /// A callback the runtime could not stop at its timeout, such as a loop
     /// in a `__gc` finalizer or a long C call. Its VM is abandoned.
@@ -174,6 +199,8 @@ impl Error {
             Self::Lua { .. }
             | Self::Timeout { .. }
             | Self::Abandoned { .. }
+            | Self::UnknownCallback { .. }
+            | Self::BadReturn { .. }
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
             Self::UnknownModel { .. } | Self::Ambiguous { .. } | Self::NoModel => {

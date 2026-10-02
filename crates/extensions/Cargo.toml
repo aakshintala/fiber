@@ -10,7 +10,10 @@ config = { path = "../config" }
 contract = { path = "../contract" }
 serde_json.workspace = true
 thiserror.workspace = true
-mlua.workspace = true
+mlua = { workspace = true, features = ["serde"] }
+# SHA-256 and HMAC-SHA256 for `host.sha256` and `host.hmac_sha256`.
+ring = "0.17"
+ureq.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
