@@ -12,14 +12,26 @@ use contract::clock::{Clock, Wake};
 pub(crate) struct System;
 
 impl Clock for System {
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process clock behind contract::clock::Clock::now"
+    )]
     fn now(&self) -> Instant {
         Instant::now()
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process clock behind contract::clock::Clock::wall"
+    )]
     fn wall(&self) -> SystemTime {
         SystemTime::now()
     }
 
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the process clock behind contract::clock::Clock::sleep"
+    )]
     fn sleep(&self, d: Duration) {
         thread::sleep(d);
     }

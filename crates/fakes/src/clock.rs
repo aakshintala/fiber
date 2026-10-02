@@ -35,6 +35,10 @@ pub struct FakeClock {
 impl FakeClock {
     /// `now()` is [`FakeClock::origin`]. `wall()` is the Unix epoch plus
     /// 1_700_000_000 seconds.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "the fake clock's origin is one Instant::now; time after that is contract::clock"
+    )]
     pub fn new() -> Arc<Self> {
         // The origin is an arbitrary Instant. Nothing compares it to a later
         // reading of the process clock.
@@ -86,6 +90,10 @@ impl FakeClock {
     /// Waits, at most `within` of real time, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`. True once it is; false at
     /// the deadline.
+    #[expect(
+        clippy::disallowed_methods,
+        reason = "a real-time bound on awaiting a park; the fake's time is contract::clock"
+    )]
     pub fn await_parked(&self, until: Instant, within: Duration) -> bool {
         // A test helper's deadline is real time. The process clock is read
         // only here, to bound the wait, never as the fake's time.

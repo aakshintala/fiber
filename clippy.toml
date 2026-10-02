@@ -2,3 +2,9 @@ allow-unwrap-in-tests = true
 allow-expect-in-tests = true
 allow-panic-in-tests = true
 allow-indexing-slicing-in-tests = true
+
+disallowed-methods = [
+    { path = "std::thread::sleep", reason = "wait on an injected contract::clock::Clock" },
+    { path = "std::time::Instant::now", reason = "read time from an injected contract::clock::Clock" },
+    { path = "std::time::SystemTime::now", reason = "read time from an injected contract::clock::Clock" },
+]
