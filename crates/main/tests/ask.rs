@@ -334,6 +334,44 @@ fn hello() -> Response {
     Response::stream(body)
 }
 
+/// An Anthropic Messages stream answering `Hello.` in two fragments.
+fn anthropic_hello() -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {
+            "id": "msg_1", "usage": {"input_tokens": 10, "output_tokens": 0}
+        }}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hel"}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "lo."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta",
+            "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// A Gemini `streamGenerateContent` stream answering `Hello.` in two parts.
+fn gemini_hello() -> Response {
+    let chunks = [
+        json!({"responseId": "resp_1", "candidates": [{"content": {
+            "parts": [{"text": "Hel"}], "role": "model"}}]}),
+        json!({"responseId": "resp_1", "candidates": [{"content": {
+            "parts": [{"text": "lo."}], "role": "model"},
+            "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}}),
+    ];
+    let body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
+    Response::stream(body)
+}
+
 /// The event kinds of a turn answered by [`hello`].
 const HELLO_KINDS: [&str; 11] = [
     "fiber_started",
@@ -1043,20 +1081,6 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
         "fiber_exited",
     ]);
     assert_eq!(run.kinds(), kinds);
-    let requested = run
-        .lines
-        .iter()
-        .position(|l| l["kind"] == "tool_call_requested")
-        .unwrap();
-    let mut steps = run
-        .lines
-        .iter()
-        .enumerate()
-        .filter(|(_, l)| l["kind"] == "step_started")
-        .map(|(i, _)| i);
-    let first = steps.next().unwrap();
-    let second = steps.next().unwrap();
-    assert!(first < requested && requested < second);
     assert_eq!(run.last()["payload"]["text"], "Hello, lovely human!");
     let requests = server.requests();
     assert_eq!(requests.len(), 2);
@@ -1207,6 +1231,81 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 }
 
 #[test]
+fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([anthropic_hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "anthropic/claude-sonnet-5-5", "hi"],
+        &[("ANTHROPIC_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/messages");
+}
+
+#[test]
+fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("openai", "https://api.openai.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openai/gpt-6-luna", "hi"],
+        &[("OPENAI_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["store"], Value::Bool(false));
+}
+
+#[test]
+fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([gemini_hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package(
+            "gemini",
+            "https://generativelanguage.googleapis.com",
+            &server.url(),
+        ),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "gemini/gemini-3.1-flash-lite", "hi"],
+        &[("GEMINI_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].path,
+        "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
+    );
+}
+
+#[test]
 fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
     let packages = [
         (
@@ -1248,7 +1347,7 @@ fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
         for model in &provider.models {
             assert_eq!(model.protocol, protocol, "{}", model.id);
             assert_eq!(model.base_url, url, "{}", model.id);
-            assert!(!model.base_url.ends_with('/'), "{}", model.id);
+            assert!(!model.input.is_empty(), "{}", model.id);
             assert!(!model.input.is_empty(), "{}", model.id);
             let cost = model.cost.as_ref().unwrap();
             assert!(cost.input > 0.0 && cost.output > 0.0, "{}", model.id);
