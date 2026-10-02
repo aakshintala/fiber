@@ -6,7 +6,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use mlua::{Function, HookTriggers, Lua, Table, Thread, VmState};
 
@@ -119,14 +119,7 @@ pub(super) fn message(e: &mlua::Error) -> String {
 pub(crate) struct Deadline(Rc<Cell<Option<Instant>>>);
 
 impl Deadline {
-    /// Starts the clock and returns the deadline.
-    pub(super) fn start(&self, timeout: Duration) -> Option<Instant> {
-        let at = Instant::now().checked_add(timeout);
-        self.restore(at);
-        at
-    }
-
-    /// The deadline [`Deadline::start`] returned, if one is set.
+    /// The deadline the hook stops at, if one is set.
     pub(super) fn at(&self) -> Option<Instant> {
         self.0.get()
     }

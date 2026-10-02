@@ -513,3 +513,116 @@ fn a_module_exactly_the_memory_cap_is_read() {
     };
     assert!(message.starts_with("init.lua:1: big.lua:"), "{message}");
 }
+
+/// Starts `command` on `ext` on its own thread; the result arrives on the
+/// receiver.
+fn start(ext: &Arc<LuaExtension>, command: &'static str) -> mpsc::Receiver<Result<String, Error>> {
+    let (tx, rx) = mpsc::channel();
+    let ext = Arc::clone(ext);
+    std::thread::spawn(move || tx.send(ext.command(command, "")));
+    rx
+}
+
+/// The verify-3 hang: an entry script the hook cannot stop, with two calls
+/// waiting on it. Both get `Abandoned` past its deadline and grace, neither
+/// waits forever, and a later call gets it at once.
+#[test]
+fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let started = Instant::now();
+    let waiters = [start(&ext, "a"), start(&ext, "b")];
+    for waiter in waiters {
+        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let Error::Abandoned { callback, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(callback, "init.lua");
+    }
+    assert!(
+        started.elapsed() < Duration::from_secs(5),
+        "the waiters took {:?}",
+        started.elapsed()
+    );
+    assert!(!ext.is_running());
+    let again = Instant::now();
+    assert!(matches!(call(&ext, "a", ""), Err(Error::Abandoned { .. })));
+    assert!(again.elapsed() < Duration::from_millis(500));
+}
+
+/// An entry script that errors stops the extension with its error, for
+/// every call that waited on it and every later call.
+#[test]
+fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
+    let setup = Setup::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::spawn(move || answer_when_released(listener, accepted_tx, release_rx));
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!("host.http({{ url = \"{url}\" }})\nerror(\"bad\")\n"),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let first = start(&ext, "a");
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("registration never reached the server");
+    let second = start(&ext, "b");
+    std::thread::sleep(Duration::from_millis(50));
+    release_tx.send(()).unwrap();
+    for waiter in [first, second] {
+        let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
+        let Error::Lua { message, .. } = &err else {
+            panic!("{err:?}")
+        };
+        assert_eq!(message, "init.lua:2: bad");
+    }
+    assert!(!ext.is_running());
+    assert!(matches!(call(&ext, "a", ""), Err(Error::Lua { .. })));
+}
+
+/// An entry script the hook stops at its deadline stops the extension with
+/// that timeout.
+#[test]
+fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(&dir.join("init.lua"), "while true do end\n");
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    for _ in 0..2 {
+        let err = call(&ext, "a", "").unwrap_err();
+        let Error::Timeout {
+            callback,
+            timeout_ms,
+            ..
+        } = &err
+        else {
+            panic!("{err:?}")
+        };
+        assert_eq!((callback.as_str(), *timeout_ms), ("init.lua", 2000));
+    }
+    assert!(!ext.is_running());
+}
+
+/// An extension whose directory is gone fails every call with that.
+#[test]
+fn an_extension_whose_directory_is_gone_fails_every_call() {
+    let setup = Setup::new();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        setup.home().join("gone"),
+        setup.home(),
+    ));
+    for _ in 0..2 {
+        let err = call(&ext, "a", "").unwrap_err();
+        assert!(matches!(err, Error::Io { .. }), "{err:?}");
+    }
+}

@@ -10,13 +10,11 @@
 //! `__gc` finalizer (Lua turns hooks off there) or a long C call such as a
 //! backtracking `string.find`, is caught by the caller instead: once the
 //! callback has started, it stops waiting a grace period past the deadline
-//! and abandons the VM. A call still waiting behind an earlier one is judged
-//! by its own timeout from when Fiber asked, and failing it leaves the VM up.
+//! and abandons the VM. What every caller waits on, and when, is `lua/hub.rs`.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -123,19 +121,8 @@ pub struct LuaExtension {
     name: String,
     dir: PathBuf,
     home: PathBuf,
-    state: Mutex<State>,
-    /// Declared timeouts, published when the entry script finishes. Commands
-    /// and provider functions are separate maps.
-    timeouts: Arc<Mutex<CallbackTimeouts>>,
-}
-
-enum State {
-    /// Never called: no VM, no thread.
-    Idle,
-    /// The thread's inbox.
-    Running(Sender<schedule::Msg>),
-    /// The VM was abandoned or its thread is gone; it takes no more calls.
-    Stopped,
+    /// The state every caller and the extension's thread observe.
+    hub: Arc<Hub>,
 }
 
 impl LuaExtension {
@@ -146,8 +133,7 @@ impl LuaExtension {
             name: name.into(),
             dir: dir.into(),
             home: home.into(),
-            state: Mutex::new(State::Idle),
-            timeouts: Arc::new(Mutex::new(CallbackTimeouts::default())),
+            hub: Arc::default(),
         }
     }
 
@@ -163,7 +149,10 @@ impl LuaExtension {
 
     /// Whether the extension's VM and thread exist and take calls.
     pub fn is_running(&self) -> bool {
-        matches!(*self.lock(), State::Running(_))
+        matches!(
+            self.hub.lock().phase,
+            Phase::Registering { .. } | Phase::Ready(_)
+        )
     }
 
     /// Runs the command `command` the extension registered with
@@ -183,13 +172,22 @@ impl LuaExtension {
     /// The functions `fiber.provider` registered for `provider`, by name;
     /// empty when the extension registered no such provider.
     pub fn provider_functions(&self, provider: &str) -> Result<Vec<String>, Error> {
-        let value = self.call(Target::Functions(provider.to_owned()), Value::Null)?;
-        Ok(value
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|v| v.as_str().map(str::to_owned))
-            .collect())
+        let mut shared = self.hub.lock();
+        self.start(&mut shared)?;
+        loop {
+            let until = match shared.gate(&self.name) {
+                Gate::Ready(timeouts) => {
+                    return Ok(timeouts
+                        .providers
+                        .get(provider)
+                        .map(|fns| fns.keys().cloned().collect())
+                        .unwrap_or_default());
+                }
+                Gate::Stopped(e) => return Err(e),
+                Gate::Wait(until) => until,
+            };
+            shared = self.hub.wait(shared, until);
+        }
     }
 
     /// Runs `function` (`models`, `quota`, `credential` or `sign`) of the
@@ -210,207 +208,61 @@ impl LuaExtension {
         )
     }
 
+    /// Queues the call and waits on the hub until it is answered, or until
+    /// its own limit passes ("Extension lifecycle" in `hub.rs`).
     fn call(&self, target: Target, arg: Value) -> Result<Value, Error> {
-        let callback = target.to_string();
         let asked = Instant::now();
-        // Missing only once registration has published and this callback is
-        // absent. A call that arrives earlier waits, then uses the timeout
-        // it declared, measured from `asked`.
-        if matches!(self.budget(&target), Budget::Missing) {
-            return Err(self.not_registered(&target));
-        }
-        let inbox = {
-            let mut state = self.lock();
-            match &*state {
-                State::Running(inbox) => inbox.clone(),
-                State::Idle => {
-                    let inbox = self.start()?;
-                    *state = State::Running(inbox.clone());
-                    inbox
-                }
-                State::Stopped => return Err(self.stopped()),
-            }
-        };
-        let (reply, answers) = mpsc::channel();
-        // The lock is not held while this waits. A host call suspends its
-        // callback, and provider work, such as `sign()` behind a refresh,
-        // has to reach the extension's thread meanwhile. The next command
-        // does not: it stays queued until this one finishes.
-        if inbox
-            .send(schedule::Msg::Job(Job {
-                target: target.clone(),
-                arg,
-                reply,
-                asked,
-            }))
-            .is_err()
-        {
-            *self.lock() = State::Stopped;
-            return Err(self.stopped());
-        }
-        // Until the callback starts, its declared timeout is the whole wait
-        // and failing it leaves the VM up. Once it has started, a grace past
-        // the deadline catches code the hook cannot stop.
-        let mut started = false;
-        let mut abandon_at = None;
+        let mut shared = self.hub.lock();
+        self.start(&mut shared)?;
+        let id = shared.push(target.clone(), arg, asked);
         loop {
-            let (limit, declared) = if started {
-                (abandon_at, None)
-            } else {
-                match self.budget(&target) {
-                    Budget::Missing => return Err(self.not_registered(&target)),
-                    Budget::Known(timeout) => {
-                        let until = asked.checked_add(timeout);
-                        if expired(until) {
-                            return Err(Error::Timeout {
-                                extension: self.name.clone(),
-                                callback,
-                                timeout_ms: timeout_ms(timeout),
-                            });
-                        }
-                        (until, Some(timeout))
-                    }
-                    Budget::Pending => (None, None),
+            self.hub.notify();
+            match shared.judge(&self.name, id, &target, asked) {
+                Next::Return(result) => {
+                    self.hub.notify();
+                    return result;
                 }
-            };
-            let answer = if let Some(at) = limit {
-                answers.recv_timeout(at.saturating_duration_since(Instant::now()))
-            } else if !started {
-                answers.recv_timeout(Duration::from_millis(20))
-            } else {
-                answers.recv().map_err(|_| RecvTimeoutError::Disconnected)
-            };
-            match answer {
-                Ok(Reply::Deadline(at)) => {
-                    started = true;
-                    abandon_at = at.and_then(|at| at.checked_add(GRACE));
-                }
-                Ok(Reply::Done(result)) => return result,
-                Err(RecvTimeoutError::Timeout) if !started => {
-                    let Some(timeout) = declared else {
-                        continue;
-                    };
-                    return Err(Error::Timeout {
-                        extension: self.name.clone(),
-                        callback,
-                        timeout_ms: timeout_ms(timeout),
-                    });
-                }
-                Err(RecvTimeoutError::Timeout) => {
-                    // ponytail: the abandoned thread is leaked, still running,
-                    // until the process exits; Rust cannot stop a thread.
-                    *self.lock() = State::Stopped;
-                    return Err(Error::Abandoned {
-                        extension: self.name.clone(),
-                        callback,
-                    });
-                }
-                Err(RecvTimeoutError::Disconnected) => {
-                    *self.lock() = State::Stopped;
-                    return Err(self.stopped());
-                }
+                Next::Sleep(until) => shared = self.hub.wait(shared, until),
             }
         }
     }
 
-    /// The timeout `target` declared. [`Budget::Pending`] until the entry
-    /// script has published the tables, and for a lookup that runs no callback.
-    fn budget(&self, target: &Target) -> Budget {
-        if matches!(target, Target::Functions(_)) {
-            return Budget::Pending;
+    /// Spawns the thread on the first call. The entry script's clock starts
+    /// here.
+    fn start(&self, shared: &mut Shared) -> Result<(), Error> {
+        if !matches!(shared.phase, Phase::Idle) {
+            return Ok(());
         }
-        let reg = self.timeouts.lock().unwrap_or_else(PoisonError::into_inner);
-        if !reg.ready {
-            return Budget::Pending;
-        }
-        match target {
-            Target::Command(name) => reg
-                .commands
-                .get(name)
-                .copied()
-                .map_or(Budget::Missing, Budget::Known),
-            Target::Provider { name, function } => reg
-                .providers
-                .get(name)
-                .and_then(|fns| fns.get(*function))
-                .copied()
-                .map_or(Budget::Missing, Budget::Known),
-            Target::Functions(_) => Budget::Pending,
-        }
-    }
-
-    fn not_registered(&self, target: &Target) -> Error {
-        match target {
-            Target::Command(command) => Error::UnknownCommand {
-                extension: self.name.clone(),
-                command: command.clone(),
-            },
-            Target::Provider { .. } | Target::Functions(_) => Error::UnknownCallback {
-                extension: self.name.clone(),
-                callback: target.to_string(),
-            },
-        }
-    }
-
-    fn stopped(&self) -> Error {
-        Error::Stopped {
-            extension: self.name.clone(),
-        }
-    }
-
-    fn lock(&self) -> MutexGuard<'_, State> {
-        // A panic aborts the process (`docs/code-quality.md`, "Panics"), so
-        // no holder can leave the lock poisoned.
-        self.state.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-
-    fn start(&self) -> Result<Sender<schedule::Msg>, Error> {
-        let (sender, inbox) = mpsc::channel();
+        let load_by = Instant::now().checked_add(LOAD_TIMEOUT);
         let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
-        let http = sender.clone();
-        let timeouts = Arc::clone(&self.timeouts);
+        let hub = Arc::clone(&self.hub);
         thread::Builder::new()
             .name(format!("lua {}", self.name))
-            .spawn(move || schedule::serve(&name, &dir, &home, &inbox, &http, &timeouts))
+            .spawn(move || schedule::serve(&name, &dir, &home, &hub, load_by))
             .map_err(|source| Error::Io {
                 path: self.dir.clone(),
                 source,
             })?;
-        Ok(sender)
+        shared.phase = Phase::Registering {
+            abandon_at: load_by.and_then(|at| at.checked_add(GRACE)),
+        };
+        Ok(())
     }
 }
 
-struct Job {
-    target: Target,
-    arg: Value,
-    reply: Sender<Reply>,
-    /// When Fiber asked. Waiting behind an earlier stream item counts
-    /// against the callback's timeout from here.
-    asked: Instant,
+/// Stops the extension: its thread quits the next time it looks.
+impl Drop for LuaExtension {
+    fn drop(&mut self) {
+        let mut shared = self.hub.lock();
+        if !matches!(shared.phase, Phase::Stopped(_)) {
+            shared.phase = Phase::Stopped(hub::stopped(&self.name));
+        }
+        drop(shared);
+        self.hub.notify();
+    }
 }
 
-/// Commands and provider functions, in separate maps so a shared name cannot collide.
-#[derive(Default)]
-struct CallbackTimeouts {
-    commands: BTreeMap<String, Duration>,
-    providers: BTreeMap<String, BTreeMap<String, Duration>>,
-    /// The entry script has finished, even if it registered nothing.
-    ready: bool,
-}
-
-/// Whether the caller already knows how long `call` may wait before the
-/// callback starts.
-#[derive(Clone, Copy)]
-enum Budget {
-    /// The entry script has not published timeouts yet.
-    Pending,
-    /// The callback declared this timeout.
-    Known(Duration),
-    /// Timeouts are published and this callback is not one of them.
-    Missing,
-}
-
-/// What a job runs.
+/// What a call runs.
 #[derive(Clone)]
 enum Target {
     /// A command `fiber.command` registered.
@@ -422,8 +274,6 @@ enum Target {
         /// `models`, `quota`, `credential` or `sign`.
         function: &'static str,
     },
-    /// The names of the functions a provider registered; runs no Lua.
-    Functions(String),
 }
 
 /// The callback's name as an error names it: a command's name, or
@@ -431,28 +281,10 @@ enum Target {
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Command(name) | Self::Functions(name) => f.write_str(name),
+            Self::Command(name) => f.write_str(name),
             Self::Provider { name, function } => write!(f, "{name}.{function}"),
         }
     }
-}
-
-/// What the extension's thread tells the caller about one job.
-enum Reply {
-    /// Lua is about to run until this deadline; none is past the end of time.
-    Deadline(Option<Instant>),
-    /// The job's result.
-    Done(Result<Value, Error>),
-}
-
-/// Sends a deadline to the caller before Lua runs. An error means the
-/// caller has already stopped waiting, so this job must not run.
-type Notify<'a> = &'a dyn Fn(Option<Instant>) -> Result<(), Error>;
-
-#[derive(Clone, Copy)]
-enum CallbackKind {
-    Command,
-    Provider,
 }
 
 fn expired(at: Option<Instant>) -> bool {
@@ -463,8 +295,11 @@ fn timeout_ms(timeout: Duration) -> u64 {
     u64::try_from(timeout.as_millis()).unwrap_or(u64::MAX)
 }
 
+mod hub;
 mod schedule;
 mod setup;
+
+use hub::{CallbackTimeouts, Gate, Hub, Next, Phase, Shared};
 
 pub(crate) use setup::Deadline;
 
@@ -488,24 +323,18 @@ enum Step {
         thread: Thread,
         deadline: Option<Instant>,
         timeout: Duration,
-        callback: String,
-        kind: CallbackKind,
+        target: Target,
         request: host::HttpRequest,
     },
 }
 
 impl Vm {
-    /// Creates the VM and runs the entry script. Its clock starts before
-    /// anything else, so creating the VM and reading the script count.
-    fn load(
-        name: &str,
-        dir: &Path,
-        home: &Path,
-        notify: Notify<'_>,
-        timeouts: &Mutex<CallbackTimeouts>,
-    ) -> Result<Self, Error> {
+    /// Creates the VM and runs the entry script under the deadline
+    /// `load_by`, which started when Fiber first asked, so creating the VM
+    /// and reading the script count.
+    fn load(name: &str, dir: &Path, home: &Path, load_by: Option<Instant>) -> Result<Self, Error> {
         let deadline = Deadline::default();
-        notify(deadline.start(LOAD_TIMEOUT))?;
+        deadline.restore(load_by);
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),
             message,
@@ -543,18 +372,18 @@ impl Vm {
             Err(e) => return Err(lua_error(e)),
         };
         vm.resume(entry, ENTRY, LOAD_TIMEOUT, mlua::Value::Nil)?;
-        *timeouts.lock().unwrap_or_else(PoisonError::into_inner) = vm.declared();
         Ok(vm)
     }
 
-    /// Starts `target` and runs it until it returns or suspends on `host.http`.
-    /// `asked` is when Fiber asked, so time already spent waiting counts.
+    /// Starts `target` and runs it until it returns or suspends on
+    /// `host.http`. `deadline` is its timeout from when Fiber asked, so time
+    /// already spent waiting counts.
     fn step(
         &self,
         target: &Target,
         arg: &Value,
-        asked: Instant,
-        notify: Notify<'_>,
+        timeout: Duration,
+        deadline: Option<Instant>,
     ) -> Result<Step, Error> {
         let fail = |e: mlua::Error| self.error(&e);
         let spec = match target {
@@ -563,28 +392,11 @@ impl Vm {
                 .providers
                 .get::<Option<Table>>(name.as_str())
                 .and_then(|p| p.map_or(Ok(None), |p| p.get::<Option<Table>>(*function))),
-            Target::Functions(name) => {
-                return Ok(Step::Done(self.function_names(name)?));
-            }
         }
         .map_err(fail)?;
         let Some(spec) = spec else {
-            return Err(match target {
-                Target::Command(command) => Error::UnknownCommand {
-                    extension: self.name.clone(),
-                    command: command.clone(),
-                },
-                Target::Provider { .. } | Target::Functions(_) => Error::UnknownCallback {
-                    extension: self.name.clone(),
-                    callback: target.to_string(),
-                },
-            });
+            return Err(hub::not_registered(&self.name, target));
         };
-        let timeout = Duration::from_millis(spec.get::<u64>("timeout").map_err(fail)?);
-        let deadline = asked.checked_add(timeout);
-        if expired(deadline) {
-            return Err(self.timed_out(&target.to_string(), timeout));
-        }
         let run = spec.get::<Function>("run").map_err(fail)?;
         let lua_arg = match target {
             Target::Command(_) => arg
@@ -593,46 +405,35 @@ impl Vm {
                 .transpose()
                 .map_err(fail)?
                 .map_or(mlua::Value::Nil, mlua::Value::String),
-            Target::Provider { .. } | Target::Functions(_) => {
-                host::to_lua(&self.lua, arg).map_err(fail)?
-            }
-        };
-        self.deadline.restore(deadline);
-        notify(deadline)?;
-        let callback = target.to_string();
-        let kind = match target {
-            Target::Command(_) => CallbackKind::Command,
-            Target::Provider { .. } | Target::Functions(_) => CallbackKind::Provider,
+            Target::Provider { .. } => host::to_lua(&self.lua, arg).map_err(fail)?,
         };
         let thread = self.lua.create_thread(run).map_err(fail)?;
         self.deadline.arm(&thread).map_err(fail)?;
         self.after(
             thread,
             MultiValue::from_vec(vec![lua_arg]),
-            &callback,
+            target,
             timeout,
             deadline,
-            kind,
         )
     }
 
+    /// Resumes `thread` until it returns or suspends on `host.http` again.
     fn after(
         &self,
         thread: Thread,
         args: MultiValue,
-        callback: &str,
+        target: &Target,
         timeout: Duration,
         deadline: Option<Instant>,
-        kind: CallbackKind,
     ) -> Result<Step, Error> {
-        match self.poll(&thread, args, callback, timeout, deadline)? {
-            setup::Poll::Done(value) => Ok(Step::Done(self.returned(kind, value)?)),
+        match self.poll(&thread, args, &target.to_string(), timeout, deadline)? {
+            setup::Poll::Done(value) => Ok(Step::Done(self.returned(target, value)?)),
             setup::Poll::Http(request) => Ok(Step::Suspend {
                 thread,
                 deadline,
                 timeout,
-                callback: callback.to_owned(),
-                kind,
+                target: target.clone(),
                 request,
             }),
         }
@@ -640,10 +441,7 @@ impl Vm {
 
     /// Every callback the entry script registered.
     fn declared(&self) -> CallbackTimeouts {
-        let mut timeouts = CallbackTimeouts {
-            ready: true,
-            ..CallbackTimeouts::default()
-        };
+        let mut timeouts = CallbackTimeouts::default();
         for (name, spec) in self.commands.pairs::<String, Table>().flatten() {
             if let Ok(ms) = spec.get::<u64>("timeout") {
                 timeouts.commands.insert(name, Duration::from_millis(ms));
@@ -661,25 +459,13 @@ impl Vm {
         timeouts
     }
 
-    fn function_names(&self, name: &str) -> Result<Value, Error> {
+    fn returned(&self, target: &Target, value: mlua::Value) -> Result<Value, Error> {
         let fail = |e: mlua::Error| self.error(&e);
-        let mut names = Vec::new();
-        if let Some(functions) = self.providers.get::<Option<Table>>(name).map_err(fail)? {
-            for pair in functions.pairs::<String, mlua::Value>() {
-                names.push(Value::String(pair.map_err(fail)?.0));
-            }
-        }
-        names.sort_by(|a, b| a.as_str().cmp(&b.as_str()));
-        Ok(Value::Array(names))
-    }
-
-    fn returned(&self, kind: CallbackKind, value: mlua::Value) -> Result<Value, Error> {
-        let fail = |e: mlua::Error| self.error(&e);
-        match kind {
-            CallbackKind::Command => Option::<String>::from_lua(value, &self.lua)
+        match target {
+            Target::Command(_) => Option::<String>::from_lua(value, &self.lua)
                 .map(|text| Value::String(text.unwrap_or_default()))
                 .map_err(fail),
-            CallbackKind::Provider => host::to_json(&value).map_err(fail),
+            Target::Provider { .. } => host::to_json(&value).map_err(fail),
         }
     }
 
