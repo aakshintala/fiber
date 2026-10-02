@@ -41,7 +41,7 @@ An implementer is given:
 
 - the ticket
 - the `docs/<area>.md` pages the ticket cites
-- `CONTEXT.md`
+- `GLOSSARY.md`
 - the gate command, `scripts/check`
 
 `AGENTS.md` at the repository root points every harness at these files.
@@ -114,7 +114,7 @@ CI's own retry of a binary-level test (`docs/testing.md`, "Flaky tests").
 ## Review
 
 Every pull request gets one review, after the gate passes. The reviewer is
-given the diff, the ticket, the docs it cites, `CONTEXT.md` and
+given the diff, the ticket, the docs it cites, `GLOSSARY.md` and
 `docs/code-quality.md`, and checks two things:
 
 - Spec: the diff does what the ticket and its `docs/<area>.md` pages say.

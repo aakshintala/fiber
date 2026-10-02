@@ -2,7 +2,7 @@
 
 What a person sets to change Fiber's defaults, where it is written, and which
 value wins. It also covers the format of a provider's data and of an
-extension's manifest. Vocabulary is `CONTEXT.md`. Where Fiber home is, and how
+extension's manifest. Vocabulary is `GLOSSARY.md`. Where Fiber home is, and how
 its files are written safely, is [Fiber home](state.md).
 
 ## Files and format

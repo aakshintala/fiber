@@ -7,7 +7,7 @@ the rejected alternatives are
 [ADR 0008](adr/0008-the-mcp-client-is-built-in.md). What pi, codex and Claude
 Code do is in `research/mcp-client/`.
 
-Vocabulary is `CONTEXT.md`. MCP server, tool call, effect, workspace, driver,
+Vocabulary is `GLOSSARY.md`. MCP server, tool call, effect, workspace, driver,
 driver command, session and event mean what it says there and nothing else.
 
 ## What Fiber does with MCP

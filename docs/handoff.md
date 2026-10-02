@@ -5,7 +5,7 @@ true now, not a plan. It is settled by
 [Handoff: when a session outgrows its context](https://github.com/aakshintala/fiber/issues/24);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Handoff, handoff note, session log, step, step
+Vocabulary is `GLOSSARY.md`. Handoff, handoff note, session log, step, step
 boundary and artifact mean what it says there and nothing else. The events are
 `docs/events.md`; the tool result contract is `docs/tools.md`.
 

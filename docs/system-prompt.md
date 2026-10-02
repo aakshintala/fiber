@@ -5,7 +5,7 @@ comes from. This is what is true now. It is settled by
 [System prompt: what it holds and what feeds it](https://github.com/aakshintala/fiber/issues/114);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`: preamble, opening message, session log, workspace,
+Vocabulary is `GLOSSARY.md`: preamble, opening message, session log, workspace,
 handoff. The cache rules this page follows are `docs/prompt-cache.md`.
 
 ## Two parts
