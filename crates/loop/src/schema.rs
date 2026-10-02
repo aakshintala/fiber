@@ -12,7 +12,7 @@ pub(crate) fn repair(schema: &Value, arguments: &Value) -> Option<ArgumentRepair
     let mut repaired = arguments.clone();
     let mut repairs = Vec::new();
     // An ambiguous `anyOf` is left as sent; the check then reports it.
-    fix(schema, &mut repaired, "", &mut repairs);
+    fix(schema, &mut repaired, "", &mut repairs, false);
     let Value::Object(repaired) = repaired else {
         return None;
     };
@@ -28,34 +28,48 @@ pub(crate) fn check(schema: &Value, value: &Value) -> Vec<String> {
 
 /// Repairs `value` where `schema` allows one reading, adding each fix to
 /// `repairs`. Returns whether it met an `anyOf` with more than one reading,
-/// which it leaves as it was.
-fn fix(schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>) -> bool {
-    let mut ambiguous = plain(schema, value, path, repairs);
+/// which it leaves as it was; with `pick` it takes the first reading instead.
+fn fix(
+    schema: &Value,
+    value: &mut Value,
+    path: &str,
+    repairs: &mut Vec<Repair>,
+    pick: bool,
+) -> bool {
+    let mut ambiguous = plain(schema, value, path, repairs, pick);
     if let Some(Value::Array(options)) = schema.get("anyOf")
         && !check(schema, value).is_empty()
     {
-        ambiguous |= any_of(schema, options, value, path, repairs);
+        ambiguous |= any_of(schema, options, value, path, repairs, pick);
     }
     ambiguous
 }
 
 /// Repairs `value` by reading each of `options`, the `anyOf` of `schema`.
 /// A branch's repair is a reading, kept only when it is the one distinct
-/// reading that passes the whole schema and no branch met an ambiguity of
-/// its own. Returns whether there was more than one reading.
+/// reading that passes the whole schema and no branch that could pass met an
+/// ambiguity of its own. Returns whether there was more than one reading.
 fn any_of(
     schema: &Value,
     options: &[Value],
     value: &mut Value,
     path: &str,
     repairs: &mut Vec<Repair>,
+    pick: bool,
 ) -> bool {
     let mut readings: Vec<(Value, Vec<Repair>)> = Vec::new();
     for option in options {
         let mut reading = value.clone();
         let mut made = Vec::new();
-        if fix(option, &mut reading, path, &mut made) {
-            return true;
+        if fix(option, &mut reading, path, &mut made, pick) {
+            // Every reading of the inner `anyOf` passes it, so the first
+            // shows whether this branch could pass at all.
+            let mut first = value.clone();
+            fix(option, &mut first, path, &mut Vec::new(), true);
+            if check(schema, &first).is_empty() {
+                return true;
+            }
+            continue;
         }
         let new = !readings.iter().any(|(seen, _)| *seen == reading);
         if !made.is_empty() && new && check(schema, &reading).is_empty() {
@@ -64,18 +78,24 @@ fn any_of(
     }
     match readings.as_mut_slice() {
         [] => false,
-        [(reading, made)] => {
+        [_, _, ..] if !pick => true,
+        [(reading, made), ..] => {
             *value = std::mem::take(reading);
             repairs.append(made);
             false
         }
-        _ => true,
     }
 }
 
 /// Repairs `value` against every keyword of `schema` but `anyOf`. Returns
 /// whether a property or item met an ambiguous `anyOf`.
-fn plain(schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>) -> bool {
+fn plain(
+    schema: &Value,
+    value: &mut Value,
+    path: &str,
+    repairs: &mut Vec<Repair>,
+    pick: bool,
+) -> bool {
     let mut ambiguous = false;
     let allowed = types(schema);
     let wants = |name: &str| allowed.contains(&name);
@@ -95,7 +115,7 @@ fn plain(schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair
                         fix: RepairFix::NullDropped,
                     });
                 } else if let Some(inner) = map.get_mut(key) {
-                    ambiguous |= fix(property, inner, &at, repairs);
+                    ambiguous |= fix(property, inner, &at, repairs, pick);
                 }
             }
             None
@@ -103,7 +123,7 @@ fn plain(schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair
         Value::Array(items) => {
             if let Some(each) = schema.get("items") {
                 for (i, item) in items.iter_mut().enumerate() {
-                    ambiguous |= fix(each, item, &format!("{path}/{i}"), repairs);
+                    ambiguous |= fix(each, item, &format!("{path}/{i}"), repairs, pick);
                 }
             }
             None

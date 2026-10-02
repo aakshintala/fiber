@@ -276,3 +276,19 @@ fn an_ambiguous_item_makes_its_branch_ambiguous() {
     let schema = json!({"type": "object", "properties": {"l": schema}});
     assert_eq!(repair(&schema, &json!({"l": [{"a": "1", "b": "2"}]})), None);
 }
+
+#[test]
+fn a_branch_that_cannot_match_adds_no_ambiguity() {
+    // Branch one's `x` has two readings, but branch one needs `missing`.
+    let two = json!({"anyOf": [
+        {"type": "object", "properties": {"a": {"type": "integer"}}},
+        {"type": "object", "properties": {"b": {"type": "integer"}}}
+    ]});
+    let schema = json!({"anyOf": [
+        {"type": "object", "required": ["missing"], "properties": {"x": two}},
+        {"type": "object", "properties": {"y": {"type": "integer"}}}
+    ]});
+    let made = repair(&schema, &json!({"x": {"a": "1", "b": "2"}, "y": "3"})).unwrap();
+    assert_eq!(made.repaired["y"], 3);
+    assert_eq!(made.repaired["x"], json!({"a": "1", "b": "2"}));
+}
