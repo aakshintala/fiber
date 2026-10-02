@@ -380,6 +380,57 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
 }
 
 #[test]
+fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
+    let setup = Setup::new();
+    let reg = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let hold = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let reg_url = format!("http://{}/", reg.local_addr().unwrap());
+    let hold_url = format!("http://{}/", hold.local_addr().unwrap());
+    let (reg_ok_tx, reg_ok_rx) = mpsc::channel();
+    let (reg_release_tx, reg_release_rx) = mpsc::channel();
+    let (hold_ok_tx, hold_ok_rx) = mpsc::channel();
+    let (hold_release_tx, hold_release_rx) = mpsc::channel();
+    std::thread::spawn(move || answer_when_released(reg, reg_ok_tx, reg_release_rx));
+    std::thread::spawn(move || answer_when_released(hold, hold_ok_tx, hold_release_rx));
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "host.http({{ url = \"{reg_url}\" }})\n\
+             fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{hold_url}\" }}).body end }})\n\
+             fiber.command(\"quick\", {{ timeout = 400, run = function() return \"ran\" end }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let held = Arc::clone(&ext);
+    let held = std::thread::spawn(move || held.command("hold", ""));
+    reg_ok_rx
+        .recv_timeout(WAIT)
+        .expect("registration never reached the server");
+    let started = Instant::now();
+    let quick = Arc::clone(&ext);
+    let quick = std::thread::spawn(move || quick.command("quick", ""));
+    std::thread::sleep(Duration::from_millis(50));
+    reg_release_tx.send(()).unwrap();
+    hold_ok_rx
+        .recv_timeout(WAIT)
+        .expect("hold never reached the server");
+    let err = quick.join().unwrap().unwrap_err();
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed > Duration::from_millis(300) && elapsed < Duration::from_millis(900),
+        "quick returned after {elapsed:?}"
+    );
+    let Error::Timeout { timeout_ms, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(*timeout_ms, 400);
+    assert!(ext.is_running());
+    hold_release_tx.send(()).unwrap();
+    assert!(held.join().unwrap().is_ok());
+}
+
+#[test]
 fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let setup = Setup::new();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
