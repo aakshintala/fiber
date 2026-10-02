@@ -311,10 +311,9 @@ fn a_lua_error_releases_the_extensions_lock() {
     let other = Arc::clone(&ext);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(other.is_running()));
-    assert_eq!(
+    assert!(
         rx.recv_timeout(WAIT)
-            .expect("waited for the lock to be taken"),
-        true
+            .expect("waited for the lock to be taken")
     );
     assert_eq!(call(&ext, "echo", "free").unwrap(), "free");
 }

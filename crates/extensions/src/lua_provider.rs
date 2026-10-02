@@ -10,7 +10,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{ModelData, Secret};
-use contract::clock::Clock;
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
@@ -87,7 +86,8 @@ impl LuaProvider {
     pub fn token(self: &Arc<Self>) -> Result<Secret, Error> {
         let mut state = lock(&self.token);
         if let Some((token, expires)) = &state.current
-            && let Ok(left) = expires.duration_since(self.extension.clock().wall())
+            && let Ok(left) =
+                expires.duration_since(contract::clock::Clock::wall(self.extension.clock()))
             && !left.is_zero()
         {
             let token = token.clone();
@@ -135,7 +135,7 @@ impl LuaProvider {
         // A token that is already expired, or whose expiry is this instant,
         // was never usable. Returning it would send a request that the
         // vendor will reject (`docs/model-routing.md`, "Credentials").
-        if expires <= self.extension.clock().wall() {
+        if expires <= contract::clock::Clock::wall(self.extension.clock()) {
             return Err(self.bad_return("credential", "a token that has already expired".into()));
         }
         Ok((Secret::new(token.to_owned()), expires))

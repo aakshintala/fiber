@@ -927,10 +927,14 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
         let result = runner.run(&mut |delta| first.send(delta).unwrap());
         done.send(result).unwrap();
     });
-    let delta = first_seen.recv_timeout(DEADLINE).unwrap();
+    let delta = first_seen
+        .recv_timeout(DEADLINE)
+        .expect("waited for the first delta");
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
     call.cancel();
-    let result = finished.recv_timeout(DEADLINE).unwrap();
+    let result = finished
+        .recv_timeout(DEADLINE)
+        .expect("waited for run to return after the cancel");
     assert_eq!(result, Err(CallError::Cancelled));
 }
 
