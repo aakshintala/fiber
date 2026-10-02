@@ -2,7 +2,7 @@
 
 What a person sets to change Fiber's defaults, where it is written, and which
 value wins. It also covers the format of a provider's data and of an
-extension's manifest. Vocabulary is `CONTEXT.md`. Where Fiber home is, and how
+extension's manifest. Vocabulary is `GLOSSARY.md`. Where Fiber home is, and how
 its files are written safely, is [Fiber home](state.md).
 
 ## Files and format
@@ -312,6 +312,7 @@ holds what `docs/extensions.md` ("What a package holds") lists:
     "exit_timeout_ms": 2000
   },
   "install": ["npm", "ci"],
+  "memory_mib": 8,
   "repo_settings": ["workspace_url"],
   "prompt": "prompt.md"
 }
@@ -320,7 +321,10 @@ holds what `docs/extensions.md` ("What a package holds") lists:
 `fiber` is the lowest Fiber version it runs on. `api` is the extension API's
 major version it was written for; Fiber loads it only when that is Fiber's own
 (`docs/extensions.md`, "The extension API version"). `process` is present only for
-a process extension, and `exit_timeout_ms` has no default. `prompt` names a
+a process extension, and `exit_timeout_ms` has no default. A Lua extension's
+entry script is `init.lua` at the top of its directory. `memory_mib` raises a
+Lua extension's memory cap, in MiB, above the default of 1
+(`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `prompt` names a
 file in the package whose text goes in the system prompt
 (`docs/system-prompt.md`, "Extension texts").
 

@@ -6,7 +6,7 @@ now, not a plan. It is settled by
 [The tool contract: what every tool shares](https://github.com/aakshintala/fiber/issues/14);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Tool call, effect, artifact, participant, seam,
+Vocabulary is `GLOSSARY.md`. Tool call, effect, artifact, participant, seam,
 extension and event mean what it says there and nothing else. How effects are
 judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 
@@ -38,11 +38,18 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
 
 ## Before a call runs
 
-- Arguments the model sent are repaired first, where the tool's input schema
-  allows exactly one reading of them: a `null` sent for an optional property
-  is dropped, a string is turned into a number or boolean where the schema
-  asks for one, and a string holding JSON is parsed where the schema asks for
-  an array or object, and kept only if the result passes the check. Nothing
+- Arguments the model sent are repaired first, and only where a property's
+  schema names a single type, after following any `$ref` to its definition.
+  Three repairs are made. A `null` sent for an optional property whose type
+  does not allow `null` is dropped. A string holding a plain JSON number, such
+  as `5`, `-2.5` or `1e3`, becomes a number where the type is `number`, and
+  where the type is `integer` only if its value is whole, so `5.0` becomes
+  `5` and `5.5` is left as sent; the string `true` or `false` becomes a
+  boolean where the type is `boolean`. A string holding JSON is parsed where
+  the type is `array` or `object`, repaired the same way inside, and kept only
+  if the result passes the check. Under `anyOf` or `oneOf` nothing is
+  repaired, and the value passes the check as sent or fails it. A `$ref`
+  that leads back to itself before reaching a type repairs nothing. Nothing
   else is repaired: JSON that does not parse, a misspelt or foreign tool name,
   and a missing or unknown property all fail the check. Repair is the same for
   every protocol, model and tool, built-in, MCP or extension. The model is not
@@ -1070,8 +1077,8 @@ Settled by
 that ticket's resolution holds the rationale and the rejected alternatives.
 
 Every tool is declared on every request, in full or deferred. A deferred tool
-is sent as its name only. The model loads its full definition when it needs
-it, and the definition is appended to the conversation, so the cached prefix
+is declared with `defer_loading`. The model sees its name and description until
+it loads the tool. The model loads the full definition when it needs it, and the definition is appended to the conversation, so the cached prefix
 holds (`docs/prompt-cache.md`, "Deferred tools"). The tool set, and which of
 its tools are deferred, change only when the preamble is built.
 

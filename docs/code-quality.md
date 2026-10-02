@@ -221,7 +221,7 @@ Only what no tool can:
 
 - the code does what its `docs/<area>.md` page says. When they disagree, the
   doc wins and the code changes
-- names match `CONTEXT.md`
+- names match `GLOSSARY.md`
 - error messages and event payloads read clearly to their consumer
 - every lint allow, `unsafe` block and mutation-test exemption gives a reason
   that holds

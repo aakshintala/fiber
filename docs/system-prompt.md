@@ -5,7 +5,7 @@ comes from. This is what is true now. It is settled by
 [System prompt: what it holds and what feeds it](https://github.com/aakshintala/fiber/issues/114);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`: preamble, opening message, session log, workspace,
+Vocabulary is `GLOSSARY.md`: preamble, opening message, session log, workspace,
 handoff. The cache rules this page follows are `docs/prompt-cache.md`.
 
 ## Two parts
@@ -157,8 +157,8 @@ Fiber reads these files, in this order:
    the workspace. Outside git, the workspace alone.
 
 In each directory Fiber reads `AGENTS.md`, or `CLAUDE.md` when there is no
-`AGENTS.md`. A `CLAUDE.md` whose only content points at `AGENTS.md`, as in this
-repository, is therefore never read. `@path` imports are not followed.
+`AGENTS.md`. A `CLAUDE.md` whose only content points at `AGENTS.md` is
+therefore never read. `@path` imports are not followed.
 
 Every file is sent in full, under its path, whatever its size. The system
 prompt tells the model the precedence rules:
