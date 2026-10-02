@@ -245,7 +245,20 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
             )
         }
         Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
-        Protocol::GoogleGenerativeAi => Arc::new(Gemini::new(endpoint)),
+        Protocol::GoogleGenerativeAi => {
+            let gemini = Gemini::new(endpoint);
+            Arc::new(
+                match model
+                    .model
+                    .compat
+                    .get("cache_key_header")
+                    .and_then(Value::as_str)
+                {
+                    Some(name) => gemini.cache_key_header(name),
+                    None => gemini,
+                },
+            )
+        }
         Protocol::OpenaiCompletions | Protocol::BedrockConverse => {
             // ponytail: docs/errors.md has no code for a protocol this Fiber
             // does not speak yet; `extension_missing` stands in.

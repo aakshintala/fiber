@@ -7,7 +7,7 @@
 //! (`research/google-generative-ai-probe`).
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 
 use contract::events::{ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
@@ -25,12 +25,25 @@ use crate::{Endpoint, Error, sse, strict};
 #[derive(Debug, Clone)]
 pub struct Gemini {
     endpoint: Endpoint,
+    cache_key_header: Option<String>,
 }
 
 impl Gemini {
     /// The protocol for one model of one provider.
     pub fn new(endpoint: Endpoint) -> Self {
-        Self { endpoint }
+        Self {
+            endpoint,
+            cache_key_header: None,
+        }
+    }
+
+    /// Also sends each request's cache key in the header `name`, for a
+    /// provider that routes by it, such as OpenCode's `x-opencode-session`
+    /// (`docs/prompt-cache.md`, "Cache markers and keys").
+    #[must_use]
+    pub fn cache_key_header(mut self, name: impl Into<String>) -> Self {
+        self.cache_key_header = Some(name.into());
+        self
     }
 
     /// Builds the call for `request`. Two calls built from the same inputs
@@ -52,6 +65,9 @@ impl Gemini {
             headers.push(("x-goog-api-key".to_owned(), key.clone()));
         }
         headers.extend(endpoint.headers.iter().cloned());
+        if let Some(name) = &self.cache_key_header {
+            headers.push((name.clone(), request.cache_key.clone()));
+        }
         Call {
             url: format!(
                 "{}/models/{}:streamGenerateContent?alt=sse",
@@ -80,15 +96,6 @@ pub struct Call {
     body: Vec<u8>,
     provider: String,
     cancel: Arc<Cancel>,
-}
-
-impl Call {
-    /// Sends the request and returns the reply's bytes, unread.
-    pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        http::post(&self.url, &self.headers, &self.body, &self.cancel)
-            .map(|(body, _)| body)
-            .map_err(retry_info)
-    }
 }
 
 impl ModelCall for Call {
@@ -273,9 +280,10 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect();
 
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    // A signature that rode on a text or `functionCall` part, waiting for
-    // the next part of the same `model` content.
-    let mut signature: Option<Value> = None;
+    // A signature waiting for the next part of the same `model` content:
+    // the bare signature off a `functionCall` part, or, when it rode in
+    // on text, the signature with a flag saying so.
+    let mut signature: Option<(Value, bool)> = None;
     for input in &request.conversation {
         let (role, part) = match input {
             Input::User { text } => ("user", json!({"text": text})),
@@ -288,9 +296,9 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 provider_item: Some(item),
                 ..
             } if *model == reference => {
-                if is_signature(item) {
-                    if let Some(earlier) = signature.replace(item.clone()) {
-                        push(&mut out, "model", carrier(earlier));
+                if let Some(rider) = pending_signature(item) {
+                    if let Some(earlier) = signature.replace(rider) {
+                        push(&mut out, "model", carrier(earlier.0));
                     }
                     continue;
                 }
@@ -320,17 +328,26 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             }
         };
         let part = if role == "model" {
-            with(part, signature.take())
+            match signature.take() {
+                // A text part's signature waits for its text, so a call in
+                // between goes without it.
+                Some((sig, rides_text)) if rides_text && part.get("functionCall").is_some() => {
+                    signature = Some((sig, rides_text));
+                    part
+                }
+                Some((sig, _)) => with(part, Some(sig)),
+                None => part,
+            }
         } else {
             if let Some(earlier) = signature.take() {
-                push(&mut out, "model", carrier(earlier));
+                push(&mut out, "model", carrier(earlier.0));
             }
             part
         };
         push(&mut out, role, part);
     }
     if let Some(earlier) = signature.take() {
-        push(&mut out, "model", carrier(earlier));
+        push(&mut out, "model", carrier(earlier.0));
     }
     out.into_iter()
         .map(|(role, parts)| json!({"role": role, "parts": parts}))
@@ -345,11 +362,24 @@ fn push(out: &mut Vec<(&'static str, Vec<Value>)>, role: &'static str, part: Val
     }
 }
 
-/// Whether a reasoning item is a bare signature: one that arrived on a
-/// text or `functionCall` part rather than in a `thought` part.
-fn is_signature(item: &Value) -> bool {
-    item.as_object()
-        .is_some_and(|map| map.len() == 1 && map.contains_key("thoughtSignature"))
+/// A stored signature waiting for its part: the bare signature with
+/// `false` when it arrived on a `functionCall` part, or the signature
+/// with `true` when it rode in on a text part rather than in a `thought`
+/// part. The text's own words travel in the reply's text; only the
+/// signature waits here.
+fn pending_signature(item: &Value) -> Option<(Value, bool)> {
+    let map = item.as_object()?;
+    let sig = map.get("thoughtSignature")?;
+    if map.len() == 1 {
+        return Some((item.clone(), false));
+    }
+    if map.get("text").is_some()
+        && !map.contains_key("thought")
+        && !map.contains_key("functionCall")
+    {
+        return Some((json!({ "thoughtSignature": sig }), true));
+    }
+    None
 }
 
 /// `object` with the fields of `extra` added, such as a signature that
@@ -469,17 +499,17 @@ impl Decoder {
             return;
         }
         self.close_thought();
-        // A signature on a text or `functionCall` part is kept as reasoning,
-        // in place, and sent back on that kind of part
-        // (`docs/loop.md`, "What the model is sent").
-        if let Some(signature) = signature {
-            self.actions
-                .push(ReplyAction::Reasoning(ReasoningCompleted {
-                    text: String::new(),
-                    provider_item: Some(signature),
-                }));
-        }
         if let Some(call) = part.get("functionCall") {
+            // A signature on a `functionCall` part is kept as reasoning,
+            // in place, and sent back on that call (`docs/loop.md`,
+            // "What the model is sent").
+            if let Some(signature) = signature {
+                self.actions
+                    .push(ReplyAction::Reasoning(ReasoningCompleted {
+                        text: String::new(),
+                        provider_item: Some(signature),
+                    }));
+            }
             let name = str_at(call, "name").to_owned();
             let arguments = call.get("args").cloned().unwrap_or_else(|| json!({}));
             sink(Delta::ToolCallArguments(ToolCallArgumentsDelta {
@@ -500,13 +530,25 @@ impl Decoder {
                     .map(|id| ProviderCallId(id.to_owned())),
                 repair: None,
             }));
-        } else if let Some(text) = part.get("text").and_then(Value::as_str)
-            && !text.is_empty()
-        {
-            self.text.push_str(text);
-            sink(Delta::Text(TextDelta {
-                text: text.to_owned(),
-            }));
+        } else {
+            // A signature on a text part is kept with the part, and sent
+            // back on the reply's text, never on a following
+            // `functionCall` (`docs/loop.md`, "What the model is sent").
+            if signature.is_some() {
+                self.actions
+                    .push(ReplyAction::Reasoning(ReasoningCompleted {
+                        text: String::new(),
+                        provider_item: Some(part.clone()),
+                    }));
+            }
+            if let Some(text) = part.get("text").and_then(Value::as_str)
+                && !text.is_empty()
+            {
+                self.text.push_str(text);
+                sink(Delta::Text(TextDelta {
+                    text: text.to_owned(),
+                }));
+            }
         }
     }
 
@@ -575,7 +617,7 @@ impl Decoder {
             actions: self.actions,
             finish,
             generation_id: GenerationId(self.id),
-            tokens: tokens(&self.usage),
+            tokens: tokens(&self.usage)?,
         })
     }
 }
@@ -583,19 +625,24 @@ impl Decoder {
 /// `usageMetadata` as `tokens`. `promptTokenCount` includes the cached
 /// tokens, which `tokens.input` excludes (`docs/events.md`); output is the
 /// candidates' tokens plus the thoughts' (ai.google.dev/api/generate-content,
-/// `UsageMetadata`). Gemini reports no cache writes.
+/// `UsageMetadata`). Gemini reports no cache writes. The counts are the
+/// provider's, so an overflowing sum fails the reply instead of panicking
+/// (`docs/code-quality.md`, "Panics").
 ///
 /// ponytail: `toolUsePromptTokenCount` (a hosted tool's prompt) is not
 /// counted; Fiber sends no hosted tool on this protocol yet.
-fn tokens(usage: &Value) -> Tokens {
+fn tokens(usage: &Value) -> Result<Tokens, Error> {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);
     let cached = count("cachedContentTokenCount");
-    Tokens {
+    let output = count("candidatesTokenCount")
+        .checked_add(count("thoughtsTokenCount"))
+        .ok_or_else(|| Error::StreamIncomplete("its usageMetadata token counts overflow".into()))?;
+    Ok(Tokens {
         input: count("promptTokenCount").saturating_sub(cached),
         cache_read: cached,
         cache_write: BTreeMap::new(),
-        output: count("candidatesTokenCount") + count("thoughtsTokenCount"),
-    }
+        output,
+    })
 }
 
 /// The string at `key`, or `""`.

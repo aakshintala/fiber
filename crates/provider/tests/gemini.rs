@@ -926,3 +926,63 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let result = finished.recv_timeout(DEADLINE).unwrap();
     assert_eq!(result, Err(CallError::Cancelled));
 }
+
+#[test]
+fn the_cache_key_goes_in_the_declared_header_and_nowhere_else_without_one() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    run(Box::new(Gemini::new(endpoint.clone()).request(&request())))
+        .0
+        .unwrap();
+    run(Box::new(
+        Gemini::new(endpoint)
+            .cache_key_header("x-opencode-session")
+            .request(&request()),
+    ))
+    .0
+    .unwrap();
+    let sent = server.requests();
+    assert_eq!(sent[0].header("x-opencode-session"), None);
+    assert_eq!(sent[1].header("x-opencode-session"), Some("session_1"));
+}
+
+#[test]
+fn a_text_signature_stays_on_its_text_when_a_call_follows() {
+    let (reply, _) = decoded(&stream(&[
+        chunk(
+            json!([{"text": "Checking.", "thoughtSignature": "c2ln"}]),
+            None,
+        ),
+        chunk(
+            json!([{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]),
+            Some("STOP"),
+        ),
+    ]));
+    let reply = reply.unwrap();
+    // The signature rode on the text part, so it is stored with it.
+    assert_eq!(
+        reply.actions[0],
+        ReplyAction::Reasoning(ReasoningCompleted {
+            text: String::new(),
+            provider_item: Some(json!({"text": "Checking.", "thoughtSignature": "c2ln"})),
+        })
+    );
+    let (contents, _) = sent_contents(after(&reply, REFERENCE));
+    // The call goes without it; the text carries it.
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
+            {"text": "Checking.", "thoughtSignature": "c2ln"}]})
+    );
+}
+
+#[test]
+fn overflowing_usage_counts_fail_instead_of_panicking() {
+    let mut overflow = chunk(json!([{"text": "hi"}]), Some("STOP"));
+    overflow["usageMetadata"] = json!({"promptTokenCount": 10,
+        "candidatesTokenCount": u64::MAX, "thoughtsTokenCount": 1});
+    let (code, message) = error_code(decoded(&stream(&[overflow])).0);
+    assert_eq!(code, ErrorCode::StreamIncomplete);
+    assert!(message.contains("usageMetadata"), "{message}");
+}
