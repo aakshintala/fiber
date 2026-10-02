@@ -274,6 +274,9 @@ impl Ctx<'_> {
                 }
                 let (repo, _) = split(dep)?;
                 let tag = pick(dep, w, &self.origin.tags(repo)?)?;
+                if plan.items.get(dep).is_some_and(|i| i.version == tag) {
+                    continue;
+                }
                 self.add_git(plan, dep, Some(tag), false)?;
                 changed = true;
             }
