@@ -292,3 +292,24 @@ fn a_branch_that_cannot_match_adds_no_ambiguity() {
     assert_eq!(made.repaired["y"], 3);
     assert_eq!(made.repaired["x"], json!({"a": "1", "b": "2"}));
 }
+
+#[test]
+fn an_impossible_branch_is_judged_by_itself() {
+    // Branch one's first reading would pass branch two; branch one still
+    // needs `missing`, so branch two's repair is the one.
+    let two = json!({"anyOf": [
+        {"type": "object", "properties": {"a": {"type": "integer"}}},
+        {"type": "object", "properties": {"b": {"type": "integer"}}}
+    ]});
+    let schema = json!({"anyOf": [
+        {
+            "type": "object",
+            "required": ["missing"],
+            "properties": {"x": two, "y": {"type": "integer"}}
+        },
+        {"type": "object", "properties": {"y": {"type": "integer"}}}
+    ]});
+    let made = repair(&schema, &json!({"x": {"a": "1", "b": "2"}, "y": "3"})).unwrap();
+    assert_eq!(made.repaired["y"], 3);
+    assert_eq!(made.repaired["x"], json!({"a": "1", "b": "2"}));
+}

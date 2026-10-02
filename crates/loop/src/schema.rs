@@ -63,10 +63,11 @@ fn any_of(
         let mut made = Vec::new();
         if fix(option, &mut reading, path, &mut made, pick) {
             // Every reading of the inner `anyOf` passes it, so the first
-            // shows whether this branch could pass at all.
+            // shows whether this branch could pass at all. The branch is
+            // judged by itself: another branch passing proves nothing here.
             let mut first = value.clone();
             fix(option, &mut first, path, &mut Vec::new(), true);
-            if check(schema, &first).is_empty() {
+            if check(option, &first).is_empty() && check(schema, &first).is_empty() {
                 return true;
             }
             continue;
