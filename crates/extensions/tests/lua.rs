@@ -18,7 +18,9 @@ use fakes::clock::FakeClock;
 
 /// How long a test waits for one call before failing. Far past every timeout
 /// the fixture declares, so it fires only when a callback is never stopped.
-const WAIT: Duration = Duration::from_secs(10);
+/// This is wall time: the memory-cap loop still has to allocate, and under
+/// the load soak that takes longer than the timeouts themselves.
+const WAIT: Duration = Duration::from_secs(60);
 
 /// Reading, compiling and running an entry script is bounded at 2 seconds
 /// (`docs/extensions.md`).
