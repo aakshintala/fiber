@@ -391,3 +391,11 @@ fn each_item_is_read_on_its_own() {
     let two = list(json!({"anyOf": [{"type": "integer"}, {"type": "string"}]}));
     assert_eq!(repair(&two, &json!({"l": [1, "3"]})), None);
 }
+
+#[test]
+fn json_is_parsed_only_into_an_object_or_array() {
+    let schema = json!({"type": "object", "properties": {"n": {"type": ["array", "null"]}}});
+    assert_eq!(repair(&schema, &json!({"n": "null"})), None);
+    let made = repair(&schema, &json!({"n": "[1]"})).unwrap();
+    assert_eq!(made.repaired["n"], json!([1]));
+}

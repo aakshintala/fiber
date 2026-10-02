@@ -157,8 +157,8 @@ fn parse(schema: &Value, text: &str, wants: &dyn Fn(&str) -> bool) -> Option<(Va
     }
     if wants("object") || wants("array") {
         let parsed: Value = serde_json::from_str(trimmed).ok()?;
-        let fits = matches!(&parsed, Value::Object(_) | Value::Array(_));
-        if fits && check(schema, &parsed).is_empty() {
+        // Whether it then passes is the whole schema's to say (`repair`).
+        if matches!(&parsed, Value::Object(_) | Value::Array(_)) {
             return Some((parsed, RepairFix::StringParsed));
         }
     }
