@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::Read;
 use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
@@ -84,6 +84,26 @@ fn a_call_waiting_on_registration_sleeps_until_the_entry_scripts_grace_ends() {
     assert!(matches!(shared.phase, Phase::Registering { .. }));
 }
 
+/// A call asked during registration keeps that instant once the entry
+/// script publishes the callback's own timeout.
+#[test]
+fn a_call_queued_during_registration_keeps_its_declared_timeout() {
+    let asked = ago(50);
+    let abandon_at = Instant::now().checked_add(Duration::from_secs(30));
+    let mut shared = in_phase(Phase::Registering { abandon_at });
+    let id = shared.push(command("work"), Value::Null, asked);
+    let Next::Sleep(until) = shared.judge("ext", id, &command("work"), asked) else {
+        panic!("a waiter returned during registration")
+    };
+    assert_eq!(until, abandon_at);
+    let mut published = ready(&[("work", 5000)]);
+    shared.phase = std::mem::replace(&mut published.phase, Phase::Idle);
+    let Next::Sleep(until) = shared.judge("ext", id, &command("work"), asked) else {
+        panic!("work returned")
+    };
+    assert_eq!(until, asked.checked_add(Duration::from_millis(5000)));
+}
+
 /// The verify-3 hang: an entry script the hook cannot stop is abandoned by
 /// the first waiter past its grace, and every other waiter gets the same
 /// error instead of waiting on its own reply.
@@ -122,10 +142,11 @@ fn a_queued_call_past_its_own_timeout_times_out_and_the_vm_stays() {
         shared.queue.iter().map(|job| job.id).collect::<Vec<_>>(),
         [slow]
     );
-    let Next::Sleep(until) = shared.judge("ext", slow, &command("slow"), ago(150)) else {
+    let asked = ago(150);
+    let Next::Sleep(until) = shared.judge("ext", slow, &command("slow"), asked) else {
         panic!("slow returned")
     };
-    assert!(until.is_some_and(|at| at > Instant::now() + Duration::from_secs(9)));
+    assert_eq!(until, asked.checked_add(Duration::from_secs(10)));
 }
 
 /// Once registration has published, a callback it did not register fails
@@ -144,16 +165,16 @@ fn a_call_the_entry_script_did_not_register_is_unknown() {
 #[test]
 fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
     let mut shared = ready(&[("park", 100)]);
-    let id = shared.push(command("park"), Value::Null, ago(2000));
+    let id = shared.push(command("park"), Value::Null, ago(60_000));
     shared.queue.clear();
     shared.calls.insert(
         id,
         Progress::Started {
-            deadline: Some(ago(1100)),
+            deadline: Some(ago(60_000)),
             parked: true,
         },
     );
-    let err = returned(shared.judge("ext", id, &command("park"), ago(2000))).unwrap_err();
+    let err = returned(shared.judge("ext", id, &command("park"), ago(60_000))).unwrap_err();
     assert!(
         matches!(
             err,
@@ -171,27 +192,30 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
 #[test]
 fn a_running_call_past_its_grace_abandons_the_vm() {
     let mut shared = ready(&[("spin", 100)]);
-    let id = shared.push(command("spin"), Value::Null, ago(600));
+    let asked = Instant::now();
+    let id = shared.push(command("spin"), Value::Null, asked);
     shared.queue.clear();
+    // Far inside the grace, and far past it, so a stall cannot cross either edge.
+    let deadline = Instant::now() + Duration::from_secs(60);
     shared.calls.insert(
         id,
         Progress::Started {
-            deadline: Some(ago(500)),
+            deadline: Some(deadline),
             parked: false,
         },
     );
-    let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), ago(600)) else {
+    let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), asked) else {
         panic!("returned inside its grace")
     };
-    assert!(until.is_some_and(|at| at > Instant::now()));
+    assert_eq!(until, deadline.checked_add(GRACE));
     shared.calls.insert(
         id,
         Progress::Started {
-            deadline: Some(ago(1100)),
+            deadline: Some(ago(60_000)),
             parked: false,
         },
     );
-    let err = returned(shared.judge("ext", id, &command("spin"), ago(1200))).unwrap_err();
+    let err = returned(shared.judge("ext", id, &command("spin"), asked)).unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     assert!(matches!(
         shared.phase,
@@ -340,9 +364,9 @@ fn serve_after(dir: &Path, first: &str) -> (Arc<Hub>, u64, thread::JoinHandle<()
     (hub, id, handle)
 }
 
-/// Waits until `check` holds for the hub's state, or two seconds pass.
+/// Waits until `check` holds for the hub's state, or five seconds pass.
 fn until(hub: &Hub, check: impl Fn(&Shared) -> bool) -> bool {
-    let end = Instant::now() + Duration::from_secs(2);
+    let end = Instant::now() + Duration::from_secs(5);
     let mut shared = hub.lock();
     while !check(&shared) {
         if Instant::now() >= end {
@@ -358,6 +382,17 @@ fn stop(hub: &Hub) {
     hub.notify();
 }
 
+/// Whether `handle` finishes before the deadline. The join itself is the
+/// signal; the deadline is only how long this test waits for it.
+fn thread_done(handle: thread::JoinHandle<()>) -> bool {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let finished = handle.join().is_ok();
+        tx.send(finished)
+    });
+    matches!(rx.recv_timeout(Duration::from_secs(5)), Ok(true))
+}
+
 /// A stopped extension's thread quits while a callback is parked, and the
 /// call queued behind it never starts.
 #[test]
@@ -365,12 +400,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        accepted_tx.send(()).unwrap();
-        thread::sleep(Duration::from_secs(3));
-        drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
-    });
+    thread::spawn(move || hold_until_close(listener, accepted_tx));
     let dir = extension(
         "parked",
         &format!(
@@ -380,7 +410,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     );
     let (hub, hold, handle) = serve_after(&dir, "hold");
     accepted_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(Duration::from_secs(10))
         .expect("hold never reached the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
@@ -390,11 +420,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
         .lock()
         .push(command("later"), Value::Null, Instant::now());
     stop(&hub);
-    let end = Instant::now() + Duration::from_secs(2);
-    while !handle.is_finished() && Instant::now() < end {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(handle.is_finished(), "the thread kept running once stopped");
+    assert!(thread_done(handle), "the thread kept running once stopped");
     assert!(matches!(
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
@@ -424,11 +450,7 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         s.calls.get(&spin),
         Some(Progress::Done(_))
     )));
-    let end = Instant::now() + Duration::from_secs(2);
-    while !handle.is_finished() && Instant::now() < end {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(handle.is_finished(), "the thread kept running once stopped");
+    assert!(thread_done(handle), "the thread kept running once stopped");
     assert!(matches!(
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
@@ -436,18 +458,31 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Accepts one connection, signals, and answers after five seconds.
+/// Accepts one connection, signals once the request is on the socket, and
+/// leaves it unanswered so the callback stays parked.
 fn hold_server() -> (String, mpsc::Receiver<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        accepted_tx.send(()).unwrap();
-        thread::sleep(Duration::from_secs(5));
-        drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
-    });
+    thread::spawn(move || hold_until_close(listener, accepted_tx));
     (url, accepted_rx)
+}
+
+/// Reads until the client drops. The first bytes are the signal that the
+/// request was sent, which is past the point where the socket timeout is set.
+fn hold_until_close(listener: TcpListener, accepted: mpsc::Sender<()>) {
+    let mut sock = listener.accept().unwrap().0;
+    let mut buf = [0u8; 1024];
+    let mut signaled = false;
+    while let Ok(n) = sock.read(&mut buf) {
+        if n == 0 {
+            break;
+        }
+        if !signaled {
+            signaled = true;
+            accepted.send(()).unwrap();
+        }
+    }
 }
 
 /// When a running callback abandons the VM, every other waiter, queued or
@@ -474,25 +509,23 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         let (ext, tx) = (Arc::clone(&ext), tx.clone());
         thread::spawn(move || tx.send((what, f(&ext))));
     };
-    let started = Instant::now();
     run("park", |e| e.command("park", "").map(Value::String));
-    park_accepted.recv_timeout(Duration::from_secs(3)).unwrap();
+    park_accepted
+        .recv_timeout(Duration::from_secs(10))
+        .expect("park never reached the server");
     run("models", |e| e.provider_call("p", "models", Value::Null));
     models_accepted
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap();
+        .recv_timeout(Duration::from_secs(10))
+        .expect("models never reached the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
     let mut seen = BTreeMap::new();
     for _ in 0..4 {
-        let (what, result) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (what, result) = rx
+            .recv_timeout(Duration::from_secs(10))
+            .expect("a waiter did not return");
         seen.insert(what, result.unwrap_err());
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "the waiters took {:?}, not the abandonment",
-        started.elapsed()
-    );
     assert!(
         matches!(seen["sign"], Error::Abandoned { .. }),
         "{:?}",

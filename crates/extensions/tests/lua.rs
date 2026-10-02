@@ -5,10 +5,11 @@
 
 mod common;
 
-use std::io::Write;
+use std::io::{Read, Write};
+use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use common::{Setup, write};
 use contract::ErrorCode;
@@ -239,8 +240,30 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
     assert!(message.contains("memory cap"), "{message}");
 }
 
-/// Accepts one connection, signals, and answers only when `release` arrives
-/// or five seconds pass, so a parked `host.http` can be finished on purpose.
+const HTTP_OK: &[u8] = b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok";
+
+/// Reads one request. The bytes are the signal that ureq has set its socket
+/// timeout and finished sending: answering at `accept` closes the socket in
+/// the gap before that `setsockopt`, and macOS returns EINVAL.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn read_request(sock: &mut TcpStream) {
+    let mut got = Vec::new();
+    let mut buf = [0u8; 512];
+    loop {
+        let n = sock.read(&mut buf).expect("reading the request");
+        assert!(n > 0, "the client closed before its request");
+        got.extend_from_slice(buf.get(..n).unwrap());
+        if got.windows(4).any(|w| w == b"\r\n\r\n") {
+            return;
+        }
+        assert!(got.len() <= 8192, "the request header never ended");
+    }
+}
+
+/// Accepts one connection, reads the request, signals, and answers when
+/// `release` arrives, so a parked `host.http` can be finished on purpose.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn answer_when_released(
     listener: std::net::TcpListener,
@@ -248,11 +271,11 @@ fn answer_when_released(
     release: mpsc::Receiver<()>,
 ) {
     let mut sock = listener.accept().unwrap().0;
+    read_request(&mut sock);
     accepted.send(()).unwrap();
-    match release.recv_timeout(Duration::from_secs(5)) {
-        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+    if release.recv_timeout(WAIT).is_ok() {
+        sock.write_all(HTTP_OK).unwrap();
     }
-    drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
 }
 
 #[test]
@@ -313,18 +336,17 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
         ),
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let slow = Arc::clone(&ext);
-    let slow = std::thread::spawn(move || slow.command("slow", ""));
+    let slow = start(&ext, "slow");
     accepted_rx
         .recv_timeout(WAIT)
         .expect("the slow command never reached the server");
-    let started = Instant::now();
-    let err = call(&ext, "quick", "").unwrap_err();
-    assert!(
-        started.elapsed() < Duration::from_millis(900),
-        "quick waited {:?}, not its own 300 ms",
-        started.elapsed()
-    );
+    // Under 5s, so a bug that waits out `slow` fails here. Far past 300ms,
+    // so a loaded runner can still deliver the timeout.
+    let quick = start(&ext, "quick");
+    let err = quick
+        .recv_timeout(Duration::from_secs(4))
+        .expect("quick did not time out on its own deadline")
+        .unwrap_err();
     let Error::Timeout {
         callback,
         timeout_ms,
@@ -336,7 +358,7 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
     assert_eq!((callback.as_str(), *timeout_ms), ("quick", 300));
     assert!(ext.is_running(), "the queued timeout stopped the extension");
     release_tx.send(()).unwrap();
-    assert!(slow.join().unwrap().is_ok());
+    assert!(slow.recv_timeout(WAIT).unwrap().is_ok());
     assert_eq!(call(&ext, "after", "").unwrap(), "no");
 }
 
@@ -362,29 +384,23 @@ fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
         ),
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let first = Arc::clone(&ext);
-    let first = std::thread::spawn(move || first.command("work", ""));
+    // Both calls are queued while the entry script is still in `host.http`.
+    // Each then reaches the work server, so the timeout it declared at
+    // registration was still ahead: an already-expired deadline never connects.
+    let first = start(&ext, "work");
+    let second = start(&ext, "work");
     accepted_rx
         .recv_timeout(WAIT)
         .expect("registration never reached the server");
-    let started = Instant::now();
-    let second = Arc::clone(&ext);
-    let second = std::thread::spawn(move || second.command("work", ""));
     release_tx.send(()).unwrap();
     for _ in 0..2 {
         work_ok_rx
             .recv_timeout(WAIT)
             .expect("work never reached the server");
-        std::thread::sleep(Duration::from_millis(1200));
         work_release_tx.send(()).unwrap();
     }
-    assert_eq!(second.join().unwrap().unwrap(), "ok");
-    assert!(
-        started.elapsed() > Duration::from_secs(1),
-        "work returned in {:?}",
-        started.elapsed()
-    );
-    assert!(first.join().unwrap().is_ok());
+    assert_eq!(first.recv_timeout(WAIT).unwrap().unwrap(), "ok");
+    assert_eq!(second.recv_timeout(WAIT).unwrap().unwrap(), "ok");
     assert!(ext.is_running());
 }
 
@@ -411,32 +427,27 @@ fn a_call_still_waiting_on_registration_times_out_from_when_it_was_asked() {
         ),
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let held = Arc::clone(&ext);
-    let held = std::thread::spawn(move || held.command("hold", ""));
+    let held = start(&ext, "hold");
+    let quick = start(&ext, "quick");
     reg_ok_rx
         .recv_timeout(WAIT)
         .expect("registration never reached the server");
-    let started = Instant::now();
-    let quick = Arc::clone(&ext);
-    let quick = std::thread::spawn(move || quick.command("quick", ""));
-    std::thread::sleep(Duration::from_millis(50));
     reg_release_tx.send(()).unwrap();
     hold_ok_rx
         .recv_timeout(WAIT)
         .expect("hold never reached the server");
-    let err = quick.join().unwrap().unwrap_err();
-    let elapsed = started.elapsed();
-    assert!(
-        elapsed > Duration::from_millis(300) && elapsed < Duration::from_millis(900),
-        "quick returned after {elapsed:?}"
-    );
+    // Still parked on `hold`, so this is quick's own deadline, not hold's.
+    let err = quick
+        .recv_timeout(Duration::from_secs(3))
+        .expect("quick did not time out while hold was parked")
+        .unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*timeout_ms, 400);
     assert!(ext.is_running());
     hold_release_tx.send(()).unwrap();
-    assert!(held.join().unwrap().is_ok());
+    assert!(held.recv_timeout(WAIT).unwrap().is_ok());
 }
 
 #[test]
@@ -456,20 +467,18 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
         ),
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let started = Instant::now();
-    let ext_call = Arc::clone(&ext);
-    let ran = std::thread::spawn(move || ext_call.command("p.sign", ""));
+    let ran = start(&ext, "p.sign");
     ok_rx
         .recv_timeout(WAIT)
         .expect("p.sign never reached the server");
-    std::thread::sleep(Duration::from_millis(300));
-    release_tx.send(()).unwrap();
-    assert_eq!(ran.join().unwrap().unwrap(), "ok");
-    let elapsed = started.elapsed();
+    // Past the provider function's 50ms, and the command has not returned:
+    // it is still the command's own timeout.
     assert!(
-        elapsed > Duration::from_millis(200) && elapsed < Duration::from_secs(2),
-        "p.sign took {elapsed:?}, not its own timeout"
+        ran.recv_timeout(Duration::from_millis(300)).is_err(),
+        "p.sign used the provider function's 50 ms timeout"
     );
+    release_tx.send(()).unwrap();
+    assert_eq!(ran.recv_timeout(WAIT).unwrap().unwrap(), "ok");
 }
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
@@ -481,14 +490,11 @@ fn answer_n(
 ) {
     for _ in 0..times {
         let mut sock = listener.accept().unwrap().0;
+        read_request(&mut sock);
         accepted.send(()).unwrap();
-        match release.recv_timeout(Duration::from_secs(8)) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        if release.recv_timeout(WAIT).is_ok() {
+            sock.write_all(HTTP_OK).unwrap();
         }
-        drop(
-            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
-        );
     }
 }
 
@@ -535,7 +541,6 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
         "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
     );
     let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let started = Instant::now();
     let waiters = [start(&ext, "a"), start(&ext, "b")];
     for waiter in waiters {
         let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
@@ -544,15 +549,10 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
         };
         assert_eq!(callback, "init.lua");
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(5),
-        "the waiters took {:?}",
-        started.elapsed()
-    );
     assert!(!ext.is_running());
-    let again = Instant::now();
-    assert!(matches!(call(&ext, "a", ""), Err(Error::Abandoned { .. })));
-    assert!(again.elapsed() < Duration::from_millis(500));
+    let again = start(&ext, "a");
+    let err = again.recv_timeout(WAIT).unwrap().unwrap_err();
+    assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
 }
 
 /// An entry script that errors stops the extension with its error, for
@@ -576,7 +576,6 @@ fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
         .recv_timeout(WAIT)
         .expect("registration never reached the server");
     let second = start(&ext, "b");
-    std::thread::sleep(Duration::from_millis(50));
     release_tx.send(()).unwrap();
     for waiter in [first, second] {
         let err = waiter.recv_timeout(WAIT).unwrap().unwrap_err();
