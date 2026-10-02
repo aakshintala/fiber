@@ -119,8 +119,8 @@ impl Loop {
             Ok(effects) => effects,
             Err(e) => return Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))),
         };
-        // ponytail: only the fast paths are decided; every other call is
-        // denied until the permission order and the reviewer exist
+        // Only the fast paths are decided; every other call is denied until
+        // the permission order (#293) and the reviewer (#294) exist
         // (`docs/permissions.md`, "The order a call is judged in").
         if !fast_path(&effects.declared, &self.workspace) {
             let text = "This call needs a review, and no reviewer is available. \

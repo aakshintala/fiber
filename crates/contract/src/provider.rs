@@ -121,7 +121,7 @@ pub enum Input {
         text: String,
         /// Whether the call's `tool_call_completed` is `failed`. A protocol
         /// sends it as its error flag.
-        // ponytail: carried, not yet sent; each protocol encodes it in #340
+        // Carried, not yet sent: each protocol encodes it in #340
         // (`docs/tools.md`, "What a result carries").
         #[serde(default)]
         is_error: bool,
