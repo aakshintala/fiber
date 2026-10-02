@@ -8,22 +8,19 @@
 //! The deadline has two guards. The instruction hook stops Lua code at the
 //! deadline and leaves the VM usable. Code the hook never sees, such as a
 //! `__gc` finalizer (Lua turns hooks off there) or a long C call such as a
-//! backtracking `string.find`, is caught by the caller instead: it stops
-//! waiting a grace period past the deadline and abandons the VM.
+//! backtracking `string.find`, is caught by the caller instead: once the
+//! callback has started, it stops waiting a grace period past the deadline
+//! and abandons the VM. A call still waiting behind an earlier one is judged
+//! by its own timeout from when Fiber asked, and failing it leaves the VM up.
 
-use std::cell::Cell;
-use std::fs::File;
-use std::io::Read;
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::rc::Rc;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
-use std::sync::{Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use mlua::{
-    FromLua, Function, HookTriggers, Lua, LuaOptions, MultiValue, StdLib, Table, Thread, VmState,
-};
+use mlua::{FromLua, Function, Lua, LuaOptions, MultiValue, StdLib, Table, Thread};
 use serde_json::Value;
 
 use crate::{Error, host};
@@ -48,14 +45,14 @@ const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
 const GRACE: Duration = Duration::from_secs(1);
 
 /// Instructions between two looks at the clock while a deadline is ahead.
-const CHECK_EVERY: u32 = 1000;
+pub(super) const CHECK_EVERY: u32 = 1000;
 
 /// The Lua half of the host's globals: `coroutine.wrap` over the armed
 /// `coroutine.create`, `require`, `fiber.command` and `fiber.provider`, which
 /// fill the two tables the prelude returns. Lua's own `wrap` is a
 /// separate C function that would make an unarmed coroutine.
 // ponytail: `timeout` is in milliseconds until #331 names its unit.
-const PRELUDE: &str = r#"
+pub(super) const PRELUDE: &str = r#"
 local create, load_module = ...
 local commands, providers = {}, {}
 local resume, pack, unpack = coroutine.resume, table.pack, table.unpack
@@ -127,6 +124,10 @@ pub struct LuaExtension {
     dir: PathBuf,
     home: PathBuf,
     state: Mutex<State>,
+    /// Each callback's declared timeout, published once the entry script has
+    /// run. A call reads it so waiting behind an earlier item counts against
+    /// its own clock (`docs/extensions.md`, "How an extension runs").
+    timeouts: Arc<Mutex<BTreeMap<String, Duration>>>,
 }
 
 enum State {
@@ -147,6 +148,7 @@ impl LuaExtension {
             dir: dir.into(),
             home: home.into(),
             state: Mutex::new(State::Idle),
+            timeouts: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -167,9 +169,10 @@ impl LuaExtension {
 
     /// Runs the command `command` the extension registered with
     /// `fiber.command`, passing `text`, and returns what its `run` returned.
-    /// The first call creates the VM and runs the entry script. A callback
-    /// runs until it returns or suspends on a host call; while it is
-    /// suspended the thread runs another callback.
+    /// The first call creates the VM and runs the entry script. A command
+    /// runs until it returns, including a host call it waits on, before the
+    /// next command starts. While it is suspended the thread runs provider
+    /// work (`models`, `credential`, `sign`), not the next command.
     pub fn command(&self, command: &str, text: &str) -> Result<String, Error> {
         let value = self.call(
             Target::Command(command.to_owned()),
@@ -210,6 +213,13 @@ impl LuaExtension {
 
     fn call(&self, target: Target, arg: Value) -> Result<Value, Error> {
         let callback = target.to_string();
+        let asked = Instant::now();
+        // Known once the entry script has published it. Waiting in the stream
+        // counts against it. Missing means this callback was never registered.
+        let budget = self.budget(&target);
+        if matches!(budget, Budget::Missing) {
+            return Err(self.not_registered(&target));
+        }
         let inbox = {
             let mut state = self.lock();
             match &*state {
@@ -224,24 +234,48 @@ impl LuaExtension {
         };
         let (reply, answers) = mpsc::channel();
         // The lock is not held while this waits. A host call suspends its
-        // callback, and another callback, such as `sign()` behind a refresh,
-        // has to reach the extension's thread meanwhile.
+        // callback, and provider work, such as `sign()` behind a refresh,
+        // has to reach the extension's thread meanwhile. The next command
+        // does not: it stays queued until this one finishes.
         if inbox
-            .send(schedule::Msg::Job(Job { target, arg, reply }))
+            .send(schedule::Msg::Job(Job {
+                target,
+                arg,
+                reply,
+                asked,
+            }))
             .is_err()
         {
             *self.lock() = State::Stopped;
             return Err(self.stopped());
         }
-        let mut until = Instant::now().checked_add(GRACE);
+        let timeout = match budget {
+            Budget::Known(timeout) => timeout,
+            Budget::Pending | Budget::Missing => GRACE,
+        };
+        // Until the callback starts, its own timeout is the whole wait.
+        // Failing that wait does not abandon the VM. Once it has started,
+        // a grace past the deadline catches code the hook cannot stop.
+        let mut started = false;
+        let mut until = asked.checked_add(timeout);
         loop {
             let answer = match until {
                 Some(at) => answers.recv_timeout(at.saturating_duration_since(Instant::now())),
                 None => answers.recv().map_err(|_| RecvTimeoutError::Disconnected),
             };
             match answer {
-                Ok(Reply::Deadline(at)) => until = at.and_then(|at| at.checked_add(GRACE)),
+                Ok(Reply::Deadline(at)) => {
+                    started = true;
+                    until = at.and_then(|at| at.checked_add(GRACE));
+                }
                 Ok(Reply::Done(result)) => return result,
+                Err(RecvTimeoutError::Timeout) if !started => {
+                    return Err(Error::Timeout {
+                        extension: self.name.clone(),
+                        callback,
+                        timeout_ms: timeout_ms(timeout),
+                    });
+                }
                 Err(RecvTimeoutError::Timeout) => {
                     // ponytail: the abandoned thread is leaked, still running,
                     // until the process exits; Rust cannot stop a thread.
@@ -256,6 +290,35 @@ impl LuaExtension {
                     return Err(self.stopped());
                 }
             }
+        }
+    }
+
+    /// The timeout `target` declared, if the entry script has published the
+    /// table. [`Budget::Pending`] until then, including for a lookup that
+    /// runs no callback.
+    fn budget(&self, target: &Target) -> Budget {
+        if matches!(target, Target::Functions(_)) {
+            return Budget::Pending;
+        }
+        let map = self.timeouts.lock().unwrap_or_else(PoisonError::into_inner);
+        if map.is_empty() {
+            return Budget::Pending;
+        }
+        map.get(&target.to_string())
+            .copied()
+            .map_or(Budget::Missing, Budget::Known)
+    }
+
+    fn not_registered(&self, target: &Target) -> Error {
+        match target {
+            Target::Command(command) => Error::UnknownCommand {
+                extension: self.name.clone(),
+                command: command.clone(),
+            },
+            Target::Provider { .. } | Target::Functions(_) => Error::UnknownCallback {
+                extension: self.name.clone(),
+                callback: target.to_string(),
+            },
         }
     }
 
@@ -275,9 +338,10 @@ impl LuaExtension {
         let (sender, inbox) = mpsc::channel();
         let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
         let http = sender.clone();
+        let timeouts = Arc::clone(&self.timeouts);
         thread::Builder::new()
             .name(format!("lua {}", self.name))
-            .spawn(move || schedule::serve(&name, &dir, &home, &inbox, &http))
+            .spawn(move || schedule::serve(&name, &dir, &home, &inbox, &http, &timeouts))
             .map_err(|source| Error::Io {
                 path: self.dir.clone(),
                 source,
@@ -290,6 +354,21 @@ struct Job {
     target: Target,
     arg: Value,
     reply: Sender<Reply>,
+    /// When Fiber asked. Waiting behind an earlier stream item counts
+    /// against the callback's timeout from here.
+    asked: Instant,
+}
+
+/// Whether the caller already knows how long `call` may wait before the
+/// callback starts.
+#[derive(Clone, Copy)]
+enum Budget {
+    /// The entry script has not published timeouts yet.
+    Pending,
+    /// The callback declared this timeout.
+    Known(Duration),
+    /// Timeouts are published and this callback is not one of them.
+    Missing,
 }
 
 /// What a job runs.
@@ -327,7 +406,7 @@ enum Reply {
 }
 
 /// Sends a deadline to the caller before Lua runs. An error means the
-/// caller has stopped waiting and abandoned the VM, so nothing may run.
+/// caller has already stopped waiting, so this job must not run.
 type Notify<'a> = &'a dyn Fn(Option<Instant>) -> Result<(), Error>;
 
 #[derive(Clone, Copy)]
@@ -345,6 +424,9 @@ fn timeout_ms(timeout: Duration) -> u64 {
 }
 
 mod schedule;
+mod setup;
+
+pub(crate) use setup::Deadline;
 
 struct Vm {
     lua: Lua,
@@ -375,14 +457,20 @@ enum Step {
 impl Vm {
     /// Creates the VM and runs the entry script. Its clock starts before
     /// anything else, so creating the VM and reading the script count.
-    fn load(name: &str, dir: &Path, home: &Path, notify: Notify<'_>) -> Result<Self, Error> {
+    fn load(
+        name: &str,
+        dir: &Path,
+        home: &Path,
+        notify: Notify<'_>,
+        timeouts: &Mutex<BTreeMap<String, Duration>>,
+    ) -> Result<Self, Error> {
         let deadline = Deadline::default();
         notify(deadline.start(LOAD_TIMEOUT))?;
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),
             message,
         };
-        let lua_error = |e: mlua::Error| fail(message(&e));
+        let lua_error = |e: mlua::Error| fail(setup::message(&e));
         let dir = dir.canonicalize().map_err(|source| Error::Io {
             path: dir.to_owned(),
             source,
@@ -397,7 +485,8 @@ impl Vm {
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(MEMORY_CAP).map_err(lua_error)?;
-        let (commands, providers) = install(&lua, &deadline, dir.clone()).map_err(lua_error)?;
+        let (commands, providers) =
+            setup::install(&lua, &deadline, dir.clone()).map_err(lua_error)?;
         let http_tag = host::install(&lua, home.to_owned()).map_err(lua_error)?;
         let vm = Self {
             lua,
@@ -408,17 +497,25 @@ impl Vm {
             providers,
         };
 
-        let entry = match load_file(&vm.lua, &dir, ENTRY) {
+        let entry = match setup::load_file(&vm.lua, &dir, ENTRY) {
             Ok(Ok(entry)) => entry,
             Ok(Err(message)) => return Err(fail(message)),
             Err(e) => return Err(lua_error(e)),
         };
         vm.resume(entry, ENTRY, LOAD_TIMEOUT, mlua::Value::Nil)?;
+        *timeouts.lock().unwrap_or_else(PoisonError::into_inner) = vm.declared();
         Ok(vm)
     }
 
     /// Starts `target` and runs it until it returns or suspends on `host.http`.
-    fn step(&self, target: &Target, arg: &Value, notify: Notify<'_>) -> Result<Step, Error> {
+    /// `asked` is when Fiber asked, so time already spent waiting counts.
+    fn step(
+        &self,
+        target: &Target,
+        arg: &Value,
+        asked: Instant,
+        notify: Notify<'_>,
+    ) -> Result<Step, Error> {
         let fail = |e: mlua::Error| self.error(&e);
         let spec = match target {
             Target::Command(command) => self.commands.get::<Option<Table>>(command.as_str()),
@@ -444,6 +541,10 @@ impl Vm {
             });
         };
         let timeout = Duration::from_millis(spec.get::<u64>("timeout").map_err(fail)?);
+        let deadline = asked.checked_add(timeout);
+        if expired(deadline) {
+            return Err(self.timed_out(&target.to_string(), timeout));
+        }
         let run = spec.get::<Function>("run").map_err(fail)?;
         let lua_arg = match target {
             Target::Command(_) => arg
@@ -456,7 +557,7 @@ impl Vm {
                 host::to_lua(&self.lua, arg).map_err(fail)?
             }
         };
-        let deadline = self.deadline.start(timeout);
+        self.deadline.restore(deadline);
         notify(deadline)?;
         let callback = target.to_string();
         let kind = match target {
@@ -485,8 +586,8 @@ impl Vm {
         kind: CallbackKind,
     ) -> Result<Step, Error> {
         match self.poll(&thread, args, callback, timeout, deadline)? {
-            Poll::Done(value) => Ok(Step::Done(self.returned(kind, value)?)),
-            Poll::Http(request) => Ok(Step::Suspend {
+            setup::Poll::Done(value) => Ok(Step::Done(self.returned(kind, value)?)),
+            setup::Poll::Http(request) => Ok(Step::Suspend {
                 thread,
                 deadline,
                 timeout,
@@ -495,6 +596,24 @@ impl Vm {
                 request,
             }),
         }
+    }
+
+    /// Every callback the entry script registered, by the name an error uses.
+    fn declared(&self) -> BTreeMap<String, Duration> {
+        let mut map = BTreeMap::new();
+        for (name, spec) in self.commands.pairs::<String, Table>().flatten() {
+            if let Ok(ms) = spec.get::<u64>("timeout") {
+                map.insert(name, Duration::from_millis(ms));
+            }
+        }
+        for (name, functions) in self.providers.pairs::<String, Table>().flatten() {
+            for (function, spec) in functions.pairs::<String, Table>().flatten() {
+                if let Ok(ms) = spec.get::<u64>("timeout") {
+                    map.insert(format!("{name}.{function}"), Duration::from_millis(ms));
+                }
+            }
+        }
+        map
     }
 
     fn function_names(&self, name: &str) -> Result<Value, Error> {
@@ -522,7 +641,7 @@ impl Vm {
     fn error(&self, e: &mlua::Error) -> Error {
         Error::Lua {
             extension: self.name.clone(),
-            message: message(e),
+            message: setup::message(e),
         }
     }
 
@@ -557,8 +676,8 @@ impl Vm {
                 timeout,
                 self.deadline.at(),
             )? {
-                Poll::Done(value) => return Ok(value),
-                Poll::Http(request) => {
+                setup::Poll::Done(value) => return Ok(value),
+                setup::Poll::Http(request) => {
                     args = host::resume_values(&self.lua, host::perform(&request)).map_err(fail)?;
                 }
             }
@@ -573,7 +692,7 @@ impl Vm {
         callback: &str,
         timeout: Duration,
         deadline: Option<Instant>,
-    ) -> Result<Poll, Error> {
+    ) -> Result<setup::Poll, Error> {
         self.deadline.restore(deadline);
         if expired(deadline) {
             return Err(self.timed_out(callback, timeout));
@@ -591,7 +710,7 @@ impl Vm {
             return Err(self.timed_out(callback, timeout));
         }
         if !thread.is_resumable() {
-            return Ok(Poll::Done(
+            return Ok(setup::Poll::Done(
                 values
                     .into_vec()
                     .into_iter()
@@ -603,7 +722,7 @@ impl Vm {
             at.saturating_duration_since(Instant::now())
                 .saturating_add(GRACE)
         });
-        Ok(Poll::Http(self.http_request(&values, grace)?))
+        Ok(setup::Poll::Http(self.http_request(&values, grace)?))
     }
 
     fn http_request(
@@ -629,154 +748,6 @@ impl Vm {
             message: "a callback yielded to the host".to_owned(),
         }
     }
-}
-
-enum Poll {
-    Done(mlua::Value),
-    Http(host::HttpRequest),
-}
-
-/// Removes the base library's I/O, which belongs to the host, and runs the
-/// prelude. Returns the tables `fiber.command` and `fiber.provider` fill.
-fn install(lua: &Lua, deadline: &Deadline, dir: PathBuf) -> mlua::Result<(Table, Table)> {
-    let globals = lua.globals();
-    for name in ["print", "warn", "dofile", "loadfile"] {
-        globals.raw_remove(name)?;
-    }
-    let deadline = deadline.clone();
-    let create = lua.create_function(move |lua, f: Function| {
-        let thread = lua.create_thread(f)?;
-        deadline.arm(&thread)?;
-        Ok(thread)
-    })?;
-    let load_module = lua.create_function(move |lua, name: String| {
-        let file = format!("{}.lua", name.replace('.', "/"));
-        Ok(match load_file(lua, &dir, &file)? {
-            Ok(chunk) => (Some(chunk), None),
-            Err(message) => (None, Some(message)),
-        })
-    })?;
-    lua.load(PRELUDE)
-        .set_name("=prelude")
-        .call((create, load_module))
-}
-
-/// Reads `file` under `dir` and compiles it, named by its path in `dir` so an
-/// error names the file and line. The inner error is the reason it cannot be
-/// loaded, for Lua to raise at the caller's line. A file larger than the
-/// memory cap is not read.
-fn load_file(lua: &Lua, dir: &Path, file: &str) -> mlua::Result<Result<Function, String>> {
-    let path = match dir.join(file).canonicalize() {
-        Ok(path) if path.starts_with(dir) => path,
-        Ok(_) => {
-            return Ok(Err(format!(
-                "`{file}` is outside the extension's directory"
-            )));
-        }
-        Err(e) => return Ok(Err(format!("`{file}`: {e}"))),
-    };
-    let mut source = Vec::new();
-    // One byte past the cap tells a file at the cap from one over it. The
-    // bound is on the read itself, so a file that grows cannot pass it.
-    let limit = u64::try_from(MEMORY_CAP)
-        .unwrap_or(u64::MAX)
-        .saturating_add(1);
-    if let Err(e) = File::open(&path).and_then(|f| f.take(limit).read_to_end(&mut source)) {
-        return Ok(Err(format!("`{file}`: {e}")));
-    }
-    if source.len() > MEMORY_CAP {
-        return Ok(Err(format!(
-            "`{file}` is larger than the extension's memory cap of {MEMORY_CAP} bytes"
-        )));
-    }
-    let name = path
-        .strip_prefix(dir)
-        .unwrap_or(&path)
-        .display()
-        .to_string();
-    match lua
-        .load(source)
-        .set_name(format!("@{name}"))
-        .into_function()
-    {
-        Ok(chunk) => Ok(Ok(chunk)),
-        Err(mlua::Error::SyntaxError { message, .. }) => Ok(Err(message)),
-        Err(e) => Err(e),
-    }
-}
-
-/// The message a person reads for a Lua error: its first line, which Lua
-/// starts with the file and line, without mlua's traceback.
-fn message(e: &mlua::Error) -> String {
-    let text = if let mlua::Error::RuntimeError(m) | mlua::Error::MemoryError(m) = e {
-        m.clone()
-    } else {
-        e.to_string()
-    };
-    text.lines().next().unwrap_or_default().to_owned()
-}
-
-/// The running callback's deadline, shared by the hook on every coroutine.
-///
-/// The hook looks at the clock every `CHECK_EVERY` instructions. Once the
-/// deadline passes it raises a timeout and re-arms its coroutine to raise one
-/// on every instruction, so a `pcall` that catches the first cannot run on
-/// (`research/extension-runtime/pass1/`, `interrupt_escalate`).
-#[derive(Clone, Default)]
-pub(crate) struct Deadline(Rc<Cell<Option<Instant>>>);
-
-impl Deadline {
-    /// Starts the clock and returns the deadline.
-    fn start(&self, timeout: Duration) -> Option<Instant> {
-        let at = Instant::now().checked_add(timeout);
-        self.restore(at);
-        at
-    }
-
-    /// The deadline [`Deadline::start`] returned, if one is set.
-    fn at(&self) -> Option<Instant> {
-        self.0.get()
-    }
-
-    /// Points the hook at `at`, the deadline of the callback about to run.
-    fn restore(&self, at: Option<Instant>) {
-        self.0.set(at);
-    }
-
-    fn passed(&self) -> bool {
-        self.0.get().is_some_and(|at| Instant::now() >= at)
-    }
-
-    fn arm(&self, thread: &Thread) -> mlua::Result<()> {
-        let deadline = self.clone();
-        thread.set_hook(
-            HookTriggers::new().every_nth_instruction(CHECK_EVERY),
-            move |lua, _| {
-                if !deadline.passed() {
-                    return Ok(VmState::Continue);
-                }
-                let escalated = deadline.clone();
-                // ponytail: an escalated coroutine stays on the per-instruction
-                // hook if a later callback resumes it; that callback runs slower,
-                // and is still stopped at its own deadline.
-                lua.current_thread().set_hook(
-                    HookTriggers::new().every_nth_instruction(1),
-                    move |_, _| {
-                        if escalated.passed() {
-                            Err(timed_out())
-                        } else {
-                            Ok(VmState::Continue)
-                        }
-                    },
-                )?;
-                Err(timed_out())
-            },
-        )
-    }
-}
-
-fn timed_out() -> mlua::Error {
-    mlua::Error::RuntimeError("the callback passed its timeout".to_owned())
 }
 
 #[cfg(test)]

@@ -5,9 +5,10 @@
 
 mod common;
 
+use std::io::Write;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use common::{Setup, write};
 use contract::ErrorCode;
@@ -236,6 +237,107 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
         "{message}"
     );
     assert!(message.contains("memory cap"), "{message}");
+}
+
+/// Accepts one connection, signals, and answers only when `release` arrives
+/// or five seconds pass, so a parked `host.http` can be finished on purpose.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+fn answer_when_released(
+    listener: std::net::TcpListener,
+    accepted: mpsc::Sender<()>,
+    release: mpsc::Receiver<()>,
+) {
+    let mut sock = listener.accept().unwrap().0;
+    accepted.send(()).unwrap();
+    match release.recv_timeout(Duration::from_secs(5)) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+    }
+    drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
+}
+
+#[test]
+fn a_second_command_waits_until_the_parked_command_finishes() {
+    let setup = Setup::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::spawn(move || answer_when_released(listener, accepted_tx, release_rx));
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "fiber.command(\"first\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let first = Arc::clone(&ext);
+    let (first_tx, first_rx) = mpsc::channel();
+    std::thread::spawn(move || first_tx.send(first.command("first", "")));
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("the first command never reached the server");
+    assert_eq!(ext.provider_functions("p").unwrap(), ["sign"]);
+    let second = Arc::clone(&ext);
+    let (second_tx, second_rx) = mpsc::channel();
+    std::thread::spawn(move || second_tx.send(second.command("second", "")));
+    assert!(
+        second_rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the second command started while the first was parked"
+    );
+    release_tx.send(()).unwrap();
+    let first = first_rx.recv_timeout(WAIT).unwrap().unwrap();
+    let second = second_rx.recv_timeout(WAIT).unwrap().unwrap();
+    assert_eq!((first.as_str(), second.as_str()), ("ok", "second"));
+    assert!(ext.is_running());
+}
+
+#[test]
+fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
+    let setup = Setup::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::spawn(move || answer_when_released(listener, accepted_tx, release_rx));
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "seen = \"no\"\n\
+             fiber.command(\"slow\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"quick\", {{ timeout = 300, run = function() seen = \"yes\"; return \"ran\" end }})\n\
+             fiber.command(\"after\", {{ timeout = 1000, run = function() return seen end }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let slow = Arc::clone(&ext);
+    let slow = std::thread::spawn(move || slow.command("slow", ""));
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("the slow command never reached the server");
+    let started = Instant::now();
+    let err = call(&ext, "quick", "").unwrap_err();
+    assert!(
+        started.elapsed() < Duration::from_millis(900),
+        "quick waited {:?}, not its own 300 ms",
+        started.elapsed()
+    );
+    let Error::Timeout {
+        callback,
+        timeout_ms,
+        ..
+    } = &err
+    else {
+        panic!("{err:?}")
+    };
+    assert_eq!((callback.as_str(), *timeout_ms), ("quick", 300));
+    assert!(ext.is_running(), "the queued timeout stopped the extension");
+    release_tx.send(()).unwrap();
+    assert!(slow.join().unwrap().is_ok());
+    assert_eq!(call(&ext, "after", "").unwrap(), "no");
 }
 
 #[test]

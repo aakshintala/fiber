@@ -1,13 +1,17 @@
-//! The extension thread's inbox (`docs/extensions.md`, "A host call suspends
-//! the code that made it"). A callback parked on `host.http` does not hold
-//! the thread: the request runs elsewhere, and another callback runs
-//! meanwhile. Each parked callback still ends at its own deadline.
+//! The extension thread's inbox (`docs/extensions.md`, "How an extension
+//! runs"). A callback parked on `host.http` does not hold the thread: the
+//! request runs elsewhere, and provider work runs meanwhile. The next
+//! command does not. It stays queued until the parked command finishes.
+//! Each parked callback still ends at its own deadline.
 
+use std::cell::Cell;
+use std::collections::{BTreeMap, VecDeque};
 use std::io;
 use std::path::Path;
+use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use mlua::Thread;
 use serde_json::Value;
@@ -15,7 +19,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::host;
 
-use super::{CallbackKind, Job, Reply, Step, Vm, expired, timeout_ms};
+use super::{CallbackKind, Job, Reply, Step, Target, Vm, expired, timeout_ms};
 
 /// A job, or the reply of a `host.http` that was running off this thread.
 pub(super) enum Msg {
@@ -34,18 +38,18 @@ struct Parked {
     reply: Sender<Reply>,
 }
 
-/// The extension's thread. A VM whose entry script failed is created again
-/// on the next job. It quits as soon as a caller has stopped waiting: that
-/// caller abandoned the VM, so nothing may run after it.
-/// The extension thread's VM and the callbacks parked on `host.http`.
+/// The extension thread's VM, the callbacks parked on `host.http`, and the
+/// commands queued behind one.
 struct Serve<'a> {
     name: &'a str,
     dir: &'a Path,
     home: &'a Path,
     vm: &'a mut Option<Vm>,
     parked: &'a mut Vec<Parked>,
+    queued: &'a mut VecDeque<Job>,
     next_id: &'a mut u64,
     http: &'a Sender<Msg>,
+    timeouts: &'a Mutex<BTreeMap<String, Duration>>,
 }
 
 pub(super) fn serve(
@@ -54,9 +58,11 @@ pub(super) fn serve(
     home: &Path,
     inbox: &Receiver<Msg>,
     http: &Sender<Msg>,
+    timeouts: &Mutex<BTreeMap<String, Duration>>,
 ) {
     let mut vm = None;
     let mut parked: Vec<Parked> = Vec::new();
+    let mut queued = VecDeque::new();
     let mut next_id = 0u64;
     let mut serve = Serve {
         name,
@@ -64,31 +70,30 @@ pub(super) fn serve(
         home,
         vm: &mut vm,
         parked: &mut parked,
+        queued: &mut queued,
         next_id: &mut next_id,
         http,
+        timeouts,
     };
     loop {
-        if !release(serve.name, serve.parked) {
+        if !release(serve.name, serve.parked) || !serve.pump() {
             return;
         }
-        let msg = if serve.parked.is_empty() {
+        let busy = !serve.parked.is_empty() || !serve.queued.is_empty();
+        let msg = if !busy {
             match inbox.recv() {
                 Ok(msg) => msg,
                 Err(std::sync::mpsc::RecvError) => return,
             }
         } else {
-            let wait = serve
-                .parked
-                .iter()
-                .filter_map(|p| p.deadline)
-                .min()
-                .map(|at| at.saturating_duration_since(Instant::now()));
-            match wait {
-                Some(wait) => match inbox.recv_timeout(wait) {
-                    Ok(msg) => msg,
-                    Err(RecvTimeoutError::Timeout) => continue,
-                    Err(RecvTimeoutError::Disconnected) => return,
-                },
+            match serve.next_wake() {
+                Some(at) => {
+                    match inbox.recv_timeout(at.saturating_duration_since(Instant::now())) {
+                        Ok(msg) => msg,
+                        Err(RecvTimeoutError::Timeout) => continue,
+                        Err(RecvTimeoutError::Disconnected) => return,
+                    }
+                }
                 None => match inbox.recv() {
                     Ok(msg) => msg,
                     Err(std::sync::mpsc::RecvError) => return,
@@ -96,7 +101,7 @@ pub(super) fn serve(
             }
         };
         let stay = match msg {
-            Msg::Job(job) => serve.start_job(job),
+            Msg::Job(job) => serve.on_job(job),
             Msg::Http(id, result) => serve.resume_http(id, result),
         };
         if !stay {
@@ -124,37 +129,104 @@ fn release(name: &str, parked: &mut Vec<Parked>) -> bool {
     true
 }
 
-/// Sends `result` unless it says the caller already left, or the send fails.
-/// False means the thread must quit.
+/// Sends `result` after a callback ran. False when the caller has gone: that
+/// caller abandoned a VM the hook could not stop, so the thread must quit.
 fn finish(reply: &Sender<Reply>, result: Result<Value, Error>) -> bool {
-    if matches!(result, Err(Error::Stopped { .. })) {
-        return false;
-    }
     reply.send(Reply::Done(result)).is_ok()
 }
 
+/// Sends `result` for a call that never reached Lua. The caller may already
+/// have failed it on its own deadline. Either way the VM stays.
+fn note(reply: &Sender<Reply>, result: Result<Value, Error>) {
+    drop(reply.send(Reply::Done(result)));
+}
+
 impl Serve<'_> {
+    /// Starts `job` now, or queues it when an earlier command is still parked.
+    fn on_job(&mut self, job: Job) -> bool {
+        let command = matches!(job.target, Target::Command(_));
+        if command && (self.command_parked() || !self.queued.is_empty()) {
+            self.queued.push_back(job);
+            return true;
+        }
+        self.start_job(job)
+    }
+
+    fn command_parked(&self) -> bool {
+        self.parked
+            .iter()
+            .any(|p| matches!(p.kind, CallbackKind::Command))
+    }
+
+    /// Starts the next queued command once no command is parked.
+    fn pump(&mut self) -> bool {
+        if self.command_parked() {
+            return true;
+        }
+        while let Some(job) = self.queued.pop_front() {
+            if !self.start_job(job) {
+                return false;
+            }
+            if self.command_parked() {
+                return true;
+            }
+        }
+        true
+    }
+
+    fn next_wake(&self) -> Option<Instant> {
+        self.parked.iter().filter_map(|p| p.deadline).min()
+    }
+
     fn start_job(&mut self, job: Job) -> bool {
-        let Job { target, arg, reply } = job;
-        let step = {
+        let Job {
+            target,
+            arg,
+            reply,
+            asked,
+        } = job;
+        if self.vm.is_none() {
             let name = self.name;
             let notify = |at| {
                 reply.send(Reply::Deadline(at)).map_err(|_| Error::Stopped {
                     extension: name.to_owned(),
                 })
             };
-            if self.vm.is_none() {
-                match Vm::load(self.name, self.dir, self.home, &notify) {
-                    Ok(loaded) => *self.vm = Some(loaded),
-                    Err(e) => return finish(&reply, Err(e)),
+            match Vm::load(self.name, self.dir, self.home, &notify, self.timeouts) {
+                Ok(loaded) => *self.vm = Some(loaded),
+                Err(Error::Stopped { .. }) => return true,
+                Err(e) => {
+                    note(&reply, Err(e));
+                    return true;
                 }
             }
-            let Some(vm) = self.vm.as_ref() else {
-                return finish(&reply, Err(self.stopped()));
+        }
+        // Set once Lua is about to run. An error before that, including a
+        // deadline that passed while this call waited, fails this call alone.
+        let announced = Cell::new(false);
+        let step = {
+            let name = self.name;
+            let notify = |at| {
+                announced.set(true);
+                reply.send(Reply::Deadline(at)).map_err(|_| Error::Stopped {
+                    extension: name.to_owned(),
+                })
             };
-            vm.step(&target, &arg, &notify)
+            let Some(vm) = self.vm.as_ref() else {
+                note(&reply, Err(self.stopped()));
+                return true;
+            };
+            vm.step(&target, &arg, asked, &notify)
         };
-        self.settle(reply, step)
+        match step {
+            // The caller left before Lua ran. The VM has not been tainted.
+            Err(Error::Stopped { .. }) => true,
+            Err(e) if !announced.get() => {
+                note(&reply, Err(e));
+                true
+            }
+            other => self.settle(reply, other),
+        }
     }
 
     fn resume_http(&mut self, id: u64, result: Result<(u16, Vec<u8>), String>) -> bool {
