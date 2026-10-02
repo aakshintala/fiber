@@ -189,3 +189,8 @@ fn two_advances_both_move_the_clock() {
     second.join().unwrap();
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(2));
 }
+
+#[test]
+fn scratch_a_test_must_not_sleep_on_the_process_clock() {
+    std::thread::sleep(Duration::from_millis(1));
+}
