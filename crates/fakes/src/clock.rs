@@ -25,7 +25,7 @@ struct State {
 
 /// A clock a test drives. `Arc<FakeClock>` coerces to `Arc<dyn Clock>`.
 /// [`FakeClock::new`] reads the process clock once, as an arbitrary origin
-/// it never reads again; [`FakeClock::advance`] and [`Clock::sleep`] are the
+/// it never reads again. [`FakeClock::advance`] and [`Clock::sleep`] are the
 /// only things that move it.
 pub struct FakeClock {
     state: Mutex<State>,
@@ -89,36 +89,15 @@ impl FakeClock {
 
     /// Waits, at most `within` of real time, until a thread is parked in
     /// [`Clock::wait_until`] with this `until`. True once it is; false at
-    /// the deadline.
-    #[expect(
-        clippy::disallowed_methods,
-        reason = "a real-time bound on awaiting a park; the fake's time is contract::clock"
-    )]
+    /// the deadline. The bound is the condvar's timeout, so this reads no
+    /// process clock.
     pub fn await_parked(&self, until: Instant, within: Duration) -> bool {
-        // A test helper's deadline is real time. The process clock is read
-        // only here, to bound the wait, never as the fake's time.
-        let start = Instant::now();
-        let mut state = lock(&self.state);
-        loop {
-            if parked_at(&state, until) {
-                return true;
-            }
-            let now = Instant::now();
-            let Some(deadline) = start.checked_add(within) else {
-                return false;
-            };
-            if now >= deadline {
-                return false;
-            }
-            let (guard, timed) = self
-                .parked_cv
-                .wait_timeout(state, deadline.saturating_duration_since(now))
-                .unwrap_or_else(PoisonError::into_inner);
-            state = guard;
-            if timed.timed_out() && !parked_at(&state, until) {
-                return false;
-            }
-        }
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| !parked_at(state, until))
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_at(&guard, until)
     }
 }
 

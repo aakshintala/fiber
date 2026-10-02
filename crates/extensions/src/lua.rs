@@ -228,16 +228,17 @@ impl LuaExtension {
     /// Queues the call and waits on the hub until it is answered, or until
     /// its own limit passes ("Extension lifecycle" in `hub.rs`).
     fn call(&self, target: Target, arg: Value) -> Result<Value, Error> {
+        // When Fiber asks, before it waits for the hub (`docs/extensions.md`).
+        let asked = self.hub.clock().now();
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
-        // Read under the hub lock, so a clock move that wakes waiters cannot
-        // land between the judgement and the park.
-        let asked = self.hub.clock().now();
         let id = shared.push(target.clone(), arg, asked);
         // Only a change wakes the others: a waiter that notified on every
         // wake would keep every other waiter spinning.
         self.hub.notify();
         loop {
+            // Under the hub lock, so a clock move cannot land between the
+            // judgement and the park.
             let now = self.hub.clock().now();
             match shared.judge(&self.name, id, &target, asked, now) {
                 Next::Return(result) => {

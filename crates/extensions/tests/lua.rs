@@ -83,6 +83,32 @@ fn read_head(sock: &mut impl Read) {
     }
 }
 
+/// `require("hold")` blocks in the loader's read of this fifo. The receiver
+/// fires once that read has opened the file, which is after the VM's last
+/// clock check: the instruction hook does not run during the read.
+fn hold_open(dir: &std::path::Path) -> mpsc::Receiver<()> {
+    let path = dir.join("hold.lua");
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("opening hold.lua");
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        // Held open so the loader's read does not see end of file.
+        let (_lock_tx, lock_rx) = mpsc::channel::<()>();
+        match lock_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
+        }
+        drop(held);
+    });
+    rx
+}
+
 /// True once `count` threads are parked in `wait_until` at `until`.
 fn parked_at(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) -> bool {
     let (tx, rx) = mpsc::channel();
@@ -270,16 +296,31 @@ fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
 
 #[test]
 fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
-    for command in ["spin_gc", "spin_find"] {
-        let clock = FakeClock::new();
-        let ext = extension(
-            "fixture",
-            fakes::lua_fixture(),
-            "/nonexistent-fiber-home",
-            clock.clone(),
+    // `spin_gc` reads from a finalizer, where the hook is off. `spin_find`
+    // reads from the callback itself: one C call, which the hook does not
+    // interrupt. Either way the clock moves only after that read has started.
+    for (command, body) in [
+        (
+            "spin_gc",
+            "setmetatable({}, { __gc = function() require(\"hold\") end })\ncollectgarbage()\n",
+        ),
+        ("spin_find", "require(\"hold\")\n"),
+    ] {
+        let setup = Setup::new();
+        let dir = setup.home().join("ext");
+        write(
+            &dir.join("init.lua"),
+            &format!(
+                "fiber.command(\"{command}\", {{ timeout = 50, run = function()\n{body}end }})\n"
+            ),
         );
+        let held = hold_open(&dir);
+        let clock = FakeClock::new();
+        let ext = extension("ext", dir, setup.home(), clock.clone());
         let asked = clock.now();
         let result = start(&ext, command);
+        held.recv_timeout(WAIT)
+            .expect("waited for the callback to block past its clock checks");
         let parked_at = asked + Duration::from_millis(50) + GRACE;
         assert!(
             clock.await_parked(parked_at, WAIT),
@@ -657,12 +698,15 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
-        "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
+        "setmetatable({}, { __gc = function() require(\"hold\") end })\ncollectgarbage()\n",
     );
+    let held = hold_open(&dir);
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let waiters = [start(&ext, "a"), start(&ext, "b")];
+    held.recv_timeout(WAIT)
+        .expect("waited for the entry script to block past its clock checks");
     assert!(
         parked_at(&clock, abandon, 2),
         "waited for both callers to park until the load grace"

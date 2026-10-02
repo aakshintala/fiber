@@ -467,6 +467,30 @@ fn read_head(sock: &mut impl Read) {
     }
 }
 
+/// `require("hold")` blocks in the loader's read of this fifo. The receiver
+/// fires once that read has opened the file.
+fn hold_open(dir: &Path) -> mpsc::Receiver<()> {
+    let path = dir.join("hold.lua");
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let held = std::fs::OpenOptions::new()
+            .write(true)
+            .open(&path)
+            .expect("opening hold.lua");
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        let (_lock_tx, lock_rx) = mpsc::channel::<()>();
+        match lock_rx.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
+        }
+        drop(held);
+    });
+    rx
+}
+
 /// Accepts one connection, reads its head, signals, and then holds the
 /// socket so the call stays parked.
 fn hold_server() -> (String, mpsc::Receiver<()>) {
@@ -502,10 +526,13 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
              fiber.command(\"queued\", {{ timeout = 8000, run = function() return \"ran\" end }})\n\
              fiber.provider(\"p\", {{\n\
                models = {{ timeout = 8000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
-               sign = {{ timeout = 50, run = function() setmetatable({{}}, {{ __gc = function() while true do end end }}); collectgarbage() end }},\n\
+               sign = {{ timeout = 50, run = function() setmetatable({{}}, {{ __gc = function() require(\"hold\") end }}); collectgarbage() end }},\n\
              }})\n"
         ),
     );
+    // The finalizer blocks in `require("hold")`, after the hook is off and
+    // after the callback's last clock check.
+    let held = hold_open(&dir);
     let clock = FakeClock::new();
     let ext = Arc::new(LuaExtension::new(
         "ext",
@@ -529,6 +556,8 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         .expect("waited for models to reach the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
+    held.recv_timeout(Duration::from_secs(3))
+        .expect("waited for sign to block past its clock checks");
     let abandon = asked + Duration::from_millis(50) + GRACE;
     assert!(
         clock.await_parked(abandon, Duration::from_secs(2)),
