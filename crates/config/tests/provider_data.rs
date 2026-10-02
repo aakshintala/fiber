@@ -57,9 +57,64 @@ fn the_documented_provider_data_reads() {
     assert_eq!(opus.max_output_tokens, Some(128_000));
     assert_eq!(opus.input, ["text", "image"]);
     assert_eq!(opus.cost.as_ref().unwrap().cache_write, Some(6.25));
+    assert!(opus.cost.as_ref().unwrap().tiers.is_empty());
     assert_eq!(gpt.protocol, Protocol::OpenaiResponses);
     assert!(gpt.subscription && !gpt.deferred_tools);
     assert_eq!(gpt.cost, None);
+}
+
+#[test]
+fn cost_tiers_read_from_provider_data() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{
+  "name": "p",
+  "models": [
+    {
+      "id": "tiered",
+      "protocol": "openai-responses",
+      "base_url": "https://x/v1",
+      "cost": {
+        "input": 2.0,
+        "output": 10.0,
+        "cache_read": 0.1,
+        "cache_write": 2.5,
+        "tiers": [
+          {
+            "input_tokens_above": 272000,
+            "input": 4.0,
+            "output": 15.0,
+            "cache_read": 0.2,
+            "cache_write": 5.0
+          }
+        ]
+      }
+    },
+    {
+      "id": "flat",
+      "protocol": "openai-responses",
+      "base_url": "https://x/v1",
+      "cost": { "input": 1.0, "output": 2.0 }
+    }
+  ]
+}"#,
+    );
+    let models = &read_providers(&dir).unwrap()[0].models;
+    let [tiered, flat] = models.as_slice() else {
+        panic!("{models:?}");
+    };
+    let tiered_cost = tiered.cost.as_ref().unwrap();
+    let [tier] = tiered_cost.tiers.as_slice() else {
+        panic!("{tiered_cost:?}");
+    };
+    assert_eq!(tier.input_tokens_above, 272_000);
+    assert_eq!(tier.input, 4.0);
+    assert_eq!(tier.output, 15.0);
+    assert_eq!(tier.cache_read, Some(0.2));
+    assert_eq!(tier.cache_write, Some(5.0));
+    assert!(flat.cost.as_ref().unwrap().tiers.is_empty());
 }
 
 #[test]
