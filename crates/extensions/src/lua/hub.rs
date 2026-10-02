@@ -190,6 +190,12 @@ impl Shared {
 
     /// Judges the call `id` against the phase and its own progress.
     pub(super) fn judge(&mut self, name: &str, id: u64, target: &Target, asked: Instant) -> Next {
+        // Stopped is final for every waiter, one holding a result included.
+        if let Phase::Stopped(e) = &self.phase {
+            let e = again(name, e);
+            self.forget(id);
+            return Next::Return(Err(e));
+        }
         if !matches!(
             self.calls.get(&id),
             Some(Progress::Queued | Progress::Started { .. })
