@@ -1064,6 +1064,66 @@ fn a_repeated_text_replays_each_part_with_its_own_signature() {
 }
 
 #[test]
+fn a_signed_reply_does_not_eat_the_same_words_in_a_later_reply() {
+    // Two replies, each logged on its own. The first signs "Hi."; the
+    // second says "Hi." with no signature. Both go out.
+    let signed = json!({"text": "Hi.", "thoughtSignature": "c2ln"});
+    let (earlier, _) = decoded(&stream(&[chunk(json!([signed.clone()]), Some("STOP"))]));
+    let (later, _) = decoded(&stream(&[chunk(json!([{"text": "Hi."}]), Some("STOP"))]));
+    let mut conversation = after(&earlier.unwrap(), REFERENCE);
+    conversation.push(Input::User {
+        text: "Say it again.".into(),
+    });
+    conversation.push(Input::Assistant {
+        text: later.unwrap().text,
+    });
+    let (contents, _) = sent_contents(conversation);
+    assert_eq!(contents[1], json!({"role": "model", "parts": [signed]}));
+    assert_eq!(
+        contents[3],
+        json!({"role": "model", "parts": [{"text": "Hi."}]})
+    );
+}
+
+#[test]
+fn a_bare_signature_is_not_dropped_when_another_follows_it() {
+    let (reply, _) = decoded(&stream(&[chunk(
+        json!([
+            {"text": "", "thoughtSignature": "b25l"},
+            {"text": "", "thoughtSignature": "dHdv"},
+        ]),
+        Some("STOP"),
+    )]));
+    let (contents, _) = sent_contents(after(&reply.unwrap(), REFERENCE));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "", "thoughtSignature": "b25l"},
+            {"text": "", "thoughtSignature": "dHdv"}]})
+    );
+}
+
+#[test]
+fn unsigned_text_stays_ahead_of_the_signed_text_after_it() {
+    let (reply, _) = decoded(&stream(&[chunk(
+        json!([
+            {"text": "Hello "},
+            {"text": "world", "thoughtSignature": "c2ln"},
+        ]),
+        Some("STOP"),
+    )]));
+    let reply = reply.unwrap();
+    assert_eq!(reply.text, "Hello world");
+    let (contents, _) = sent_contents(after(&reply, REFERENCE));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "Hello "},
+            {"text": "world", "thoughtSignature": "c2ln"}]})
+    );
+}
+
+#[test]
 fn overflowing_usage_counts_fail_instead_of_panicking() {
     let mut overflow = chunk(json!([{"text": "hi"}]), Some("STOP"));
     overflow["usageMetadata"] = json!({"promptTokenCount": 10,

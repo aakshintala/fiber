@@ -280,66 +280,30 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect();
 
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    // A bare signature off a `functionCall` part, waiting for the call.
-    // A text part replays at once, verbatim with its own signature, so
-    // only bare signatures wait here.
-    let mut signature: Option<Value> = None;
-    // Signed texts already replayed verbatim: the reply's text carries
-    // their words again, so the assistant part sends only what is left.
-    let mut consumed: Vec<String> = Vec::new();
+    // The open reply's reasoning and calls, in the order they were logged,
+    // plus its assistant text once that event arrives. A user message or a
+    // tool result ends the reply, and so does the end of the conversation,
+    // so nothing is kept for the next one.
+    let mut logged: Vec<&Input> = Vec::new();
+    let mut reply_text: Option<&str> = None;
     for input in &request.conversation {
-        let (role, part) = match input {
-            Input::User { text } => ("user", json!({"text": text})),
-            Input::Assistant { text } => {
-                // The reply's text carries signed words again, so only
-                // what is left goes out; nothing at all when the stored
-                // parts already said it.
-                let mut rest = text.clone();
-                for taken in &consumed {
-                    rest = rest.replacen(taken.as_str(), "", 1);
-                }
-                if rest.is_empty() {
-                    continue;
-                }
-                ("model", json!({"text": rest}))
+        match input {
+            Input::User { text } => {
+                close_reply(&mut out, &mut logged, &mut reply_text);
+                push(&mut out, "user", json!({"text": text}));
             }
+            Input::Assistant { text } => reply_text = Some(text.as_str()),
             // Reasoning goes back unchanged, only to the model that
             // produced it, and never as plain text.
             Input::Reasoning {
                 model,
-                provider_item: Some(item),
+                provider_item: Some(_),
                 ..
-            } if *model == reference => {
-                if stored_text(item) {
-                    // Each logged text replays in order, with its own
-                    // signature attached to it, and never again in the
-                    // assistant part (`docs/loop.md`, "What the model is
-                    // sent").
-                    if let Some(text) = item.get("text").and_then(Value::as_str) {
-                        consumed.push(text.to_owned());
-                    }
-                    push(&mut out, "model", item.clone());
-                    continue;
-                }
-                if let Some(sig) = waiting_signature(item) {
-                    if let Some(earlier) = signature.replace(sig) {
-                        push(&mut out, "model", carrier(earlier));
-                    }
-                    continue;
-                }
-                ("model", item.clone())
-            }
-            Input::Reasoning { .. } => continue,
-            Input::ToolCall { call, .. } => {
-                // Only an id the model emitted is sent back
-                // (`docs/model-routing.md`, "Google Generative AI wire facts").
-                let function = with(
-                    json!({"name": call.name, "args": call.arguments}),
-                    call.provider_id.as_ref().map(|id| json!({"id": id.0})),
-                );
-                ("model", json!({ "functionCall": function }))
-            }
+            } if *model == reference => logged.push(input),
+            Input::Reasoning { .. } => {}
+            Input::ToolCall { .. } => logged.push(input),
             Input::ToolResult { action_id, text } => {
+                close_reply(&mut out, &mut logged, &mut reply_text);
                 let call = calls.get(action_id);
                 let response = with(
                     json!({
@@ -349,25 +313,92 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     call.and_then(|c| c.provider_id.as_ref())
                         .map(|id| json!({"id": id.0})),
                 );
-                ("user", json!({ "functionResponse": response }))
+                push(&mut out, "user", json!({ "functionResponse": response }));
             }
-        };
-        let part = if role == "model" {
-            with(part, signature.take())
-        } else {
-            if let Some(earlier) = signature.take() {
-                push(&mut out, "model", carrier(earlier));
-            }
-            part
-        };
-        push(&mut out, role, part);
+        }
     }
-    if let Some(earlier) = signature.take() {
-        push(&mut out, "model", carrier(earlier));
-    }
+    close_reply(&mut out, &mut logged, &mut reply_text);
     out.into_iter()
         .map(|(role, parts)| json!({"role": role, "parts": parts}))
         .collect()
+}
+
+/// Emits the open reply's model parts and drops them, text included.
+fn close_reply(
+    out: &mut Vec<(&'static str, Vec<Value>)>,
+    logged: &mut Vec<&Input>,
+    reply_text: &mut Option<&str>,
+) {
+    let text = reply_text.take().unwrap_or("");
+    for part in replay_reply(logged, text) {
+        push(out, "model", part);
+    }
+    logged.clear();
+}
+
+/// One reply's parts, from its own logged items, in the order they were
+/// logged. Each text segment once: the reply's text is those segments in
+/// order, so the words before a signed segment go out before that part,
+/// and the part keeps the signature it arrived with. A signature that
+/// arrived on a call rides on the call. Nothing in here is kept for the
+/// next reply (`docs/loop.md`, "What the model is sent").
+fn replay_reply(logged: &[&Input], text: &str) -> Vec<Value> {
+    let mut parts = Vec::new();
+    let mut cursor = 0;
+    let mut signature = None;
+    for input in logged {
+        match input {
+            Input::Reasoning {
+                provider_item: Some(item),
+                ..
+            } => {
+                if let Some(sig) = waiting_signature(item) {
+                    if let Some(earlier) = signature.replace(sig) {
+                        parts.push(carrier(earlier));
+                    }
+                } else if stored_text(item) {
+                    cursor = lay_text(&mut parts, text, cursor, item);
+                } else {
+                    parts.push(item.clone());
+                }
+            }
+            Input::ToolCall { call, .. } => {
+                // Only an id the model emitted is sent back
+                // (`docs/model-routing.md`, "Google Generative AI wire facts").
+                let function = with(
+                    json!({"name": call.name, "args": call.arguments}),
+                    call.provider_id.as_ref().map(|id| json!({"id": id.0})),
+                );
+                parts.push(with(json!({ "functionCall": function }), signature.take()));
+            }
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolResult { .. } => {}
+        }
+    }
+    if let Some(rest) = text.get(cursor..).filter(|rest| !rest.is_empty()) {
+        parts.push(with(json!({"text": rest}), signature.take()));
+    } else if let Some(sig) = signature {
+        parts.push(carrier(sig));
+    }
+    parts
+}
+
+/// The signed text `item`, after the unsigned words that precede it in
+/// this reply's text. `cursor` is how much of that text is already placed.
+fn lay_text(parts: &mut Vec<Value>, text: &str, mut cursor: usize, item: &Value) -> usize {
+    if let Some(segment) = item.get("text").and_then(Value::as_str)
+        && let Some(rest) = text.get(cursor..)
+        && let Some(at) = rest.find(segment)
+    {
+        if let Some(prefix) = rest.get(..at).filter(|prefix| !prefix.is_empty()) {
+            parts.push(json!({"text": prefix}));
+        }
+        cursor += at + segment.len();
+    }
+    parts.push(item.clone());
+    cursor
 }
 
 /// Adds `part` to the last content when it has `role`, or opens one.
@@ -381,8 +412,8 @@ fn push(out: &mut Vec<(&'static str, Vec<Value>)>, role: &'static str, part: Val
 /// The bare signature waiting for its part: off a `functionCall` part,
 /// or on an empty text part that holds no words of its own. Only the
 /// signature waits; an empty text must never overwrite the reply's text.
-/// A text part with words of its own is never waiting: it replays at
-/// once (see `stored_text`).
+/// A text part with words of its own is not waiting (`stored_text`): that
+/// part is replayed unchanged, in its place in the reply.
 fn waiting_signature(item: &Value) -> Option<Value> {
     let map = item.as_object()?;
     let sig = map.get("thoughtSignature")?;
