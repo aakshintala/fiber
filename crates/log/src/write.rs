@@ -168,6 +168,23 @@ impl Log {
         Watcher::new(queue, inner.dir.clone(), inner.next)
     }
 
+    /// Writes `bytes` to the file `name` in the session's `artifacts/`,
+    /// replacing any file of that name, and returns its path relative to the
+    /// session directory (`docs/events.md`, "Conventions") and its absolute
+    /// path. A name that is not one plain file name is refused.
+    pub fn write_artifact(&self, name: &str, bytes: &[u8]) -> Result<(String, PathBuf), Error> {
+        let dir = self.lock().dir.join(ARTIFACTS);
+        let path = dir.join(name);
+        if Path::new(name).file_name() != Some(name.as_ref()) {
+            return Err(io_at(&path)(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "an artifact's name is one plain file name",
+            )));
+        }
+        fs::write(&path, bytes).map_err(io_at(&path))?;
+        Ok((format!("{ARTIFACTS}/{name}"), path))
+    }
+
     /// How many fsyncs this log has made, counted where they are made
     /// (`docs/performance.md`, "Measuring").
     pub fn fsyncs(&self) -> u64 {

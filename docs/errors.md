@@ -121,7 +121,9 @@ policy is `docs/model-routing.md`, "When a model call fails".
 
 Every stop or finish reason a protocol documents is mapped in its native
 module. An unknown one fails the call as `unknown_stop_reason`, whatever the
-protocol. A reason a vendor documents that Fiber has not mapped is a Fiber
+protocol. `pause_turn` is not unknown: the loop continues it
+(`docs/loop.md`, "A reply paused by a hosted tool"). Only a reply still
+paused after the continuation bound fails the turn with `unknown_stop_reason`. A reason a vendor documents that Fiber has not mapped is a Fiber
 bug, and a release fixes it.
 
 The status alone cannot classify: OpenRouter sends an upstream's context
@@ -203,8 +205,10 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit | the session model's provider is not installed |
+| `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
 | `extension_required_failed` | exit | a required extension failed to start |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
+| `fetch_failed` | exit | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
 | `http_error` | tool call | `web_fetch` got a status other than 2xx |
@@ -249,6 +253,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
 | `usage` | exit | the invocation or its environment is wrong; exits 2 |
+| `version_conflict` | exit | an install needs two majors of one dependency, or no tag meets a minimum; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
 
 Notices, for a failure outside any action:
 

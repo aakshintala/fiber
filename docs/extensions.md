@@ -166,9 +166,16 @@ extension's hooks. Code that reads and writes the extension's own globals must
 expect another callback to have run in between.
 
 **Every callback declares its timeout, with no default.** Hooks, watchers,
-commands and timers alike. A hook's clock starts when Fiber asks, so time
+commands and timers alike. A `timeout` is in milliseconds, a whole number above
+0. A hook's clock starts when Fiber asks, so time
 spent waiting behind earlier items in the stream counts against it. A callback
-past its timeout is stopped ("When an extension misbehaves").
+past its timeout is stopped ("When an extension misbehaves"). When the hook
+cannot stop the VM, the caller waits 1 second more after the timeout before it
+abandons the VM.
+
+Fiber runs a Lua extension's entry script, `init.lua`, when it creates the VM.
+Reading, compiling and running it is bounded at 2 seconds. The script is not a
+callback, so it declares no timeout.
 
 A process extension keeps the same order: Fiber sends it the stream's items
 one at a time and waits for each reply. How it schedules its own timers and
@@ -342,39 +349,44 @@ A provider may have four pieces of Lua:
 
 - `models()`, which discovers its models
 - `quota()`, which reports its quota (`docs/model-routing.md`, "Quota")
-- `credential()`, which returns a token and its expiry, for a cloud sign-in or
-  an OAuth login (`docs/model-routing.md`, "Credentials")
+- `credential()`, which returns `{ token = <string>, expires_at = <Unix seconds> }`,
+  for a cloud sign-in or an OAuth login (`docs/model-routing.md`, "Credentials")
 - `sign()`, which adds headers to each request, for a scheme such as AWS SigV4
   (`docs/model-routing.md`, "Signing a request")
 
-Only `sign()` runs while a request is being sent. It sees the body's SHA-256,
-never the body. A `sign()` that errors or returns unusable headers fails the
-call with `credential_failed` (`docs/errors.md`). Here is a provider for a gateway that lists its models at
+Each function is `{ timeout, run }`, like `fiber.command`: `timeout` in
+milliseconds, `run` the function Fiber calls. Only `sign()` runs while a
+request is being sent. It sees the body's SHA-256, never the body. A `sign()`
+that errors or returns unusable headers fails the call with `credential_failed`
+(`docs/errors.md`). Here is a provider for a gateway that lists its models at
 `/models`:
 
 ```lua
 fiber.provider("acme", {
-  models = function()
-    local key = host.secret("acme.api_key")
-    local reply = host.http({
-      url = "https://api.acme.dev/v1/models",
-      headers = { authorization = "Bearer " .. key },
-    })
-    local list = {}
-    for _, m in ipairs(json.decode(reply.body).data) do
-      table.insert(list, {
-        id = m.id,
-        protocol = m.id:find("^claude") and "anthropic-messages" or "openai-completions",
-        base_url = "https://api.acme.dev/v1",
-        context_window = m.context_length,
+  models = {
+    timeout = 10000,
+    run = function()
+      local key = host.secret("acme.api_key")
+      local reply = host.http({
+        url = "https://api.acme.dev/v1/models",
+        headers = { authorization = "Bearer " .. key },
       })
-    end
-    return list
-  end,
+      local list = {}
+      for _, m in ipairs(json.decode(reply.body).data) do
+        table.insert(list, {
+          id = m.id,
+          protocol = m.id:find("^claude") and "anthropic-messages" or "openai-completions",
+          base_url = "https://api.acme.dev/v1",
+          context_window = m.context_length,
+        })
+      end
+      return list
+    end,
+  },
 })
 ```
 
-In plain terms: Fiber calls `models` when it needs the model list. The function
+In plain terms: Fiber calls `models.run` when it needs the model list. The function
 fetches the API key, asks the gateway for its models, and returns one entry per
 model, choosing each model's protocol from its name. Fiber caches the list on
 disk and refreshes it in the background at startup. The function never runs
@@ -625,10 +637,18 @@ box changes that frame (`docs/tui.md`, "How a TUI extension runs").
 
 One VM per extension (rather than one shared VM for all) costs about 120 KiB per
 extension — measured, `research/extension-runtime/vm-isolation/` — and buys real
-isolation: each extension has its own globals, its own garbage collector, an
-optional per-extension memory cap, and a crash or runaway allocation contained to
+isolation: each extension has its own globals, its own garbage collector, a
+per-extension memory cap, and a crash or runaway allocation contained to
 that one VM. A shared VM with per-extension environments is leaner at large
 extension counts and is the documented fallback if that ever matters.
+
+Each Lua extension's memory is capped at 1 MiB by default. Past the cap, an
+allocation fails with a Lua error in that extension's VM, and Fiber does not
+read a file larger than the cap. A Lua extension measures about 150 KiB, and
+the busy-session budget is 24 MiB (`docs/performance.md`), so a small default
+keeps one extension from using the budget. An extension that needs more sets
+`memory_mib` in its manifest (`docs/configuration.md`, "An extension's
+manifest"). The install summary shows a raised cap ("What an install shows").
 
 The `reload` driver command (`docs/invocation.md`) reloads extensions. It is how
 a running session picks up an installed or updated extension. Each reloaded
@@ -720,6 +740,12 @@ An extension's name is where it lives, as with Go modules:
 works, there is no registry, and two authors cannot claim the same name. A
 local path also works, for an extension under development.
 
+Without a marker, the first three parts of a name are the repository and the
+rest is a path inside it. A name can mark where the repository ends with a
+`.git` suffix, as Go does, so a repository inside subgroups can be named:
+`gitlab.com/group/subgroup/repo.git/path`. A name whose repository or tag does
+not exist fails with `extension_not_found`.
+
 Each first-party provider extension also has a short name, so
 `fiber install openrouter` means the first-party extension's full name. The
 short names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`,
@@ -743,8 +769,14 @@ later, and 1.9 is the newest, Fiber installs 1.4. The same inputs always give
 the same result, so there is no lockfile and no solver. A newer version arrives
 only when something raises its minimum.
 
+A version a person installed or updated by name counts as one more minimum,
+and it stays until they remove that extension. So `fiber update <name>` on a
+dependency keeps the newer version, and the same installed set always gives
+the same result.
+
 Two extensions that need different major versions, such as 1.x and 2.x, stop
-the install with an error naming both.
+the install with `version_conflict`, naming both. So does a minimum that no
+tag meets.
 
 Fiber records the exact commit it installed and loads only that. Nothing is
 signed. The fetch runs over TLS or SSH, and a binary is checked against the
@@ -756,7 +788,7 @@ running on.
 | Command | What it does |
 |---|---|
 | `fiber install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
-| `fiber update <name>` | Moves one extension to its newest version and re-resolves its dependencies. |
+| `fiber update <name>` | Moves one extension to its newest version and re-resolves its dependencies. The new version stays a minimum (see [Versions](#versions)). |
 | `fiber remove <name>` | Removes an extension, and any dependency nothing else uses. |
 | `fiber list` | Lists installed extensions with their versions and commits. |
 
@@ -769,6 +801,9 @@ ahead without asking, so scripts can set up a machine.
 Install refuses an extension whose manifest needs a newer Fiber than the one
 running, or a different extension API version, with `extension_incompatible`.
 Update `fiber`, or install a version of the extension that fits.
+
+A fetch that fails, because git or the network failed, stops the install with
+`fetch_failed`. Neither it nor `version_conflict` is retried automatically.
 
 Installed extensions live in [Fiber home](state.md), one directory each, at
 `extensions/<name>/`.
@@ -823,11 +858,13 @@ home (`docs/configuration.md`). A repository cannot set it.
 
 In a terminal, `fiber install` and `fiber update` show:
 
-- where it comes from and its version
-- the tools it registers, each with its effects
+- its name, where it comes from and its version
 - the providers it registers, each with its base URLs
-- the hooks, watchers and commands it registers
 - the program a process extension runs, and its install step
-- the skills, prompt templates, themes, binaries and TUI extension it carries
+- the memory cap of a Lua extension, when its manifest raises it above 1 MiB
+- the skills, prompt templates, themes, binaries and TUI files it carries
 
-The full source is one key away.
+The summary shows what the manifest and the files tell. It does not list tools,
+hooks, watchers or commands: a Lua extension registers those only when its
+script runs, and installing runs none of its code. The full source is one key
+away, so a person can read them.

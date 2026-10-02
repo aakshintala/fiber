@@ -114,7 +114,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
 | getrandom | random ids | ~0 | ~0 | ~0 | 3 | 325 |
-| ring | SHA-256, for PKCE and extension binary checksums | ~0 | ~0 | ~0 | 8 | 341 |
+| ring | SHA-256, for PKCE and extension binary checksums; HMAC-SHA256, for `host.hmac_sha256` | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
@@ -221,7 +221,10 @@ yaml-rust and bincode.
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,
-`maximum`, `minLength` and `anyOf`. A built-in tool's schema uses only the
+`maximum`, `minLength`, `anyOf` and `$ref`. A `$ref` is followed only within
+the same schema, such as `#/$defs/name` or `#/definitions/name`; one that
+points elsewhere, or leads back to itself, fails the check with a message
+saying so. A built-in tool's schema uses only the
 subset, and a test fails if one does not. In an extension's or an MCP
 server's schema, a keyword outside the subset is skipped, not failed, so a
 server whose schema uses one still works. Checking those schemas is best

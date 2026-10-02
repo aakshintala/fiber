@@ -4,7 +4,7 @@
 //! it writes it, and a resume renders the log the same way, so the two never
 //! differ.
 
-use contract::events::{AssistantMessageCompleted, Event, InputItem, MessageOutcome};
+use contract::events::{AssistantMessageCompleted, CallStatus, Event, InputItem, MessageOutcome};
 use contract::provider::Input;
 use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope};
@@ -71,6 +71,7 @@ pub(crate) fn render(
                 conversation.push(Input::ToolResult {
                     action_id: action.clone(),
                     text: text(&completed.content),
+                    is_error: completed.status == CallStatus::Failed,
                 });
             }
         }
@@ -145,7 +146,7 @@ fn user(content: &[ContentPart]) -> Input {
 }
 
 /// The text parts of `content`, joined. Only text reaches the model yet.
-fn text(content: &[ContentPart]) -> String {
+pub(crate) fn text(content: &[ContentPart]) -> String {
     content
         .iter()
         .filter_map(|part| match part {

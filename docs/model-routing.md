@@ -106,6 +106,15 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
   `caller` returned 200. An invalid `caller` returned 400.
 - More than 4 `cache_control` blocks across `tools`, `system` and `messages`
   returned 400.
+- A reply stops with `pause_turn` when the server-side loop for a hosted tool
+  such as web search reaches its iteration limit, 10 by default. The reply may
+  end in a `server_tool_use` block with no result block. Anthropic's
+  continuation: "append the assistant's response to your messages and make
+  another API request", with the same `tools`
+  (<https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons>).
+  A `pause_turn` reply is never `tool_use`: a client tool call stops with
+  `tool_use`. Fiber continues a paused reply as `docs/loop.md`, "A reply paused
+  by a hosted tool", says.
 - More than 20 tools with `strict: true` returned 400, "The maximum number of
   strict tools supported is 20" (measured October 1, 2026).
 
@@ -445,7 +454,8 @@ Most first-party providers use a key. The table in
 else.
 
 A provider whose credential is a token that expires declares a Lua
-`credential()` function. It returns a token and its expiry. Fiber caches the
+`credential()` function. It returns `{ token = <string>, expires_at = <Unix
+seconds> }`: the token and the time it expires. Fiber caches the
 token and calls the function again when the token is within 5 minutes of
 expiry. It runs off the request path. A cloud's own sign-in, such as Google
 Vertex's, is this function, written in the extension, not in Fiber.

@@ -65,10 +65,14 @@ codes! {
     ExtensionIncompatible,
     /// The session model's provider is not installed.
     ExtensionMissing,
+    /// An install names a repository or tag that does not exist.
+    ExtensionNotFound,
     /// A required extension failed to start.
     ExtensionRequiredFailed,
     /// The extension providing the tool died twice.
     ExtensionUnavailable,
+    /// An install or update could not fetch: git or the network failed.
+    FetchFailed,
     /// A monitor was suppressed for 30 seconds.
     Flooded,
     /// An extension hook errored or ran out of time.
@@ -172,6 +176,9 @@ codes! {
     UnsupportedFile,
     /// The invocation or its environment is wrong; exits 2.
     Usage,
+    /// An install needs two majors of one dependency, or no tag meets a
+    /// minimum.
+    VersionConflict,
 }
 
 #[cfg(test)]
