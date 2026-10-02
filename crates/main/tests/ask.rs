@@ -28,6 +28,9 @@ use fakes::{ProviderServer, Response};
 use rustix::pty;
 use serde_json::{Value, json};
 
+#[path = "../../provider/tests/support/probes.rs"]
+mod probes;
+
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
@@ -329,6 +332,44 @@ fn hello() -> Response {
         .iter()
         .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
         .collect();
+    Response::stream(body)
+}
+
+/// An Anthropic Messages stream answering `Hello.` in two fragments.
+fn anthropic_hello() -> Response {
+    let events = [
+        json!({"type": "message_start", "message": {
+            "id": "msg_1", "usage": {"input_tokens": 10, "output_tokens": 0}
+        }}),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hel"}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "lo."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+        json!({"type": "message_delta",
+            "delta": {"stop_reason": "end_turn"}, "usage": {"output_tokens": 3}}),
+        json!({"type": "message_stop"}),
+    ];
+    let body: String = events
+        .iter()
+        .map(|e| format!("event: {}\ndata: {e}\n\n", e["type"].as_str().unwrap()))
+        .collect();
+    Response::stream(body)
+}
+
+/// A Gemini `streamGenerateContent` stream answering `Hello.` in two parts.
+fn gemini_hello() -> Response {
+    let chunks = [
+        json!({"responseId": "resp_1", "candidates": [{"content": {
+            "parts": [{"text": "Hel"}], "role": "model"}}]}),
+        json!({"responseId": "resp_1", "candidates": [{"content": {
+            "parts": [{"text": "lo."}], "role": "model"},
+            "finishReason": "STOP"}],
+            "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 3}}),
+    ];
+    let body: String = chunks.iter().map(|c| format!("data: {c}\n\n")).collect();
     Response::stream(body)
 }
 
@@ -972,6 +1013,358 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     );
 }
 
+/// One recorded probe exchange as a fake-server response: the stream's
+/// bytes, or the recorded error status with its body.
+fn probe(path: &str, label: &str) -> Response {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let exchanges = probes::read(&root.join(path)).unwrap();
+    let exchange = exchanges
+        .into_iter()
+        .find(|e| e.label.contains(label))
+        .unwrap();
+    match exchange.response {
+        probes::Recorded::Stream(bytes) => Response::stream(bytes),
+        probes::Recorded::Status(status, body) => Response::status(status, body),
+    }
+}
+
+#[test]
+fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        probe(
+            "research/anthropic-messages-probe/raw/stream.json",
+            "stream tool use",
+        ),
+        probe(
+            "research/anthropic-messages-probe/raw/stream.json",
+            "stream plain text",
+        ),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "anthropic/claude-sonnet-5-5",
+            "What is the weather in Paris? Use the tool.",
+        ],
+        &[("ANTHROPIC_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let mut kinds = vec![
+        "fiber_started",
+        "session_started",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+    ];
+    kinds.extend(["tool_call_arguments_delta"; 4]);
+    kinds.extend([
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+    ]);
+    kinds.extend(["assistant_message_delta"; 3]);
+    kinds.extend([
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    assert_eq!(run.kinds(), kinds);
+    assert_eq!(run.last()["payload"]["text"], "Hello, lovely human!");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.path, "/v1/messages");
+        assert_eq!(request.header("x-api-key"), Some("<masked>"));
+    }
+}
+
+#[test]
+fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        probe(
+            "research/openai-responses-probe/raw/probe.json",
+            "tool no strict",
+        ),
+        probe(
+            "research/openai-responses-probe/raw/probe.json",
+            "instructions #1",
+        ),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package("openai", "https://api.openai.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "openai/gpt-6-luna",
+            "Call f with a=\"x\".",
+        ],
+        &[("OPENAI_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(run.last()["payload"]["text"], "7");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(request.path, "/v1/responses");
+        assert_eq!(request.header("authorization"), Some("<masked>"));
+        let body: Value = serde_json::from_slice(&request.body).unwrap();
+        assert_eq!(body["store"], Value::Bool(false));
+    }
+}
+
+#[test]
+fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([
+        probe(
+            "research/google-generative-ai-probe/raw/id-emitted-gemini-3.1-flash-lite.json",
+            "id-emitted",
+        ),
+        probe(
+            "research/google-generative-ai-probe/raw/sse2-stream-ok.json",
+            "sse2-stream-ok",
+        ),
+    ])
+    .unwrap();
+    install(
+        &setup,
+        &setup.package(
+            "gemini",
+            "https://generativelanguage.googleapis.com",
+            &server.url(),
+        ),
+    );
+
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "gemini/gemini-3.1-flash-lite",
+            "Plot point x=3 y=4 with v \"a\".",
+        ],
+        &[("GEMINI_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The `functionCall` part carries a `thoughtSignature`, which decodes
+    // as reasoning; the unknown tool's result ends the step and the turn
+    // goes on to the second recording.
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_arguments_delta",
+            "reasoning_started",
+            "reasoning_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "reasoning_started",
+            "reasoning_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        run.last()["payload"]["text"],
+        "Hello! How can I help you today?"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    for request in &requests {
+        assert_eq!(
+            request.path,
+            "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
+        );
+        assert_eq!(request.header("x-goog-api-key"), Some("<masked>"));
+    }
+}
+
+#[test]
+fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([anthropic_hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("anthropic", "https://api.anthropic.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "anthropic/claude-sonnet-5-5", "hi"],
+        &[("ANTHROPIC_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/messages");
+}
+
+#[test]
+fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package("openai", "https://api.openai.com", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openai/gpt-6-luna", "hi"],
+        &[("OPENAI_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/v1/responses");
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["store"], Value::Bool(false));
+}
+
+#[test]
+fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([gemini_hello()]).unwrap();
+    install(
+        &setup,
+        &setup.package(
+            "gemini",
+            "https://generativelanguage.googleapis.com",
+            &server.url(),
+        ),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "gemini/gemini-3.1-flash-lite", "hi"],
+        &[("GEMINI_API_KEY", "sk-test")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(
+        requests[0].path,
+        "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
+    );
+}
+
+#[test]
+fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
+    let packages = [
+        (
+            "anthropic",
+            config::Protocol::AnthropicMessages,
+            "https://api.anthropic.com/v1",
+            [
+                "claude-fable-5-1",
+                "claude-opus-5-5",
+                "claude-sonnet-5-5",
+                "claude-haiku-4-5",
+            ],
+        ),
+        (
+            "openai",
+            config::Protocol::OpenaiResponses,
+            "https://api.openai.com/v1",
+            ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"],
+        ),
+        (
+            "gemini",
+            config::Protocol::GoogleGenerativeAi,
+            "https://generativelanguage.googleapis.com/v1beta",
+            [
+                "gemini-3.1-pro-preview",
+                "gemini-3.8-flash",
+                "gemini-3.5-flash-lite",
+                "gemini-3.1-flash-lite",
+            ],
+        ),
+    ];
+    for (name, protocol, url, ids) in packages {
+        let providers = config::read_providers(&package(name)).unwrap();
+        assert_eq!(providers.len(), 1, "{name}");
+        let provider = &providers[0];
+        assert_eq!(provider.name, name);
+        let model_ids: Vec<&str> = provider.models.iter().map(|m| m.id.as_str()).collect();
+        assert_eq!(model_ids, Vec::from(ids));
+        for model in &provider.models {
+            assert_eq!(model.protocol, protocol, "{}", model.id);
+            assert_eq!(model.base_url, url, "{}", model.id);
+            assert!(!model.input.is_empty(), "{}", model.id);
+            let cost = model.cost.as_ref().unwrap();
+            assert!(cost.input > 0.0 && cost.output > 0.0, "{}", model.id);
+            if name == "openai" {
+                assert_eq!(
+                    model.compat.get("store"),
+                    Some(&Value::Bool(false)),
+                    "{}",
+                    model.id
+                );
+            } else {
+                assert!(model.compat.get("store").is_none(), "{}", model.id);
+            }
+        }
+    }
+}
+
 #[test]
 fn a_zen_model_is_sent_to_zens_url() {
     let setup = Setup::new();
@@ -1048,10 +1441,10 @@ fn install_takes_one_name_or_path() {
     assert!(!setup.home().join(".extensions.lock").exists());
 }
 
-/// A live turn with `muse-spark-1.3-contributor`, opt in by naming the key
+/// A live turn with `model`, opt in by naming the key
 /// file in `var` (`docs/testing.md`, "Live calls and evals"). Prints the
 /// event kinds and the final text.
-fn live(var: &str, package_name: &str, provider: &str, key_env: &str) {
+fn live(var: &str, package_name: &str, provider: &str, model: &str, key_env: &str) {
     let Some(key_file) = std::env::var_os(var) else {
         return;
     };
@@ -1059,7 +1452,7 @@ fn live(var: &str, package_name: &str, provider: &str, key_env: &str) {
     let setup = Setup::new();
     install(&setup, &package(package_name));
 
-    let model = format!("{provider}/muse-spark-1.3-contributor");
+    let model = format!("{provider}/{model}");
     let run = setup.fiber_with_env(
         &["ask", "--model", &model, "Reply with one short sentence."],
         &[(key_env, key.trim())],
@@ -1077,11 +1470,51 @@ fn live_opencode_go_completes_one_turn() {
         "FIBER_LIVE_OPENCODE_KEY_FILE",
         "opencode",
         "opencode-go",
+        "muse-spark-1.3-contributor",
         "OPENCODE_API_KEY",
     );
 }
 
 #[test]
 fn live_muse_completes_one_turn() {
-    live("FIBER_LIVE_MUSE_KEY_FILE", "muse", "muse", "META_API_KEY");
+    live(
+        "FIBER_LIVE_MUSE_KEY_FILE",
+        "muse",
+        "muse",
+        "muse-spark-1.3-contributor",
+        "META_API_KEY",
+    );
+}
+
+#[test]
+fn live_anthropic_completes_one_turn() {
+    live(
+        "FIBER_LIVE_ANTHROPIC_KEY_FILE",
+        "anthropic",
+        "anthropic",
+        "claude-sonnet-5-5",
+        "ANTHROPIC_API_KEY",
+    );
+}
+
+#[test]
+fn live_openai_completes_one_turn() {
+    live(
+        "FIBER_LIVE_OPENAI_KEY_FILE",
+        "openai",
+        "openai",
+        "gpt-6-luna",
+        "OPENAI_API_KEY",
+    );
+}
+
+#[test]
+fn live_gemini_completes_one_turn() {
+    live(
+        "FIBER_LIVE_GEMINI_KEY_FILE",
+        "gemini",
+        "gemini",
+        "gemini-3.1-flash-lite",
+        "GEMINI_API_KEY",
+    );
 }

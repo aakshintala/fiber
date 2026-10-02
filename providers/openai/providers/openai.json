@@ -1,0 +1,88 @@
+{
+  "name": "openai",
+  "credential": {
+    "env": "OPENAI_API_KEY"
+  },
+  "models": [
+    {
+      "id": "gpt-6.1-sol",
+      "protocol": "openai-responses",
+      "base_url": "https://api.openai.com/v1",
+      "compat": {
+        "store": false
+      },
+      "context_window": 272000,
+      "max_output_tokens": 128000,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 2.0,
+        "output": 10.0,
+        "cache_read": 0.1,
+        "cache_write": 2.5
+      }
+    },
+    {
+      "id": "gpt-6-sol",
+      "protocol": "openai-responses",
+      "base_url": "https://api.openai.com/v1",
+      "compat": {
+        "store": false
+      },
+      "context_window": 272000,
+      "max_output_tokens": 128000,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 2.0,
+        "output": 10.0,
+        "cache_read": 0.2,
+        "cache_write": 2.5
+      }
+    },
+    {
+      "id": "gpt-6-astra",
+      "protocol": "openai-responses",
+      "base_url": "https://api.openai.com/v1",
+      "compat": {
+        "store": false
+      },
+      "context_window": 272000,
+      "max_output_tokens": 128000,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 10.0,
+        "output": 50.0,
+        "cache_read": 1.0,
+        "cache_write": 12.5
+      }
+    },
+    {
+      "id": "gpt-6-luna",
+      "protocol": "openai-responses",
+      "base_url": "https://api.openai.com/v1",
+      "compat": {
+        "store": false
+      },
+      "context_window": 272000,
+      "max_output_tokens": 128000,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.1,
+        "output": 0.5,
+        "cache_read": 0.01,
+        "cache_write": 0.125
+      }
+    }
+  ]
+}
