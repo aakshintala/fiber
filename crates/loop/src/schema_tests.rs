@@ -326,3 +326,61 @@ fn a_cyclic_ref_repairs_nothing() {
     );
     assert_eq!(repair(&schema, &json!({"n": null, "m": null})), None);
 }
+
+#[test]
+fn a_ref_is_checked() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"count": {"type": "integer", "minimum": 1}},
+        "definitions": {"word": {"type": "string"}},
+        "properties": {
+            "n": {"$ref": "#/$defs/count"},
+            "w": {"$ref": "#/definitions/word"},
+            "l": {"type": "array", "items": {"$ref": "#/$defs/count"}}
+        }
+    });
+    assert!(check(&schema, &json!({"n": 2, "w": "a", "l": [1]})).is_empty());
+    assert_eq!(
+        check(&schema, &json!({"n": 0, "w": 1, "l": [1, 0]})),
+        [
+            "`/l/1`: must be at least 1",
+            "`/n`: must be at least 1",
+            "`/w`: expected string, got a number"
+        ]
+    );
+}
+
+#[test]
+fn a_ref_inside_parsed_json_is_checked() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"count": {"type": "integer", "minimum": 1}},
+        "properties": {
+            "o": {"type": "object", "properties": {"k": {"$ref": "#/$defs/count"}}}
+        }
+    });
+    assert_eq!(repair(&schema, &json!({"o": r#"{"k": 0}"#})), None);
+    let made = repair(&schema, &json!({"o": r#"{"k": "2"}"#})).unwrap();
+    assert_eq!(made.repaired["o"], json!({"k": 2}));
+}
+
+#[test]
+fn a_ref_that_cannot_be_followed_fails_the_check() {
+    let schema = json!({
+        "type": "object",
+        "$defs": {"a": {"$ref": "#/$defs/b"}, "b": {"$ref": "#/$defs/a"}},
+        "properties": {
+            "far": {"$ref": "https://example.com/schema"},
+            "gone": {"$ref": "#/$defs/missing"},
+            "loop": {"$ref": "#/$defs/a"}
+        }
+    });
+    assert_eq!(
+        check(&schema, &json!({"far": 1, "gone": 1, "loop": 1})),
+        [
+            "`/far`: its schema's `$ref` to `https://example.com/schema` cannot be followed",
+            "`/gone`: its schema's `$ref` to `#/$defs/missing` cannot be followed",
+            "`/loop`: its schema's `$ref` to `#/$defs/a` leads back to itself"
+        ]
+    );
+}

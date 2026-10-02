@@ -217,7 +217,10 @@ yaml-rust and bincode.
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,
-`maximum`, `minLength` and `anyOf`. A built-in tool's schema uses only the
+`maximum`, `minLength`, `anyOf` and `$ref`. A `$ref` is followed only within
+the same schema, such as `#/$defs/name` or `#/definitions/name`; one that
+points elsewhere, or leads back to itself, fails the check with a message
+saying so. A built-in tool's schema uses only the
 subset, and a test fails if one does not. In an extension's or an MCP
 server's schema, a keyword outside the subset is skipped, not failed, so a
 server whose schema uses one still works. Checking those schemas is best
