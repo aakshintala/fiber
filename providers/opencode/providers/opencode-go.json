@@ -1,0 +1,48 @@
+{
+  "name": "opencode-go",
+  "credential": {
+    "env": "OPENCODE_API_KEY"
+  },
+  "models": [
+    {
+      "id": "muse-spark-1.3-contributor",
+      "protocol": "openai-responses",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "subscription": true,
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.1,
+        "output": 0.2,
+        "cache_read": 0.002
+      }
+    },
+    {
+      "id": "muse-spark-1.2-contributor",
+      "protocol": "openai-responses",
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "compat": {
+        "cache_key_header": "x-opencode-session"
+      },
+      "subscription": true,
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.1,
+        "output": 0.2,
+        "cache_read": 0.002
+      }
+    }
+  ]
+}

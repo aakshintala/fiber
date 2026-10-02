@@ -121,7 +121,8 @@ bottom.
 "run this and give me a result." Fiber's own built-in tools are compiled in
 and register through this seam exactly as an extension's would. An extension
 registering the same name replaces the built-in, and **the replacement is
-recorded in the session log**, so a headless caller, a resumed session and an
+recorded in the session log** (`replaced` on `preamble_built`,
+`docs/events.md`), so a headless caller, a resumed session and an
 audit all see it. The loop asks the registry for a name and runs what comes
 back; it never learns whether the answer was Fiber's or an extension's.
 

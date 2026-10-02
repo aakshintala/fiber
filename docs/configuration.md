@@ -357,7 +357,20 @@ provider extension declares") lists:
   (`docs/model-routing.md`, "Credentials"). A provider whose token expires,
   such as an OAuth login, declares a Lua `credential()` function instead.
 - `compat` is a flat object of the flags the protocol reads. Fiber never
-  guesses a flag.
+  guesses a flag, and a flag that is absent is not set:
+
+  | Flag | Type | Read by | Effect |
+  |---|---|---|---|
+  | `store` | boolean | `openai-responses`, `openai-completions` | sent as the request's `store`; absent, the request has no `store` key |
+  | `max_tokens` | boolean | `openai-completions` | the output limit goes in `max_tokens`; absent, it goes in `max_completion_tokens` |
+  | `reasoning_object` | boolean | `openai-completions` | the effort goes in `reasoning: {effort}`, as OpenRouter takes it; absent, it goes in `reasoning_effort` |
+  | `anthropic` | boolean | `openai-completions` | the model is Anthropic's, behind a gateway such as OpenRouter: requests carry Anthropic's `cache_control` markers on content parts, and Anthropic's strict-tool limits apply |
+  | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
+  | `cache_key_header` | string | `openai-responses`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |
+
+  `openai-completions` always sends `stream_options.include_usage: true`,
+  because OpenAI sends no usage without it (`docs/model-routing.md`,
+  "openai-completions facts").
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
 - `cost` is in US dollars per million tokens.

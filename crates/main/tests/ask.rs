@@ -94,10 +94,12 @@ impl Setup {
     fn package(&self, name: &str, origin: &str, url: &str) -> PathBuf {
         let from = package(name);
         let to = self.root.join(format!("pkg-{name}"));
-        for file in [
-            "extension.json".to_owned(),
-            format!("providers/{name}.json"),
-        ] {
+        let mut files = vec!["extension.json".to_owned()];
+        for entry in fs::read_dir(from.join("providers")).unwrap() {
+            let file = entry.unwrap().file_name();
+            files.push(format!("providers/{}", file.to_str().unwrap()));
+        }
+        for file in files {
             let text = fs::read_to_string(from.join(&file)).unwrap();
             fs::create_dir_all(to.join(&file).parent().unwrap()).unwrap();
             fs::write(to.join(&file), text.replace(origin, url)).unwrap();
@@ -599,11 +601,13 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
         format!(
             "Install github.com/aakshintala/fiber/providers/opencode from {path}\n\
              Version 0.0.0\n\
-             Provider opencode: https://opencode.ai/zen/go/v1, https://opencode.ai/zen/v1\n\
+             Provider opencode-go: https://opencode.ai/zen/go/v1\n\
+             Provider opencode-zen: https://opencode.ai/zen/v1\n\
              Go ahead? [y/N] fiber: installed github.com/aakshintala/fiber/providers/opencode\n"
         )
     );
-    assert!(installed.join("providers/opencode.json").is_file());
+    assert!(installed.join("providers/opencode-go.json").is_file());
+    assert!(installed.join("providers/opencode-zen.json").is_file());
 }
 
 #[test]
@@ -706,7 +710,7 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
         &[
             "ask",
             "--model",
-            "opencode/muse-spark-1.3-contributor",
+            "opencode-go/muse-spark-1.3-contributor",
             "What is the weather in Paris?",
         ],
         &[("OPENCODE_API_KEY", "sk-test")],
@@ -794,7 +798,7 @@ fn a_zen_model_is_sent_to_zens_url() {
     );
 
     let run = setup.fiber_with_env(
-        &["ask", "--model", "opencode/muse-spark-1.3", "hi"],
+        &["ask", "--model", "opencode-zen/muse-spark-1.3", "hi"],
         &[("OPENCODE_API_KEY", "sk-test")],
     );
 
@@ -811,26 +815,28 @@ fn a_zen_model_is_sent_to_zens_url() {
 
 #[test]
 fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
-    let [opencode] = config::read_providers(&package("opencode"))
-        .unwrap()
-        .try_into()
-        .unwrap();
-    let go = "https://opencode.ai/zen/go/v1";
-    let zen = "https://opencode.ai/zen/v1";
-    let (mut go_ids, mut zen_ids) = (Vec::new(), Vec::new());
-    for model in &opencode.models {
-        let on_go = model.base_url == go;
-        assert!(on_go || model.base_url == zen, "{}", model.id);
-        assert_eq!(model.subscription, on_go, "{}", model.id);
-        assert!(model.cost.is_some(), "{} declares its prices", model.id);
-        assert_eq!(model.compat["cache_key_header"], "x-opencode-session");
-        if on_go { &mut go_ids } else { &mut zen_ids }.push(&model.id);
+    let providers = config::read_providers(&package("opencode")).unwrap();
+    let names: Vec<&str> = providers.iter().map(|p| p.name.as_str()).collect();
+    assert_eq!(names.len(), 2, "{names:?}");
+    for provider in &providers {
+        let (url, subscription) = match provider.name.as_str() {
+            "opencode-go" => ("https://opencode.ai/zen/go/v1", true),
+            "opencode-zen" => ("https://opencode.ai/zen/v1", false),
+            other => panic!("unexpected provider {other}"),
+        };
+        assert!(!provider.models.is_empty(), "{}", provider.name);
+        for model in &provider.models {
+            assert_eq!(model.base_url, url, "{}", model.id);
+            assert_eq!(model.subscription, subscription, "{}", model.id);
+            assert!(model.cost.is_some(), "{} declares its prices", model.id);
+            assert_eq!(model.compat["cache_key_header"], "x-opencode-session");
+        }
     }
-    assert!(go_ids.contains(&&"muse-spark-1.3-contributor".to_owned()));
-    assert!(!zen_ids.is_empty());
+    let go = providers.iter().find(|p| p.name == "opencode-go").unwrap();
     assert!(
-        go_ids.iter().all(|id| !zen_ids.contains(id)),
-        "a model reference names one base URL"
+        go.models
+            .iter()
+            .any(|m| m.id == "muse-spark-1.3-contributor")
     );
 }
 
@@ -854,7 +860,7 @@ fn install_takes_one_name_or_path() {
 /// A live turn with `muse-spark-1.3-contributor`, opt in by naming the key
 /// file in `var` (`docs/testing.md`, "Live calls and evals"). Prints the
 /// event kinds and the final text.
-fn live(var: &str, package_name: &str, key_env: &str) {
+fn live(var: &str, package_name: &str, provider: &str, key_env: &str) {
     let Some(key_file) = std::env::var_os(var) else {
         return;
     };
@@ -862,7 +868,7 @@ fn live(var: &str, package_name: &str, key_env: &str) {
     let setup = Setup::new();
     install(&setup, &package(package_name));
 
-    let model = format!("{package_name}/muse-spark-1.3-contributor");
+    let model = format!("{provider}/muse-spark-1.3-contributor");
     let run = setup.fiber_with_env(
         &["ask", "--model", &model, "Reply with one short sentence."],
         &[(key_env, key.trim())],
@@ -879,11 +885,12 @@ fn live_opencode_go_completes_one_turn() {
     live(
         "FIBER_LIVE_OPENCODE_KEY_FILE",
         "opencode",
+        "opencode-go",
         "OPENCODE_API_KEY",
     );
 }
 
 #[test]
 fn live_muse_completes_one_turn() {
-    live("FIBER_LIVE_MUSE_KEY_FILE", "muse", "META_API_KEY");
+    live("FIBER_LIVE_MUSE_KEY_FILE", "muse", "muse", "META_API_KEY");
 }

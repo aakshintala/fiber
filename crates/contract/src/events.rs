@@ -23,7 +23,8 @@ pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,
     HandoffTrigger, InstructionFile, InstructionFileSent, InstructionReason, InstructionSent,
     ModelChanged, ModelSettings, Note, Notice, OpeningMessage, Outcome, PreambleBuilt,
-    PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SwitchSource, UsageRecorded,
+    PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SwitchSource, ToolReplaced,
+    UsageRecorded,
 };
 pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
