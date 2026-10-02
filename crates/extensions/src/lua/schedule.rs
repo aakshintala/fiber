@@ -5,13 +5,13 @@
 //! Each parked callback still ends at its own deadline.
 
 use std::cell::Cell;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::VecDeque;
 use std::io;
 use std::path::Path;
 use std::sync::Mutex;
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use mlua::Thread;
 use serde_json::Value;
@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::host;
 
-use super::{CallbackKind, Job, Reply, Step, Target, Vm, expired, timeout_ms};
+use super::{CallbackKind, CallbackTimeouts, Job, Reply, Step, Target, Vm, expired, timeout_ms};
 
 /// A job, or the reply of a `host.http` that was running off this thread.
 pub(super) enum Msg {
@@ -49,7 +49,7 @@ struct Serve<'a> {
     queued: &'a mut VecDeque<Job>,
     next_id: &'a mut u64,
     http: &'a Sender<Msg>,
-    timeouts: &'a Mutex<BTreeMap<String, Duration>>,
+    timeouts: &'a Mutex<CallbackTimeouts>,
 }
 
 pub(super) fn serve(
@@ -58,7 +58,7 @@ pub(super) fn serve(
     home: &Path,
     inbox: &Receiver<Msg>,
     http: &Sender<Msg>,
-    timeouts: &Mutex<BTreeMap<String, Duration>>,
+    timeouts: &Mutex<CallbackTimeouts>,
 ) {
     let mut vm = None;
     let mut parked: Vec<Parked> = Vec::new();

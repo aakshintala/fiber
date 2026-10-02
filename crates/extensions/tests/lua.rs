@@ -341,6 +341,80 @@ fn a_queued_command_times_out_on_its_own_deadline_and_the_vm_stays() {
 }
 
 #[test]
+fn a_call_made_before_registration_finishes_uses_its_declared_timeout() {
+    let setup = Setup::new();
+    let reg = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let work = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let reg_url = format!("http://{}/", reg.local_addr().unwrap());
+    let work_url = format!("http://{}/", work.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::spawn(move || answer_when_released(reg, accepted_tx, release_rx));
+    std::thread::spawn(move || answer_after(work, Duration::from_millis(1200), 2));
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "host.http({{ url = \"{reg_url}\" }})\n\
+             fiber.command(\"work\", {{ timeout = 5000, run = function() return host.http({{ url = \"{work_url}\" }}).body end }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let first = Arc::clone(&ext);
+    let first = std::thread::spawn(move || first.command("work", ""));
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("registration never reached the server");
+    let started = Instant::now();
+    let second = Arc::clone(&ext);
+    let second = std::thread::spawn(move || second.command("work", ""));
+    release_tx.send(()).unwrap();
+    assert_eq!(second.join().unwrap().unwrap(), "ok");
+    assert!(
+        started.elapsed() > Duration::from_secs(1),
+        "work returned in {:?}",
+        started.elapsed()
+    );
+    assert!(first.join().unwrap().is_ok());
+    assert!(ext.is_running());
+}
+
+#[test]
+fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
+    let setup = Setup::new();
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    std::thread::spawn(move || answer_after(listener, Duration::from_millis(300), 1));
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "fiber.command(\"p.sign\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 50, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let ext = Arc::new(LuaExtension::new("ext", dir, setup.home()));
+    let started = Instant::now();
+    assert_eq!(call(&ext, "p.sign", "").unwrap(), "ok");
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed > Duration::from_millis(200) && elapsed < Duration::from_secs(2),
+        "p.sign took {elapsed:?}, not its own timeout"
+    );
+}
+
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+fn answer_after(listener: std::net::TcpListener, delay: Duration, times: usize) {
+    for _ in 0..times {
+        let mut sock = listener.accept().unwrap().0;
+        std::thread::sleep(delay);
+        drop(
+            sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
+        );
+    }
+}
+
+#[test]
 fn a_module_exactly_the_memory_cap_is_read() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");

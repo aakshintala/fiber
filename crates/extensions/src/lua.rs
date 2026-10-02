@@ -124,10 +124,10 @@ pub struct LuaExtension {
     dir: PathBuf,
     home: PathBuf,
     state: Mutex<State>,
-    /// Each callback's declared timeout, published once the entry script has
-    /// run. A call reads it so waiting behind an earlier item counts against
-    /// its own clock (`docs/extensions.md`, "How an extension runs").
-    timeouts: Arc<Mutex<BTreeMap<String, Duration>>>,
+    /// Declared timeouts, published when the entry script finishes. Commands
+    /// and provider functions are separate maps (`docs/extensions.md`, "How
+    /// an extension runs").
+    timeouts: Arc<Mutex<CallbackTimeouts>>,
 }
 
 enum State {
@@ -148,7 +148,7 @@ impl LuaExtension {
             dir: dir.into(),
             home: home.into(),
             state: Mutex::new(State::Idle),
-            timeouts: Arc::new(Mutex::new(BTreeMap::new())),
+            timeouts: Arc::new(Mutex::new(CallbackTimeouts::default())),
         }
     }
 
@@ -214,10 +214,10 @@ impl LuaExtension {
     fn call(&self, target: Target, arg: Value) -> Result<Value, Error> {
         let callback = target.to_string();
         let asked = Instant::now();
-        // Known once the entry script has published it. Waiting in the stream
-        // counts against it. Missing means this callback was never registered.
-        let budget = self.budget(&target);
-        if matches!(budget, Budget::Missing) {
+        // Missing only once registration has published and this callback is
+        // absent. A call that arrives earlier waits, then uses the timeout
+        // it declared, measured from `asked`.
+        if matches!(self.budget(&target), Budget::Missing) {
             return Err(self.not_registered(&target));
         }
         let inbox = {
@@ -239,7 +239,7 @@ impl LuaExtension {
         // does not: it stays queued until this one finishes.
         if inbox
             .send(schedule::Msg::Job(Job {
-                target,
+                target: target.clone(),
                 arg,
                 reply,
                 asked,
@@ -249,27 +249,46 @@ impl LuaExtension {
             *self.lock() = State::Stopped;
             return Err(self.stopped());
         }
-        let timeout = match budget {
-            Budget::Known(timeout) => timeout,
-            Budget::Pending | Budget::Missing => GRACE,
-        };
-        // Until the callback starts, its own timeout is the whole wait.
-        // Failing that wait does not abandon the VM. Once it has started,
-        // a grace past the deadline catches code the hook cannot stop.
+        // Until the callback starts, its declared timeout is the whole wait
+        // and failing it leaves the VM up. Once it has started, a grace past
+        // the deadline catches code the hook cannot stop.
         let mut started = false;
-        let mut until = asked.checked_add(timeout);
+        let mut abandon_at = None;
         loop {
-            let answer = match until {
+            let (limit, declared) = if started {
+                (abandon_at, None)
+            } else {
+                match self.budget(&target) {
+                    Budget::Missing => return Err(self.not_registered(&target)),
+                    Budget::Known(timeout) => {
+                        let until = asked.checked_add(timeout);
+                        if expired(until) {
+                            return Err(Error::Timeout {
+                                extension: self.name.clone(),
+                                callback,
+                                timeout_ms: timeout_ms(timeout),
+                            });
+                        }
+                        (until, Some(timeout))
+                    }
+                    // Not a deadline: registration has not published one yet.
+                    Budget::Pending => (Some(Instant::now() + Duration::from_millis(20)), None),
+                }
+            };
+            let answer = match limit {
                 Some(at) => answers.recv_timeout(at.saturating_duration_since(Instant::now())),
                 None => answers.recv().map_err(|_| RecvTimeoutError::Disconnected),
             };
             match answer {
                 Ok(Reply::Deadline(at)) => {
                     started = true;
-                    until = at.and_then(|at| at.checked_add(GRACE));
+                    abandon_at = at.and_then(|at| at.checked_add(GRACE));
                 }
                 Ok(Reply::Done(result)) => return result,
                 Err(RecvTimeoutError::Timeout) if !started => {
+                    let Some(timeout) = declared else {
+                        continue;
+                    };
                     return Err(Error::Timeout {
                         extension: self.name.clone(),
                         callback,
@@ -293,20 +312,30 @@ impl LuaExtension {
         }
     }
 
-    /// The timeout `target` declared, if the entry script has published the
-    /// table. [`Budget::Pending`] until then, including for a lookup that
-    /// runs no callback.
+    /// The timeout `target` declared. [`Budget::Pending`] until the entry
+    /// script has published the tables, and for a lookup that runs no callback.
     fn budget(&self, target: &Target) -> Budget {
         if matches!(target, Target::Functions(_)) {
             return Budget::Pending;
         }
-        let map = self.timeouts.lock().unwrap_or_else(PoisonError::into_inner);
-        if map.is_empty() {
+        let reg = self.timeouts.lock().unwrap_or_else(PoisonError::into_inner);
+        if !reg.ready {
             return Budget::Pending;
         }
-        map.get(&target.to_string())
-            .copied()
-            .map_or(Budget::Missing, Budget::Known)
+        match target {
+            Target::Command(name) => reg
+                .commands
+                .get(name)
+                .copied()
+                .map_or(Budget::Missing, Budget::Known),
+            Target::Provider { name, function } => reg
+                .providers
+                .get(name)
+                .and_then(|fns| fns.get(*function))
+                .copied()
+                .map_or(Budget::Missing, Budget::Known),
+            Target::Functions(_) => Budget::Pending,
+        }
     }
 
     fn not_registered(&self, target: &Target) -> Error {
@@ -359,6 +388,16 @@ struct Job {
     asked: Instant,
 }
 
+/// Timeouts the entry script declared. Commands and provider functions live
+/// in different maps so their names cannot collide.
+#[derive(Default)]
+struct CallbackTimeouts {
+    commands: BTreeMap<String, Duration>,
+    providers: BTreeMap<String, BTreeMap<String, Duration>>,
+    /// The entry script has finished, even if it registered nothing.
+    ready: bool,
+}
+
 /// Whether the caller already knows how long `call` may wait before the
 /// callback starts.
 #[derive(Clone, Copy)]
@@ -372,6 +411,7 @@ enum Budget {
 }
 
 /// What a job runs.
+#[derive(Clone)]
 enum Target {
     /// A command `fiber.command` registered.
     Command(String),
@@ -462,7 +502,7 @@ impl Vm {
         dir: &Path,
         home: &Path,
         notify: Notify<'_>,
-        timeouts: &Mutex<BTreeMap<String, Duration>>,
+        timeouts: &Mutex<CallbackTimeouts>,
     ) -> Result<Self, Error> {
         let deadline = Deadline::default();
         notify(deadline.start(LOAD_TIMEOUT))?;
@@ -598,22 +638,27 @@ impl Vm {
         }
     }
 
-    /// Every callback the entry script registered, by the name an error uses.
-    fn declared(&self) -> BTreeMap<String, Duration> {
-        let mut map = BTreeMap::new();
+    /// Every callback the entry script registered.
+    fn declared(&self) -> CallbackTimeouts {
+        let mut timeouts = CallbackTimeouts {
+            ready: true,
+            ..CallbackTimeouts::default()
+        };
         for (name, spec) in self.commands.pairs::<String, Table>().flatten() {
             if let Ok(ms) = spec.get::<u64>("timeout") {
-                map.insert(name, Duration::from_millis(ms));
+                timeouts.commands.insert(name, Duration::from_millis(ms));
             }
         }
         for (name, functions) in self.providers.pairs::<String, Table>().flatten() {
+            let mut fns = BTreeMap::new();
             for (function, spec) in functions.pairs::<String, Table>().flatten() {
                 if let Ok(ms) = spec.get::<u64>("timeout") {
-                    map.insert(format!("{name}.{function}"), Duration::from_millis(ms));
+                    fns.insert(function, Duration::from_millis(ms));
                 }
             }
+            timeouts.providers.insert(name, fns);
         }
-        map
+        timeouts
     }
 
     fn function_names(&self, name: &str) -> Result<Value, Error> {

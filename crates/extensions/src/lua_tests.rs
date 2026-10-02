@@ -1,4 +1,3 @@
-use std::collections::BTreeMap;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Mutex;
 
@@ -15,7 +14,7 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         &fakes::lua_fixture(),
         Path::new("/nonexistent-fiber-home"),
         &|_| Ok(()),
-        &Mutex::new(BTreeMap::new()),
+        &Mutex::new(CallbackTimeouts::default()),
     )
     .unwrap();
     let boom = vm
@@ -54,7 +53,7 @@ fn a_job_whose_caller_left_before_it_ran_is_skipped() {
     }
     let http = inbox.clone();
     drop(inbox);
-    let timeouts = Mutex::new(BTreeMap::new());
+    let timeouts = Mutex::new(CallbackTimeouts::default());
     std::thread::spawn(move || {
         schedule::serve(
             "fixture",
@@ -124,7 +123,7 @@ fn the_worker_quits_when_a_started_callbacks_caller_leaves() {
         }))
         .unwrap();
     let http = inbox.clone();
-    let timeouts = Mutex::new(BTreeMap::new());
+    let timeouts = Mutex::new(CallbackTimeouts::default());
     let serve_dir = dir.clone();
     std::thread::spawn(move || {
         schedule::serve(
@@ -186,7 +185,7 @@ fn the_worker_quits_when_a_running_callback_errors_after_its_caller_leaves() {
         }))
         .unwrap();
     let http = inbox.clone();
-    let timeouts = Mutex::new(BTreeMap::new());
+    let timeouts = Mutex::new(CallbackTimeouts::default());
     let serve_dir = dir.clone();
     std::thread::spawn(move || {
         schedule::serve(
