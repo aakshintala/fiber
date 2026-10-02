@@ -21,26 +21,38 @@ pub(crate) fn repair(schema: &Value, arguments: &Value) -> Option<ArgumentRepair
 /// Every way `value` fails `schema`, one line per bad field.
 pub(crate) fn check(schema: &Value, value: &Value) -> Vec<String> {
     let mut errors = Vec::new();
-    walk(schema, schema, value, "", &mut errors);
+    position(schema, schema, value, "", &mut errors);
     errors
 }
 
-/// Whether `value` passes `schema`, part of `root`.
-fn passes(root: &Value, schema: &Value, value: &Value) -> bool {
+/// Checks `value`, a position of its own in the arguments, against `schema`,
+/// part of `root`. A `$ref` that cannot be followed is the position's last
+/// line.
+fn position(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
+    if let Err(why) = walk(root, schema, value, path, errors, &mut Vec::new()) {
+        errors.push(why);
+    }
+}
+
+/// Whether `value` passes `schema` at the position `refs` belongs to.
+fn passes<'a>(
+    root: &'a Value,
+    schema: &'a Value,
+    value: &Value,
+    path: &str,
+    refs: &mut Vec<&'a Value>,
+) -> Result<bool, String> {
     let mut errors = Vec::new();
-    walk(root, schema, value, "", &mut errors);
-    errors.is_empty()
+    walk(root, schema, value, path, &mut errors, refs)?;
+    Ok(errors.is_empty())
 }
 
 /// Repairs `value` against `schema`, part of `root`, adding each fix to
 /// `repairs`. Nothing under an `anyOf` or `oneOf` is repaired.
 fn fix(root: &Value, schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>) {
-    let Ok(schema) = resolve(root, schema) else {
+    let Some(schema) = target(root, schema) else {
         return;
     };
-    if choice(schema) {
-        return;
-    }
     match value {
         Value::Object(map) => {
             let required = required(schema);
@@ -51,8 +63,7 @@ fn fix(root: &Value, schema: &Value, value: &mut Value, path: &str, repairs: &mu
                 };
                 let drop = inner.is_null()
                     && !required.contains(&key.as_str())
-                    && resolve(root, property)
-                        .ok()
+                    && target(root, property)
                         .and_then(single)
                         .is_some_and(|kind| kind != "null");
                 if drop {
@@ -117,7 +128,9 @@ fn parse(
     }
     let mut inside = Vec::new();
     fix(root, schema, &mut parsed, path, &mut inside);
-    if !passes(root, schema, &parsed) {
+    let mut errors = Vec::new();
+    position(root, schema, &parsed, path, &mut errors);
+    if !errors.is_empty() {
         return None;
     }
     repairs.append(&mut inside);
@@ -142,7 +155,7 @@ fn number(text: &str, integer: bool) -> Option<Number> {
 /// `oneOf`.
 fn single(schema: &Value) -> Option<&str> {
     match types(schema).as_slice() {
-        [one] if !choice(schema) => Some(one),
+        [one] => Some(one),
         _ => None,
     }
 }
@@ -153,26 +166,50 @@ fn choice(schema: &Value) -> bool {
     schema.get("anyOf").is_some() || schema.get("oneOf").is_some()
 }
 
-/// `schema`, part of `root`, with each `$ref` followed. Only a `$ref` within
-/// `root` is followed; the error says why one was not.
-fn resolve<'a>(root: &'a Value, mut schema: &'a Value) -> Result<&'a Value, String> {
-    let mut seen = Vec::new();
-    while let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        if seen.contains(&reference) {
-            return Err(format!(
-                "its schema's `$ref` to `{reference}` leads back to itself"
-            ));
+/// The schema a repair reads: `schema`, part of `root`, with each `$ref`
+/// followed. `None` where any step offers a choice of shapes, or a `$ref`
+/// cannot be followed or leads back to itself.
+fn target<'a>(root: &'a Value, mut schema: &'a Value) -> Option<&'a Value> {
+    let mut refs = Vec::new();
+    loop {
+        if choice(schema) {
+            return None;
         }
-        seen.push(reference);
-        schema = reference
-            .strip_prefix('#')
-            .and_then(|pointer| root.pointer(pointer))
-            .ok_or_else(|| format!("its schema's `$ref` to `{reference}` cannot be followed"))?;
+        let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
+            return Some(schema);
+        };
+        schema = follow(root, reference, &refs).ok()?;
+        refs.push(schema);
     }
-    Ok(schema)
 }
 
-fn walk(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
+/// What `reference` points to within `root`, unless it is one of `refs`, the
+/// schemas already followed at this position.
+fn follow<'a>(root: &'a Value, reference: &str, refs: &[&Value]) -> Result<&'a Value, String> {
+    let found = reference
+        .strip_prefix('#')
+        .and_then(|pointer| root.pointer(pointer))
+        .ok_or_else(|| format!("its schema's `$ref` to `{reference}` cannot be followed"))?;
+    if refs.iter().any(|seen| std::ptr::eq(*seen, found)) {
+        return Err(format!(
+            "its schema's `$ref` to `{reference}` leads back to itself"
+        ));
+    }
+    Ok(found)
+}
+
+/// Checks `value` against `schema` and the schema its `$ref` points to.
+/// `refs` are the schemas followed at this position, through `$ref` and
+/// `anyOf`; a step into a property or an item starts a new position. The
+/// error is a `$ref` that cannot be followed or leads back to itself.
+fn walk<'a>(
+    root: &'a Value,
+    schema: &'a Value,
+    value: &Value,
+    path: &str,
+    errors: &mut Vec<String>,
+    refs: &mut Vec<&'a Value>,
+) -> Result<(), String> {
     let at = || {
         if path.is_empty() {
             "arguments".to_owned()
@@ -180,14 +217,24 @@ fn walk(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Ve
             format!("`{path}`")
         }
     };
-    let schema = match resolve(root, schema) {
-        Ok(schema) => schema,
-        Err(why) => return errors.push(format!("{}: {why}", at())),
-    };
-    if let Some(Value::Array(options)) = schema.get("anyOf")
-        && !options.iter().any(|o| passes(root, o, value))
-    {
-        errors.push(format!("{}: matches none of the shapes allowed", at()));
+    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
+        let found = follow(root, reference, refs).map_err(|why| format!("{}: {why}", at()))?;
+        refs.push(found);
+        let followed = walk(root, found, value, path, errors, refs);
+        refs.pop();
+        followed?;
+    }
+    if let Some(Value::Array(options)) = schema.get("anyOf") {
+        let mut any = false;
+        for option in options {
+            if passes(root, option, value, path, refs)? {
+                any = true;
+                break;
+            }
+        }
+        if !any {
+            errors.push(format!("{}: matches none of the shapes allowed", at()));
+        }
     }
     let types = types(schema);
     if !types.is_empty() && !types.iter().any(|t| is(value, t)) {
@@ -197,7 +244,7 @@ fn walk(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Ve
             types.join(" or "),
             name(value)
         ));
-        return;
+        return Ok(());
     }
     if let Some(Value::Array(allowed)) = schema.get("enum")
         && !allowed.contains(value)
@@ -230,12 +277,13 @@ fn walk(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Ve
         Value::Array(items) => {
             if let Some(each) = schema.get("items") {
                 for (i, item) in items.iter().enumerate() {
-                    walk(root, each, item, &format!("{path}/{i}"), errors);
+                    position(root, each, item, &format!("{path}/{i}"), errors);
                 }
             }
         }
         Value::Null | Value::Bool(_) => {}
     }
+    Ok(())
 }
 
 fn object(
@@ -253,9 +301,9 @@ fn object(
     for (key, value) in map {
         let at = format!("{path}/{}", escape(key));
         match (property(schema, key), schema.get("additionalProperties")) {
-            (Some(property), _) => walk(root, property, value, &at, errors),
+            (Some(property), _) => position(root, property, value, &at, errors),
             (None, Some(Value::Bool(false))) => errors.push(format!("`{at}`: not allowed")),
-            (None, Some(extra @ Value::Object(_))) => walk(root, extra, value, &at, errors),
+            (None, Some(extra @ Value::Object(_))) => position(root, extra, value, &at, errors),
             (None, _) => {}
         }
     }

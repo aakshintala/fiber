@@ -1,7 +1,31 @@
-use contract::events::RepairFix;
+use std::sync::mpsc;
+use std::time::Duration;
+
+use contract::events::{ArgumentRepair, RepairFix};
 use serde_json::{Value, json};
 
 use super::{check, repair};
+
+/// The check and the repair of `arguments`, each run on its own thread under
+/// a deadline, so a schema that loops fails the test instead of hanging it.
+fn within(schema: &Value, arguments: &Value) -> (Vec<String>, Option<ArgumentRepair>) {
+    let (schema, arguments) = (schema.clone(), arguments.clone());
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send((check(&schema, &arguments), repair(&schema, &arguments))));
+    rx.recv_timeout(Duration::from_secs(10))
+        .expect("the check or the repair never finished")
+}
+
+/// `{"<key>": ..., "<key>": ..., "<key>": <leaf>}`, `depth` deep.
+fn nested(depth: usize, key: &str, leaf: Value, wrap: impl Fn(Value) -> Value) -> Value {
+    (0..depth).fold(leaf, |inner, _| {
+        let mut level = wrap(json!({"v": "1"}));
+        if let Some(map) = level.as_object_mut() {
+            map.insert(key.to_owned(), inner);
+        }
+        level
+    })
+}
 
 fn schema() -> Value {
     json!({
@@ -383,4 +407,165 @@ fn a_ref_that_cannot_be_followed_fails_the_check() {
             "`/loop`: its schema's `$ref` to `#/$defs/a` leads back to itself"
         ]
     );
+}
+
+fn with_defs(defs: Value, x: Value) -> Value {
+    json!({"type": "object", "$defs": defs, "properties": {"x": x}})
+}
+
+const CYCLE: &str = "`/x`: its schema's `$ref` to `#/$defs/a` leads back to itself";
+
+#[test]
+fn a_ref_cycle_through_any_of_fails_the_check() {
+    let schema = with_defs(
+        json!({"a": {"anyOf": [{"$ref": "#/$defs/a"}]}}),
+        json!({"$ref": "#/$defs/a"}),
+    );
+    let (errors, made) = within(&schema, &json!({"x": "3"}));
+    assert_eq!(errors, [CYCLE]);
+    assert_eq!(made, None);
+    // The verifier's schema, with the cycle at the root.
+    let root = json!({"$defs": {"a": {"anyOf": [{"$ref": "#/$defs/a"}]}}, "$ref": "#/$defs/a"});
+    let (errors, made) = within(&root, &json!({}));
+    assert_eq!(
+        errors,
+        ["arguments: its schema's `$ref` to `#/$defs/a` leads back to itself"]
+    );
+    assert_eq!(made, None);
+}
+
+#[test]
+fn a_ref_cycle_through_one_of_or_all_of_ends() {
+    // The check skips `oneOf` and `allOf`, so it never follows the `$ref`
+    // inside; nothing under `oneOf` is repaired, and `allOf` is no choice.
+    for keyword in ["oneOf", "allOf"] {
+        let schema = with_defs(
+            json!({"a": {"type": "integer", keyword: [{"$ref": "#/$defs/a"}]}}),
+            json!({"$ref": "#/$defs/a"}),
+        );
+        let (errors, made) = within(&schema, &json!({"x": "3"}));
+        if keyword == "oneOf" {
+            assert_eq!(errors, ["`/x`: expected integer, got a string"]);
+            assert_eq!(made, None);
+        } else {
+            assert_eq!(made.unwrap().repaired["x"], 3);
+        }
+    }
+}
+
+#[test]
+fn mutual_recursion_fails_the_check() {
+    let schema = with_defs(
+        json!({
+            "a": {"anyOf": [{"$ref": "#/$defs/b"}]},
+            "b": {"anyOf": [{"$ref": "#/$defs/a"}]}
+        }),
+        json!({"$ref": "#/$defs/a"}),
+    );
+    let (errors, made) = within(&schema, &json!({"x": 1}));
+    assert_eq!(errors, [CYCLE]);
+    assert_eq!(made, None);
+}
+
+#[test]
+fn recursion_through_properties_ends_and_repairs_every_depth() {
+    let node = json!({
+        "type": "object",
+        "properties": {"v": {"type": "integer"}, "next": {"$ref": "#/$defs/node"}}
+    });
+    let schema = with_defs(json!({"node": node}), json!({"$ref": "#/$defs/node"}));
+    let sent = json!({"x": nested(200, "next", json!({"v": "1"}), |level| level)});
+    let (errors, made) = within(&schema, &sent);
+    assert_eq!(errors.len(), 201, "every `v` is a string as sent");
+    let made = made.unwrap();
+    assert_eq!(made.repairs.len(), 201);
+    assert!(check(&schema, &Value::Object(made.repaired)).is_empty());
+}
+
+#[test]
+fn recursion_through_items_ends_and_repairs_every_depth() {
+    let node = json!({
+        "type": "object",
+        "properties": {
+            "v": {"type": "integer"},
+            "kids": {"type": "array", "items": {"$ref": "#/$defs/node"}}
+        }
+    });
+    let schema = with_defs(json!({"node": node}), json!({"$ref": "#/$defs/node"}));
+    let kids = nested(200, "kids", json!({"v": "1"}), |level| level);
+    // Each level's `kids` is a one-item array.
+    fn arrays(value: &mut Value) {
+        if let Some(kid) = value.get_mut("kids") {
+            arrays(kid);
+            *kid = json!([kid.take()]);
+        }
+    }
+    let mut kids = kids;
+    arrays(&mut kids);
+    let (_, made) = within(&schema, &json!({"x": kids}));
+    let made = made.unwrap();
+    assert_eq!(made.repairs.len(), 201);
+    assert!(check(&schema, &Value::Object(made.repaired)).is_empty());
+}
+
+#[test]
+fn a_choice_beside_a_ref_is_never_repaired() {
+    let defs = json!({
+        "n": {"type": "integer"},
+        "m": {"$ref": "#/$defs/n", "anyOf": [{}]}
+    });
+    for x in [
+        json!({"$ref": "#/$defs/n", "anyOf": [{}]}),
+        json!({"$ref": "#/$defs/n", "oneOf": [{}]}),
+        json!({"$ref": "#/$defs/m"}),
+    ] {
+        let schema = with_defs(defs.clone(), x.clone());
+        let (_, made) = within(&schema, &json!({"x": "3"}));
+        assert_eq!(made, None, "{x}");
+        let (_, made) = within(&schema, &json!({"x": null}));
+        assert_eq!(made, None, "{x}");
+    }
+}
+
+#[test]
+fn the_keywords_beside_a_ref_are_checked() {
+    let schema = with_defs(
+        json!({"n": {"type": "integer"}}),
+        json!({"$ref": "#/$defs/n", "minimum": 5, "anyOf": [{"maximum": 9}]}),
+    );
+    assert!(check(&schema, &json!({"x": 6})).is_empty());
+    assert_eq!(
+        check(&schema, &json!({"x": 3})),
+        ["`/x`: must be at least 5"]
+    );
+    assert_eq!(
+        check(&schema, &json!({"x": 10})),
+        ["`/x`: matches none of the shapes allowed"]
+    );
+    assert_eq!(
+        check(&schema, &json!({"x": "a"})),
+        ["`/x`: expected integer, got a string"]
+    );
+}
+
+#[test]
+fn a_ref_to_a_missing_definition_fails_the_check() {
+    let schema = with_defs(json!({}), json!({"$ref": "#/$defs/missing"}));
+    let (errors, made) = within(&schema, &json!({"x": "3"}));
+    assert_eq!(
+        errors,
+        ["`/x`: its schema's `$ref` to `#/$defs/missing` cannot be followed"]
+    );
+    assert_eq!(made, None);
+}
+
+#[test]
+fn a_non_local_ref_fails_the_check() {
+    let schema = with_defs(json!({}), json!({"$ref": "https://example.com/n"}));
+    let (errors, made) = within(&schema, &json!({"x": "3"}));
+    assert_eq!(
+        errors,
+        ["`/x`: its schema's `$ref` to `https://example.com/n` cannot be followed"]
+    );
+    assert_eq!(made, None);
 }
