@@ -619,6 +619,9 @@ fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
     let listed = setup.fiber(&["list"], None);
     assert_eq!(listed.code, Some(0), "stderr: {}", listed.stderr);
     assert_eq!(listed.raw, [format!("{name} 0.0.0 local")]);
+    let updated = setup.fiber(&["update", "muse"], None);
+    assert_eq!(updated.code, Some(0), "stderr: {}", updated.stderr);
+    assert_eq!(updated.stderr, format!("fiber: installed {name}\n"));
     let removed = setup.fiber(&["remove", "muse"], None);
     assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
     assert_eq!(removed.stderr, format!("fiber: removed {name}\n"));

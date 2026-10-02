@@ -223,8 +223,58 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
             .requested
     );
     // A second dependent raises the minimum, and the dependency moves up.
-    install(&setup, &repos, b).unwrap();
+    let p = plan(
+        &setup.home(),
+        &Request::Install(b.into()),
+        FIBER,
+        &repos.origin(),
+    )
+    .unwrap();
+    let moved: Vec<_> = p.items().filter(|i| i.name == dep).collect();
+    assert_eq!(moved.len(), 1);
+    assert_eq!(moved[0].changes, None);
+    p.commit().unwrap();
     assert_eq!(versions(&setup)[dep], "v1.4.0");
+    let listed = list(&setup.home()).unwrap();
+    let requested: Vec<_> = listed
+        .iter()
+        .map(|i| (i.name.as_str(), i.requested))
+        .collect();
+    assert_eq!(requested, [(b, true), (dep, false), (a, true)]);
+}
+
+#[test]
+fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.0.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let first = plan(
+        &setup.home(),
+        &Request::Install(dep.into()),
+        FIBER,
+        &repos.origin(),
+    );
+    first.unwrap().commit().unwrap();
+    repos.tag(dep, "", "v1.6.0", &manifest(dep), &[]);
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.6")]), &[]);
+    install(&setup, &repos, top).unwrap();
+    let listed = list(&setup.home()).unwrap();
+    let dep_row = listed.iter().find(|i| i.name == dep).unwrap();
+    assert_eq!(
+        (dep_row.version.as_str(), dep_row.requested),
+        ("v1.6.0", true)
+    );
+}
+
+#[test]
+fn an_extensions_directory_that_cannot_be_listed_is_io_failed() {
+    let setup = Setup::new();
+    write(&setup.home().join("extensions"), "not a directory");
+    assert_eq!(list(&setup.home()).unwrap_err().code(), ErrorCode::IoFailed);
 }
 
 #[test]

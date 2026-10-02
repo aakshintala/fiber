@@ -148,7 +148,7 @@ impl Origin {
 
 #[cfg(test)]
 mod tests {
-    use super::{SHORT_NAMES, full_name, split};
+    use super::{SHORT_NAMES, full_name, is_path, split};
 
     #[test]
     fn every_short_name_is_a_first_party_provider() {
@@ -164,6 +164,16 @@ mod tests {
     #[test]
     fn a_full_name_is_left_alone() {
         assert_eq!(full_name("github.com/acme/x"), "github.com/acme/x");
+    }
+
+    #[test]
+    fn a_path_is_told_from_a_name() {
+        for path in ["./tools/lint", "../lint", "/abs/lint", "~/lint"] {
+            assert!(is_path(path), "{path}");
+        }
+        for name in ["muse", "github.com/acme/lint"] {
+            assert!(!is_path(name), "{name}");
+        }
     }
 
     #[test]
