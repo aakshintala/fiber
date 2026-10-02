@@ -469,6 +469,7 @@ fn read_head(sock: &mut impl Read) {
 
 /// `require("hold")` blocks in the loader's read of this fifo. The receiver
 /// fires once that read has opened the file.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn hold_open(dir: &Path) -> mpsc::Receiver<()> {
     let path = dir.join("hold.lua");
     let made = std::process::Command::new("mkfifo").arg(&path).status();
@@ -478,7 +479,7 @@ fn hold_open(dir: &Path) -> mpsc::Receiver<()> {
         let held = std::fs::OpenOptions::new()
             .write(true)
             .open(&path)
-            .expect("opening hold.lua");
+            .unwrap();
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
