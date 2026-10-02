@@ -262,7 +262,11 @@ fn a_finished_call_on_a_stopped_extension_gets_the_stopped_error() {
 /// ends its wait.
 #[test]
 fn provider_functions_abandoning_registration_wakes_every_waiter() {
-    let ext = LuaExtension::new("ext", fakes::lua_fixture(), "/nonexistent-fiber-home");
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        fakes::lua_fixture(),
+        "/nonexistent-fiber-home",
+    ));
     ext.hub.lock().phase = Phase::Registering {
         abandon_at: Some(ago(1)),
     };
@@ -279,7 +283,14 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
         woke_tx.send(()).unwrap();
     });
     waiting_rx.recv().unwrap();
-    let err = ext.provider_functions("p").unwrap_err();
+    // Its own thread, so a call that never returns fails the test.
+    let (done_tx, done_rx) = mpsc::channel();
+    let caller = Arc::clone(&ext);
+    thread::spawn(move || done_tx.send(caller.provider_functions("p")));
+    let err = done_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("provider_functions never returned")
+        .unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     // A hang guard only: without the wake the waiter never returns.
     woke_rx
