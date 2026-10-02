@@ -280,15 +280,29 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect();
 
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    // A signature waiting for the next part of the same `model` content:
-    // the bare signature off a `functionCall` part, or, when it rode in
-    // on text, the signature with a flag saying so.
-    let mut signature: Option<(Value, bool)> = None;
+    // A bare signature off a `functionCall` part, waiting for the call.
+    // A text part replays at once, verbatim with its own signature, so
+    // only bare signatures wait here.
+    let mut signature: Option<Value> = None;
+    // Signed texts already replayed verbatim: the reply's text carries
+    // their words again, so the assistant part sends only what is left.
+    let mut consumed: Vec<String> = Vec::new();
     for input in &request.conversation {
         let (role, part) = match input {
             Input::User { text } => ("user", json!({"text": text})),
-            Input::Assistant { text } if text.is_empty() => continue,
-            Input::Assistant { text } => ("model", json!({"text": text})),
+            Input::Assistant { text } => {
+                // The reply's text carries signed words again, so only
+                // what is left goes out; nothing at all when the stored
+                // parts already said it.
+                let mut rest = text.clone();
+                for taken in &consumed {
+                    rest = rest.replacen(taken.as_str(), "", 1);
+                }
+                if rest.is_empty() {
+                    continue;
+                }
+                ("model", json!({"text": rest}))
+            }
             // Reasoning goes back unchanged, only to the model that
             // produced it, and never as plain text.
             Input::Reasoning {
@@ -296,9 +310,20 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 provider_item: Some(item),
                 ..
             } if *model == reference => {
-                if let Some(rider) = pending_signature(item) {
-                    if let Some(earlier) = signature.replace(rider) {
-                        push(&mut out, "model", carrier(earlier.0));
+                if stored_text(item) {
+                    // Each logged text replays in order, with its own
+                    // signature attached to it, and never again in the
+                    // assistant part (`docs/loop.md`, "What the model is
+                    // sent").
+                    if let Some(text) = item.get("text").and_then(Value::as_str) {
+                        consumed.push(text.to_owned());
+                    }
+                    push(&mut out, "model", item.clone());
+                    continue;
+                }
+                if let Some(sig) = waiting_signature(item) {
+                    if let Some(earlier) = signature.replace(sig) {
+                        push(&mut out, "model", carrier(earlier));
                     }
                     continue;
                 }
@@ -328,26 +353,17 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             }
         };
         let part = if role == "model" {
-            match signature.take() {
-                // A text part's signature waits for its text, so a call in
-                // between goes without it.
-                Some((sig, rides_text)) if rides_text && part.get("functionCall").is_some() => {
-                    signature = Some((sig, rides_text));
-                    part
-                }
-                Some((sig, _)) => with(part, Some(sig)),
-                None => part,
-            }
+            with(part, signature.take())
         } else {
             if let Some(earlier) = signature.take() {
-                push(&mut out, "model", carrier(earlier.0));
+                push(&mut out, "model", carrier(earlier));
             }
             part
         };
         push(&mut out, role, part);
     }
     if let Some(earlier) = signature.take() {
-        push(&mut out, "model", carrier(earlier.0));
+        push(&mut out, "model", carrier(earlier));
     }
     out.into_iter()
         .map(|(role, parts)| json!({"role": role, "parts": parts}))
@@ -362,24 +378,32 @@ fn push(out: &mut Vec<(&'static str, Vec<Value>)>, role: &'static str, part: Val
     }
 }
 
-/// A stored signature waiting for its part: the bare signature with
-/// `false` when it arrived on a `functionCall` part, or the signature
-/// with `true` when it rode in on a text part rather than in a `thought`
-/// part. The text's own words travel in the reply's text; only the
-/// signature waits here.
-fn pending_signature(item: &Value) -> Option<(Value, bool)> {
+/// The bare signature waiting for its part: off a `functionCall` part,
+/// or on an empty text part that holds no words of its own. Only the
+/// signature waits; an empty text must never overwrite the reply's text.
+/// A text part with words of its own is never waiting: it replays at
+/// once (see `stored_text`).
+fn waiting_signature(item: &Value) -> Option<Value> {
     let map = item.as_object()?;
     let sig = map.get("thoughtSignature")?;
-    if map.len() == 1 {
-        return Some((item.clone(), false));
-    }
-    if map.get("text").is_some()
-        && !map.contains_key("thought")
-        && !map.contains_key("functionCall")
-    {
-        return Some((json!({ "thoughtSignature": sig }), true));
+    if map.len() == 1 || map.get("text").and_then(Value::as_str) == Some("") {
+        return Some(json!({ "thoughtSignature": sig }));
     }
     None
+}
+
+/// Whether a stored item is a text part with words of its own: it
+/// replays verbatim, in place. A `thought` part is not text, even with a
+/// signature; an explicit `"thought": false` still marks plain text.
+/// What the decoder stores decides the rest: a text part is stored whole
+/// only with a signature, and never with a `functionCall`.
+fn stored_text(item: &Value) -> bool {
+    item.as_object().is_some_and(|map| {
+        map.get("text")
+            .and_then(Value::as_str)
+            .is_some_and(|text| !text.is_empty())
+            && map.get("thought").and_then(Value::as_bool) != Some(true)
+    })
 }
 
 /// `object` with the fields of `extra` added, such as a signature that

@@ -593,8 +593,14 @@ fn a_text_signature_rides_on_the_reply_text_or_alone_when_there_is_none() {
             {"text": "Hello! How can I help you today?", "thoughtSignature": signature}]})
     );
 
-    let mut silent = reply.clone();
-    silent.text.clear();
+    // Silence arrives with no text on the part, and rides alone on an
+    // empty text part.
+    let (silent, _) = decoded(&stream(&[chunk(
+        json!([{"text": "", "thoughtSignature": signature}]),
+        Some("STOP"),
+    )]));
+    let silent = silent.unwrap();
+    assert_eq!(silent.text, "");
     let (contents, _) = sent_contents(after(&silent, REFERENCE));
     assert_eq!(
         contents[1],
@@ -968,13 +974,93 @@ fn a_text_signature_stays_on_its_text_when_a_call_follows() {
         })
     );
     let (contents, _) = sent_contents(after(&reply, REFERENCE));
-    // The call goes without it; the text carries it.
+    // Each logged part replays in order: the text with its signature,
+    // then the call without one.
     assert_eq!(
         contents[1],
         json!({"role": "model", "parts": [
-            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}},
-            {"text": "Checking.", "thoughtSignature": "c2ln"}]})
+            {"text": "Checking.", "thoughtSignature": "c2ln"},
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]})
     );
+}
+
+#[test]
+fn a_text_signature_stays_on_its_text_when_a_signed_call_follows() {
+    let (reply, _) = decoded(&stream(&[
+        chunk(
+            json!([{"text": "Checking.", "thoughtSignature": "c2ln"}]),
+            None,
+        ),
+        chunk(
+            json!([{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+                "thoughtSignature": "c2FsbA"}]),
+            Some("STOP"),
+        ),
+    ]));
+    let reply = reply.unwrap();
+    let (contents, raw) = sent_contents(after(&reply, REFERENCE));
+    // Each signature stays on its own part: the text's on the text,
+    // the call's on the call. Neither moves onto an empty text part.
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "Checking.", "thoughtSignature": "c2ln"},
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+             "thoughtSignature": "c2FsbA"}]})
+    );
+    assert!(!raw.contains("{\"text\":\"\""));
+}
+
+#[test]
+fn a_signed_text_marked_not_thought_replays_exactly_once() {
+    let part = json!({"text": "Hi.", "thought": false, "thoughtSignature": "c2ln"});
+    let (reply, _) = decoded(&stream(&[chunk(json!([part.clone()]), Some("STOP"))]));
+    let reply = reply.unwrap();
+    assert_eq!(reply.text, "Hi.");
+    let (contents, raw) = sent_contents(after(&reply, REFERENCE));
+    assert_eq!(contents[1], json!({"role": "model", "parts": [part]}));
+    assert_eq!(raw.matches("Hi.").count(), 1);
+}
+
+#[test]
+fn a_thoughts_words_are_not_mistaken_for_replayed_text() {
+    // The thought's words reappear in the answer: only the stored text
+    // part is consumed from the reply's text, never the thought.
+    let (reply, _) = decoded(&stream(&[
+        chunk(json!([{"text": "Ready", "thought": true}]), None),
+        chunk(json!([{"text": "Ready, go."}]), Some("STOP")),
+    ]));
+    let reply = reply.unwrap();
+    let (contents, _) = sent_contents(after(&reply, REFERENCE));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "Ready", "thought": true},
+            {"text": "Ready, go."}]})
+    );
+}
+
+#[test]
+fn a_repeated_text_replays_each_part_with_its_own_signature() {
+    // The same words twice, signed once: the signed part replays with
+    // its signature, and the unsigned words still go out.
+    let (reply, _) = decoded(&stream(&[
+        chunk(json!([{"text": "Yo"}]), None),
+        chunk(
+            json!([{"text": "Yo", "thoughtSignature": "c2ln"}]),
+            Some("STOP"),
+        ),
+    ]));
+    let reply = reply.unwrap();
+    assert_eq!(reply.text, "YoYo");
+    let (contents, raw) = sent_contents(after(&reply, REFERENCE));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "Yo", "thoughtSignature": "c2ln"},
+            {"text": "Yo"}]})
+    );
+    assert_eq!(raw.matches("\"text\":\"Yo\"").count(), 2);
 }
 
 #[test]
