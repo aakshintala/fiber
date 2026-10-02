@@ -16,7 +16,7 @@ use crate::Error;
 
 /// The largest binary Fiber downloads.
 // ponytail: a fixed 256 MiB cap; raise it when a real binary needs more.
-const MAX_BINARY: u64 = 256 * 1024 * 1024;
+const MAX_BINARY: u64 = 268_435_456;
 
 /// This platform's key in a manifest's `binaries`, such as `darwin-arm64`.
 pub fn platform() -> String {

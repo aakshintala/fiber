@@ -1122,3 +1122,51 @@ fn what_a_package_carries_is_listed_from_its_files_and_manifest() {
         ]
     );
 }
+
+#[test]
+fn a_listing_skips_stray_files_and_hidden_directories() {
+    let setup = Setup::new();
+    let source = setup.source("local", &manifest("acme"), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    write(&setup.home().join("extensions/stray.txt"), "x");
+    fs::create_dir_all(setup.home().join("extensions/.scratch")).unwrap();
+    assert_eq!(versions(&setup).keys().collect::<Vec<_>>(), ["acme"]);
+}
+
+#[test]
+fn a_projects_directory_that_cannot_be_listed_fails_the_removal() {
+    let setup = Setup::new();
+    let source = setup.source("local", &manifest("acme"), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    write(&setup.home().join("projects"), "not a directory");
+    let Err(err) = removal(&setup.home(), "acme") else {
+        panic!("planned")
+    };
+    assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
+}
+
+#[test]
+fn an_items_source_is_its_path_or_its_name() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[]);
+    let p = plan(
+        &setup.home(),
+        &Request::Install(LIB.into()),
+        FIBER,
+        &repos.origin(),
+    )
+    .unwrap();
+    assert_eq!(p.items().next().unwrap().source(), LIB);
+    drop(p);
+    let source = setup.source("local", &manifest("acme"), &[]);
+    let p = plan(
+        &setup.home(),
+        &Request::Path(source.clone()),
+        FIBER,
+        &Origin::github(),
+    )
+    .unwrap();
+    let shown = fs::canonicalize(&source).unwrap().display().to_string();
+    assert_eq!(p.items().next().unwrap().source(), shown);
+}

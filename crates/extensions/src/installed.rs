@@ -4,7 +4,7 @@ use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use crate::Error;
 use crate::git::full_name;
@@ -26,14 +26,14 @@ pub struct Installed {
     pub depends: BTreeMap<String, String>,
 }
 
-/// How long a second operation waits for the lock before it fails. A
-/// process another thread just started can hold a copy of the lock's file
-/// for a moment after its owner let go.
-const LOCK_WAIT: Duration = Duration::from_millis(500);
+/// How many times, ten milliseconds apart, a second operation tries for the
+/// lock before it fails. A process another thread just started can hold a
+/// copy of the lock's file for a moment after its owner let go.
+const LOCK_TRIES: u32 = 50;
 
 /// Takes the one lock over `extensions/` that every install, update and
 /// remove holds from its first read to its last write. A second operation
-/// waits [`LOCK_WAIT`], then fails with [`Error::Busy`].
+/// waits half a second, then fails with [`Error::Busy`].
 pub(crate) fn lock(home: &Path) -> Result<File, Error> {
     fs::create_dir_all(home).map_err(io(home))?;
     let path = home.join(".extensions.lock");
@@ -42,17 +42,14 @@ pub(crate) fn lock(home: &Path) -> Result<File, Error> {
         .append(true)
         .open(&path)
         .map_err(io(&path))?;
-    let start = Instant::now();
-    loop {
+    for _ in 0..LOCK_TRIES {
         match file.try_lock() {
             Ok(()) => return Ok(file),
-            Err(TryLockError::WouldBlock) if start.elapsed() < LOCK_WAIT => {
-                thread::sleep(Duration::from_millis(10));
-            }
-            Err(TryLockError::WouldBlock) => return Err(Error::Busy),
+            Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(10)),
             Err(TryLockError::Error(e)) => return Err(io(&path)(e)),
         }
     }
+    Err(Error::Busy)
 }
 
 /// The installed extensions, by name. A manifest or record that cannot be
@@ -104,15 +101,15 @@ impl Removal {
             remove(dir)?;
         }
         for path in &self.data {
+            if fs::symlink_metadata(path).is_err() {
+                continue;
+            }
             let gone = if path.is_dir() {
                 fs::remove_dir_all(path)
             } else {
                 fs::remove_file(path)
             };
-            match gone {
-                Err(e) if e.kind() != std::io::ErrorKind::NotFound => return Err(io(path)(e)),
-                Ok(()) | Err(_) => {}
-            }
+            gone.map_err(io(path))?;
         }
         Ok(())
     }

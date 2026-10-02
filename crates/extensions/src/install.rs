@@ -192,9 +192,8 @@ pub(crate) fn commit_all(
 /// is replaced, never written through.
 fn write_record(dir: &Path, record: &Record) -> Result<(), Error> {
     let file = dir.join(RECORD);
-    match fs::remove_file(&file) {
-        Err(e) if e.kind() != ErrorKind::NotFound => return Err(io(&file)(e)),
-        Ok(()) | Err(_) => {}
+    if fs::symlink_metadata(&file).is_ok() {
+        fs::remove_file(&file).map_err(io(&file))?;
     }
     let mut out = fs::OpenOptions::new()
         .write(true)
