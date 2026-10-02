@@ -185,7 +185,11 @@ fn a_token_within_five_minutes_of_expiry_is_refreshed_off_the_request_path() {
     assert_eq!(within(move || first.token()).unwrap().expose(), "t1");
     assert_eq!(server.requests().len(), 1);
     // Into the refresh window, still short of expiry.
-    clock.advance(Duration::from_secs(3600) - REFRESH_BEFORE);
+    clock.advance(
+        Duration::from_secs(3600)
+            .checked_sub(REFRESH_BEFORE)
+            .unwrap(),
+    );
     let second = Arc::clone(&provider);
     assert_eq!(within(move || second.token()).unwrap().expose(), "t1");
     assert!(
@@ -515,10 +519,7 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
         "waited for get to park at its grace"
     );
     clock.advance(Duration::from_millis(200));
-    let err = rx
-        .recv_timeout(WAIT)
-        .expect("waited for get")
-        .unwrap_err();
+    let err = rx.recv_timeout(WAIT).expect("waited for get").unwrap_err();
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };
