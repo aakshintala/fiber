@@ -163,6 +163,72 @@ fn the_worker_quits_when_a_started_callbacks_caller_leaves() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// A callback that is already running, and then errors after its caller has
+/// gone, abandoned the VM. The thread quits instead of serving a later job.
+#[test]
+fn the_worker_quits_when_a_running_callback_errors_after_its_caller_leaves() {
+    let dir = std::env::temp_dir().join(format!("fiber-lua-spin-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("init.lua"),
+        "fiber.command(\"spin\", { timeout = 400, run = function() while true do end end })\n\
+         fiber.command(\"later\", { timeout = 1000, run = function() return \"later\" end })\n",
+    )
+    .unwrap();
+    let (inbox, jobs) = mpsc::channel();
+    let (reply, answers) = mpsc::channel();
+    inbox
+        .send(schedule::Msg::Job(Job {
+            target: Target::Command("spin".to_owned()),
+            arg: Value::String(String::new()),
+            reply,
+            asked: Instant::now(),
+        }))
+        .unwrap();
+    let http = inbox.clone();
+    let timeouts = Mutex::new(BTreeMap::new());
+    let serve_dir = dir.clone();
+    std::thread::spawn(move || {
+        schedule::serve(
+            "spin",
+            &serve_dir,
+            Path::new("/nonexistent-fiber-home"),
+            &jobs,
+            &http,
+            &timeouts,
+        );
+    });
+    let mut deadlines = 0;
+    let until = Instant::now() + Duration::from_secs(2);
+    while deadlines < 2 && Instant::now() < until {
+        match answers.recv_timeout(Duration::from_millis(200)) {
+            Ok(Reply::Deadline(_)) => deadlines += 1,
+            Ok(Reply::Done(_)) => panic!("spin finished before its caller left"),
+            Err(mpsc::RecvTimeoutError::Timeout) => {}
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+        }
+    }
+    assert_eq!(deadlines, 2, "the callback never started");
+    drop(answers);
+    let (later, later_rx) = mpsc::channel();
+    inbox
+        .send(schedule::Msg::Job(Job {
+            target: Target::Command("later".to_owned()),
+            arg: Value::String(String::new()),
+            reply: later,
+            asked: Instant::now(),
+        }))
+        .unwrap();
+    assert!(
+        matches!(
+            later_rx.recv_timeout(Duration::from_secs(2)),
+            Err(mpsc::RecvTimeoutError::Disconnected)
+        ),
+        "the worker kept running after the caller left"
+    );
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
 /// [`Deadline::at`] is the instant [`Deadline::start`] stored.
 #[test]
 fn the_deadline_reports_the_instant_it_was_started() {
