@@ -121,6 +121,9 @@ impl Error {
 fn status_code(status: u16, body: &str) -> ErrorCode {
     match status {
         401 => ErrorCode::AuthenticationFailed,
+        // Gemini answers a bad key with 400 `API_KEY_INVALID`
+        // (`research/google-generative-ai-probe`, `raw/auth-badheader.json`).
+        400 if has_reason(body, "API_KEY_INVALID") => ErrorCode::AuthenticationFailed,
         429 => ErrorCode::RateLimited,
         408 | 409 | 500..=599 => ErrorCode::ProviderUnavailable,
         _ if overflow(body_code(body).as_deref(), &body_message(body)) => {
@@ -136,28 +139,65 @@ fn status_code(status: u16, body: &str) -> ErrorCode {
 fn reply_failed_code(code: Option<&str>, message: &str) -> ErrorCode {
     match code {
         Some("rate_limit_exceeded" | "rate_limit_error") => ErrorCode::RateLimited,
-        Some("server_error" | "overloaded_error" | "api_error") => ErrorCode::ProviderUnavailable,
+        // Gemini's in-stream `error.status` is a `google.rpc.Code` name.
+        Some("RESOURCE_EXHAUSTED") => ErrorCode::RateLimited,
+        Some(
+            "server_error" | "overloaded_error" | "api_error" | "INTERNAL" | "UNAVAILABLE"
+            | "DEADLINE_EXCEEDED",
+        ) => ErrorCode::ProviderUnavailable,
         _ if overflow(code, message) => ErrorCode::ContextOverflow,
         _ => ErrorCode::StreamIncomplete,
     }
 }
 
-/// The overflow shapes seen on `openai-responses` and documented for
-/// `anthropic-messages` (`docs/errors.md`, "Recognising a context
+/// The overflow shapes `docs/errors.md` lists ("Recognising a context
 /// overflow"). The Anthropic phrase is unprobed: no probed request
 /// overflowed the context window.
 fn overflow(code: Option<&str>, message: &str) -> bool {
     (code == Some("invalid_prompt") && message.contains("exceeds the context window"))
+        || code == Some("context_length_exceeded")
         || message.contains("prompt is too long")
+        || openrouter_overflow(message)
 }
 
-/// The provider's own code in an error body: `error.code`.
+/// OpenRouter's own size check: "This endpoint's maximum context length is
+/// N tokens. However, you requested about T tokens (I of text input, O in
+/// the output)." The same words reject an oversized `max_tokens`; it is an
+/// overflow only when the input alone fills the context
+/// (`research/provider-errors`, "Context overflow").
+fn openrouter_overflow(message: &str) -> bool {
+    let number = |after: &str| -> Option<u64> {
+        let rest = message.split_once(after)?.1.trim_start();
+        let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+        digits.parse().ok()
+    };
+    let input = message
+        .split_once(" of text input")
+        .and_then(|(head, _)| head.rsplit(['(', ' ']).next())
+        .and_then(|n| n.parse::<u64>().ok());
+    match (number("maximum context length is"), input) {
+        (Some(context), Some(input)) => input >= context,
+        _ => false,
+    }
+}
+
+/// The provider's own code in an error body: `error.code`, or the
+/// upstream's `error.metadata.provider_code` that OpenRouter adds.
 fn body_code(body: &str) -> Option<String> {
     let value: Value = serde_json::from_str(body).ok()?;
-    value
-        .pointer("/error/code")
-        .and_then(Value::as_str)
+    ["/error/metadata/provider_code", "/error/code"]
+        .iter()
+        .find_map(|p| value.pointer(p).and_then(Value::as_str))
         .map(str::to_owned)
+}
+
+/// Whether a Google error body's `error.details` names `reason`
+/// (`google.rpc.ErrorInfo`).
+fn has_reason(body: &str, reason: &str) -> bool {
+    serde_json::from_str::<Value>(body)
+        .ok()
+        .and_then(|v| v.pointer("/error/details")?.as_array().cloned())
+        .is_some_and(|details| details.iter().any(|d| d["reason"] == reason))
 }
 
 /// The provider's own message in an error body: `error.message`, or

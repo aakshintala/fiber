@@ -186,7 +186,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
 }
 
 /// Whether any `enum` in `schema` has an object or array value.
-fn complex_enum(schema: &Value) -> bool {
+pub(crate) fn complex_enum(schema: &Value) -> bool {
     match schema {
         Value::Object(map) => map.iter().any(|(key, value)| {
             (key == "enum"
@@ -201,11 +201,11 @@ fn complex_enum(schema: &Value) -> bool {
 }
 
 /// The most tools Anthropic takes with `strict: true` in one request.
-const MAX_STRICT_TOOLS: usize = 20;
+pub(crate) const MAX_STRICT_TOOLS: usize = 20;
 
 /// The most cache markers Anthropic takes in one request
 /// (`docs/prompt-cache.md`, "Cache markers and keys").
-const MAX_MARKERS: usize = 4;
+pub(crate) const MAX_MARKERS: usize = 4;
 
 /// Removes cache markers past [`MAX_MARKERS`], counted across `tools`,
 /// `system` and `messages` after `extra_body` is merged. The ones kept are
@@ -259,7 +259,7 @@ fn tool_choice(choice: &str) -> Value {
 /// `{"type": "ephemeral"}`, with `ttl` added for a 1-hour cache
 /// (`docs/prompt-cache.md`, "Cache lifetime"; no beta header is needed,
 /// `research/provider-harvest/anthropic-messages.md`, "TTL values").
-fn cache_control(lifetime: &CacheLifetime) -> Value {
+pub(crate) fn cache_control(lifetime: &CacheLifetime) -> Value {
     match lifetime {
         CacheLifetime::FiveMinutes => json!({"type": "ephemeral"}),
         CacheLifetime::OneHour => json!({"type": "ephemeral", "ttl": "1h"}),

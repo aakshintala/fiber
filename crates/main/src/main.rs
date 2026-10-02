@@ -23,6 +23,8 @@ use extensions::Providers;
 use log::Log;
 use r#loop::Loop;
 use provider::anthropic_messages::Messages;
+use provider::google_generative_ai::Gemini;
+use provider::openai_completions::Completions;
 use provider::openai_responses::Responses;
 use provider::{Compat, Endpoint};
 use serde_json::Value;
@@ -223,9 +225,7 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
-        compat: Compat {
-            store: model.model.compat.get("store").and_then(Value::as_bool),
-        },
+        compat: Compat::from_data(&model.model.compat),
         max_output_tokens: model.model.max_output_tokens,
         extra_body: model.model.extra_body.clone(),
     };
@@ -244,8 +244,23 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
                 },
             )
         }
+        Protocol::OpenaiCompletions => Arc::new(Completions::new(endpoint)),
         Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
-        Protocol::OpenaiCompletions | Protocol::GoogleGenerativeAi | Protocol::BedrockConverse => {
+        Protocol::GoogleGenerativeAi => {
+            let gemini = Gemini::new(endpoint);
+            Arc::new(
+                match model
+                    .model
+                    .compat
+                    .get("cache_key_header")
+                    .and_then(Value::as_str)
+                {
+                    Some(name) => gemini.cache_key_header(name),
+                    None => gemini,
+                },
+            )
+        }
+        Protocol::BedrockConverse => {
             // ponytail: docs/errors.md has no code for a protocol this Fiber
             // does not speak yet; `extension_missing` stands in.
             return Err(failure(

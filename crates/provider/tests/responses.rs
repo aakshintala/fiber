@@ -460,7 +460,10 @@ fn store_and_extra_fields_come_from_model_data_only() {
     .0
     .unwrap();
     let declared = Endpoint {
-        compat: Compat { store: Some(false) },
+        compat: Compat {
+            store: Some(false),
+            ..Compat::default()
+        },
         extra_body: json!({"service_tier": "priority"})
             .as_object()
             .unwrap()
