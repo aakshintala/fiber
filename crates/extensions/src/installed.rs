@@ -1,9 +1,8 @@
 //! What is installed, and `fiber remove` (`docs/extensions.md`, "Installing").
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
-use std::sync::{Mutex, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -32,25 +31,11 @@ pub struct Installed {
 /// copy of the lock's file for a moment after its owner let go.
 const LOCK_TRIES: u32 = 50;
 
-/// The file lock over `extensions/.lock`, plus a process-local note that
-/// this process holds it. A plan keeps one across approval and then calls
-/// [`list`], which must not try to lock the file again.
+/// The file lock over `extensions/.lock`. A plan keeps one across approval.
 pub(crate) struct Lock {
     /// Kept so dropping the lock releases it.
     #[allow(dead_code, reason = "dropping the file releases the advisory lock")]
     file: File,
-    path: PathBuf,
-}
-
-impl Drop for Lock {
-    fn drop(&mut self) {
-        holders().remove(&self.path);
-    }
-}
-
-fn holders() -> std::sync::MutexGuard<'static, BTreeSet<PathBuf>> {
-    static HELD: Mutex<BTreeSet<PathBuf>> = Mutex::new(BTreeSet::new());
-    HELD.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Takes the one lock over `extensions/` that every install, update, remove
@@ -71,8 +56,7 @@ pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
         match file.try_lock() {
             Ok(()) => {
                 recover(&root)?;
-                holders().insert(path.clone());
-                return Ok(Lock { file, path });
+                return Ok(Lock { file });
             }
             Err(TryLockError::WouldBlock) => thread::sleep(Duration::from_millis(10)),
             Err(TryLockError::Error(e)) => return Err(io(&path)(e)),
@@ -83,14 +67,11 @@ pub(crate) fn lock(home: &Path) -> Result<Lock, Error> {
 
 /// The installed extensions, by name. A manifest or record that cannot be
 /// read is an error naming the file. A commit that stopped halfway is
-/// finished first, unless this process already holds the lock.
+/// finished first, under the same lock every other operation takes.
 pub fn list(home: &Path) -> Result<Vec<Installed>, Error> {
     let root = home.join("extensions");
     if !root.try_exists().map_err(io(&root))? {
         return Ok(Vec::new());
-    }
-    if holders().contains(&root.join(".lock")) {
-        return read(home);
     }
     let _lock = lock(home)?;
     read(home)

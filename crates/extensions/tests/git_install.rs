@@ -472,10 +472,17 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
     assert_eq!(item.version, "v1.1.0");
     let changes = item.changes.clone().unwrap();
     assert!(changes.contains("b.lua"), "{changes}");
-    assert_eq!(
-        commit(&list(&setup.home()).unwrap()[0]).as_deref(),
-        Some(first.as_str())
-    );
+    // The plan holds the lock, so the record is read directly: planning
+    // leaves the installed commit alone.
+    let record = fs::read_to_string(
+        setup
+            .home()
+            .join("extensions")
+            .join(LIB.replace('/', "-"))
+            .join(".fiber.json"),
+    )
+    .unwrap();
+    assert!(record.contains(&first), "{record}");
     p.commit().unwrap();
     let now = list(&setup.home()).unwrap();
     assert_eq!(now[0].version, "v1.1.0");
@@ -655,6 +662,12 @@ fn a_second_operation_while_one_holds_the_lock_fails_cleanly() {
     assert!(matches!(err, Error::Busy), "{err}");
     assert_eq!(err.code(), ErrorCode::IoFailed, "{err}");
     assert!(matches!(removal(&setup.home(), LIB), Err(Error::Busy)));
+    // A list from another thread of this process waits for the lock too,
+    // so it never reads a set the plan is part way through committing.
+    let home = setup.home();
+    let listed = std::thread::spawn(move || list(&home)).join().unwrap();
+    assert!(matches!(listed, Err(Error::Busy)), "{listed:?}");
+    assert!(matches!(list(&setup.home()), Err(Error::Busy)));
     assert!(setup.home().join("extensions/.lock").is_file());
     assert!(!setup.home().join(".extensions.lock").exists());
     // The first plan is untouched by the second's refusal.
