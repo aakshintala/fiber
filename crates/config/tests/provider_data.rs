@@ -131,12 +131,26 @@ fn the_documented_manifest_reads() {
     setup.write(
         &dir.join("extension.json"),
         r#"{"name": "github.com/acme/fiber-acme", "version": "v1.4.0", "fiber": "0.3.0",
-            "api": 1, "depends": {}, "repo_settings": ["workspace_url"], "prompt": "prompt.md"}"#,
+            "api": 1, "depends": {"github.com/acme/oauth-helper": "v1.2.0"},
+            "repo_settings": ["workspace_url"], "prompt": "prompt.md"}"#,
     );
     let manifest = read_manifest(&dir).unwrap();
     assert_eq!(manifest.name, "github.com/acme/fiber-acme");
+    assert_eq!(manifest.version, "v1.4.0");
     assert_eq!(manifest.fiber, "0.3.0");
     assert_eq!(manifest.api, 1);
+    assert_eq!(manifest.depends["github.com/acme/oauth-helper"], "v1.2.0");
+}
+
+#[test]
+fn a_manifest_without_depends_has_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}"#,
+    );
+    assert!(read_manifest(&dir).unwrap().depends.is_empty());
 }
 
 #[test]
@@ -146,6 +160,8 @@ fn a_manifest_that_is_not_json_or_lacks_a_field_is_invalid() {
     for text in [
         r#"{"name": "a", "fiber": "0.1.0", "api": 1,}"#,
         r#"{"name": "a", "api": 1}"#,
+        r#"{"name": "a", "fiber": "0.1.0", "api": 1}"#,
+        r#"{"name": "a", "version": "v1", "fiber": "0.1.0", "api": 1, "depends": ["b"]}"#,
         r#"{"name": "a", "fiber": "0.1.0", "api": "1"}"#,
     ] {
         setup.write(&dir.join("extension.json"), text);

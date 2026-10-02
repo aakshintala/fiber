@@ -10,7 +10,7 @@ use std::path::{Component, Path, PathBuf};
 
 use pulldown_cmark::{BrokenLink, Event, LinkType, Options, Parser, Tag, TagEnd};
 
-const CHECKED: [&str; 3] = ["CONTEXT.md", "AGENTS.md", "README.md"];
+const CHECKED: [&str; 3] = ["GLOSSARY.md", "AGENTS.md", "README.md"];
 const PATH_ROOTS: [&str; 5] = ["docs/", "crates/", "scripts/", "research/", ".github/"];
 
 /// What the checks need from one Markdown file. Offsets are into its source.

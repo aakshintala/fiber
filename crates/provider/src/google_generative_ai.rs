@@ -302,7 +302,9 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             } if *model == reference => logged.push(input),
             Input::Reasoning { .. } => {}
             Input::ToolCall { .. } => logged.push(input),
-            Input::ToolResult { action_id, text } => {
+            Input::ToolResult {
+                action_id, text, ..
+            } => {
                 close_reply(&mut out, &mut logged, "");
                 let call = calls.get(action_id);
                 let response = with(

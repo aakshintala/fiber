@@ -5,7 +5,7 @@ what is true now, not a plan. It is settled by
 [What is the event stream, and what is durable?](https://github.com/aakshintala/fiber/issues/6);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Session, turn, step, action, event and tool call
+Vocabulary is `GLOSSARY.md`. Session, turn, step, action, event and tool call
 mean what it says there and nothing else.
 
 ## The rule everything else follows from
@@ -246,7 +246,7 @@ Durable. The last line a process writes for a session.
 | `suspended_on` | string | no | the `request_id` of the pending approval or question the process exited on (`docs/invocation.md`, "Lifecycle") |
 | `questions` | `questions` | no | copied from the last `turn_completed`, when its turn ended on questions |
 
-A process is the unit these two lines bound (`CONTEXT.md`, "Process"). They are
+A process is the unit these two lines bound (`GLOSSARY.md`, "Process"). They are
 durable for one reason: a `fiber_started` with no matching `fiber_exited` is the
 only record that a process died rather than finished. A session that was rewound
 ends with `rewound` instead, which closes the boundary the same way ("Rewind").

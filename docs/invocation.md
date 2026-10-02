@@ -6,7 +6,7 @@ true now, not a plan. It is settled by
 and [Control center: one hub, headless sessions, clients over it](https://github.com/aakshintala/fiber/issues/256);
 those tickets' resolutions hold the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Front door, hub, driver command, session, turn,
+Vocabulary is `GLOSSARY.md`. Front door, hub, driver command, session, turn,
 step boundary, steering message, watcher and driver mean what it says there
 and nothing else. The events named here are `docs/events.md`; this page is
 only the process contract over them.

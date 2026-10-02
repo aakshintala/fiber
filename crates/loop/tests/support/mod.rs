@@ -14,21 +14,22 @@
 use std::hash::BuildHasher as _;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use contract::events::{
     ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::Message;
-use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction};
-use contract::shapes::{ContentPart, Origin, Sender as From};
+use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
+use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, SessionId};
 use fakes::{Scripted, ScriptedProvider, reply};
 use log::Log;
 use r#loop::Loop;
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 
 /// How long a turn may take before a test fails instead of hanging.
 pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
@@ -54,19 +55,29 @@ pub(crate) fn reasoning_reply(thought: &str, text: &str) -> Scripted {
     }
 }
 
-/// A reply that calls `names`, tools no one registered, after `text`.
+/// A reply that calls `names`, each with `{"city": "Paris"}`, after `text`.
 pub(crate) fn tool_call_reply(text: &str, names: &[&str]) -> Scripted {
+    let calls: Vec<(&str, Value)> = names
+        .iter()
+        .map(|n| (*n, json!({"city": "Paris"})))
+        .collect();
+    calls_reply(text, &calls)
+}
+
+/// A reply that makes `calls`, each a tool's name and its arguments, after
+/// `text`.
+pub(crate) fn calls_reply(text: &str, calls: &[(&str, Value)]) -> Scripted {
     let mut end = reply(text);
     let mut deltas = vec![Delta::Text(TextDelta { text: text.into() })];
-    for (index, name) in names.iter().enumerate() {
+    for (index, (name, arguments)) in calls.iter().enumerate() {
         deltas.push(Delta::ToolCallArguments(ToolCallArgumentsDelta {
             index: u32::try_from(index).unwrap(),
             name: Some((*name).into()),
-            text: "{\"city\":\"Paris\"}".into(),
+            text: arguments.to_string(),
         }));
         end.actions.push(ReplyAction::ToolCall(ToolCallRequested {
             name: (*name).into(),
-            arguments: json!({"city": "Paris"}),
+            arguments: arguments.clone(),
             provider_id: None,
             repair: None,
         }));
@@ -74,6 +85,168 @@ pub(crate) fn tool_call_reply(text: &str, names: &[&str]) -> Scripted {
     Scripted {
         deltas,
         end: Ok(end),
+    }
+}
+
+/// Notes shared by the tools in one step, and a signal when one is added.
+/// A tool that waits for another blocks here instead of polling.
+pub(crate) struct Trace {
+    notes: Mutex<Vec<String>>,
+    changed: Condvar,
+}
+
+impl Default for Trace {
+    fn default() -> Self {
+        Self {
+            notes: Mutex::default(),
+            changed: Condvar::new(),
+        }
+    }
+}
+
+impl Trace {
+    pub(crate) fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<String>>> {
+        self.notes.lock()
+    }
+
+    fn push(&self, line: String) {
+        let mut notes = self.notes.lock().unwrap();
+        notes.push(line);
+        self.changed.notify_all();
+    }
+
+    /// Blocks until `line` has been pushed, and fails the test at [`DEADLINE`].
+    fn wait_for(&self, line: &str) {
+        let mut notes = self.notes.lock().unwrap();
+        let deadline = Instant::now() + DEADLINE;
+        while !notes.iter().any(|note| note == line) {
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            assert!(!remaining.is_zero(), "timed out waiting for {line}");
+            let (guard, result) = self.changed.wait_timeout(notes, remaining).unwrap();
+            notes = guard;
+            assert!(
+                !(result.timed_out() && !notes.iter().any(|note| note == line)),
+                "timed out waiting for {line}"
+            );
+        }
+    }
+}
+
+/// A test tool registered through the tool seam, standing in for a built-in.
+/// Its schema takes a required string `city` and an optional integer `days`.
+pub(crate) struct TestTool {
+    pub(crate) name: &'static str,
+    /// What its effects function returns.
+    pub(crate) effects: Result<DeclaredEffects, EffectsError>,
+    /// What a call returns.
+    pub(crate) output: Output,
+    pub(crate) bound: Bound,
+    /// Waited on by every call before it returns.
+    pub(crate) barrier: Option<Arc<Barrier>>,
+    /// A tool whose call a call of this one waits to see finish, in `trace`.
+    pub(crate) after: Option<&'static str>,
+    /// What happened, in order, shared between tools: `effects <name>`,
+    /// `run <name>`, `done <name>`.
+    pub(crate) trace: Arc<Trace>,
+    /// The arguments each call ran with.
+    pub(crate) ran: Mutex<Vec<Map<String, Value>>>,
+}
+
+impl TestTool {
+    /// A tool whose calls only read, and return `text`.
+    pub(crate) fn reads(name: &'static str, text: &str) -> Self {
+        Self::declaring(name, text, vec![Effect::Reads], None)
+    }
+
+    /// A tool whose calls declare `effects` on `paths`, and return `text`.
+    pub(crate) fn declaring(
+        name: &'static str,
+        text: &str,
+        effects: Vec<Effect>,
+        paths: Option<Vec<String>>,
+    ) -> Self {
+        Self {
+            name,
+            effects: Ok(DeclaredEffects {
+                effects,
+                reversible: true,
+                paths,
+            }),
+            output: Output {
+                content: vec![ContentPart::Text { text: text.into() }],
+                ..Output::default()
+            },
+            bound: Bound::DEFAULT,
+            barrier: None,
+            after: None,
+            trace: Arc::default(),
+            ran: Mutex::default(),
+        }
+    }
+
+    /// A tool whose calls fail with `code`.
+    pub(crate) fn failing(name: &'static str, code: contract::ErrorCode) -> Self {
+        let mut tool = Self::reads(name, "It broke.");
+        tool.output.error = Some(Failure {
+            code,
+            message: "It broke.".into(),
+            retry_after: None,
+            provider: None,
+        });
+        tool
+    }
+
+    pub(crate) fn ran(&self) -> Vec<Map<String, Value>> {
+        self.ran.lock().unwrap().clone()
+    }
+
+    fn note(&self, what: &str) {
+        self.trace.push(format!("{what} {}", self.name));
+    }
+}
+
+impl Tool for TestTool {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.into(),
+            description: format!("The test tool {}.", self.name),
+            input_schema: json!({
+                "type": "object",
+                "properties": {
+                    "city": {"type": "string"},
+                    "days": {"type": "integer"}
+                },
+                "required": ["city"],
+                "additionalProperties": false
+            }),
+            deferred: false,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        self.note("effects");
+        self.effects.clone().map(|declared| Effects {
+            declared,
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(&self, arguments: &Map<String, Value>) -> Output {
+        self.note("run");
+        self.ran.lock().unwrap().push(arguments.clone());
+        if let Some(other) = self.after {
+            self.trace.wait_for(&format!("done {other}"));
+        }
+        if let Some(barrier) = &self.barrier {
+            barrier.wait();
+        }
+        self.note("done");
+        self.output.clone()
+    }
+
+    fn bound(&self) -> Bound {
+        self.bound
     }
 }
 
@@ -116,6 +289,8 @@ pub(crate) struct Session {
     pub(crate) provider: Arc<ScriptedProvider>,
     pub(crate) log: Arc<Log>,
     pub(crate) dir: PathBuf,
+    /// The workspace, an empty directory.
+    pub(crate) workspace: PathBuf,
     pub(crate) inbox: Sender<Message>,
     lines: mpsc::Receiver<Envelope>,
     pub(crate) looped: Option<Loop>,
@@ -126,7 +301,18 @@ impl Session {
     /// Answers each model call with the next of `script`. The first model
     /// call sends `during` to the inbox, when there is one.
     pub(crate) fn new(script: Vec<Scripted>, during: Option<Message>) -> Self {
+        Self::with_tools(script, during, Vec::new())
+    }
+
+    /// As [`Session::new`], with `tools` registered.
+    pub(crate) fn with_tools(
+        script: Vec<Scripted>,
+        during: Option<Message>,
+        tools: Vec<Arc<dyn Tool>>,
+    ) -> Self {
         let home = TempDir::new();
+        let workspace = home.0.join("workspace");
+        std::fs::create_dir_all(&workspace).unwrap();
         let id = SessionId("s_test".into());
         let log = Arc::new(Log::create(&home.0, id.clone()).unwrap());
         let mut watcher = log.watch();
@@ -150,12 +336,17 @@ impl Session {
             MODEL.into(),
             "You are terse.".into(),
             rx,
-            "/work".into(),
+            workspace.display().to_string(),
+            tools
+                .into_iter()
+                .map(|tool| ("builtin".to_owned(), tool))
+                .collect(),
         )
         .unwrap();
         Self {
             provider,
             dir: home.0.join(&id.0),
+            workspace,
             log,
             inbox,
             lines,

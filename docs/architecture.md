@@ -5,7 +5,7 @@ what is true now, not a plan. It is settled by
 [What modules exist, and who may call whom?](https://github.com/aakshintala/fiber/issues/7);
 that ticket's resolution holds the rationale and the rejected alternatives.
 
-Vocabulary is `CONTEXT.md`. Watcher, driver, participant, seam, hook, session,
+Vocabulary is `GLOSSARY.md`. Watcher, driver, participant, seam, hook, session,
 turn, event and tool call mean what it says there and nothing else.
 
 How Fiber is started, the commands a driver may send, and which process runs

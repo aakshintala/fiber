@@ -5,8 +5,9 @@
 //! `cargo run -p loop --example turn -- [--prompt TEXT] [--tool NAME]...`
 //!
 //! The fake provider replies with reasoning and text. Each `--tool NAME`
-//! makes its first reply call that tool instead; no tool is registered, so
-//! the call fails `unknown_tool` and the turn takes another step.
+//! makes its first reply call that tool instead, with `{"city": "Paris"}`,
+//! and the turn takes another step. One test tool is registered,
+//! `get_weather`, which only reads; any other name fails `unknown_tool`.
 
 #![allow(
     clippy::print_stdout,
@@ -18,6 +19,7 @@
 mod support;
 
 use std::process::ExitCode;
+use std::sync::Arc;
 
 fn main() -> ExitCode {
     let mut prompt = "Say hello.".to_owned();
@@ -42,7 +44,8 @@ fn main() -> ExitCode {
         "The person wants a greeting.",
         "Hello.",
     ));
-    let mut session = support::Session::new(script, None);
+    let weather = support::TestTool::reads("get_weather", "Sunny in Paris.");
+    let mut session = support::Session::with_tools(script, None, vec![Arc::new(weather)]);
     if session.inbox.send(support::message(&prompt)).is_err() {
         return ExitCode::FAILURE;
     }

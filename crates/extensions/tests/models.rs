@@ -7,10 +7,10 @@
 
 mod common;
 
-use common::{Setup, manifest, provider, write};
+use common::{Setup, install, manifest, provider, write};
 use config::{Config, ProjectKey, Sources};
 use contract::ErrorCode;
-use extensions::{Error, Providers, install};
+use extensions::{Error, Providers};
 use serde_json::json;
 
 fn installed(setup: &Setup, extensions: &[(&str, serde_json::Value)]) -> Providers {

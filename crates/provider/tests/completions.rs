@@ -528,6 +528,7 @@ fn four_turn_conversation() -> Vec<Input> {
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
+            is_error: false,
         },
         Input::User {
             text: "And Rome?".into(),
@@ -669,6 +670,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
+            is_error: false,
         },
         Input::Assistant {
             text: String::new(),
@@ -935,6 +937,7 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
     let result = |id: &str| Input::ToolResult {
         action_id: ActionId(id.into()),
         text: "ok".into(),
+        is_error: false,
     };
     let reasoning = Input::Reasoning {
         model: "openrouter/z-ai/glm-5.3-flash".into(),

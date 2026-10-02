@@ -27,6 +27,15 @@ resolved review, and the orchestrator merges it without asking.
 The orchestrator judges an implementer's work from the diff and the gate's
 output, never from the implementer's account of it.
 
+An orchestrator may start other orchestrators, one per ticket. The one the
+owner started is the main orchestrator; the ones it starts are
+sub-orchestrators. A sub-orchestrator comments on tickets and opens
+`needs-owner` and follow-up issues itself. Before it opens an issue, it
+searches the tracker for an existing one. Its report to the orchestrator
+that started it lists every issue it opened or commented on. The main
+orchestrator keeps the conversation with the owner: what to ask, when, and
+in what order.
+
 ## Choosing models
 
 An implementer is chosen for the capability its ticket needs: a mechanical
@@ -41,7 +50,7 @@ An implementer is given:
 
 - the ticket
 - the `docs/<area>.md` pages the ticket cites
-- `CONTEXT.md`
+- `GLOSSARY.md`
 - the gate command, `scripts/check`
 
 `AGENTS.md` at the repository root points every harness at these files.
@@ -107,6 +116,11 @@ When the ticket carries the `bug` label, CI runs the pull request's new and
 changed tests against the base commit, and at least one must fail there
 (`docs/testing.md`, "Proving a test bites").
 
+A ticket whose defect is in test code, such as a flaky test, carries the
+`test-only` label, never `bug`. Its pull request states the root cause and
+the evidence that the fix holds, such as repeated runs under load, in place
+of a test that fails on the base commit.
+
 The orchestrator waits on `CI` with `gh-ci`. A failed check is fixed in a new
 commit. A failed run is never re-run until it passes; the one exception is
 CI's own retry of a binary-level test (`docs/testing.md`, "Flaky tests").
@@ -114,7 +128,7 @@ CI's own retry of a binary-level test (`docs/testing.md`, "Flaky tests").
 ## Review
 
 Every pull request gets one review, after the gate passes. The reviewer is
-given the diff, the ticket, the docs it cites, `CONTEXT.md` and
+given the diff, the ticket, the docs it cites, `GLOSSARY.md` and
 `docs/code-quality.md`, and checks two things:
 
 - Spec: the diff does what the ticket and its `docs/<area>.md` pages say.

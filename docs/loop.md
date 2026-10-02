@@ -7,7 +7,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 How pi, codex and Claude Code run a turn is
 [research/the-turn/README.md](../research/the-turn/README.md).
 
-Vocabulary is `CONTEXT.md`. Turn, step, action, tool call and event mean what
+Vocabulary is `GLOSSARY.md`. Turn, step, action, tool call and event mean what
 it says there and nothing else. The threads and the inbox are
 `docs/architecture.md`, "Concurrency"; the events are `docs/events.md`.
 
@@ -72,6 +72,22 @@ why, in words it can act on:
 A denied call does not stop the calls beside it: they run, and the turn
 continues. A person who wants the turn to stop sends `cancel`; `reply` has
 no option that does both.
+
+## A reply paused by a hosted tool
+
+An `anthropic-messages` reply stops with `pause_turn` when a long-running hosted
+tool, such as the hosted `web_search` ("Web search" in `docs/tools.md`), is
+paused by the provider. The reply is not the end of the turn and is not a
+failure. The loop continues it inside the same step's turn: it sends the
+request again with the paused reply appended as the last assistant message,
+unchanged, as Anthropic documents (`docs/model-routing.md`, "Anthropic messages
+wire facts"). Each continuation is a model call like any other: it is logged,
+counted against the budget and retried as `docs/model-routing.md`, "When a
+model call fails", says. The paused reply's text and actions are kept.
+
+A turn continues a paused reply at most 5 times in a row. The number is picked,
+not measured. If the reply is still paused after that, the turn fails with
+`unknown_stop_reason`, and the message carries `pause_turn`.
 
 ## A reply cut off by the output limit
 
