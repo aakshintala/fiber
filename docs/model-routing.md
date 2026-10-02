@@ -106,6 +106,15 @@ Measured on `claude-sonnet-5-5` against api.anthropic.com
   `caller` returned 200. An invalid `caller` returned 400.
 - More than 4 `cache_control` blocks across `tools`, `system` and `messages`
   returned 400.
+- A reply stops with `pause_turn` when the server-side loop for a hosted tool
+  such as web search reaches its iteration limit, 10 by default. The reply may
+  end in a `server_tool_use` block with no result block. Anthropic's
+  continuation: "append the assistant's response to your messages and make
+  another API request", with the same `tools`
+  (<https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons>).
+  A `pause_turn` reply is never `tool_use`: a client tool call stops with
+  `tool_use`. Fiber continues a paused reply as `docs/loop.md`, "A reply paused
+  by a hosted tool", says.
 - More than 20 tools with `strict: true` returned 400, "The maximum number of
   strict tools supported is 20" (measured October 1, 2026).
 

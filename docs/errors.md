@@ -109,7 +109,9 @@ policy is `docs/model-routing.md`, "When a model call fails".
 
 Every stop or finish reason a protocol documents is mapped in its native
 module. An unknown one fails the call as `unknown_stop_reason`, whatever the
-protocol. A reason a vendor documents that Fiber has not mapped is a Fiber
+protocol. `pause_turn` is not unknown: the loop continues it
+(`docs/loop.md`, "A reply paused by a hosted tool"). Only a reply still
+paused after the continuation bound fails the turn with `unknown_stop_reason`. A reason a vendor documents that Fiber has not mapped is a Fiber
 bug, and a release fixes it.
 
 The status alone cannot classify: OpenRouter sends an upstream's context
