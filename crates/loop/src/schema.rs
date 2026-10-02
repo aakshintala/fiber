@@ -2,16 +2,20 @@
 //! runs"): the repairs made where a property's schema names a single type,
 //! and the check. The check covers the subset `docs/dependencies.md`,
 //! "Written ourselves", names; any other keyword is skipped.
+//!
+//! One position is one value in the arguments. [`applying`] lists the schemas
+//! that apply there; the check and the repair both read that list, and only
+//! [`applying`] reads `$ref`.
 
 use contract::events::{ArgumentRepair, Repair, RepairFix};
-use serde_json::{Map, Number, Value};
+use serde_json::{Number, Value};
 
 /// The repairs `schema` allows to `arguments`, or `None` when none applied.
 /// One pass over the arguments.
 pub(crate) fn repair(schema: &Value, arguments: &Value) -> Option<ArgumentRepair> {
     let mut repaired = arguments.clone();
     let mut repairs = Vec::new();
-    fix(schema, schema, &mut repaired, "", &mut repairs);
+    repair_at(schema, &[schema], &mut repaired, "", &mut repairs);
     let Value::Object(repaired) = repaired else {
         return None;
     };
@@ -21,120 +25,390 @@ pub(crate) fn repair(schema: &Value, arguments: &Value) -> Option<ArgumentRepair
 /// Every way `value` fails `schema`, one line per bad field.
 pub(crate) fn check(schema: &Value, value: &Value) -> Vec<String> {
     let mut errors = Vec::new();
-    position(schema, schema, value, "", &mut errors);
+    examine(schema, &[schema], value, "", &mut errors);
     errors
 }
 
-/// Checks `value`, a position of its own in the arguments, against `schema`,
-/// part of `root`. A `$ref` that cannot be followed is the position's last
-/// line.
-fn position(root: &Value, schema: &Value, value: &Value, path: &str, errors: &mut Vec<String>) {
-    if let Err(why) = walk(root, schema, value, path, errors, &mut Vec::new()) {
-        errors.push(why);
+/// Checks `value` at `pointer`. A `$ref` failure is this position's one line.
+fn examine(
+    root: &Value,
+    reaching: &[&Value],
+    value: &Value,
+    pointer: &str,
+    errors: &mut Vec<String>,
+) {
+    if let Err(why) = check_list(root, reaching, &[], value, pointer, errors) {
+        errors.push(format!("{}: {why}", place(pointer)));
     }
 }
 
-/// Whether `value` passes `schema` at the position `refs` belongs to.
-fn passes<'a>(
+/// Checks `value` against [`applying`]'s list. `guard` is the schemas already
+/// followed on this path. `Err` is a `$ref` failure, not yet placed.
+fn check_list<'a>(
     root: &'a Value,
-    schema: &'a Value,
+    reaching: &[&'a Value],
+    guard: &[&'a Value],
     value: &Value,
-    path: &str,
-    refs: &mut Vec<&'a Value>,
-) -> Result<bool, String> {
-    let mut errors = Vec::new();
-    walk(root, schema, value, path, &mut errors, refs)?;
-    Ok(errors.is_empty())
+    pointer: &str,
+    errors: &mut Vec<String>,
+) -> Result<(), String> {
+    // Each schema that reaches the position starts from the same guard, so
+    // two of them may `$ref` one definition without that being a cycle.
+    let mut chains = Vec::with_capacity(reaching.len());
+    for schema in reaching {
+        chains.push(applying(root, &[*schema], guard)?);
+    }
+    let mut open = Vec::new();
+    for chain in &chains {
+        for (index, schema) in chain.iter().enumerate() {
+            let here = chain_guard(guard, chain, index);
+            if !any_of(root, schema, &here, value, pointer)? {
+                errors.push(format!(
+                    "{}: matches none of the shapes allowed",
+                    place(pointer)
+                ));
+            }
+            let kinds = types(schema);
+            if !kinds.is_empty() && !kinds.iter().any(|kind| is(value, kind)) {
+                errors.push(format!(
+                    "{}: expected {}, got {}",
+                    place(pointer),
+                    kinds.join(" or "),
+                    name(value)
+                ));
+                // A type failure skips the rest of this schema's keywords,
+                // not the other schemas at this position.
+                continue;
+            }
+            if let Some(Value::Array(allowed)) = schema.get("enum")
+                && !allowed.contains(value)
+            {
+                let allowed: Vec<String> = allowed.iter().map(Value::to_string).collect();
+                errors.push(format!(
+                    "{}: must be one of {}",
+                    place(pointer),
+                    allowed.join(", ")
+                ));
+            }
+            match value {
+                Value::Number(n) => bounds(schema, n, pointer, errors),
+                Value::String(text) => min_length(schema, text, pointer, errors),
+                Value::Object(_) | Value::Array(_) | Value::Bool(_) | Value::Null => {}
+            }
+            open.push(*schema);
+        }
+    }
+    match value {
+        Value::Object(map) => check_object(root, &open, map, pointer, errors),
+        Value::Array(items) => check_items(root, &open, items, pointer, errors),
+        Value::String(_) | Value::Number(_) | Value::Bool(_) | Value::Null => {}
+    }
+    Ok(())
 }
 
-/// Repairs `value` against `schema`, part of `root`, adding each fix to
-/// `repairs`. Nothing under an `anyOf` or `oneOf` is repaired.
-fn fix(root: &Value, schema: &Value, value: &mut Value, path: &str, repairs: &mut Vec<Repair>) {
-    let Some(schema) = target(root, schema) else {
+/// The schemas that apply at one position: each of `reaching`, then every
+/// schema its `$ref` chain reaches. `path` is the schemas followed so far
+/// along this path of `$ref` and `anyOf` steps.
+fn applying<'a>(
+    root: &'a Value,
+    reaching: &[&'a Value],
+    path: &[&'a Value],
+) -> Result<Vec<&'a Value>, String> {
+    let mut list = Vec::new();
+    for start in reaching {
+        let mut seen = path.to_vec();
+        let mut current = *start;
+        loop {
+            list.push(current);
+            let Some(reference) = current.get("$ref").and_then(Value::as_str) else {
+                break;
+            };
+            let Some(target) = reference
+                .strip_prefix('#')
+                .and_then(|pointer| root.pointer(pointer))
+            else {
+                return Err(format!(
+                    "its schema's `$ref` to `{reference}` cannot be followed"
+                ));
+            };
+            if seen.iter().any(|schema| std::ptr::eq(*schema, target)) {
+                return Err(format!(
+                    "its schema's `$ref` to `{reference}` leads back to itself"
+                ));
+            }
+            seen.push(target);
+            current = target;
+        }
+    }
+    Ok(list)
+}
+
+/// `incoming` plus this chain's `$ref` targets up through `chain[index]`.
+/// The schema that reached the chain is not a target, so two chains may
+/// reach one definition without that being a cycle.
+fn chain_guard<'a>(incoming: &[&'a Value], chain: &[&'a Value], index: usize) -> Vec<&'a Value> {
+    let mut guard = incoming.to_vec();
+    if let Some(followed) = chain.get(1..=index) {
+        guard.extend_from_slice(followed);
+    }
+    guard
+}
+
+/// Whether `value` matches one `anyOf` branch. No `anyOf` matches. A `$ref`
+/// failure is `Err`: it belongs to this position, not to the branch.
+fn any_of<'a>(
+    root: &'a Value,
+    schema: &'a Value,
+    guard: &[&'a Value],
+    value: &Value,
+    pointer: &str,
+) -> Result<bool, String> {
+    let Some(Value::Array(options)) = schema.get("anyOf") else {
+        return Ok(true);
+    };
+    for option in options {
+        let mut local = Vec::new();
+        check_list(root, &[option], guard, value, pointer, &mut local)?;
+        if local.is_empty() {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+fn bounds(schema: &Value, n: &Number, pointer: &str, errors: &mut Vec<String>) {
+    let n = n.as_f64().unwrap_or(f64::NAN);
+    if let Some(min) = schema.get("minimum").and_then(Value::as_f64)
+        && n < min
+    {
+        errors.push(format!("{}: must be at least {min}", place(pointer)));
+    }
+    if let Some(max) = schema.get("maximum").and_then(Value::as_f64)
+        && n > max
+    {
+        errors.push(format!("{}: must be at most {max}", place(pointer)));
+    }
+}
+
+fn min_length(schema: &Value, text: &str, pointer: &str, errors: &mut Vec<String>) {
+    if let Some(min) = schema.get("minLength").and_then(Value::as_u64)
+        && u64::try_from(text.chars().count()).unwrap_or(u64::MAX) < min
+    {
+        errors.push(format!(
+            "{}: must be at least {min} characters",
+            place(pointer)
+        ));
+    }
+}
+
+fn check_object(
+    root: &Value,
+    schemas: &[&Value],
+    map: &serde_json::Map<String, Value>,
+    pointer: &str,
+    errors: &mut Vec<String>,
+) {
+    for schema in schemas {
+        for key in required(schema) {
+            if !map.contains_key(key) {
+                errors.push(format!("`{pointer}/{}`: missing", escape(key)));
+            }
+        }
+    }
+    for (key, child) in map {
+        let at = format!("{pointer}/{}", escape(key));
+        let mut child_schemas = Vec::new();
+        for schema in schemas {
+            match (property(schema, key), schema.get("additionalProperties")) {
+                (Some(property), _) => child_schemas.push(property),
+                (None, Some(Value::Bool(false))) => {
+                    errors.push(format!("`{at}`: not allowed"));
+                }
+                (None, Some(extra @ Value::Object(_))) => child_schemas.push(extra),
+                (None, _) => {}
+            }
+        }
+        if !child_schemas.is_empty() {
+            // A property is a new position: its guard starts empty.
+            examine(root, &child_schemas, child, &at, errors);
+        }
+    }
+}
+
+fn check_items(
+    root: &Value,
+    schemas: &[&Value],
+    items: &[Value],
+    pointer: &str,
+    errors: &mut Vec<String>,
+) {
+    let item_schemas: Vec<&Value> = schemas
+        .iter()
+        .filter_map(|schema| schema.get("items"))
+        .collect();
+    if item_schemas.is_empty() {
+        return;
+    }
+    for (i, item) in items.iter().enumerate() {
+        examine(root, &item_schemas, item, &format!("{pointer}/{i}"), errors);
+    }
+}
+
+/// Repairs `value` from the schemas that reach it. Nothing here or below is
+/// repaired when the list has `anyOf` or `oneOf`, or cannot be built.
+fn repair_at(
+    root: &Value,
+    reaching: &[&Value],
+    value: &mut Value,
+    pointer: &str,
+    repairs: &mut Vec<Repair>,
+) {
+    let Some(list) = repaired_list(root, reaching) else {
         return;
     };
     match value {
-        Value::Object(map) => {
-            let required = required(schema);
-            for (key, property) in properties(schema) {
-                let at = format!("{path}/{}", escape(key));
-                let Some(inner) = map.get_mut(key) else {
-                    continue;
-                };
-                let drop = inner.is_null()
-                    && !required.contains(&key.as_str())
-                    && target(root, property)
-                        .and_then(single)
-                        .is_some_and(|kind| kind != "null");
-                if drop {
-                    map.remove(key);
-                    repairs.push(Repair {
-                        path: at,
-                        fix: RepairFix::NullDropped,
-                    });
-                } else {
-                    fix(root, property, inner, &at, repairs);
-                }
-            }
-        }
+        Value::Object(map) => repair_object(root, &list, map, pointer, repairs),
         Value::Array(items) => {
-            if let Some(each) = schema.get("items") {
-                for (i, item) in items.iter_mut().enumerate() {
-                    fix(root, each, item, &format!("{path}/{i}"), repairs);
-                }
+            let item_schemas: Vec<&Value> = list
+                .iter()
+                .filter_map(|schema| schema.get("items"))
+                .collect();
+            if item_schemas.is_empty() {
+                return;
+            }
+            for (i, item) in items.iter_mut().enumerate() {
+                repair_at(
+                    root,
+                    &item_schemas,
+                    item,
+                    &format!("{pointer}/{i}"),
+                    repairs,
+                );
             }
         }
         Value::String(text) => {
-            let Some(kind) = single(schema) else {
+            let Some(kind) = single_type(&list) else {
                 return;
             };
-            let read = match kind {
-                "integer" | "number" => number(text, kind == "integer")
-                    .map(|n| (Value::Number(n), RepairFix::StringToNumber)),
-                "boolean" => match text.as_str() {
-                    "true" => Some((Value::Bool(true), RepairFix::StringToBoolean)),
-                    "false" => Some((Value::Bool(false), RepairFix::StringToBoolean)),
-                    _ => None,
-                },
-                "array" | "object" => parse(root, schema, kind, text, path, repairs),
-                _ => None,
+            let Some((read, how)) = read_string(root, reaching, kind, text, pointer, repairs)
+            else {
+                return;
             };
-            if let Some((read, how)) = read {
-                *value = read;
-                repairs.push(Repair {
-                    path: path.to_owned(),
-                    fix: how,
-                });
-            }
+            *value = read;
+            repairs.push(Repair {
+                path: pointer.to_owned(),
+                fix: how,
+            });
         }
         Value::Null | Value::Bool(_) | Value::Number(_) => {}
     }
 }
 
-/// `text` parsed as the `kind` (array or object) `schema` names, repaired
-/// inside, where the result passes `schema`. The repairs inside go to
-/// `repairs` only then.
-fn parse(
+fn repaired_list<'a>(root: &'a Value, reaching: &[&'a Value]) -> Option<Vec<&'a Value>> {
+    let list = applying(root, reaching, &[]).ok()?;
+    let blocked = list
+        .iter()
+        .any(|schema| schema.get("anyOf").is_some() || schema.get("oneOf").is_some());
+    (!blocked).then_some(list)
+}
+
+fn repair_object(
     root: &Value,
-    schema: &Value,
+    list: &[&Value],
+    map: &mut serde_json::Map<String, Value>,
+    pointer: &str,
+    repairs: &mut Vec<Repair>,
+) {
+    let required_keys = union_required(list);
+    let mut by_key: std::collections::BTreeMap<String, Vec<&Value>> =
+        std::collections::BTreeMap::new();
+    for schema in list {
+        let Some(properties) = schema.get("properties").and_then(Value::as_object) else {
+            continue;
+        };
+        for (key, property) in properties {
+            by_key.entry(key.clone()).or_default().push(property);
+        }
+    }
+    let keys: Vec<(String, Vec<&Value>)> = by_key.into_iter().collect();
+    for (key, subs) in keys {
+        let at = format!("{pointer}/{}", escape(&key));
+        let drop_null = map.get(&key).is_some_and(|inner| inner.is_null())
+            && !required_keys.contains(&key.as_str())
+            && repaired_list(root, &subs)
+                .is_some_and(|child| single_type(&child).is_some_and(|kind| kind != "null"));
+        if drop_null {
+            map.remove(&key);
+            repairs.push(Repair {
+                path: at,
+                fix: RepairFix::NullDropped,
+            });
+        } else if let Some(inner) = map.get_mut(&key) {
+            repair_at(root, &subs, inner, &at, repairs);
+        }
+    }
+}
+
+/// `text` read as the single `kind`. Parsed JSON is kept only when it
+/// passes the check against every schema that reaches the position.
+fn read_string(
+    root: &Value,
+    reaching: &[&Value],
     kind: &str,
     text: &str,
-    path: &str,
+    pointer: &str,
     repairs: &mut Vec<Repair>,
 ) -> Option<(Value, RepairFix)> {
-    let mut parsed: Value = serde_json::from_str(text).ok()?;
-    if !is(&parsed, kind) {
-        return None;
+    match kind {
+        "integer" | "number" => {
+            number(text, kind == "integer").map(|n| (Value::Number(n), RepairFix::StringToNumber))
+        }
+        "boolean" => match text {
+            "true" => Some((Value::Bool(true), RepairFix::StringToBoolean)),
+            "false" => Some((Value::Bool(false), RepairFix::StringToBoolean)),
+            _ => None,
+        },
+        "array" | "object" => {
+            let mut parsed: Value = serde_json::from_str(text).ok()?;
+            if !is(&parsed, kind) {
+                return None;
+            }
+            let mut inside = Vec::new();
+            repair_at(root, reaching, &mut parsed, pointer, &mut inside);
+            let mut errors = Vec::new();
+            examine(root, reaching, &parsed, pointer, &mut errors);
+            if !errors.is_empty() {
+                return None;
+            }
+            repairs.append(&mut inside);
+            Some((parsed, RepairFix::StringParsed))
+        }
+        _ => None,
     }
-    let mut inside = Vec::new();
-    fix(root, schema, &mut parsed, path, &mut inside);
-    let mut errors = Vec::new();
-    position(root, schema, &parsed, path, &mut errors);
-    if !errors.is_empty() {
-        return None;
+}
+
+/// The one type every schema in `list` that has `type` names, when they
+/// agree. A `type` array of several types, or two different types, is none.
+fn single_type<'a>(list: &[&'a Value]) -> Option<&'a str> {
+    let mut found: Option<&str> = None;
+    for schema in list {
+        if schema.get("type").is_none() {
+            continue;
+        }
+        let kinds = types(schema);
+        let [kind] = kinds.as_slice() else {
+            return None;
+        };
+        if found.is_some_and(|prev| prev != *kind) {
+            return None;
+        }
+        found = Some(*kind);
     }
-    repairs.append(&mut inside);
-    Some((parsed, RepairFix::StringParsed))
+    found
+}
+
+fn union_required<'a>(list: &[&'a Value]) -> Vec<&'a str> {
+    list.iter().flat_map(|schema| required(schema)).collect()
 }
 
 /// `text` as a plain JSON number, whole where `integer` is asked for.
@@ -149,164 +423,6 @@ fn number(text: &str, integer: bool) -> Option<Number> {
     }
     let whole = number.as_f64().filter(|f| f.fract() == 0.0)?;
     format!("{whole:.0}").parse::<i64>().ok().map(Number::from)
-}
-
-/// The one type `schema` names, where it names one and has no `anyOf` or
-/// `oneOf`.
-fn single(schema: &Value) -> Option<&str> {
-    match types(schema).as_slice() {
-        [one] => Some(one),
-        _ => None,
-    }
-}
-
-/// Whether `schema` offers a choice of shapes, under which nothing is
-/// repaired.
-fn choice(schema: &Value) -> bool {
-    schema.get("anyOf").is_some() || schema.get("oneOf").is_some()
-}
-
-/// The schema a repair reads: `schema`, part of `root`, with each `$ref`
-/// followed. `None` where any step offers a choice of shapes, or a `$ref`
-/// cannot be followed or leads back to itself.
-fn target<'a>(root: &'a Value, mut schema: &'a Value) -> Option<&'a Value> {
-    let mut refs = Vec::new();
-    loop {
-        if choice(schema) {
-            return None;
-        }
-        let Some(reference) = schema.get("$ref").and_then(Value::as_str) else {
-            return Some(schema);
-        };
-        schema = follow(root, reference, &refs).ok()?;
-        refs.push(schema);
-    }
-}
-
-/// What `reference` points to within `root`, unless it is one of `refs`, the
-/// schemas already followed at this position.
-fn follow<'a>(root: &'a Value, reference: &str, refs: &[&Value]) -> Result<&'a Value, String> {
-    let found = reference
-        .strip_prefix('#')
-        .and_then(|pointer| root.pointer(pointer))
-        .ok_or_else(|| format!("its schema's `$ref` to `{reference}` cannot be followed"))?;
-    if refs.iter().any(|seen| std::ptr::eq(*seen, found)) {
-        return Err(format!(
-            "its schema's `$ref` to `{reference}` leads back to itself"
-        ));
-    }
-    Ok(found)
-}
-
-/// Checks `value` against `schema` and the schema its `$ref` points to.
-/// `refs` are the schemas followed at this position, through `$ref` and
-/// `anyOf`; a step into a property or an item starts a new position. The
-/// error is a `$ref` that cannot be followed or leads back to itself.
-fn walk<'a>(
-    root: &'a Value,
-    schema: &'a Value,
-    value: &Value,
-    path: &str,
-    errors: &mut Vec<String>,
-    refs: &mut Vec<&'a Value>,
-) -> Result<(), String> {
-    let at = || {
-        if path.is_empty() {
-            "arguments".to_owned()
-        } else {
-            format!("`{path}`")
-        }
-    };
-    if let Some(reference) = schema.get("$ref").and_then(Value::as_str) {
-        let found = follow(root, reference, refs).map_err(|why| format!("{}: {why}", at()))?;
-        refs.push(found);
-        let followed = walk(root, found, value, path, errors, refs);
-        refs.pop();
-        followed?;
-    }
-    if let Some(Value::Array(options)) = schema.get("anyOf") {
-        let mut any = false;
-        for option in options {
-            if passes(root, option, value, path, refs)? {
-                any = true;
-                break;
-            }
-        }
-        if !any {
-            errors.push(format!("{}: matches none of the shapes allowed", at()));
-        }
-    }
-    let types = types(schema);
-    if !types.is_empty() && !types.iter().any(|t| is(value, t)) {
-        errors.push(format!(
-            "{}: expected {}, got {}",
-            at(),
-            types.join(" or "),
-            name(value)
-        ));
-        return Ok(());
-    }
-    if let Some(Value::Array(allowed)) = schema.get("enum")
-        && !allowed.contains(value)
-    {
-        let allowed: Vec<String> = allowed.iter().map(Value::to_string).collect();
-        errors.push(format!("{}: must be one of {}", at(), allowed.join(", ")));
-    }
-    match value {
-        Value::Number(n) => {
-            let n = n.as_f64().unwrap_or(f64::NAN);
-            if let Some(min) = schema.get("minimum").and_then(Value::as_f64)
-                && n < min
-            {
-                errors.push(format!("{}: must be at least {min}", at()));
-            }
-            if let Some(max) = schema.get("maximum").and_then(Value::as_f64)
-                && n > max
-            {
-                errors.push(format!("{}: must be at most {max}", at()));
-            }
-        }
-        Value::String(text) => {
-            if let Some(min) = schema.get("minLength").and_then(Value::as_u64)
-                && u64::try_from(text.chars().count()).unwrap_or(u64::MAX) < min
-            {
-                errors.push(format!("{}: must be at least {min} characters", at()));
-            }
-        }
-        Value::Object(map) => object(root, schema, map, path, errors),
-        Value::Array(items) => {
-            if let Some(each) = schema.get("items") {
-                for (i, item) in items.iter().enumerate() {
-                    position(root, each, item, &format!("{path}/{i}"), errors);
-                }
-            }
-        }
-        Value::Null | Value::Bool(_) => {}
-    }
-    Ok(())
-}
-
-fn object(
-    root: &Value,
-    schema: &Value,
-    map: &Map<String, Value>,
-    path: &str,
-    errors: &mut Vec<String>,
-) {
-    for key in required(schema) {
-        if !map.contains_key(key) {
-            errors.push(format!("`{path}/{}`: missing", escape(key)));
-        }
-    }
-    for (key, value) in map {
-        let at = format!("{path}/{}", escape(key));
-        match (property(schema, key), schema.get("additionalProperties")) {
-            (Some(property), _) => position(root, property, value, &at, errors),
-            (None, Some(Value::Bool(false))) => errors.push(format!("`{at}`: not allowed")),
-            (None, Some(extra @ Value::Object(_))) => position(root, extra, value, &at, errors),
-            (None, _) => {}
-        }
-    }
 }
 
 fn is(value: &Value, name: &str) -> bool {
@@ -350,16 +466,16 @@ fn required(schema: &Value) -> Vec<&str> {
         .unwrap_or_default()
 }
 
-fn properties(schema: &Value) -> impl Iterator<Item = (&String, &Value)> {
-    schema
-        .get("properties")
-        .and_then(Value::as_object)
-        .into_iter()
-        .flatten()
+fn property<'a>(schema: &'a Value, key: &str) -> Option<&'a Value> {
+    schema.get("properties").and_then(|props| props.get(key))
 }
 
-fn property<'a>(schema: &'a Value, key: &str) -> Option<&'a Value> {
-    schema.get("properties").and_then(|p| p.get(key))
+fn place(pointer: &str) -> String {
+    if pointer.is_empty() {
+        "arguments".to_owned()
+    } else {
+        format!("`{pointer}`")
+    }
 }
 
 /// A key as a JSON Pointer token.

@@ -108,6 +108,20 @@ fn the_check_gives_one_line_per_bad_field() {
 }
 
 #[test]
+fn an_extra_property_is_checked_against_its_schema() {
+    let schema = json!({
+        "type": "object",
+        "properties": {"n": {"type": "integer"}},
+        "additionalProperties": {"type": "string"}
+    });
+    assert!(check(&schema, &json!({"n": 1, "note": "a"})).is_empty());
+    assert_eq!(
+        check(&schema, &json!({"note": 1})),
+        ["`/note`: expected string, got a number"]
+    );
+}
+
+#[test]
 fn keywords_outside_the_subset_are_skipped() {
     let schema = json!({"type": "object", "properties": {"x": {"type": "uuid", "format": "z"}}});
     assert!(check(&schema, &json!({"x": 1, "y": 2})).is_empty());
@@ -568,4 +582,215 @@ fn a_non_local_ref_fails_the_check() {
         ["`/x`: its schema's `$ref` to `https://example.com/n` cannot be followed"]
     );
     assert_eq!(made, None);
+}
+
+#[test]
+fn parsed_json_is_checked_against_the_keywords_beside_a_ref() {
+    let schema = with_defs(
+        json!({"o": {"type": "object"}}),
+        json!({"$ref": "#/$defs/o", "required": ["k"]}),
+    );
+    let (_, empty) = within(&schema, &json!({"x": "{}"}));
+    assert_eq!(empty, None);
+    let (_, made) = within(&schema, &json!({"x": r#"{"k":1}"#}));
+    assert_eq!(made.unwrap().repaired["x"], json!({"k": 1}));
+}
+
+#[test]
+fn a_type_beside_a_ref_is_read_by_the_repair() {
+    let schema = with_defs(
+        json!({"any": {"minimum": 0}}),
+        json!({"$ref": "#/$defs/any", "type": "integer"}),
+    );
+    let (_, made) = within(&schema, &json!({"x": "3"}));
+    assert_eq!(made.unwrap().repaired["x"], json!(3));
+}
+
+#[test]
+fn two_types_along_a_ref_chain_are_not_single() {
+    let schema = with_defs(
+        json!({"s": {"type": "string"}}),
+        json!({"$ref": "#/$defs/s", "type": "integer"}),
+    );
+    let (errors, made) = within(&schema, &json!({"x": "3"}));
+    assert_eq!(made, None);
+    assert_eq!(errors, ["`/x`: expected integer, got a string"]);
+    // The later type must not win on its own, and the earlier one must not either.
+    let reversed = with_defs(
+        json!({"n": {"type": "integer"}}),
+        json!({"$ref": "#/$defs/n", "type": "string"}),
+    );
+    let (errors, made) = within(&reversed, &json!({"x": "3"}));
+    assert_eq!(made, None);
+    assert_eq!(errors, ["`/x`: expected integer, got a string"]);
+}
+
+#[test]
+fn properties_beside_a_ref_are_repaired() {
+    let schema = with_defs(
+        json!({"o": {"type": "object", "properties": {"m": {"type": "integer"}}}}),
+        json!({"$ref": "#/$defs/o", "properties": {"n": {"type": "integer"}}}),
+    );
+    let (_, made) = within(&schema, &json!({"x": {"n": "1", "m": "2"}}));
+    assert_eq!(made.unwrap().repaired["x"], json!({"n": 1, "m": 2}));
+    // `n`'s type is on the target and its bound is beside the `$ref`.
+    let both = with_defs(
+        json!({"o": {"type": "object", "properties": {"n": {"type": "integer"}}}}),
+        json!({"$ref": "#/$defs/o", "properties": {"n": {"minimum": 5}}}),
+    );
+    let (_, made) = within(&both, &json!({"x": {"n": "6"}}));
+    assert_eq!(made.unwrap().repaired["x"]["n"], json!(6));
+    assert_eq!(
+        check(&both, &json!({"x": {"n": 4}})),
+        ["`/x/n`: must be at least 5"]
+    );
+}
+
+#[test]
+fn required_beside_a_ref_keeps_a_null() {
+    let schema = with_defs(
+        json!({"o": {"type": "object", "properties": {"n": {"type": "integer"}}}}),
+        json!({"$ref": "#/$defs/o", "required": ["n"]}),
+    );
+    let (_, made) = within(&schema, &json!({"x": {"n": null}}));
+    assert_eq!(made, None);
+}
+
+#[test]
+fn two_refs_to_one_definition_are_not_a_cycle() {
+    let schema = json!({
+        "$defs": {
+            "n": {"type": "integer"},
+            "body": {
+                "type": "object",
+                "properties": {"x": {"$ref": "#/$defs/n"}}
+            }
+        },
+        "type": "object",
+        "properties": {"x": {"$ref": "#/$defs/n"}},
+        "$ref": "#/$defs/body"
+    });
+    let (errors, made) = within(&schema, &json!({"x": "3"}));
+    assert!(
+        errors
+            .iter()
+            .all(|line| !line.contains("leads back to itself")),
+        "{errors:?}"
+    );
+    let made = made.expect("a string integer is repaired");
+    assert_eq!(made.repaired["x"], json!(3));
+    assert!(check(&schema, &Value::Object(made.repaired)).is_empty());
+}
+
+#[test]
+fn the_check_and_the_repair_agree() {
+    let cases: Vec<(&str, Value, Vec<Value>)> = vec![
+        (
+            "schema",
+            schema(),
+            vec![
+                json!({"path": "/a", "limit": 5, "all": true, "edits": [1], "note": null}),
+                json!({"path": "/a", "edits": [1, "2"]}),
+                json!({
+                    "path": "/a",
+                    "limit": "5",
+                    "ratio": "0.5",
+                    "all": "false",
+                    "edits": "[1, \"2\"]",
+                    "mode": null
+                }),
+                json!({"path": "/a", "either": "3"}),
+                json!({"path": null}),
+                json!({"path": "/a", "mode": null}),
+            ],
+        ),
+        (
+            "parsed object",
+            object(json!({
+                "o": {
+                    "type": "object",
+                    "properties": {"n": {"type": "integer"}},
+                    "additionalProperties": false
+                }
+            })),
+            vec![json!({"o": r#"{"n": "3"}"#}), json!({"o": r#"{"bad": 1}"#})],
+        ),
+        (
+            "ref followed",
+            json!({
+                "type": "object",
+                "$defs": {"count": {"type": "integer"}},
+                "properties": {"n": {"$ref": "#/$defs/count"}}
+            }),
+            vec![json!({"n": "3"}), json!({"n": null})],
+        ),
+        (
+            "parsed json beside a ref",
+            with_defs(
+                json!({"o": {"type": "object"}}),
+                json!({"$ref": "#/$defs/o", "required": ["k"]}),
+            ),
+            vec![json!({"x": "{}"}), json!({"x": r#"{"k":1}"#})],
+        ),
+        (
+            "type beside a ref",
+            with_defs(
+                json!({"any": {"minimum": 0}}),
+                json!({"$ref": "#/$defs/any", "type": "integer"}),
+            ),
+            vec![json!({"x": "3"})],
+        ),
+        (
+            "two types along a ref",
+            with_defs(
+                json!({"s": {"type": "string"}}),
+                json!({"$ref": "#/$defs/s", "type": "integer"}),
+            ),
+            vec![json!({"x": "3"})],
+        ),
+        (
+            "properties beside a ref",
+            with_defs(
+                json!({"o": {"type": "object", "properties": {"m": {"type": "integer"}}}}),
+                json!({"$ref": "#/$defs/o", "properties": {"n": {"type": "integer"}}}),
+            ),
+            vec![json!({"x": {"n": "1", "m": "2"}})],
+        ),
+        (
+            "required beside a ref",
+            with_defs(
+                json!({"o": {"type": "object", "properties": {"n": {"type": "integer"}}}}),
+                json!({"$ref": "#/$defs/o", "required": ["n"]}),
+            ),
+            vec![json!({"x": {"n": null}})],
+        ),
+        (
+            "two refs to one definition",
+            json!({
+                "$defs": {
+                    "n": {"type": "integer"},
+                    "body": {
+                        "type": "object",
+                        "properties": {"x": {"$ref": "#/$defs/n"}}
+                    }
+                },
+                "type": "object",
+                "properties": {"x": {"$ref": "#/$defs/n"}},
+                "$ref": "#/$defs/body"
+            }),
+            vec![json!({"x": "3"}), json!({"x": 3})],
+        ),
+    ];
+    for (name, schema, arguments) in cases {
+        for arguments in arguments {
+            let (_, made) = within(&schema, &arguments);
+            let Some(made) = made else { continue };
+            let repaired = Value::Object(made.repaired);
+            let errors = check(&schema, &repaired);
+            assert!(
+                errors.is_empty(),
+                "{name}: {arguments} repaired to {repaired} which fails {errors:?}"
+            );
+        }
+    }
 }
