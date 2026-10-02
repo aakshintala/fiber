@@ -132,6 +132,11 @@ A `functionCall` that arrives without an `id` is logged with no `provider_id`
 (`docs/events.md`, `tool_call_requested`). Fiber pairs the call with its result
 by its action id, which stays local. Only an id the model emitted is sent back.
 
+Because a replayed `functionCall` needs the signature its own model gave it, a
+tool call and its result that another model reference made are sent to Gemini
+as plain text, not as `functionCall` and `functionResponse` parts
+(`docs/loop.md`, "What the model is sent").
+
 The Gemini API answers HTTP 404 "no longer available to new users" for
 `gemini-2.5-flash-lite`, `gemini-2.5-flash` and `gemini-2.5-pro` on a key created
 in September 2026.
