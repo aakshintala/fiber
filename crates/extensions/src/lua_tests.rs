@@ -83,7 +83,8 @@ fn a_job_whose_caller_left_before_it_ran_is_skipped() {
 }
 
 /// A caller that leaves after the callback started abandoned the VM. The
-/// thread quits and does not run a later job.
+/// thread quits when that callback ends in an error, and does not run a
+/// later job.
 #[test]
 fn the_worker_quits_when_a_started_callbacks_caller_leaves() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -107,7 +108,7 @@ fn the_worker_quits_when_a_started_callbacks_caller_leaves() {
     std::fs::write(
         dir.join("init.lua"),
         format!(
-            "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"hold\", {{ timeout = 5000, run = function() host.http({{ url = \"{url}\" }}); error(\"after\") end }})\n\
              fiber.command(\"later\", {{ timeout = 1000, run = function() return \"later\" end }})\n"
         ),
     )
@@ -167,5 +168,10 @@ fn the_worker_quits_when_a_started_callbacks_caller_leaves() {
 fn the_deadline_reports_the_instant_it_was_started() {
     let deadline = Deadline::default();
     let started = deadline.start(Duration::from_secs(5));
+    let now = Instant::now();
     assert_eq!(deadline.at(), started);
+    assert!(
+        started.is_some_and(|at| at >= now && at <= now + Duration::from_secs(5)),
+        "the deadline is not five seconds ahead: {started:?}"
+    );
 }
