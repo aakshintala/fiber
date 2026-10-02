@@ -718,6 +718,12 @@ An extension's name is where it lives, as with Go modules:
 works, there is no registry, and two authors cannot claim the same name. A
 local path also works, for an extension under development.
 
+Without a marker, the first three parts of a name are the repository and the
+rest is a path inside it. A name can mark where the repository ends with a
+`.git` suffix, as Go does, so a repository inside subgroups can be named:
+`gitlab.com/group/subgroup/repo.git/path`. A name whose repository or tag does
+not exist fails with `extension_not_found`.
+
 Each first-party provider extension also has a short name, so
 `fiber install openrouter` means the first-party extension's full name. The
 short names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`,
@@ -741,8 +747,14 @@ later, and 1.9 is the newest, Fiber installs 1.4. The same inputs always give
 the same result, so there is no lockfile and no solver. A newer version arrives
 only when something raises its minimum.
 
+A version a person installed or updated by name counts as one more minimum,
+and it stays until they remove that extension. So `fiber update <name>` on a
+dependency keeps the newer version, and the same installed set always gives
+the same result.
+
 Two extensions that need different major versions, such as 1.x and 2.x, stop
-the install with an error naming both.
+the install with `version_conflict`, naming both. So does a minimum that no
+tag meets.
 
 Fiber records the exact commit it installed and loads only that. Nothing is
 signed. The fetch runs over TLS or SSH, and a binary is checked against the
@@ -754,7 +766,7 @@ running on.
 | Command | What it does |
 |---|---|
 | `fiber install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
-| `fiber update <name>` | Moves one extension to its newest version and re-resolves its dependencies. |
+| `fiber update <name>` | Moves one extension to its newest version and re-resolves its dependencies. The new version stays a minimum (see [Versions](#versions)). |
 | `fiber remove <name>` | Removes an extension, and any dependency nothing else uses. |
 | `fiber list` | Lists installed extensions with their versions and commits. |
 
@@ -766,6 +778,9 @@ ahead without asking, so scripts can set up a machine.
 
 Install refuses an extension whose manifest needs a newer Fiber than the one
 running.
+
+A fetch that fails, because git or the network failed, stops the install with
+`fetch_failed`. Neither it nor `version_conflict` is retried automatically.
 
 Installed extensions live in [Fiber home](state.md), one directory each, at
 `extensions/<name>/`.
@@ -820,11 +835,12 @@ home (`docs/configuration.md`). A repository cannot set it.
 
 In a terminal, `fiber install` and `fiber update` show:
 
-- where it comes from and its version
-- the tools it registers, each with its effects
+- its name, where it comes from and its version
 - the providers it registers, each with its base URLs
-- the hooks, watchers and commands it registers
 - the program a process extension runs, and its install step
-- the skills, prompt templates, themes, binaries and TUI extension it carries
+- the skills, prompt templates, themes, binaries and TUI files it carries
 
-The full source is one key away.
+The summary shows what the manifest and the files tell. It does not list tools,
+hooks, watchers or commands: a Lua extension registers those only when its
+script runs, and installing runs none of its code. The full source is one key
+away, so a person can read them.
