@@ -384,9 +384,9 @@ fn a_module_larger_than_the_memory_cap_is_not_read() {
     assert!(message.contains("memory cap"), "{message}");
 }
 
-/// Accepts one connection, reads its head, signals, and answers only when
-/// `release` arrives or `WAIT` passes, so a parked `host.http` can be
-/// finished on purpose.
+/// Accepts one connection, reads its head, signals, and answers when
+/// `release` arrives or is dropped, so a parked `host.http` stays parked
+/// until the test says.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
 fn answer_when_released(
     listener: std::net::TcpListener,
@@ -396,8 +396,8 @@ fn answer_when_released(
     let mut sock = listener.accept().unwrap().0;
     read_head(&mut sock);
     accepted.send(()).unwrap();
-    match release.recv_timeout(WAIT) {
-        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+    match release.recv() {
+        Ok(()) | Err(mpsc::RecvError) => {}
     }
     drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
 }
@@ -657,9 +657,8 @@ fn answer_n(
         let mut sock = listener.accept().unwrap().0;
         read_head(&mut sock);
         accepted.send(()).unwrap();
-        match release.recv_timeout(WAIT) {
-            Ok(())
-            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        match release.recv() {
+            Ok(()) | Err(mpsc::RecvError) => {}
         }
         drop(
             sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"),
