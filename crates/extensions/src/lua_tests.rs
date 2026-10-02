@@ -50,18 +50,34 @@ fn the_worker_quits_once_a_caller_stops_waiting() {
     }
     let http = inbox.clone();
     drop(inbox);
-    schedule::serve(
-        "fixture",
-        &fakes::lua_fixture(),
-        Path::new("/nonexistent-fiber-home"),
-        &jobs,
-        &http,
+    let (done_tx, done_rx) = mpsc::channel::<()>();
+    std::thread::spawn(move || {
+        schedule::serve(
+            "fixture",
+            &fakes::lua_fixture(),
+            Path::new("/nonexistent-fiber-home"),
+            &jobs,
+            &http,
+        );
+        // The job left in the inbox is dropped with it, and its reply sender.
+        drop(jobs);
+        assert!(done_tx.send(()).is_ok());
+    });
+    assert!(
+        done_rx.recv_timeout(Duration::from_secs(2)).is_ok(),
+        "the worker did not quit"
     );
-    // Dropping the inbox drops the job left in it, and its reply sender.
-    drop(jobs);
     assert_eq!(
-        answers.recv_timeout(Duration::from_secs(10)).err(),
+        answers.recv_timeout(Duration::from_secs(2)).err(),
         Some(mpsc::RecvTimeoutError::Disconnected),
         "the later job was served"
     );
+}
+
+/// [`Deadline::at`] is the instant [`Deadline::start`] stored.
+#[test]
+fn the_deadline_reports_the_instant_it_was_started() {
+    let deadline = Deadline::default();
+    let started = deadline.start(Duration::from_secs(5));
+    assert_eq!(deadline.at(), started);
 }

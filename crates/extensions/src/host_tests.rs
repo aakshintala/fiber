@@ -51,6 +51,13 @@ fn what_json_cannot_hold_is_an_error() {
         ));
         assert!(to_json(&value).is_err(), "{code}");
     }
+    // A lightuserdata other than the null sentinel is not JSON null.
+    assert!(
+        to_json(&LuaValue::LightUserData(mlua::LightUserData(
+            std::ptr::dangling_mut::<std::ffi::c_void>()
+        )))
+        .is_err()
+    );
 }
 
 #[test]

@@ -438,13 +438,26 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     write(
         &dir.join("init.lua"),
         &format!(
-            "fiber.command(\"get\", {{ timeout = 200, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n"
+            "fiber.command(\"get\", {{ timeout = 200, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"ok\", {{ timeout = 1000, run = function() return \"ok\" end }})\n"
         ),
     );
     let extension = Arc::new(LuaExtension::new("ext", dir, setup.home()));
-    let err = within(move || extension.command("get", "")).unwrap_err();
+    let started = Instant::now();
+    let call = Arc::clone(&extension);
+    let err = within(move || call.command("get", "")).unwrap_err();
+    // The scheduler completes the callback at its deadline. Waiting out the
+    // caller's grace, about a second more, means it did not.
+    assert!(
+        started.elapsed() < Duration::from_secs(1),
+        "get returned after {:?}, past its deadline",
+        started.elapsed()
+    );
     let Error::Timeout { timeout_ms, .. } = &err else {
         panic!("{err:?}")
     };
     assert_eq!(*timeout_ms, 200);
+    // A timeout of one parked callback leaves the extension's thread running.
+    let again = Arc::clone(&extension);
+    assert_eq!(within(move || again.command("ok", "")).unwrap(), "ok");
 }
