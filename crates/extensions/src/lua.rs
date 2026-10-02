@@ -183,7 +183,11 @@ impl LuaExtension {
                         .map(|fns| fns.keys().cloned().collect())
                         .unwrap_or_default());
                 }
-                Gate::Stopped(e) => return Err(e),
+                Gate::Stopped(e) => {
+                    // This may be the waiter that abandoned registration.
+                    self.hub.notify();
+                    return Err(e);
+                }
                 Gate::Wait(until) => until,
             };
             shared = self.hub.wait(shared, until);

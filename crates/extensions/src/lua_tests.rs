@@ -232,10 +232,10 @@ fn every_waiter_on_a_stopped_extension_gets_the_stored_error() {
     }
 }
 
-/// A finished call returns its result, even after the extension stopped.
+/// A finished call returns its result while the extension is up.
 #[test]
 fn a_finished_call_returns_its_result() {
-    let mut shared = in_phase(Phase::Stopped(hub::stopped("ext")));
+    let mut shared = ready(&[("x", 1000)]);
     let id = shared.push(command("x"), Value::Null, Instant::now());
     shared.finish(id, Ok(Value::String("done".to_owned())));
     assert_eq!(
@@ -243,6 +243,48 @@ fn a_finished_call_returns_its_result() {
         "done"
     );
     assert!(shared.calls.is_empty());
+}
+
+/// Once the extension is stopped, a waiter holding a finished result gets
+/// the stopped error: Stopped is final for every waiter.
+#[test]
+fn a_finished_call_on_a_stopped_extension_gets_the_stopped_error() {
+    let mut shared = in_phase(Phase::Stopped(hub::stopped("ext")));
+    let id = shared.push(command("x"), Value::Null, Instant::now());
+    shared.finish(id, Ok(Value::String("done".to_owned())));
+    let err = returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap_err();
+    assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
+    assert!(shared.calls.is_empty());
+}
+
+/// When `provider_functions` abandons registration, it wakes every other
+/// waiter. The other waiter here sleeps with no limit, so only that wake
+/// ends its wait.
+#[test]
+fn provider_functions_abandoning_registration_wakes_every_waiter() {
+    let ext = LuaExtension::new("ext", fakes::lua_fixture(), "/nonexistent-fiber-home");
+    ext.hub.lock().phase = Phase::Registering {
+        abandon_at: Some(ago(1)),
+    };
+    let hub = Arc::clone(&ext.hub);
+    let (waiting_tx, waiting_rx) = mpsc::channel();
+    let (woke_tx, woke_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut shared = hub.lock();
+        // Sent while holding the lock, so the abandonment comes after the wait starts.
+        waiting_tx.send(()).unwrap();
+        while !matches!(shared.phase, Phase::Stopped(_)) {
+            shared = hub.wait(shared, None);
+        }
+        woke_tx.send(()).unwrap();
+    });
+    waiting_rx.recv().unwrap();
+    let err = ext.provider_functions("p").unwrap_err();
+    assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
+    // A hang guard only: without the wake the waiter never returns.
+    woke_rx
+        .recv_timeout(Duration::from_secs(10))
+        .expect("the other waiter was never woken");
 }
 
 /// An extension dropped while running is stopped, so its thread quits.
