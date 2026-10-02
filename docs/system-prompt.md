@@ -157,8 +157,8 @@ Fiber reads these files, in this order:
    the workspace. Outside git, the workspace alone.
 
 In each directory Fiber reads `AGENTS.md`, or `CLAUDE.md` when there is no
-`AGENTS.md`. A `CLAUDE.md` whose only content points at `AGENTS.md`, as in this
-repository, is therefore never read. `@path` imports are not followed.
+`AGENTS.md`. A `CLAUDE.md` whose only content points at `AGENTS.md` is
+therefore never read. `@path` imports are not followed.
 
 Every file is sent in full, under its path, whatever its size. The system
 prompt tells the model the precedence rules:
