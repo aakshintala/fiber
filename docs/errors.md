@@ -268,7 +268,7 @@ Notices, for a failure outside any action:
 |---|---|
 | `command_conflict` | two extensions registered the same command name |
 | `config_key_ignored` | an unknown key, or a key a repository may not set |
-| `extension_failed` | an extension failed to start or missed its deadline |
+| `extension_failed` | an extension failed to start or missed its deadline, or its install record is missing or unreadable, so loading skipped it (`docs/extensions.md`, "Installing") |
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
