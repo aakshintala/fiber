@@ -43,8 +43,8 @@ fn kill_group_signals_a_live_group() {
         .process_group(0)
         .spawn()
         .unwrap();
-    assert!(kill_group(child.id(), "0"));
-    assert!(kill_group(child.id(), "KILL"));
+    assert!(kill_group(child.id(), "0").unwrap());
+    assert!(kill_group(child.id(), "KILL").unwrap());
     child.wait().unwrap();
 }
 
