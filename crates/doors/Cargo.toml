@@ -13,5 +13,10 @@ serde_json.workspace = true
 [dev-dependencies]
 fakes = { path = "../fakes" }
 
+# The jig (docs/testing.md, "Jigs"). `test = true` runs its own tests.
+[[example]]
+name = "connect"
+test = true
+
 [lints]
 workspace = true

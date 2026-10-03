@@ -8,6 +8,7 @@
 pub mod clock;
 mod codes;
 pub mod commands;
+pub mod emit;
 mod envelope;
 pub mod events;
 mod ids;

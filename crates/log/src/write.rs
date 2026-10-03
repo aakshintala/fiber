@@ -2,6 +2,7 @@
 //! durable lines, fsyncs them in the order `docs/events.md`, "Writing", sets,
 //! and fans every event out to watchers.
 
+use std::collections::BTreeMap;
 use std::fs::{self, DirBuilder, File, OpenOptions, TryLockError};
 use std::io::{self, Write};
 use std::os::unix::fs::DirBuilderExt;
@@ -10,6 +11,7 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, UNIX_EPOCH};
 
 use contract::clock::Clock;
+use contract::emit::Emit;
 use contract::events::{Class, Event};
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
@@ -39,6 +41,9 @@ struct Inner {
     next: u64,
     fsyncs: u64,
     watchers: Vec<Weak<Queue>>,
+    /// The newest line of each latest-wins kind. A subscriber reads it after
+    /// registering, so a lagging connection cannot hide it.
+    latest: BTreeMap<String, Envelope>,
     /// Why the log stopped, once a write or fsync failed.
     failed: Option<String>,
 }
@@ -100,14 +105,16 @@ impl Log {
         // A no-op unless the tail is torn.
         let complete = u64::try_from(complete_len(&bytes)).unwrap_or(u64::MAX);
         events.set_len(complete).map_err(io_at(&path))?;
-        let next = match crate::read(&dir)?.last() {
+        let lines = crate::read(&dir)?;
+        let next = match lines.last() {
             Some(line) => line.seq.map_or(0, |s| s.0 + 1),
             None => 0,
         };
-        Ok(Self::from_parts(
-            Inner::new(id, dir, events, lock, next),
-            clock,
-        ))
+        let mut inner = Inner::new(id, dir, events, lock, next);
+        for line in &lines {
+            inner.remember(line);
+        }
+        Ok(Self::from_parts(inner, clock))
     }
 
     /// Emits `event` about `turn_id` and `action_id`, where they apply, and
@@ -150,6 +157,7 @@ impl Log {
             }
             Class::Ephemeral => {}
         }
+        inner.remember(&line);
         inner.watchers.retain(|w| match w.upgrade() {
             Some(queue) => {
                 queue.push(&line);
@@ -160,9 +168,34 @@ impl Log {
         Ok(line)
     }
 
+    /// The newest line of a latest-wins kind (`session_status` or
+    /// `extensions_loaded`), recorded as it was appended. Nothing for any
+    /// other kind, and nothing before that kind has been written. A
+    /// subscriber registers its watcher first and then reads this, so a line
+    /// written in between is queued and may also be here; the latest wins.
+    pub fn latest(&self, kind: &str) -> Option<Envelope> {
+        self.lock().latest.get(kind).cloned()
+    }
+
     /// A watcher that receives every event appended from now on. On a log
     /// stopped by a failed write, one that returns the failure at once.
     pub fn watch(&self) -> Watcher {
+        let armed = self.arm(false);
+        Watcher::new(armed.queue, armed.dir, armed.next)
+    }
+
+    /// A watcher that receives every durable line from `seq` 0, then
+    /// everything written after it was registered. The queue is registered
+    /// before the log is read, so a line written between the two is queued
+    /// and also read; [`Watcher`] returns it once.
+    pub fn watch_all(&self) -> Result<Watcher, Error> {
+        let armed = self.arm(true);
+        self.finish(armed)
+    }
+
+    /// Registers a queue. `from_start` is [`Log::watch_all`]: the watcher
+    /// begins at `seq` 0. [`Log::watch`] begins at the next line.
+    fn arm(&self, from_start: bool) -> Armed {
         let mut inner = self.lock();
         let queue = Arc::new(Queue::default());
         if let Some(cause) = &inner.failed {
@@ -172,7 +205,17 @@ impl Log {
         // idle keeps nothing.
         inner.watchers.retain(|w| w.strong_count() > 0);
         inner.watchers.push(Arc::downgrade(&queue));
-        Watcher::new(queue, inner.dir.clone(), inner.next)
+        Armed {
+            queue,
+            dir: inner.dir.clone(),
+            next: if from_start { 0 } else { inner.next },
+        }
+    }
+
+    /// Reads the log into the watcher `armed` registered.
+    fn finish(&self, armed: Armed) -> Result<Watcher, Error> {
+        let lines = crate::read(&armed.dir)?;
+        Ok(Watcher::starting(armed.queue, armed.dir, lines))
     }
 
     /// Writes `bytes` to the file `name` in the session's `artifacts/`,
@@ -212,6 +255,26 @@ impl Log {
     }
 }
 
+impl Emit for Log {
+    fn emit(&self, event: &Event) {
+        if event.class() != Class::Ephemeral {
+            return;
+        }
+        // A poisoned log has already stopped. The line is ephemeral, so
+        // dropping it loses nothing the log was keeping.
+        match self.append(event, None, None) {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+/// A queue registered on a log, before [`Log::watch_all`] reads the file.
+struct Armed {
+    queue: Arc<Queue>,
+    dir: PathBuf,
+    next: u64,
+}
+
 impl Drop for Log {
     fn drop(&mut self) {
         for queue in self.lock().watchers.iter().filter_map(Weak::upgrade) {
@@ -230,7 +293,16 @@ impl Inner {
             next,
             fsyncs: 0,
             watchers: Vec::new(),
+            latest: BTreeMap::new(),
             failed: None,
+        }
+    }
+
+    /// Keeps `line` when its kind is one whose latest wins
+    /// (`session_status`, `extensions_loaded`).
+    fn remember(&mut self, line: &Envelope) {
+        if matches!(line.kind.as_str(), "session_status" | "extensions_loaded") {
+            self.latest.insert(line.kind.clone(), line.clone());
         }
     }
 

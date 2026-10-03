@@ -17,6 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
 use contract::inbox::Delivery;
@@ -81,6 +82,9 @@ impl io::Read for Untouched {
 fn failure_of(result: Result<String, Failure>) -> Failure {
     result.unwrap_err()
 }
+
+/// How long a test waits for a delivery before it fails.
+const DEADLINE: Duration = Duration::from_secs(10);
 
 const NO_PROMPT: &str = "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.";
 
@@ -220,8 +224,16 @@ fn open(temp: &Temp, home: &str, out: &Shared) -> (Arc<Log>, PathBuf, Result<Ses
     let sessions = home.join("projects/p/sessions");
     let id = SessionId(mint("s_"));
     let dir = sessions.join(&id.0);
-    let log = Arc::new(Log::create(&sessions, id, fakes::clock::FakeClock::new()).unwrap());
-    let session = Session::open(&home, &dir, log.watch(), Box::new(out.clone()));
+    let clock = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        Log::create(
+            &sessions,
+            id,
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+    );
+    let session = Session::open(&home, &dir, &log, clock, Vec::new(), Box::new(out.clone()));
     (log, dir, session)
 }
 
@@ -276,17 +288,25 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
     let ran = session.ask("hi".into(), |inbox| {
-        let Delivery::Prompt(message, _) = inbox.recv().unwrap() else {
+        let Delivery::Prompt(message, _) =
+            inbox.recv_timeout(DEADLINE).expect("the prompt arrives")
+        else {
             panic!("the prompt arrives as a prompt");
         };
         assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
         assert!(matches!(message.sender.origin, Origin::Driver));
         assert!(message.sender.command_id.0.starts_with("c_"));
         assert!(
-            matches!(inbox.recv().unwrap(), Delivery::Close(_)),
+            matches!(
+                inbox
+                    .recv_timeout(DEADLINE)
+                    .expect("close follows the prompt"),
+                Delivery::Close(_)
+            ),
             "close follows the prompt"
         );
-        assert!(inbox.recv().is_err(), "nothing follows close");
+        // The inbox stays open for clients. `ask` itself queued nothing more.
+        assert!(inbox.try_recv().is_err(), "nothing follows close");
         log.append(
             &Event::TurnStarted(TurnStarted {
                 input: vec![InputItem::Message {

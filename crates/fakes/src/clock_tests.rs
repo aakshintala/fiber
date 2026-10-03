@@ -126,9 +126,10 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
     let until = clock.origin() + Duration::from_secs(30);
     let barrier = Arc::new(Barrier::new(2));
     let (release_tx, release_rx) = mpsc::channel();
+    let (exit_tx, exit_rx) = mpsc::channel();
     let clock_t = Arc::clone(&clock);
     let barrier_t = Arc::clone(&barrier);
-    let handle = thread::spawn(move || {
+    thread::spawn(move || {
         barrier_t.wait();
         clock_t.wait_until(Some(until), &mut |bound| {
             assert_eq!(bound, None);
@@ -136,6 +137,7 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
                 .recv_timeout(Duration::from_secs(5))
                 .expect("waited for the test to release the parked thread");
         });
+        if let Ok(()) = exit_tx.send(()) {}
     });
     barrier.wait();
     assert!(
@@ -144,7 +146,9 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
     );
     assert_eq!(clock.parked(), vec![Some(until)]);
     release_tx.send(()).unwrap();
-    handle.join().unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
     assert!(clock.parked().is_empty());
 }
 
@@ -156,13 +160,15 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
     let clock = FakeClock::new();
     let until = clock.origin() + Duration::from_secs(30);
     let (release_tx, release_rx) = mpsc::channel();
+    let (exit_tx, exit_rx) = mpsc::channel();
     let clock_t = Arc::clone(&clock);
-    let parked = thread::spawn(move || {
+    thread::spawn(move || {
         clock_t.wait_until(Some(until), &mut |_bound| {
             release_rx
                 .recv_timeout(Duration::from_secs(5))
                 .expect("waited for the test to release the parked thread");
         });
+        if let Ok(()) = exit_tx.send(()) {}
     });
     assert!(
         clock.await_parked(until, Duration::from_secs(5)),
@@ -180,7 +186,9 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
             .expect("waited for await_parked to see the thread already parked")
     );
     release_tx.send(()).unwrap();
-    parked.join().unwrap();
+    exit_rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the parked thread exits");
 }
 
 /// `await_parked_count` on a helper. A mutant that waits out its 30 s `within`
@@ -288,15 +296,22 @@ fn two_advances_both_move_the_clock() {
     let clock = FakeClock::new();
     let barrier = Arc::new(Barrier::new(3));
     let spawn = |clock: Arc<FakeClock>, barrier: Arc<Barrier>| {
+        let (tx, rx) = mpsc::channel();
         thread::spawn(move || {
             barrier.wait();
             clock.advance(Duration::from_millis(1));
-        })
+            if let Ok(()) = tx.send(()) {}
+        });
+        rx
     };
     let first = spawn(Arc::clone(&clock), Arc::clone(&barrier));
     let second = spawn(Arc::clone(&clock), Arc::clone(&barrier));
     barrier.wait();
-    first.join().unwrap();
-    second.join().unwrap();
+    first
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the first advance returns");
+    second
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the second advance returns");
     assert_eq!(clock.now(), clock.origin() + Duration::from_millis(2));
 }

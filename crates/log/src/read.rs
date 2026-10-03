@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 
 use contract::Envelope;
 
@@ -62,7 +62,9 @@ pub(crate) struct Queue {
 
 #[derive(Default)]
 struct State {
-    lines: VecDeque<Envelope>,
+    /// Ordinary lines and kept lines in one order. A kept line stays where
+    /// it was pushed, including ahead of a catch-up.
+    queue: VecDeque<Envelope>,
     /// The queue filled and lines were dropped since the watcher last caught
     /// up from the log.
     lagged: bool,
@@ -91,11 +93,21 @@ impl Queue {
     /// lost, which costs nothing (`docs/architecture.md`, "Streaming").
     pub(crate) fn push(&self, line: &Envelope) {
         let mut state = self.lock();
-        if state.lagged || state.lines.len() >= CAPACITY {
+        if state.lagged || state.queue.len() >= CAPACITY {
             state.lagged = true;
         } else {
-            state.lines.push_back(line.clone());
+            state.queue.push_back(line.clone());
         }
+        drop(state);
+        self.ready.notify_one();
+    }
+
+    /// Hands the watcher `line` even when the queue is full or lagged, in
+    /// push order with the ordinary lines. [`Queue::push`] would drop it.
+    pub(crate) fn push_kept(&self, line: &Envelope) {
+        // debt: kept lines are bounded only by the client's own command rate (one acknowledgement per command it sends); a cap on unsent acknowledgements per connection if a flooding client is ever seen.
+        let mut state = self.lock();
+        state.queue.push_back(line.clone());
         drop(state);
         self.ready.notify_one();
     }
@@ -119,6 +131,35 @@ impl Queue {
             cause: cause.to_owned(),
         };
         self.ready.notify_one();
+    }
+}
+
+/// Pushes a line into one watcher's queue. Cloning it does not keep the
+/// watcher alive: once the watcher is dropped, [`Injector::push`] does
+/// nothing.
+#[derive(Clone)]
+pub struct Injector {
+    queue: Weak<Queue>,
+}
+
+impl Injector {
+    /// Hands `line` to the watcher, without waiting. A watcher that has
+    /// fallen behind drops it, as it drops any other line, and a push after
+    /// the watcher is dropped is ignored.
+    pub fn push(&self, line: Envelope) {
+        if let Some(queue) = self.queue.upgrade() {
+            queue.push(&line);
+        }
+    }
+
+    /// Hands `line` to the watcher even when it has fallen behind, in push
+    /// order with the ordinary lines. A push after the watcher is dropped is
+    /// ignored. A catch-up re-reads the log and does not drop a kept line
+    /// still queued.
+    pub fn push_kept(&self, line: Envelope) {
+        if let Some(queue) = self.queue.upgrade() {
+            queue.push_kept(&line);
+        }
     }
 }
 
@@ -149,6 +190,26 @@ impl Watcher {
             dir,
             next,
             backlog: VecDeque::new(),
+        }
+    }
+
+    /// A watcher whose first lines are `lines`, then whatever arrives after
+    /// it was registered. `next` starts at 0 so a line already queued is
+    /// skipped once `lines` has returned it.
+    pub(crate) fn starting(queue: Arc<Queue>, dir: PathBuf, lines: Vec<Envelope>) -> Self {
+        Self {
+            queue,
+            dir,
+            next: 0,
+            backlog: VecDeque::from(lines),
+        }
+    }
+
+    /// A handle that pushes lines into this watcher's queue and no other.
+    /// The handle does not keep the watcher alive.
+    pub fn injector(&self) -> Injector {
+        Injector {
+            queue: Arc::downgrade(&self.queue),
         }
     }
 
@@ -186,14 +247,16 @@ impl Watcher {
         }
     }
 
-    /// Waits for a line, for the need to catch up, or for the end, in that
-    /// order. The lagged flag is cleared before the log is re-read, so a line
-    /// written after the re-read is queued, never lost. The end is handed
-    /// over once and then reads as closed.
+    /// Waits for a queued line, for the need to catch up, or for the end,
+    /// in that order. Kept lines are in the queue, so they come out before
+    /// a catch-up and a catch-up does not drop one still queued. The lagged
+    /// flag is cleared before the log is re-read, so a line written after
+    /// the re-read is queued, never lost. The end is handed over once and
+    /// then reads as closed.
     fn take(&self) -> Taken {
         let mut state = self.queue.lock();
         loop {
-            if let Some(line) = state.lines.pop_front() {
+            if let Some(line) = state.queue.pop_front() {
                 return Taken::Line(line);
             }
             if state.lagged {

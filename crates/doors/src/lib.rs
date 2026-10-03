@@ -7,6 +7,7 @@
 //! `main` builds the session's parts; this crate never sees a provider or
 //! the loop (`docs/architecture.md`, "The call rules").
 
+mod client;
 mod session;
 
 use std::collections::hash_map::RandomState;

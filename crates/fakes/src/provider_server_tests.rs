@@ -1,4 +1,8 @@
-use std::io::{Cursor, Read};
+use std::io::{Cursor, Read, Write};
+use std::net::TcpStream;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use super::*;
 
@@ -52,4 +56,36 @@ fn a_rejected_body_keeps_what_decoded_before_the_fault() {
     let (_, body, _) = decode(b"3\r\nabc\r\n4\r\nde");
 
     assert_eq!(body, b"abcde");
+}
+
+#[test]
+fn hold_records_the_request_and_sends_the_body_only_after_release() {
+    let server = ProviderServer::start([Response::stream(b"hello")]).unwrap();
+    server.hold();
+    let addr = server.addr;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .write_all(b"POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        let mut body = Vec::new();
+        stream.read_to_end(&mut body).unwrap();
+        tx.send(body).unwrap();
+    });
+
+    assert!(
+        server.await_requests(1, Duration::from_secs(2)),
+        "the request is recorded while the response is held"
+    );
+    assert!(
+        rx.recv_timeout(Duration::from_secs(2)).is_err(),
+        "the client has no body while the response is held"
+    );
+
+    server.release();
+    let body = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("release sends the body");
+    assert!(body.ends_with(b"hello"));
 }

@@ -11,8 +11,6 @@ publish.workspace = true
 [dependencies]
 contract = { path = "../contract" }
 ring = "0.17"
-
-[dev-dependencies]
 serde_json.workspace = true
 
 # The jig (docs/testing.md, "Jigs"). `test = true` runs its own tests with the
