@@ -386,7 +386,13 @@ provider extension declares") lists:
   "openai-completions facts").
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
-- `cost` is in US dollars per million tokens.
+- `cost` is in US dollars per million tokens. A model priced by request size
+  adds `tiers`, a list of the same four prices, each with `input_tokens_above`:
+  the highest threshold the request's input tokens exceed prices the whole call,
+  and below every threshold the base prices apply. What counts as input
+  tokens, such as whether cache reads count, is the vendor's definition, and
+  the package declares its thresholds by it. Absent means one price at every
+  size.
 - `subscription` is `true` for a model a subscription login serves; its `cost`
   is then the vendor's API prices (`docs/model-routing.md`, "Cost"). Absent
   means false.

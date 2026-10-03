@@ -131,6 +131,25 @@ pub struct Cost {
     /// Tokens written to the prompt cache.
     #[serde(default)]
     pub cache_write: Option<f64>,
+    /// Higher input sizes, each with its own four prices; absent means none.
+    #[serde(default)]
+    pub tiers: Vec<Tier>,
+}
+
+/// One price tier when cost varies by request size. A tier states all four
+/// prices.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+pub struct Tier {
+    /// Input tokens above which this tier's prices apply to the whole call.
+    pub input_tokens_above: u64,
+    /// Input tokens.
+    pub input: f64,
+    /// Output tokens.
+    pub output: f64,
+    /// Tokens read from the prompt cache.
+    pub cache_read: f64,
+    /// Tokens written to the prompt cache.
+    pub cache_write: f64,
 }
 
 /// A wire protocol (`docs/model-routing.md`, "Protocols and providers").
