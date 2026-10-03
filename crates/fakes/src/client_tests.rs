@@ -24,6 +24,25 @@ fn accept_within(listener: &UnixListener) -> UnixStream {
 }
 
 #[test]
+fn slow_false_starts_the_reader_and_slow_true_does_not() {
+    let dir = TempDir::new("fc");
+    let path = dir.path().join("s");
+    let listener = UnixListener::bind(&path).unwrap();
+    let client = Client::connect(&path).unwrap();
+    let _server = accept_within(&listener);
+    client.slow(true);
+    assert!(
+        super::lock(&client.reader).is_none(),
+        "slow(true) does not start the reader"
+    );
+    client.slow(false);
+    assert!(
+        super::lock(&client.reader).is_some(),
+        "slow(false) starts the reader"
+    );
+}
+
+#[test]
 fn a_paused_client_reads_nothing_until_told() {
     let dir = TempDir::new("fc");
     let path = dir.path().join("s");

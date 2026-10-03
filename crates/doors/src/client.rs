@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader, Write};
 use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 
 use contract::commands::{Command, CommandLine, SentPart};
@@ -117,13 +118,7 @@ pub(crate) fn serve_connection(
 /// Tells `injector`'s writer to exit. The line is kept when the queue is
 /// full, so a disconnect still reaches a writer that has fallen behind.
 pub(crate) fn stop_writer(injector: &Injector, session: &SessionId) {
-    enqueue(injector, control_line(session, STOP, 0));
-}
-
-/// Queues a line doors originated. It is kept, so a lagging connection still
-/// gets its acknowledgement, its flush and its stop.
-pub(crate) fn enqueue(injector: &Injector, line: Envelope) {
-    injector.push_kept(line);
+    injector.push_kept(control_line(session, STOP, 0));
 }
 
 /// A carriage return and a line feed both end a command line.
@@ -131,7 +126,7 @@ fn is_line_ending(byte: u8) -> bool {
     byte == b'\n' || byte == b'\r'
 }
 
-fn shutdown_both(stream: UnixStream) -> Box<dyn Fn() + Send + Sync> {
+pub(crate) fn shutdown_both(stream: UnixStream) -> Box<dyn Fn() + Send + Sync> {
     Box::new(move || match stream.shutdown(Shutdown::Both) {
         Ok(()) | Err(_) => {}
     })
@@ -182,7 +177,7 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
             return;
         }
     };
-    dispatch(conn, parsed);
+    dispatch(conn, parsed, &line.command);
 }
 
 struct Classified {
@@ -232,7 +227,7 @@ fn built(command: &str) -> bool {
     )
 }
 
-fn dispatch(conn: &mut Conn, line: CommandLine) {
+fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     let id = line.id;
     match line.command {
         Command::Subscribe(args) => subscribe(conn, id, args.level),
@@ -264,18 +259,18 @@ fn dispatch(conn: &mut Conn, line: CommandLine) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
         }
-        Command::Message(_) => unknown(conn, id, "message"),
-        Command::Cancel => unknown(conn, id, "cancel"),
-        Command::JobStop(_) => unknown(conn, id, "job_stop"),
-        Command::Background => unknown(conn, id, "background"),
-        Command::Reload => unknown(conn, id, "reload"),
-        Command::Model(_) => unknown(conn, id, "model"),
-        Command::Credential(_) => unknown(conn, id, "credential"),
-        Command::Name(_) => unknown(conn, id, "name"),
-        Command::Handoff(_) => unknown(conn, id, "handoff"),
-        Command::Rewind(_) => unknown(conn, id, "rewind"),
-        Command::Shell(_) => unknown(conn, id, "shell"),
-        Command::Command(_) => unknown(conn, id, "command"),
+        Command::Message(_)
+        | Command::Cancel
+        | Command::JobStop(_)
+        | Command::Background
+        | Command::Reload
+        | Command::Model(_)
+        | Command::Credential(_)
+        | Command::Name(_)
+        | Command::Handoff(_)
+        | Command::Rewind(_)
+        | Command::Shell(_)
+        | Command::Command(_) => unknown(conn, id, name),
     }
 }
 
@@ -422,7 +417,7 @@ fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str
 fn send(conn: &mut Conn, event: Event) {
     let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
     if let Some(injector) = &conn.injector {
-        enqueue(injector, line);
+        injector.push_kept(line);
         return;
     }
     let Some(direct) = conn.direct.as_mut() else {
@@ -459,10 +454,11 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
                 message: rejection.message,
             }),
         };
-        enqueue(
-            &injector,
-            session::envelope(&gate.session_id, gate.clock.as_ref(), &event),
-        );
+        injector.push_kept(session::envelope(
+            &gate.session_id,
+            gate.clock.as_ref(),
+            &event,
+        ));
     })
 }
 
@@ -502,13 +498,21 @@ pub(crate) fn spawn_writer(
 ) {
     gate.begin_writer();
     let ended = Arc::clone(&gate);
+    let (tx, rx) = mpsc::channel();
     match thread::Builder::new()
         .name("writer".to_owned())
         .spawn(move || {
             let _end = WriterEnd(ended);
+            // The handle is stored before this write can block, so close joins it.
+            if rx.recv().is_err() {
+                return;
+            }
             write_loop(watcher, stream, summary);
         }) {
-        Ok(handle) => gate.push_writer(id, handle),
+        Ok(handle) => {
+            gate.push_writer(id, handle);
+            if let Ok(()) = tx.send(()) {}
+        }
         Err(_) => gate.end_writer(),
     }
 }
@@ -553,7 +557,7 @@ fn summary_line(kind: &str) -> bool {
     )
 }
 
-fn write_line(stream: &mut dyn Write, line: &Envelope) -> std::io::Result<()> {
+pub(crate) fn write_line(stream: &mut dyn Write, line: &Envelope) -> std::io::Result<()> {
     let mut bytes = serde_json::to_vec(line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');

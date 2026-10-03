@@ -164,7 +164,7 @@ impl Log {
     /// A watcher that receives every event appended from now on. On a log
     /// stopped by a failed write, one that returns the failure at once.
     pub fn watch(&self) -> Watcher {
-        let armed = self.arm(false);
+        let armed = self.arm(false, None);
         Watcher::new(armed.queue, armed.dir, armed.next)
     }
 
@@ -173,15 +173,29 @@ impl Log {
     /// before the log is read, so a line written between the two is queued
     /// and also read; [`Watcher`] returns it once.
     pub fn watch_all(&self) -> Result<Watcher, Error> {
-        let armed = self.arm(true);
+        let armed = self.arm(true, None);
         self.finish(armed)
     }
 
+    /// A watcher that receives only `kinds`, from now on, and never falls
+    /// behind. When its queue is full it drops the oldest line of the same
+    /// kind, so the latest line of each kind is kept. An ephemeral kind is
+    /// not in the log, and a catch-up could not restore it. A line injected
+    /// with [`crate::Injector::push_kept`] is kept as well.
+    pub fn watch_latest(&self, kinds: &[&str]) -> Watcher {
+        let armed = self.arm(false, Some(kinds));
+        Watcher::new(armed.queue, armed.dir, armed.next)
+    }
+
     /// Registers a queue. `from_start` is [`Log::watch_all`]: the watcher
-    /// begins at `seq` 0. [`Log::watch`] begins at the next line.
-    fn arm(&self, from_start: bool) -> Armed {
+    /// begins at `seq` 0. [`Log::watch`] begins at the next line. `kinds` is
+    /// [`Log::watch_latest`]: the queue keeps those kinds only.
+    fn arm(&self, from_start: bool, kinds: Option<&[&str]>) -> Armed {
         let mut inner = self.lock();
-        let queue = Arc::new(Queue::default());
+        let queue = match kinds {
+            Some(kinds) => Arc::new(Queue::keeping(kinds)),
+            None => Arc::new(Queue::default()),
+        };
         if let Some(cause) = &inner.failed {
             queue.fail(&inner.session_id.0, cause);
         }

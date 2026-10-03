@@ -12,7 +12,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
-use std::time::{Duration, UNIX_EPOCH};
+use std::time::{Duration, Instant, UNIX_EPOCH};
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
@@ -196,7 +196,7 @@ impl Gate {
     fn wait_writers(&self) {
         let until = self.clock.now() + GRACE;
         let mut conns = lock(&self.conns);
-        while conns.writers_open > 0 && self.clock.now() < until {
+        while conns.writers_open > 0 && grace_remains(self.clock.now(), until) {
             let writers = &self.writers;
             let mut slot = Some(conns);
             self.clock.wait_until(Some(until), &mut |bound| {
@@ -235,10 +235,8 @@ impl Gate {
     pub(crate) fn flush(&self) -> (Option<contract::Envelope>, Option<contract::Envelope>) {
         let _one = lock(&self.flush_lock);
         let token = self.flush_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        client::enqueue(
-            &self.cache_injector,
-            control_line(&self.session_id, client::FLUSH, token),
-        );
+        self.cache_injector
+            .push_kept(control_line(&self.session_id, client::FLUSH, token));
         let mut snap = lock(&self.snap);
         while snap.flushed < token && !self.stop.load(Ordering::Relaxed) {
             #[cfg(test)]
@@ -283,8 +281,14 @@ impl Gate {
         }
     }
 
-    /// Records `handle` and returns the id `serve` finishes the connection with.
-    pub(crate) fn push_reader(&self, handle: JoinHandle<()>) -> u64 {
+    /// Records `handle` and `shutdown` together, and returns the id `serve`
+    /// finishes the connection with. `close` joins the reader; the shutdown
+    /// is what unblocks it. A published connection never lacks one.
+    pub(crate) fn push_reader(
+        &self,
+        handle: JoinHandle<()>,
+        shutdown: Box<dyn Fn() + Send + Sync>,
+    ) -> u64 {
         let mut conns = lock(&self.conns);
         let id = conns.next;
         conns.next = conns.next.wrapping_add(1);
@@ -293,7 +297,7 @@ impl Gate {
             Live {
                 reader: Some(handle),
                 writer: None,
-                shutdown: None,
+                shutdown: Some(shutdown),
             },
         ));
         id
@@ -400,7 +404,7 @@ fn open_in(
     );
     let printer_watcher = log.watch();
     let printer_stop = printer_watcher.injector();
-    let cache_watcher = log.watch();
+    let cache_watcher = log.watch_latest(&["session_status", "extensions_loaded"]);
     let cache_injector = cache_watcher.injector();
     let gate = Arc::new(Gate {
         log: Arc::downgrade(log),
@@ -486,6 +490,9 @@ fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                 if gate.stopped() {
                     return;
                 }
+                let Ok(shutdown_stream) = stream.try_clone() else {
+                    continue;
+                };
                 let (tx, rx) = mpsc::channel();
                 let child = Arc::clone(&gate);
                 if let Ok(handle) = spawn("client", move || {
@@ -494,7 +501,7 @@ fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                     };
                     client::serve(stream, child, id);
                 }) {
-                    let id = gate.push_reader(handle);
+                    let id = gate.push_reader(handle, client::shutdown_both(shutdown_stream));
                     if tx.send(id).is_err() {
                         gate.finish(id);
                     }
@@ -521,11 +528,11 @@ fn accept_error_waits(kind: io::ErrorKind) -> bool {
     kind != io::ErrorKind::Interrupted
 }
 
-/// A flush token counts only when it is strictly newer. An equal token is the
-/// same mark again: storing it would not move `flushed`, and a waiter that
-/// woke would recheck and keep waiting.
-fn flush_token_is_newer(token: u64, flushed: u64) -> bool {
-    token > flushed
+/// True while the grace has not been reached. An equal instant is the
+/// deadline itself. Waiting on through it would spin: the clock does not
+/// park for a time that has already arrived.
+fn grace_remains(now: Instant, until: Instant) -> bool {
+    now < until
 }
 
 /// Shuts the connection's socket and joins the threads still running on it.
@@ -571,9 +578,7 @@ fn cache(mut watcher: Watcher, gate: &Gate) {
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             let mut snap = lock(&gate.snap);
-            if flush_token_is_newer(token, snap.flushed) {
-                snap.flushed = token;
-            }
+            snap.flushed = snap.flushed.max(token);
             drop(snap);
             gate.snap_ready.notify_all();
             continue;
@@ -660,13 +665,12 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
         if line.kind == client::STOP {
             return;
         }
-        let Ok(mut bytes) = serde_json::to_vec(&line) else {
-            continue;
-        };
-        bytes.push(b'\n');
-        // A reader that went away stops the copy, never the session.
-        if out.write_all(&bytes).and_then(|()| out.flush()).is_err() {
-            return;
+        // A line that cannot be serialized is skipped. A reader that went
+        // away stops the copy, never the session.
+        match client::write_line(out.as_mut(), &line) {
+            Ok(()) => {}
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => continue,
+            Err(_) => return,
         }
         if line.kind == "fiber_exited" {
             return;

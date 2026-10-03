@@ -66,8 +66,14 @@ struct State {
     /// it was pushed, including ahead of a catch-up.
     queue: VecDeque<Envelope>,
     /// The queue filled and lines were dropped since the watcher last caught
-    /// up from the log.
+    /// up from the log. Unused when [`State::kinds`] is set: that queue never
+    /// falls behind.
     lagged: bool,
+    /// When set, [`Queue::push`] keeps only these kinds and, once full, drops
+    /// the oldest line of the same kind. The latest of each kind stays. A
+    /// catch-up cannot restore an ephemeral line, so this is how
+    /// `session_status` survives a saturated queue.
+    kinds: Option<Vec<String>>,
     end: End,
 }
 
@@ -83,6 +89,18 @@ enum End {
 }
 
 impl Queue {
+    /// A queue that keeps only `kinds`. It never falls behind: a full queue
+    /// drops the oldest line of the incoming kind.
+    pub(crate) fn keeping(kinds: &[&str]) -> Self {
+        Self {
+            state: Mutex::new(State {
+                kinds: Some(kinds.iter().map(|kind| (*kind).to_owned()).collect()),
+                ..State::default()
+            }),
+            ready: Condvar::new(),
+        }
+    }
+
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
     }
@@ -91,12 +109,13 @@ impl Queue {
     /// that has fallen behind gets nothing until it catches up: it re-reads
     /// the durable lines it missed from the log, and the ephemeral ones are
     /// lost, which costs nothing (`docs/architecture.md`, "Streaming").
+    /// A queue built with [`Queue::keeping`] does not fall behind. It drops
+    /// other kinds, and when it is full it drops the oldest line of the same
+    /// kind so the latest one is what a subscriber is sent.
     pub(crate) fn push(&self, line: &Envelope) {
         let mut state = self.lock();
-        if state.lagged || state.queue.len() >= CAPACITY {
-            state.lagged = true;
-        } else {
-            state.queue.push_back(line.clone());
+        if !enqueue(&mut state, line) {
+            return;
         }
         drop(state);
         self.ready.notify_one();
@@ -132,6 +151,56 @@ impl Queue {
         };
         self.ready.notify_one();
     }
+}
+
+/// Queues `line`. False when a kind-filtered queue is ignoring it, so the
+/// watcher is not woken for a line it will never see.
+fn enqueue(state: &mut State, line: &Envelope) -> bool {
+    if let Some(kinds) = &state.kinds {
+        if !kinds.iter().any(|kind| kind == &line.kind) {
+            return false;
+        }
+        if state.queue.len() >= CAPACITY {
+            drop_oldest_same_kind(&mut state.queue, &line.kind);
+        }
+        state.queue.push_back(line.clone());
+        return true;
+    }
+    if state.lagged || state.queue.len() >= CAPACITY {
+        state.lagged = true;
+    } else {
+        state.queue.push_back(line.clone());
+    }
+    true
+}
+
+/// Makes one space in a full queue. The oldest line of `kind` goes first, so
+/// the latest of that kind replaces it. A kind with no older line drops the
+/// oldest repeated kind, and only then the oldest line, so a flush sitting
+/// alone is not the first thing removed.
+fn drop_oldest_same_kind(queue: &mut VecDeque<Envelope>, kind: &str) {
+    let pos = queue
+        .iter()
+        .position(|queued| queued.kind == kind)
+        .or_else(|| oldest_repeat(queue));
+    match pos {
+        Some(pos) => {
+            queue.remove(pos);
+        }
+        None => {
+            queue.pop_front();
+        }
+    }
+}
+
+fn oldest_repeat(queue: &VecDeque<Envelope>) -> Option<usize> {
+    queue.iter().position(|queued| {
+        queue
+            .iter()
+            .filter(|other| other.kind == queued.kind)
+            .count()
+            > 1
+    })
 }
 
 /// Pushes a line into one watcher's queue. Cloning it does not keep the

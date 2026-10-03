@@ -20,6 +20,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 use contract::events::{
     CommandAccepted, Empty, Event, ExtensionsLoaded, FiberExited, LoadedExtension, Notice,
+    SessionState, SessionStatus,
 };
 use contract::shapes::{Tokens, Usage};
 use contract::{CommandId, ErrorCode};
@@ -392,14 +393,20 @@ fn subscribe_waits_out_a_full_cache_queue_and_close_wakes_it() {
         .run(Vec::new(), move |_inbox| {
             log.append(&extensions(), None, None).unwrap();
             wait_until_cache_pauses();
-            for _ in 0..1_200 {
-                log.append(&notice(), None, None).unwrap();
+            for i in 0..1_200 {
+                log.append(&status(&format!("s{i}")), None, None).unwrap();
             }
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sum", "summary");
             assert_eq!(recv(&client)["payload"]["command_id"], "c_sum");
             wait_until_flush_waits();
             release_cache();
+            let line = recv(&client);
+            assert_eq!(line["kind"], "session_status");
+            assert_eq!(
+                line["payload"]["name"], "s1199",
+                "a status emitted after the cache queue is full is the one a subscriber is sent"
+            );
             let line = recv(&client);
             assert_eq!(line["kind"], "extensions_loaded");
             Ok(())
@@ -549,10 +556,9 @@ fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher)
     let reader = thread::spawn(move || match stop_rx.recv_timeout(DEADLINE) {
         Ok(()) | Err(_) => {}
     });
-    let id = gate.push_reader(reader);
     let fail = Arc::clone(held);
-    gate.set_shutdown(
-        id,
+    let id = gate.push_reader(
+        reader,
         Box::new(move || {
             fail.fail();
             if let Ok(()) = stop_tx.send(()) {}
@@ -654,7 +660,7 @@ fn an_acknowledgement_survives_a_lagged_queue() {
             result: None,
         }),
     );
-    crate::client::enqueue(&injector, ack);
+    injector.push_kept(ack);
     let held = Held::new(Hold::Go);
     let write = HeldWrite {
         held: Arc::clone(&held),
@@ -710,10 +716,82 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         done_rx.try_recv().is_err(),
         "close has not returned before the grace passes"
     );
-    clock.advance(Duration::from_secs(2));
+    clock.advance(Duration::from_secs(2).saturating_sub(Duration::from_millis(1)));
+    assert!(
+        done_rx.try_recv().is_err(),
+        "close has not returned one millisecond before the grace"
+    );
+    clock.advance(Duration::from_millis(1));
+    // Shorter than the blocked writer's own wait, so that wait ending cannot
+    // make close return.
+    done_rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("close returns once the grace has passed");
+}
+
+#[test]
+fn the_grace_ends_at_its_deadline() {
+    let clock = FakeClock::new();
+    let now = clock.now();
+    assert!(super::grace_remains(now, now + Duration::from_millis(1)));
+    assert!(!super::grace_remains(now, now));
+}
+
+#[test]
+fn a_published_reader_is_shut_down_before_it_is_joined() {
+    reset();
+    let opened = open();
+    let gate = Arc::clone(&opened.session.gate);
+    let (peer, mut stream) = UnixStream::pair().unwrap();
+    let shutdown = stream.try_clone().unwrap();
+    let (started_tx, started_rx) = mpsc::channel();
+    let reader = thread::spawn(move || {
+        if let Ok(()) = started_tx.send(()) {}
+        let mut buf = [0u8; 1];
+        match stream.read(&mut buf) {
+            Ok(_) | Err(_) => {}
+        }
+    });
+    started_rx
+        .recv_timeout(DEADLINE)
+        .expect("the reader is running");
+    let id = gate.push_reader(reader, crate::client::shutdown_both(shutdown));
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        gate.finish(id);
+        if let Ok(()) = done_tx.send(()) {}
+    });
     done_rx
         .recv_timeout(DEADLINE)
-        .expect("close returns once the grace has passed");
+        .expect("reap shuts the reader down before joining it");
+    drop(peer);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_reader_that_reaps_itself_finishes() {
+    reset();
+    let opened = open();
+    let gate = Arc::clone(&opened.session.gate);
+    let (peer, stream) = UnixStream::pair().unwrap();
+    let shutdown = stream.try_clone().unwrap();
+    let (id_tx, id_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let child = Arc::clone(&gate);
+    let reader = thread::spawn(move || {
+        let Ok(id) = id_rx.recv_timeout(DEADLINE) else {
+            return;
+        };
+        crate::client::serve(stream, child, id);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    let id = gate.push_reader(reader, crate::client::shutdown_both(shutdown));
+    if let Ok(()) = id_tx.send(id) {}
+    drop(peer);
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("a reader that reaps itself finishes");
+    close_within(opened.session, opened.log);
 }
 
 #[test]
@@ -814,9 +892,16 @@ fn an_interrupted_accept_does_not_wait_and_any_other_error_does() {
     assert!(!super::accept_error_waits(io::ErrorKind::Interrupted));
 }
 
-#[test]
-fn an_equal_flush_token_is_not_newer() {
-    assert!(!super::flush_token_is_newer(1, 1));
-    assert!(super::flush_token_is_newer(2, 1));
-    assert!(!super::flush_token_is_newer(1, 2));
+fn status(name: &str) -> Event {
+    Event::SessionStatus(SessionStatus {
+        name: name.to_owned(),
+        workspace: "/w".into(),
+        parent: None,
+        model: "m".into(),
+        state: SessionState::Idle,
+        since: 0,
+        spend: usage(),
+        delegates: 0,
+        jobs: 0,
+    })
 }
