@@ -57,8 +57,9 @@ An implementer is given:
 
 ## The gate
 
-`scripts/check` must pass before a pull request opens, whoever wrote the
-code. No change is too small for it.
+`scripts/check` must pass before every push, whoever wrote the code: before
+the pull request opens and before each push that repairs it. CI is not where
+a lint or test failure is found first. No change is too small for it.
 
 It runs, for the crates `docs/ci.md`, "Selection", chooses, what CI's
 per-platform job runs: `cargo fmt --check`, clippy with the workspace lints,

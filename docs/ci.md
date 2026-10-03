@@ -68,8 +68,8 @@ The selector has its own tests.
 ## On every pull request that changes code
 
 On each of Linux x86_64, Linux arm64 and macOS arm64, one job runs
-`scripts/check`, the same command an implementer runs before opening a pull
-request (`docs/workflow.md`, "The gate"). It:
+`scripts/check`, the same command an implementer runs before every push to
+a pull request (`docs/workflow.md`, "The gate"). It:
 
 - builds the workspace with the debug profile
 - runs clippy with the workspace lints across all targets, so code compiled

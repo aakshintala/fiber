@@ -43,7 +43,9 @@ rustfmt with its default settings. CI runs `cargo fmt --check`.
 
 Lints are set once, in the workspace `Cargo.toml` under `[workspace.lints]`,
 and every crate inherits them with `lints.workspace = true`. A lint set to
-deny fails the build.
+deny fails the build. Every other warning, rustc's default-warn lints
+included, fails the gate: `scripts/check` runs clippy with `-D warnings`.
+A local build still only warns.
 
 Denied everywhere:
 

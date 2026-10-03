@@ -71,8 +71,8 @@ if [ "$scope" != platform ]; then
 fi
 
 if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
-  echo "== cargo clippy --all-targets"
-  cargo clippy --all-targets "${package_spec_args[@]}"
+  echo "== cargo clippy --all-targets -- -D warnings"
+  cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
   echo "== cargo nextest run"
   cargo nextest run "${package_spec_args[@]}" 2>&1 | tee "$log"
   nextest=$(count '[0-9]+ tests? run')
