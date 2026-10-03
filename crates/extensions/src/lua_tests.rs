@@ -366,15 +366,9 @@ fn dropping_the_extension_stops_it() {
 }
 
 /// An extension directory in a fresh temporary directory, with `init`.
-fn extension(tag: &str, init: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("fiber-lua-{tag}-{}", std::process::id()));
-    // A process id comes round again; a killed run leaves its directory,
-    // fifos included, behind. Start from an empty one.
-    match std::fs::remove_dir_all(&dir) {
-        Ok(()) | Err(_) => {}
-    }
-    std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(dir.join("init.lua"), init).unwrap();
+fn extension(tag: &str, init: &str) -> fakes::TempDir {
+    let dir = fakes::TempDir::new(&format!("fiber-lua-{tag}"));
+    std::fs::write(dir.path().join("init.lua"), init).unwrap();
     dir
 }
 
@@ -434,7 +428,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
         ),
     );
     let clock = FakeClock::new();
-    let (hub, hold, done) = serve_after(&dir, "hold", &clock);
+    let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
     accepted_rx
         .recv_timeout(WAIT_UNTIL)
         .expect("waited for hold to reach the server");
@@ -450,7 +444,6 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
     ));
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A thread stopped while a callback runs quits when that callback ends,
@@ -462,9 +455,9 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         "fiber.command(\"spin\", { timeout = 1000, run = function() require(\"go_spin\") while true do end end })\n\
          fiber.command(\"later\", { timeout = 5000, run = function() return \"later\" end })\n",
     );
-    let went = go_module(&dir, "spin");
+    let went = go_module(dir.path(), "spin");
     let clock = FakeClock::new();
-    let (hub, spin, done) = serve_after(&dir, "spin", &clock);
+    let (hub, spin, done) = serve_after(dir.path(), "spin", &clock);
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
     went.recv_timeout(WAIT)
         .expect("waited for spin to pass its clock check");
@@ -484,7 +477,6 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
     ));
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// Reads an HTTP head, through the blank line that ends it.
@@ -565,11 +557,11 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     );
     // The go module is sign's first statement, before the finalizer's loop.
     // The finalizer runs with the hook off, so only the caller's grace stops it.
-    let went = go_module(&dir, "sign");
+    let went = go_module(dir.path(), "sign");
     let clock = FakeClock::new();
     let ext = Arc::new(LuaExtension::new(
         "ext",
-        &dir,
+        dir.path(),
         "/nonexistent-fiber-home",
         clock.clone(),
     ));
@@ -617,7 +609,6 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         );
     }
     assert!(!ext.is_running());
-    std::fs::remove_dir_all(&dir).unwrap();
 }
 
 /// A call that finds no thread started fails rather than wait forever.

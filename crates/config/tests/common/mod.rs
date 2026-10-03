@@ -7,39 +7,34 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Config, ConfigError, ProjectKey, Sources};
 use serde_json::{Map, Value};
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
 pub(crate) const PROJECT: &str = "-Users-alice-work-app-.git";
 
 pub(crate) struct Setup {
-    root: PathBuf,
+    root: fakes::TempDir,
 }
 
 impl Setup {
     pub(crate) fn new() -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("fiber-config-{}-{n}", std::process::id()));
-        fs::remove_dir_all(&root).unwrap_or(());
-        fs::create_dir_all(root.join("home")).unwrap();
-        fs::create_dir_all(root.join("workspace")).unwrap();
+        let root = fakes::TempDir::new("fiber-config");
+        fs::create_dir(root.path().join("home")).unwrap();
+        fs::create_dir(root.path().join("workspace")).unwrap();
         Self { root }
     }
 
     pub(crate) fn root(&self) -> &Path {
-        &self.root
+        self.root.path()
     }
 
     pub(crate) fn home(&self) -> PathBuf {
-        self.root.join("home")
+        self.root().join("home")
     }
 
     pub(crate) fn workspace(&self) -> PathBuf {
-        self.root.join("workspace")
+        self.root().join("workspace")
     }
 
     pub(crate) fn global(&self) -> PathBuf {
@@ -69,12 +64,6 @@ impl Setup {
             project: key(),
             overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
         })
-    }
-}
-
-impl Drop for Setup {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap_or(());
     }
 }
 

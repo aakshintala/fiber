@@ -1542,20 +1542,6 @@ fn a_listing_drops_backups_once_a_commit_has_finished() {
     assert!(!setup.home().join("extensions/.commit").exists());
 }
 
-/// Restores mode 0755 on drop so the temporary home can be removed.
-struct RestoreMode(PathBuf);
-
-impl Drop for RestoreMode {
-    fn drop(&mut self) {
-        let Ok(meta) = fs::metadata(&self.0) else {
-            return;
-        };
-        let mut perms = meta.permissions();
-        perms.set_mode(0o755);
-        fs::set_permissions(&self.0, perms).unwrap();
-    }
-}
-
 #[test]
 fn a_remove_treats_only_not_found_as_already_gone() {
     let setup = Setup::new();
@@ -1585,7 +1571,6 @@ fn a_remove_treats_only_not_found_as_already_gone() {
     common::install(&home, &source, FIBER).unwrap();
     write(&data.join("x"), "x");
     let parent = home.join("data");
-    let _restore = RestoreMode(parent.clone());
     let mut perms = fs::metadata(&parent).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&parent, perms).unwrap();
@@ -1629,7 +1614,6 @@ fn a_data_directory_that_cannot_be_removed_fails_naming_it() {
     let data = home.join("data/acme");
     let inner = data.join("inner");
     write(&inner.join("x"), "x");
-    let _restore = RestoreMode(inner.clone());
     let mut perms = fs::metadata(&inner).unwrap().permissions();
     perms.set_mode(0o000);
     fs::set_permissions(&inner, perms).unwrap();

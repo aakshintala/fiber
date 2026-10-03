@@ -6,11 +6,13 @@
 pub mod clock;
 mod provider_server;
 mod scripted_provider;
+mod temp_dir;
 
 use std::path::PathBuf;
 
 pub use provider_server::{ProviderServer, Request, Response};
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
+pub use temp_dir::TempDir;
 
 /// The fixture Lua extension's directory: `extension.json`, `init.lua` and
 /// the module it requires, one command per runtime behaviour a test exercises.

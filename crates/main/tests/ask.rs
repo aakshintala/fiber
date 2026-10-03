@@ -16,10 +16,9 @@ use std::fs;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -34,33 +33,29 @@ mod probes;
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
 /// macOS.
 struct Setup {
-    root: PathBuf,
+    root: fakes::TempDir,
 }
 
 impl Setup {
     fn new() -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("fa{}-{n}", std::process::id()));
-        fs::remove_dir_all(&root).unwrap_or(());
-        fs::create_dir_all(root.join("h")).unwrap();
-        fs::create_dir_all(root.join("w")).unwrap();
+        let root = fakes::TempDir::new("fa");
+        fs::create_dir_all(root.path().join("h")).unwrap();
+        fs::create_dir_all(root.path().join("w")).unwrap();
         Self { root }
     }
 
     fn home(&self) -> PathBuf {
-        self.root.join("h")
+        self.root.path().join("h")
     }
 
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and makes `fake/m` the configured model.
     fn provider(&self, server: &ProviderServer) {
-        let source = self.root.join("src");
+        let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
@@ -105,7 +100,7 @@ impl Setup {
     /// URL's origin `origin` replaced by `url`, and returns the copy.
     fn package(&self, name: &str, origin: &str, url: &str) -> PathBuf {
         let from = package(name);
-        let to = self.root.join(format!("pkg-{name}"));
+        let to = self.root.path().join(format!("pkg-{name}"));
         let mut files = vec!["extension.json".to_owned()];
         for entry in fs::read_dir(from.join("providers")).unwrap() {
             let file = entry.unwrap().file_name();
@@ -153,10 +148,10 @@ impl Setup {
     ) -> Run {
         let mut child = Command::new(env!("CARGO_BIN_EXE_fiber"))
             .args(args)
-            .current_dir(self.root.join("w"))
+            .current_dir(self.root.path().join("w"))
             .env_clear()
             .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", &self.root)
+            .env("HOME", self.root.path())
             .env("FIBER_HOME", home)
             .env("FIBER_TEST_FAKE_KEY", "sk-test")
             .envs(env.iter().copied())
@@ -167,6 +162,7 @@ impl Setup {
             .spawn()
             .unwrap();
         let group = child.id();
+        let guard = KillGroup(group);
         // Taking the pipe closes it once written.
         if let Some(mut pipe) = child.stdin.take()
             && let Some(text) = text
@@ -196,6 +192,8 @@ impl Setup {
             !group_alive(group),
             "`fiber` left a process in its group behind"
         );
+        // The group is empty. Skip the drop, which would kill it again.
+        std::mem::forget(guard);
         Run::from(output)
     }
 
@@ -208,12 +206,6 @@ impl Setup {
     /// when `fiber` exits.
     fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
         self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
-    }
-}
-
-impl Drop for Setup {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap_or(());
     }
 }
 
@@ -266,6 +258,44 @@ fn kill_group(group: u32) {
         .unwrap();
 }
 
+/// Kills process group `group` on drop. After the child is reaped and the
+/// group is empty, [`std::mem::forget`] skips that kill.
+struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        // A panic between spawn and reap still kills the group. Failure
+        // here is ignored: the process may already be gone.
+        match Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", self.0)])
+            .status()
+        {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+#[test]
+fn dropping_the_group_guard_kills_the_group() {
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    drop(KillGroup(group));
+    // On Linux `kill -0` still succeeds for a killed zombie until it is
+    // reaped, so the group is checked after `wait`.
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the process group to die"),
+    };
+    assert_eq!(status.signal(), Some(9));
+    assert!(!group_alive(group));
+}
+
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
 /// stderr.
 struct Run {
@@ -313,7 +343,7 @@ impl Run {
 
     /// The session's directory, from its id.
     fn session_dir(&self, setup: &Setup) -> PathBuf {
-        let workspace = fs::canonicalize(setup.root.join("w")).unwrap();
+        let workspace = fs::canonicalize(setup.root.path().join("w")).unwrap();
         let key = workspace.to_string_lossy().replace('/', "-");
         setup
             .home()
@@ -576,7 +606,7 @@ fn a_missing_credential_fails_before_the_session() {
 fn a_bedrock_converse_model_fails_before_the_session() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
-    let source = setup.root.join("src");
+    let source = setup.root.path().join("src");
     write(
         &source.join("extension.json"),
         &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
@@ -1042,7 +1072,7 @@ struct Github {
 
 impl Github {
     fn new(setup: &Setup) -> Self {
-        let base = setup.root.join("gh");
+        let base = setup.root.path().join("gh");
         let repo = base.join("aakshintala/fiber");
         fs::create_dir_all(&repo).unwrap();
         git(&repo, &["init", "--quiet"]);

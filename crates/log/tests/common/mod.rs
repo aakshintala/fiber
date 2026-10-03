@@ -11,39 +11,31 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::events::Event;
 use contract::{Envelope, SessionId};
 use serde_json::{Value, json};
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
 /// A temporary directory standing in for a project's `sessions/`, removed
 /// when dropped.
-pub(crate) struct TestDir(PathBuf);
+pub(crate) struct TestDir(fakes::TempDir);
 
 impl TestDir {
     pub(crate) fn new(name: &str) -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let path = std::env::temp_dir().join(format!("log-{name}-{}-{n}", std::process::id()));
-        fs::remove_dir_all(&path).unwrap_or(());
-        Self(path)
+        let dir = fakes::TempDir::new(&format!("log-{name}"));
+        // `Log::create` fsyncs each directory it makes, and a test counts
+        // this path among them, so the name is claimed and then left absent.
+        fs::remove_dir(dir.path()).unwrap();
+        Self(dir)
     }
 
     pub(crate) fn path(&self) -> &Path {
-        &self.0
+        self.0.path()
     }
 
     /// The session directory of `id` under this directory.
     pub(crate) fn session(&self, id: &SessionId) -> PathBuf {
-        self.0.join(&id.0)
-    }
-}
-
-impl Drop for TestDir {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap_or(());
+        self.path().join(&id.0)
     }
 }
 
