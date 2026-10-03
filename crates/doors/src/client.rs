@@ -235,6 +235,7 @@ fn dispatch(conn: &mut Conn, line: CommandLine) {
         Command::Background => unknown(conn, id, "background"),
         Command::Reload => unknown(conn, id, "reload"),
         Command::Model(_) => unknown(conn, id, "model"),
+        Command::Credential(_) => unknown(conn, id, "credential"),
         Command::Name(_) => unknown(conn, id, "name"),
         Command::Handoff(_) => unknown(conn, id, "handoff"),
         Command::Rewind(_) => unknown(conn, id, "rewind"),

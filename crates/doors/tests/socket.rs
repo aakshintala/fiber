@@ -435,7 +435,8 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             );
 
             for name in [
-                "message", "cancel", "job_stop", "background", "reload", "model", "name",
+                "message", "cancel", "job_stop", "background", "reload", "model", "credential",
+                "name",
                 "handoff", "rewind", "shell", "command",
             ] {
                 send(
