@@ -78,7 +78,7 @@ struct Snap {
 struct Live {
     reader: Option<JoinHandle<()>>,
     writer: Option<JoinHandle<()>>,
-    shutdown: Option<UnixStream>,
+    shutdown: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 struct Conns {
@@ -235,8 +235,10 @@ impl Gate {
     pub(crate) fn flush(&self) -> (Option<contract::Envelope>, Option<contract::Envelope>) {
         let _one = lock(&self.flush_lock);
         let token = self.flush_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        self.cache_injector
-            .push_kept(control_line(&self.session_id, client::FLUSH, token));
+        client::enqueue(
+            &self.cache_injector,
+            control_line(&self.session_id, client::FLUSH, token),
+        );
         let mut snap = lock(&self.snap);
         while snap.flushed < token && !self.stop.load(Ordering::Relaxed) {
             #[cfg(test)]
@@ -297,10 +299,10 @@ impl Gate {
         id
     }
 
-    pub(crate) fn set_shutdown(&self, id: u64, stream: UnixStream) {
+    pub(crate) fn set_shutdown(&self, id: u64, shutdown: Box<dyn Fn() + Send + Sync>) {
         let mut conns = lock(&self.conns);
         if let Some((_, live)) = conns.live.iter_mut().find(|(slot, _)| *slot == id) {
-            live.shutdown = Some(stream);
+            live.shutdown = Some(shutdown);
         }
     }
 
@@ -529,10 +531,8 @@ fn flush_token_is_newer(token: u64, flushed: u64) -> bool {
 /// Shuts the connection's socket and joins the threads still running on it.
 /// A reader reaping itself detaches its own handle; joining it would deadlock.
 fn reap(live: Live) {
-    if let Some(stream) = live.shutdown {
-        match stream.shutdown(std::net::Shutdown::Both) {
-            Ok(()) | Err(_) => {}
-        }
+    if let Some(shutdown) = live.shutdown {
+        shutdown();
     }
     if let Some(writer) = live.writer {
         join(writer);
@@ -557,16 +557,6 @@ fn before_cache_line(_: &Gate) {}
 #[cfg(test)]
 pub(crate) fn park_reader_for_test() {
     tests::park_reader();
-}
-
-#[cfg(test)]
-pub(crate) fn wait_if_writer_paused() {
-    tests::wait_if_writer_paused();
-}
-
-#[cfg(test)]
-pub(crate) fn note_writer_blocked<T>(body: impl FnOnce() -> T) -> T {
-    tests::note_writer_blocked(body)
 }
 
 /// Keeps the latest `session_status` and `extensions_loaded`. A flush line

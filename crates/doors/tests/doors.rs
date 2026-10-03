@@ -17,6 +17,7 @@ use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
 use contract::inbox::Delivery;
@@ -284,14 +285,22 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
     let ran = session.ask("hi".into(), |inbox| {
-        let Delivery::Prompt(message, _) = inbox.recv().unwrap() else {
+        let Delivery::Prompt(message, _) = inbox
+            .recv_timeout(Duration::from_secs(10))
+            .expect("the prompt arrives")
+        else {
             panic!("the prompt arrives as a prompt");
         };
         assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
         assert!(matches!(message.sender.origin, Origin::Driver));
         assert!(message.sender.command_id.0.starts_with("c_"));
         assert!(
-            matches!(inbox.recv().unwrap(), Delivery::Close(_)),
+            matches!(
+                inbox
+                    .recv_timeout(Duration::from_secs(10))
+                    .expect("close follows the prompt"),
+                Delivery::Close(_)
+            ),
             "close follows the prompt"
         );
         // The inbox stays open for clients. `ask` itself queued nothing more.

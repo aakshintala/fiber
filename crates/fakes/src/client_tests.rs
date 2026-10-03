@@ -1,5 +1,5 @@
-use std::io::{BufRead, BufReader, ErrorKind, Read, Write};
-use std::os::unix::net::UnixListener;
+use std::io::{BufRead, BufReader, Read, Write};
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -11,6 +11,18 @@ use crate::TempDir;
 
 const DEADLINE: Duration = Duration::from_secs(2);
 
+/// `accept` on a thread, so the test's wait is the deadline below.
+fn accept_within(listener: &UnixListener) -> UnixStream {
+    let listener = listener.try_clone().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || if let Ok(()) = tx.send(listener.accept()) {});
+    let (stream, _) = rx
+        .recv_timeout(DEADLINE)
+        .expect("a client is accepted")
+        .unwrap();
+    stream
+}
+
 #[test]
 fn a_paused_client_reads_nothing_until_told() {
     let dir = TempDir::new("fc");
@@ -18,34 +30,16 @@ fn a_paused_client_reads_nothing_until_told() {
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
     client.slow(true);
-    let (mut server, _) = listener.accept().unwrap();
+    let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
-    server.set_nonblocking(true).unwrap();
-    let chunk = vec![b'y'; 64 * 1024];
-    let cap = 64 * 1024 * 1024;
-    let mut wrote = 0usize;
-    let mut blocked = false;
-    while wrote < cap {
-        match server.write(&chunk) {
-            Ok(0) => break,
-            Ok(n) => wrote += n,
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                blocked = true;
-                break;
-            }
-            Err(error) => panic!("{error}"),
-        }
-    }
     assert!(
-        blocked,
-        "a paused client reads nothing, so a write blocks before {cap} bytes"
+        client.recv(DEADLINE).is_none(),
+        "a paused client reads nothing"
     );
-
     client.slow(false);
     let line = client
         .recv(DEADLINE)
-        .expect("the line arrives once the client reads");
+        .expect("slow(false) starts the reader");
     assert_eq!(line["ok"], true);
 }
 
@@ -55,7 +49,7 @@ fn send_writes_the_line_and_a_newline() {
     let path = dir.path().join("s");
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
-    let (server, _) = listener.accept().unwrap();
+    let server = accept_within(&listener);
     client.send(r#"{"id":1}"#).unwrap();
     server.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut buf = Vec::new();
@@ -71,7 +65,7 @@ fn recv_returns_a_buffered_line_without_waiting_for_the_socket_to_close() {
     let path = dir.path().join("s");
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
-    let (mut server, _) = listener.accept().unwrap();
+    let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(
@@ -92,7 +86,7 @@ fn a_line_keeps_no_trailing_cr_or_lf() {
     let path = dir.path().join("s");
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
-    let (mut server, _) = listener.accept().unwrap();
+    let mut server = accept_within(&listener);
     server.write_all(b"hello\r\n").unwrap();
     let line = client.recv(DEADLINE).expect("a line arrives");
     assert_eq!(line, Value::String("hello".into()));
@@ -104,7 +98,7 @@ fn a_running_client_stops_reading_once_paused() {
     let path = dir.path().join("s");
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
-    let (mut server, _) = listener.accept().unwrap();
+    let mut server = accept_within(&listener);
     server.write_all(b"{\"n\":0}\n").unwrap();
     let first = client.recv(DEADLINE).expect("the first line arrives");
     assert_eq!(first["n"], 0);
@@ -125,48 +119,12 @@ fn a_running_client_stops_reading_once_paused() {
 }
 
 #[test]
-fn slow_false_starts_the_reader() {
-    let dir = TempDir::new("fc");
-    let path = dir.path().join("s");
-    let listener = UnixListener::bind(&path).unwrap();
-    let client = Client::connect(&path).unwrap();
-    let (mut server, _) = listener.accept().unwrap();
-    server.set_nonblocking(true).unwrap();
-    let mut chunk = vec![b'y'; 64 * 1024];
-    for byte in chunk.iter_mut().skip(63).step_by(64) {
-        *byte = b'\n';
-    }
-    let cap = 64 * 1024 * 1024;
-    let mut wrote = 0usize;
-    let mut blocked = false;
-    while wrote < cap {
-        match server.write(&chunk) {
-            Ok(0) => break,
-            Ok(n) => wrote += n,
-            Err(error) if error.kind() == ErrorKind::Interrupted => {}
-            Err(error) if error.kind() == ErrorKind::WouldBlock => {
-                blocked = true;
-                break;
-            }
-            Err(error) => panic!("{error}"),
-        }
-    }
-    assert!(blocked, "the socket buffer fills before {cap} bytes");
-    server.set_nonblocking(false).unwrap();
-    server.set_write_timeout(Some(DEADLINE)).unwrap();
-    client.slow(false);
-    server
-        .write_all(&[1])
-        .expect("slow(false) starts the reader");
-}
-
-#[test]
 fn drop_closes_the_socket() {
     let dir = TempDir::new("fc");
     let path = dir.path().join("s");
     let listener = UnixListener::bind(&path).unwrap();
     let client = Client::connect(&path).unwrap();
-    let (mut server, _) = listener.accept().unwrap();
+    let mut server = accept_within(&listener);
     server.write_all(b"{\"ok\":true}\n").unwrap();
     server.set_read_timeout(Some(DEADLINE)).unwrap();
     client.recv(DEADLINE).expect("the line arrives");

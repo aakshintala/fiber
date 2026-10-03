@@ -662,6 +662,19 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
             );
             send(
                 &client,
+                r#"{"id":"c_latest","command":"history","args":{"from_seq":299}}"#,
+            );
+            let latest = response(&client, "c_latest");
+            assert_eq!(kind(&latest), "command_accepted");
+            let latest_seqs: Vec<u64> = latest["payload"]["result"]["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| line["seq"].as_u64().unwrap())
+                .collect();
+            assert_eq!(latest_seqs, vec![299]);
+            send(
+                &client,
                 r#"{"id":"c_past","command":"history","args":{"from_seq":300}}"#,
             );
             assert_eq!(

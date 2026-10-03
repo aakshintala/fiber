@@ -62,10 +62,9 @@ pub(crate) struct Queue {
 
 #[derive(Default)]
 struct State {
-    lines: VecDeque<Envelope>,
-    /// Lines handed over even when the queue is full. They are delivered
-    /// after a catch-up, so a dropped durable line is re-read first.
-    kept: VecDeque<Envelope>,
+    /// Ordinary lines and kept lines in one order. A kept line stays where
+    /// it was pushed, including ahead of a catch-up.
+    queue: VecDeque<Envelope>,
     /// The queue filled and lines were dropped since the watcher last caught
     /// up from the log.
     lagged: bool,
@@ -94,21 +93,21 @@ impl Queue {
     /// lost, which costs nothing (`docs/architecture.md`, "Streaming").
     pub(crate) fn push(&self, line: &Envelope) {
         let mut state = self.lock();
-        if state.lagged || state.lines.len() >= CAPACITY {
+        if state.lagged || state.queue.len() >= CAPACITY {
             state.lagged = true;
         } else {
-            state.lines.push_back(line.clone());
+            state.queue.push_back(line.clone());
         }
         drop(state);
         self.ready.notify_one();
     }
 
-    /// Hands the watcher `line` even when the queue is full or lagged.
-    /// [`Queue::push`] would drop it, and a control line that was dropped
-    /// would never arrive.
+    /// Hands the watcher `line` even when the queue is full or lagged, in
+    /// push order with the ordinary lines. [`Queue::push`] would drop it.
     pub(crate) fn push_kept(&self, line: &Envelope) {
+        // debt: kept lines are bounded only by the client's own command rate (one acknowledgement per command it sends); a cap on unsent acknowledgements per connection if a flooding client is ever seen.
         let mut state = self.lock();
-        state.kept.push_back(line.clone());
+        state.queue.push_back(line.clone());
         drop(state);
         self.ready.notify_one();
     }
@@ -153,10 +152,10 @@ impl Injector {
         }
     }
 
-    /// Hands `line` to the watcher even when it has fallen behind. A push
-    /// after the watcher is dropped is ignored. The watcher delivers it
-    /// after it has caught up, so the line is not lost and does not hide a
-    /// durable line the queue had dropped.
+    /// Hands `line` to the watcher even when it has fallen behind, in push
+    /// order with the ordinary lines. A push after the watcher is dropped is
+    /// ignored. A catch-up re-reads the log and does not drop a kept line
+    /// still queued.
     pub fn push_kept(&self, line: Envelope) {
         if let Some(queue) = self.queue.upgrade() {
             queue.push_kept(&line);
@@ -248,22 +247,21 @@ impl Watcher {
         }
     }
 
-    /// Waits for a line, for the need to catch up, or for the end, in that
-    /// order. The lagged flag is cleared before the log is re-read, so a line
-    /// written after the re-read is queued, never lost. The end is handed
-    /// over once and then reads as closed.
+    /// Waits for a queued line, for the need to catch up, or for the end,
+    /// in that order. Kept lines are in the queue, so they come out before
+    /// a catch-up and a catch-up does not drop one still queued. The lagged
+    /// flag is cleared before the log is re-read, so a line written after
+    /// the re-read is queued, never lost. The end is handed over once and
+    /// then reads as closed.
     fn take(&self) -> Taken {
         let mut state = self.queue.lock();
         loop {
-            if let Some(line) = state.lines.pop_front() {
+            if let Some(line) = state.queue.pop_front() {
                 return Taken::Line(line);
             }
             if state.lagged {
                 state.lagged = false;
                 return Taken::CatchUp;
-            }
-            if let Some(line) = state.kept.pop_front() {
-                return Taken::Line(line);
             }
             match std::mem::replace(&mut state.end, End::Closed) {
                 End::Open => state.end = End::Open,

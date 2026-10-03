@@ -3,6 +3,7 @@
 //! thread that writes its events.
 
 use std::io::{BufRead, BufReader, Write};
+use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::thread;
@@ -41,7 +42,7 @@ struct Conn {
     id: u64,
     gate: Arc<Gate>,
     direct: Option<UnixStream>,
-    writer: Option<UnixStream>,
+    writer: Option<Box<dyn Write + Send>>,
     subscribed: bool,
     full: bool,
     injector: Option<Injector>,
@@ -49,15 +50,33 @@ struct Conn {
 }
 
 /// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
-/// the reader in.
+/// the reader in. The writer and the shutdown are the socket's other clones.
 pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
+    let Some(writer) = stream.try_clone().ok() else {
+        return;
+    };
+    let Some(shutdown) = stream.try_clone().ok() else {
+        return;
+    };
+    serve_connection(stream, Box::new(writer), shutdown_both(shutdown), gate, id);
+}
+
+/// Reads `stream` and writes through `writer`. `shutdown` ends a blocked
+/// `writer`, which is how [`crate::session::Session::close`] reaps the
+/// connection. Production builds all three from one socket.
+pub(crate) fn serve_connection(
+    stream: UnixStream,
+    writer: Box<dyn Write + Send>,
+    shutdown: Box<dyn Fn() + Send + Sync>,
+    gate: Arc<Gate>,
+    id: u64,
+) {
     let _finish = Finish {
         gate: Arc::clone(&gate),
         id,
     };
-    let (direct, writer, shutdown) = match clones(&stream) {
-        Some(clones) => clones,
-        None => return,
+    let Some(direct) = stream.try_clone().ok() else {
+        return;
     };
     gate.set_shutdown(id, shutdown);
     let mut conn = Conn {
@@ -77,7 +96,7 @@ pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                while buf.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                while buf.last().is_some_and(|byte| is_line_ending(*byte)) {
                     buf.pop();
                 }
                 on_line(&buf, &mut conn);
@@ -98,7 +117,24 @@ pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
 /// Tells `injector`'s writer to exit. The line is kept when the queue is
 /// full, so a disconnect still reaches a writer that has fallen behind.
 pub(crate) fn stop_writer(injector: &Injector, session: &SessionId) {
-    injector.push_kept(control_line(session, STOP, 0));
+    enqueue(injector, control_line(session, STOP, 0));
+}
+
+/// Queues a line doors originated. It is kept, so a lagging connection still
+/// gets its acknowledgement, its flush and its stop.
+pub(crate) fn enqueue(injector: &Injector, line: Envelope) {
+    injector.push_kept(line);
+}
+
+/// A carriage return and a line feed both end a command line.
+fn is_line_ending(byte: u8) -> bool {
+    byte == b'\n' || byte == b'\r'
+}
+
+fn shutdown_both(stream: UnixStream) -> Box<dyn Fn() + Send + Sync> {
+    Box::new(move || match stream.shutdown(Shutdown::Both) {
+        Ok(()) | Err(_) => {}
+    })
 }
 
 struct Finish {
@@ -112,13 +148,6 @@ impl Drop for Finish {
         crate::session::park_reader_for_test();
         self.gate.finish(self.id);
     }
-}
-
-fn clones(stream: &UnixStream) -> Option<(UnixStream, UnixStream, UnixStream)> {
-    let direct = stream.try_clone().ok()?;
-    let writer = stream.try_clone().ok()?;
-    let shutdown = stream.try_clone().ok()?;
-    Some((direct, writer, shutdown))
 }
 
 fn on_line(bytes: &[u8], conn: &mut Conn) {
@@ -290,6 +319,7 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
             }
         }
     } else if let Some(status) = status {
+        // A log event, so a lagging connection drops it and catches up.
         injector.push(status);
     }
     conn.subscribed = true;
@@ -392,7 +422,7 @@ fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str
 fn send(conn: &mut Conn, event: Event) {
     let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
     if let Some(injector) = &conn.injector {
-        injector.push(line);
+        enqueue(injector, line);
         return;
     }
     let Some(direct) = conn.direct.as_mut() else {
@@ -429,11 +459,10 @@ fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
                 message: rejection.message,
             }),
         };
-        injector.push(session::envelope(
-            &gate.session_id,
-            gate.clock.as_ref(),
-            &event,
-        ));
+        enqueue(
+            &injector,
+            session::envelope(&gate.session_id, gate.clock.as_ref(), &event),
+        );
     })
 }
 
@@ -464,11 +493,11 @@ impl Drop for Once {
     }
 }
 
-fn spawn_writer(
+pub(crate) fn spawn_writer(
     gate: Arc<Gate>,
     id: u64,
     watcher: log::Watcher,
-    stream: UnixStream,
+    stream: Box<dyn Write + Send>,
     summary: bool,
 ) {
     gate.begin_writer();
@@ -492,10 +521,12 @@ impl Drop for WriterEnd {
     }
 }
 
-pub(crate) fn write_loop(mut watcher: log::Watcher, mut stream: UnixStream, summary: bool) {
+pub(crate) fn write_loop(
+    mut watcher: log::Watcher,
+    mut stream: Box<dyn Write + Send>,
+    summary: bool,
+) {
     loop {
-        #[cfg(test)]
-        crate::session::wait_if_writer_paused();
         let line = match watcher.recv() {
             Ok(Some(line)) => line,
             Ok(None) | Err(_) => return,
@@ -509,7 +540,7 @@ pub(crate) fn write_loop(mut watcher: log::Watcher, mut stream: UnixStream, summ
         if summary && !summary_line(&line.kind) {
             continue;
         }
-        if write_line(&mut stream, &line).is_err() {
+        if write_line(stream.as_mut(), &line).is_err() {
             return;
         }
     }
@@ -522,22 +553,12 @@ fn summary_line(kind: &str) -> bool {
     )
 }
 
-fn write_line(stream: &mut UnixStream, line: &Envelope) -> std::io::Result<()> {
+fn write_line(stream: &mut dyn Write, line: &Envelope) -> std::io::Result<()> {
     let mut bytes = serde_json::to_vec(line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');
-    #[cfg(test)]
-    {
-        crate::session::note_writer_blocked(|| -> std::io::Result<()> {
-            stream.write_all(&bytes)?;
-            stream.flush()
-        })
-    }
-    #[cfg(not(test))]
-    {
-        stream.write_all(&bytes)?;
-        stream.flush()
-    }
+    stream.write_all(&bytes)?;
+    stream.flush()
 }
 
 /// A control line for `session`. `token` tells one flush from the next.
@@ -555,3 +576,7 @@ pub(crate) fn control_line(session: &SessionId, kind: &str, token: u64) -> Envel
         payload,
     }
 }
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

@@ -82,15 +82,16 @@ fn watch_all_yields_every_durable_line_from_the_start_then_live_lines() {
 #[test]
 fn an_injected_line_arrives_in_push_order_and_is_dropped_when_lagged() {
     let (_tmp, log) = open("inject");
-    let mut watcher = log.watch();
+    let watcher = log.watch();
     let injector = watcher.injector();
     let before = log.append(&empty("step_started"), None, None).unwrap();
     let injected = marked("notice");
     injector.push(injected.clone());
     let after = log.append(&empty("step_started"), None, None).unwrap();
-    assert_eq!(watcher.recv().unwrap(), Some(before));
-    assert_eq!(watcher.recv().unwrap(), Some(injected));
-    assert_eq!(watcher.recv().unwrap(), Some(after));
+    let rx = relay(watcher);
+    assert_eq!(next(&rx), Some(before));
+    assert_eq!(next(&rx), Some(injected));
+    assert_eq!(next(&rx), Some(after));
 
     let lagged = log.watch();
     let lagged_injector = lagged.injector();
@@ -114,27 +115,50 @@ fn an_injected_line_arrives_in_push_order_and_is_dropped_when_lagged() {
 }
 
 #[test]
-fn a_kept_line_is_delivered_after_the_watcher_was_lagged() {
-    let (_tmp, log) = open("kept");
+fn a_kept_line_keeps_its_place_among_ordinary_lines() {
+    let (_tmp, log) = open("kept-order");
     let watcher = log.watch();
     let injector = watcher.injector();
-    for _ in 0..1_100 {
-        log.append(&delta("x"), None, None).unwrap();
-    }
-    injector.push_kept(marked("flush"));
+    injector.push(marked("before"));
+    injector.push_kept(marked("kept"));
+    injector.push(marked("after"));
     let rx = relay(watcher);
-    let mut saw_flush = false;
+    let kinds: Vec<String> = (0..3).map(|_| next(&rx).unwrap().kind).collect();
+    assert_eq!(
+        kinds,
+        vec!["before".to_owned(), "kept".to_owned(), "after".to_owned()],
+        "a kept line stays in push order among ordinary lines"
+    );
+}
+
+#[test]
+fn a_kept_line_pushed_before_a_lag_is_returned_before_catch_up() {
+    let (_tmp, log) = open("kept-lag");
+    let watcher = log.watch();
+    let injector = watcher.injector();
+    injector.push_kept(marked("kept"));
+    for _ in 0..1_100 {
+        log.append(&empty("step_started"), None, None).unwrap();
+    }
+    injector.push(marked("after"));
+    let rx = relay(watcher);
+    let mut lines = Vec::new();
     for _ in 0..2_000 {
-        let line = rx
-            .recv_timeout(DEADLINE)
-            .expect("a kept line arrives after a full queue")
-            .expect("the log stays open until the kept line arrives");
-        if line.kind == "flush" {
-            saw_flush = true;
+        let line = next(&rx).expect("the flood arrives before the deadline");
+        lines.push(line);
+        if lines.iter().filter(|line| line.seq.is_some()).count() == 1_100 {
             break;
         }
     }
-    assert!(saw_flush, "a kept line arrives after a full queue");
+    assert!(
+        !lines.iter().any(|line| line.kind == "after"),
+        "a lagged watcher drops an ordinary line pushed after the kept one"
+    );
+    assert_eq!(
+        lines.first().map(|line| line.kind.as_str()),
+        Some("kept"),
+        "a kept line pushed before a flood is returned before catch-up"
+    );
 }
 
 #[test]

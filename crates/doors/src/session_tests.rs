@@ -9,7 +9,7 @@
 )]
 
 use std::fs;
-use std::io::{self, Read};
+use std::io::{self, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -17,13 +17,16 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use contract::ErrorCode;
 use contract::clock::Clock;
-use contract::events::{ContextAdded, Empty, Event, ExtensionsLoaded, LoadedExtension, Notice};
-use contract::inbox::Delivery;
+use contract::events::{
+    CommandAccepted, Empty, Event, ExtensionsLoaded, FiberExited, LoadedExtension, Notice,
+};
+use contract::shapes::{Tokens, Usage};
+use contract::{CommandId, ErrorCode};
 use fakes::Client;
 use fakes::clock::FakeClock;
 use log::Log;
+use serde_json::Value;
 
 use super::{Gate, Session};
 
@@ -42,11 +45,6 @@ struct Control {
     parked: AtomicUsize,
     parked_mu: Mutex<()>,
     parked_cv: Condvar,
-    writer_pause: Mutex<bool>,
-    writer_cv: Condvar,
-    writing: AtomicBool,
-    write_mu: Mutex<()>,
-    write_cv: Condvar,
     accept_waiting: AtomicBool,
     accept_mu: Mutex<()>,
     accept_cv: Condvar,
@@ -65,11 +63,6 @@ static CONTROL: Control = Control {
     parked: AtomicUsize::new(0),
     parked_mu: Mutex::new(()),
     parked_cv: Condvar::new(),
-    writer_pause: Mutex::new(false),
-    writer_cv: Condvar::new(),
-    writing: AtomicBool::new(false),
-    write_mu: Mutex::new(()),
-    write_cv: Condvar::new(),
     accept_waiting: AtomicBool::new(false),
     accept_mu: Mutex::new(()),
     accept_cv: Condvar::new(),
@@ -102,29 +95,6 @@ pub(super) fn note_flush_wait() {
 pub(super) fn release_cache() {
     *lock(&CONTROL.pause) = false;
     CONTROL.pause_cv.notify_all();
-}
-
-fn release_writer() {
-    *lock(&CONTROL.writer_pause) = false;
-    CONTROL.writer_cv.notify_all();
-}
-
-fn pause_writer() {
-    *lock(&CONTROL.writer_pause) = true;
-}
-
-fn wait_until_writer_blocks() {
-    let guard = lock(&CONTROL.write_mu);
-    let (_guard, _) = CONTROL
-        .write_cv
-        .wait_timeout_while(guard, DEADLINE, |_| {
-            !CONTROL.writing.load(Ordering::Relaxed)
-        })
-        .unwrap_or_else(PoisonError::into_inner);
-    assert!(
-        CONTROL.writing.load(Ordering::Relaxed),
-        "the writer blocks on a client that is not reading"
-    );
 }
 
 fn wait_until_accept_waits() {
@@ -163,36 +133,6 @@ pub(super) fn park_reader() {
     );
 }
 
-pub(super) fn wait_if_writer_paused() {
-    let paused = lock(&CONTROL.writer_pause);
-    if !*paused {
-        return;
-    }
-    let (paused, _) = CONTROL
-        .writer_cv
-        .wait_timeout_while(paused, DEADLINE, |paused| *paused)
-        .unwrap_or_else(PoisonError::into_inner);
-    assert!(!*paused, "the writer is still paused");
-}
-
-pub(super) fn note_writer_blocked<T>(body: impl FnOnce() -> T) -> T {
-    if thread::current().name() != Some("writer") {
-        return body();
-    }
-    {
-        let _held = lock(&CONTROL.write_mu);
-        CONTROL.writing.store(true, Ordering::Relaxed);
-        CONTROL.write_cv.notify_all();
-    }
-    let result = body();
-    {
-        let _held = lock(&CONTROL.write_mu);
-        CONTROL.writing.store(false, Ordering::Relaxed);
-        CONTROL.write_cv.notify_all();
-    }
-    result
-}
-
 pub(super) fn note_accept_wait() {
     let _held = lock(&CONTROL.accept_mu);
     CONTROL.accept_waiting.store(true, Ordering::Relaxed);
@@ -206,9 +146,6 @@ fn reset() {
     CONTROL.hold_reader.store(false, Ordering::Relaxed);
     CONTROL.hold_cv.notify_all();
     CONTROL.parked.store(0, Ordering::Relaxed);
-    *lock(&CONTROL.writer_pause) = false;
-    CONTROL.writer_cv.notify_all();
-    CONTROL.writing.store(false, Ordering::Relaxed);
     CONTROL.accept_waiting.store(false, Ordering::Relaxed);
 }
 
@@ -219,7 +156,6 @@ impl Drop for Release {
         CONTROL.hold_reader.store(false, Ordering::Relaxed);
         CONTROL.hold_cv.notify_all();
         release_cache();
-        release_writer();
     }
 }
 
@@ -367,7 +303,7 @@ fn many_connections_leave_nothing_held() {
                     conns.live.iter().any(|(_, live)| {
                         live.reader.is_some() && live.writer.is_some() && live.shutdown.is_some()
                     }),
-                    "a live connection keeps its threads and its shutdown socket"
+                    "a live connection keeps its reader, its writer and its shutdown"
                 );
             }
             drop(client);
@@ -497,11 +433,163 @@ fn step() -> Event {
     Event::StepStarted(Empty {})
 }
 
-fn wide_context() -> Event {
-    Event::ContextAdded(ContextAdded {
-        text: "z".repeat(64 * 1024),
-        extension: "e".into(),
-        hook: "turn_start".into(),
+enum Hold {
+    Wait,
+    Go,
+    Fail,
+}
+
+struct HeldState {
+    entered: bool,
+    hold: Hold,
+}
+
+struct Held {
+    mu: Mutex<HeldState>,
+    cv: Condvar,
+    buf: Mutex<Vec<u8>>,
+    buf_cv: Condvar,
+}
+
+struct HeldWrite {
+    held: Arc<Held>,
+}
+
+impl Held {
+    fn new(hold: Hold) -> Arc<Self> {
+        Arc::new(Self {
+            mu: Mutex::new(HeldState {
+                entered: false,
+                hold,
+            }),
+            cv: Condvar::new(),
+            buf: Mutex::new(Vec::new()),
+            buf_cv: Condvar::new(),
+        })
+    }
+
+    fn fail(&self) {
+        lock(&self.mu).hold = Hold::Fail;
+        self.cv.notify_all();
+    }
+
+    fn release(&self) {
+        lock(&self.mu).hold = Hold::Go;
+        self.cv.notify_all();
+    }
+
+    fn wait_blocked(&self) {
+        let guard = lock(&self.mu);
+        let (guard, _) = self
+            .cv
+            .wait_timeout_while(guard, DEADLINE, |state| !state.entered)
+            .unwrap_or_else(PoisonError::into_inner);
+        assert!(guard.entered, "the writer is blocked in write");
+    }
+
+    fn wait_text(&self, ready: impl Fn(&str) -> bool, what: &str) -> String {
+        let guard = lock(&self.buf);
+        let (guard, _) = self
+            .buf_cv
+            .wait_timeout_while(guard, DEADLINE, |buf| !ready(&String::from_utf8_lossy(buf)))
+            .unwrap_or_else(PoisonError::into_inner);
+        let text = String::from_utf8_lossy(&guard).into_owned();
+        assert!(ready(&text), "{what}");
+        text
+    }
+}
+
+impl Write for HeldWrite {
+    fn write(&mut self, data: &[u8]) -> io::Result<usize> {
+        let mut state = lock(&self.held.mu);
+        state.entered = true;
+        self.held.cv.notify_all();
+        let (state, waited) = self
+            .held
+            .cv
+            .wait_timeout_while(state, DEADLINE, |state| matches!(state.hold, Hold::Wait))
+            .unwrap_or_else(PoisonError::into_inner);
+        if waited.timed_out() && matches!(state.hold, Hold::Wait) {
+            return Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the writer was not released",
+            ));
+        }
+        match state.hold {
+            Hold::Fail => Err(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "the connection shut down",
+            )),
+            Hold::Wait => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the writer was not released",
+            )),
+            Hold::Go => {
+                drop(state);
+                lock(&self.held.buf).extend_from_slice(data);
+                self.held.buf_cv.notify_all();
+                Ok(data.len())
+            }
+        }
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+fn lines_of(text: &str) -> Vec<Value> {
+    text.lines()
+        .filter_map(|line| serde_json::from_str(line).ok())
+        .collect()
+}
+
+fn attach_held(gate: &Arc<super::Gate>, held: &Arc<Held>, watcher: log::Watcher) {
+    let (stop_tx, stop_rx) = mpsc::channel();
+    let reader = thread::spawn(move || match stop_rx.recv_timeout(DEADLINE) {
+        Ok(()) | Err(_) => {}
+    });
+    let id = gate.push_reader(reader);
+    let fail = Arc::clone(held);
+    gate.set_shutdown(
+        id,
+        Box::new(move || {
+            fail.fail();
+            if let Ok(()) = stop_tx.send(()) {}
+        }),
+    );
+    crate::client::spawn_writer(
+        Arc::clone(gate),
+        id,
+        watcher,
+        Box::new(HeldWrite {
+            held: Arc::clone(held),
+        }),
+        false,
+    );
+}
+
+fn usage() -> Usage {
+    Usage {
+        tokens: Tokens {
+            input: 0,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 0,
+        },
+        cost: Some(0.0),
+        subscription_cost: 0.0,
+    }
+}
+
+fn exited() -> Event {
+    Event::FiberExited(FiberExited {
+        exit_code: 0,
+        usage: usage(),
+        final_message: None,
+        error: None,
+        suspended_on: None,
+        questions: None,
     })
 }
 
@@ -534,7 +622,7 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
     });
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        crate::client::write_loop(watcher, stream, false);
+        crate::client::write_loop(watcher, Box::new(stream), false);
         if let Ok(()) = tx.send(()) {}
     });
     rx.recv_timeout(DEADLINE)
@@ -543,125 +631,159 @@ fn a_disconnect_stops_a_writer_whose_queue_is_full() {
 }
 
 #[test]
-fn a_paused_writer_drops_ephemeral_lines_and_keeps_durable_ones() {
+fn an_acknowledgement_survives_a_lagged_queue() {
     reset();
-    let _release = Release;
-    pause_writer();
-    let opened = open();
-    let socket = opened.socket.clone();
-    let log = Arc::clone(&opened.log);
-    opened
-        .session
-        .run(Vec::new(), move |_inbox| {
-            let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sub", "full");
-            for _ in 0..1_200 {
-                log.append(&notice(), None, None).unwrap();
-            }
-            for _ in 0..3 {
-                log.append(&step(), None, None).unwrap();
-            }
-            release_writer();
-            let mut notices = 0;
-            let mut seqs = Vec::new();
-            loop {
-                let line = recv(&client);
-                if line["kind"] == "notice" {
-                    notices += 1;
-                }
-                if let Some(seq) = line["seq"].as_u64() {
-                    seqs.push(seq);
-                    if seq == 2 {
-                        break;
-                    }
-                }
-            }
-            assert!(
-                notices < 1_200,
-                "a paused writer drops ephemeral lines, got {notices}"
-            );
-            assert_eq!(seqs, vec![0, 1, 2]);
-            Ok(())
-        })
-        .unwrap();
-    close_within(opened.session, opened.log);
+    let temp = fakes::TempDir::new("fd");
+    let sessions = temp.path().join("h/projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), timed).unwrap());
+    let watcher = log.watch();
+    let injector = watcher.injector();
+    for _ in 0..1_200 {
+        log.append(&notice(), None, None).unwrap();
+    }
+    log.append(&step(), None, None).unwrap();
+    let ack = crate::session::envelope(
+        &id,
+        clock.as_ref(),
+        &Event::CommandAccepted(CommandAccepted {
+            command_id: CommandId("c_tools".into()),
+            result: None,
+        }),
+    );
+    crate::client::enqueue(&injector, ack);
+    let held = Held::new(Hold::Go);
+    let write = HeldWrite {
+        held: Arc::clone(&held),
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        crate::client::write_loop(watcher, Box::new(write), false);
+        if let Ok(()) = tx.send(()) {}
+    });
+    let text = held.wait_text(
+        |text| text.contains("c_tools") && text.contains("step_started"),
+        "the acknowledgement and the catch-up line arrive",
+    );
+    let ack_at = text
+        .find("c_tools")
+        .expect("the acknowledgement arrives from a lagged queue");
+    let step_at = text
+        .find("step_started")
+        .expect("catch-up returns the durable line the queue dropped");
+    assert!(
+        ack_at < step_at,
+        "a kept acknowledgement is returned before catch-up"
+    );
+    drop(log);
+    rx.recv_timeout(DEADLINE)
+        .expect("the writer ends once the log is dropped");
 }
 
 #[test]
-fn a_client_that_never_reads_does_not_hold_close_past_the_grace() {
+fn a_blocked_writer_holds_close_until_the_grace_passes() {
     reset();
-    let _release = Release;
     let opened = open();
     let clock = Arc::clone(&opened.clock);
-    let socket = opened.socket.clone();
-    let log = Arc::clone(&opened.log);
-    let (tx, rx) = mpsc::channel();
-    opened
-        .session
-        .run(Vec::new(), move |inbox| {
-            let client = Client::connect(&socket).unwrap();
-            client.slow(true);
-            client
-                .send(r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#)
-                .unwrap();
-            client
-                .send(
-                    r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"hi"}]}}"#,
-                )
-                .unwrap();
-            let stop = Arc::new(AtomicBool::new(false));
-            let wrote = Arc::new(AtomicUsize::new(0));
-            let appender = {
-                let log = Arc::clone(&log);
-                let stop = Arc::clone(&stop);
-                let wrote = Arc::clone(&wrote);
-                thread::spawn(move || {
-                    let line = wide_context();
-                    let size = 64 * 1024;
-                    while !stop.load(Ordering::Relaxed) {
-                        let at = wrote.fetch_add(size, Ordering::Relaxed);
-                        if at >= 64 * 1024 * 1024 {
-                            return;
-                        }
-                        log.append(&line, None, None).unwrap();
-                    }
-                })
-            };
-            match inbox
-                .recv_timeout(DEADLINE)
-                .expect("the prompt is delivered")
-            {
-                Delivery::Prompt(_, ack) => drop(ack),
-                Delivery::Steer(..)
-                | Delivery::SteerDrop(..)
-                | Delivery::Reply(..)
-                | Delivery::Close(_) => panic!("the prompt is delivered"),
-            }
-            wait_until_writer_blocks();
-            stop.store(true, Ordering::Relaxed);
-            appender.join().unwrap();
-            tx.send(client).unwrap();
-            Ok(())
-        })
-        .unwrap();
-    let client = rx.recv_timeout(DEADLINE).expect("the client is held");
+    let gate = Arc::clone(&opened.session.gate);
+    let watcher = opened.log.watch();
+    opened.log.append(&notice(), None, None).unwrap();
+    let held = Held::new(Hold::Wait);
+    attach_held(&gate, &held, watcher);
+    held.wait_blocked();
     let until = clock.now() + Duration::from_secs(2);
     let (done_tx, done_rx) = mpsc::channel();
     let session = opened.session;
-    let held = opened.log;
+    let log = opened.log;
     thread::spawn(move || {
-        session.close(held);
+        session.close(log);
         if let Ok(()) = done_tx.send(()) {}
     });
     assert!(
         clock.await_parked(until, DEADLINE),
-        "close waits for a writer that is not reading"
+        "close waits for a writer that is blocked in write"
+    );
+    assert!(
+        done_rx.try_recv().is_err(),
+        "close has not returned before the grace passes"
     );
     clock.advance(Duration::from_secs(2));
     done_rx
         .recv_timeout(DEADLINE)
         .expect("close returns once the grace has passed");
-    drop(client);
+}
+
+#[test]
+fn a_reading_writer_records_fiber_exited_before_it_ends() {
+    reset();
+    let opened = open();
+    let gate = Arc::clone(&opened.session.gate);
+    let watcher = opened.log.watch();
+    opened.log.append(&exited(), None, None).unwrap();
+    let held = Held::new(Hold::Go);
+    attach_held(&gate, &held, watcher);
+    held.wait_text(
+        |text| text.contains("fiber_exited"),
+        "a reading writer records fiber_exited",
+    );
+    {
+        let conns = super::lock(&gate.conns);
+        assert!(
+            conns.writers_open > 0,
+            "fiber_exited arrives before the writer ends"
+        );
+    }
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn a_slow_writer_keeps_durable_lines_in_seq_order() {
+    reset();
+    let opened = open();
+    let gate = Arc::clone(&opened.session.gate);
+    let watcher = opened.log.watch();
+    opened.log.append(&notice(), None, None).unwrap();
+    let held = Held::new(Hold::Wait);
+    attach_held(&gate, &held, watcher);
+    held.wait_blocked();
+    let log = Arc::clone(&opened.log);
+    for _ in 0..1_200 {
+        log.append(&notice(), None, None).unwrap();
+    }
+    for _ in 0..3 {
+        log.append(&step(), None, None).unwrap();
+    }
+    drop(log);
+    held.release();
+    let text = held.wait_text(
+        |text| lines_of(text).iter().any(|line| line["seq"] == 2),
+        "the durable lines arrive after the writer is released",
+    );
+    let lines = lines_of(&text);
+    let durable: Vec<&str> = lines
+        .iter()
+        .filter(|line| line["seq"].is_u64())
+        .filter_map(|line| line["kind"].as_str())
+        .collect();
+    assert_eq!(
+        durable,
+        ["step_started", "step_started", "step_started"],
+        "durable lines arrive in seq order"
+    );
+    let seqs: Vec<u64> = lines
+        .iter()
+        .filter_map(|line| line["seq"].as_u64())
+        .collect();
+    assert_eq!(seqs, vec![0, 1, 2]);
+    let notices = lines.iter().filter(|line| line["kind"] == "notice").count();
+    assert!(
+        notices < 1_200,
+        "a slow writer drops ephemeral lines, got {notices}"
+    );
+    close_within(opened.session, opened.log);
 }
 
 #[test]
