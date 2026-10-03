@@ -4,7 +4,7 @@
 
 use contract::commands::Reply;
 use contract::events::SteeringApplied;
-use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
+use contract::inbox::{Ack, Delivery, Message, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
 use crate::{Error, Loop};
@@ -24,13 +24,14 @@ const STALE_REPLY: &str = "That request is no longer pending.";
 /// A `reply`'s keys do not fit the pending request.
 pub(crate) const UNFIT_REPLY: &str = "That answer does not fit the pending request.";
 
-/// What the idle drain collected: the turn's input, in arrival order, and
-/// the prompts to accept once `turn_started` is written.
+/// What the idle drain collected. A prompt is accepted only while `messages`
+/// is empty, so when `prompt` is set the prompt is the first message.
 pub(crate) struct TurnInput {
-    /// Prompts and steers that start the turn, in arrival order.
+    /// The turn's input, in arrival order.
     pub(crate) messages: Vec<Message>,
-    /// One per prompt in `messages`. A steer was already accepted when taken.
-    pub(crate) prompts: Vec<Ack>,
+    /// Set when the first message is a prompt, accepted once `turn_started`
+    /// is written. A steer was already accepted when taken.
+    pub(crate) prompt: Option<Ack>,
 }
 
 /// What an approval wait should do with a delivery it took.
@@ -41,14 +42,6 @@ pub(crate) enum Waited {
     Reply(Reply, Ack),
     /// `close` was taken. The pending approval is now unanswerable.
     Closed,
-}
-
-/// A message taken by the idle drain, before `turn_started` is written.
-enum Piece {
-    /// Accepted once `turn_started` is written.
-    Prompt(Message, Ack),
-    /// Already accepted.
-    Steer(Message),
 }
 
 impl Loop {
@@ -64,12 +57,15 @@ impl Loop {
             let first = self.inbox.recv().ok()?;
             let mut batch = vec![first];
             batch.extend(self.inbox.try_iter());
-            let mut input = Vec::new();
+            let mut input = TurnInput {
+                messages: Vec::new(),
+                prompt: None,
+            };
             for delivery in batch {
                 self.admit_idle(delivery, &mut input);
             }
-            if !input.is_empty() {
-                return Some(assemble(input));
+            if !input.messages.is_empty() {
+                return Some(input);
             }
             if self.closing {
                 return None;
@@ -124,23 +120,24 @@ impl Loop {
     }
 
     /// `delivery` while the loop is still collecting a turn's input.
-    fn admit_idle(&mut self, delivery: Delivery, input: &mut Vec<Piece>) {
+    fn admit_idle(&mut self, delivery: Delivery, input: &mut TurnInput) {
         match delivery {
             Delivery::Prompt(message, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
-                } else if !input.is_empty() {
+                } else if !input.messages.is_empty() {
                     reject(ack, ErrorCode::Busy, BUSY);
                 } else {
-                    input.push(Piece::Prompt(message, ack));
+                    input.messages.push(message);
+                    input.prompt = Some(ack);
                 }
             }
             Delivery::Steer(message, ack) => {
-                if self.closing && input.is_empty() {
+                if self.closing && input.messages.is_empty() {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
                     accept(ack);
-                    input.push(Piece::Steer(message));
+                    input.messages.push(message);
                 }
             }
             Delivery::SteerDrop(id, ack) => {
@@ -192,60 +189,36 @@ impl Loop {
 
 /// Accepts a command that answers nothing.
 pub(crate) fn accept(ack: Ack) {
-    answer(ack, Ok(None));
+    (ack.0)(Ok(None));
 }
 
 /// Rejects a command. The sentence is Fiber's own
 /// (`docs/invocation.md`, "Driver commands").
 pub(crate) fn reject(ack: Ack, code: ErrorCode, message: &str) {
-    answer(
-        ack,
-        Err(Rejection {
-            code,
-            message: message.to_owned(),
-        }),
-    );
+    (ack.0)(Err(Rejection {
+        code,
+        message: message.to_owned(),
+    }));
 }
 
-fn answer(ack: Ack, given: Answer) {
-    (ack.0)(given);
-}
-
-fn assemble(input: Vec<Piece>) -> TurnInput {
-    let mut messages = Vec::with_capacity(input.len());
-    let mut prompts = Vec::new();
-    for piece in input {
-        match piece {
-            Piece::Prompt(message, ack) => {
-                messages.push(message);
-                prompts.push(ack);
-            }
-            Piece::Steer(message) => messages.push(message),
-        }
-    }
-    TurnInput { messages, prompts }
-}
-
-/// Removes the unapplied steer `id` names from the idle drain's input.
-fn drop_piece(input: &mut Vec<Piece>, id: &CommandId) -> bool {
-    let Some(index) = input.iter().position(|piece| match piece {
-        Piece::Steer(message) => message.sender.command_id == *id,
-        Piece::Prompt(_, _) => false,
-    }) else {
-        return false;
-    };
-    input.remove(index);
-    true
+/// Removes the unapplied steer `id` names. The prompt, when present, is the
+/// first message and is not a steer, so that index is skipped.
+fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
+    let skip = usize::from(input.prompt.is_some());
+    input
+        .messages
+        .iter()
+        .skip(skip)
+        .position(|message| message.sender.command_id == *id)
+        .map(|index| input.messages.remove(skip + index))
+        .is_some()
 }
 
 /// Removes the unapplied steer `id` names from `queued`.
 fn drop_queued(queued: &mut std::collections::VecDeque<Message>, id: &CommandId) -> bool {
-    let Some(index) = queued
+    queued
         .iter()
         .position(|message| message.sender.command_id == *id)
-    else {
-        return false;
-    };
-    queued.remove(index);
-    true
+        .map(|index| queued.remove(index))
+        .is_some()
 }

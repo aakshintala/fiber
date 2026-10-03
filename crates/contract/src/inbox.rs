@@ -46,6 +46,7 @@ impl fmt::Debug for Ack {
 }
 
 /// What the loop's inbox carries (`docs/invocation.md`, "Driver commands").
+#[derive(Debug)]
 pub enum Delivery {
     /// Starts a turn. Rejected `busy` while one is running, and `closing`
     /// after `close`.
@@ -61,39 +62,4 @@ pub enum Delivery {
     /// Accept no more prompts. The turn in flight finishes, then the loop
     /// exits.
     Close(Ack),
-}
-
-impl fmt::Debug for Delivery {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            Self::Prompt(message, ack) => {
-                f.debug_tuple("Prompt").field(message).field(ack).finish()
-            }
-            Self::Steer(message, ack) => f.debug_tuple("Steer").field(message).field(ack).finish(),
-            Self::SteerDrop(id, ack) => f.debug_tuple("SteerDrop").field(id).field(ack).finish(),
-            Self::Reply(reply, ack) => f.debug_tuple("Reply").field(reply).field(ack).finish(),
-            Self::Close(ack) => f.debug_tuple("Close").field(ack).finish(),
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{Ack, Delivery, Message};
-    use crate::CommandId;
-    use crate::shapes::{ContentPart, Origin, Sender};
-
-    #[test]
-    fn a_delivery_names_its_command_and_its_ack_in_debug() {
-        let message = Message {
-            content: vec![ContentPart::Text { text: "hi".into() }],
-            sender: Sender {
-                origin: Origin::Driver,
-                command_id: CommandId("c_1".into()),
-            },
-        };
-        let text = format!("{:?}", Delivery::Prompt(message, Ack(Box::new(|_| {}))));
-        assert!(text.starts_with("Prompt("), "{text}");
-        assert!(text.contains("Ack(..)"), "{text}");
-    }
 }

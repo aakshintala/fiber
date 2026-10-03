@@ -206,11 +206,7 @@ impl Loop {
     /// Runs turns until `close` is taken or every sender of the inbox is
     /// gone (`docs/invocation.md`, "Lifecycle").
     pub fn run(mut self) -> Result<(), Error> {
-        while !self.closing {
-            if self.turn()?.is_none() {
-                break;
-            }
-        }
+        while self.turn()?.is_some() {}
         Ok(())
     }
 
@@ -241,8 +237,8 @@ impl Loop {
             None,
         )?;
         // A prompt is accepted once its `turn_started` is written. A log
-        // error above drops these uncalled.
-        for ack in started.prompts {
+        // error above drops it uncalled.
+        if let Some(ack) = started.prompt {
             inbox::accept(ack);
         }
         let completed = loop {
