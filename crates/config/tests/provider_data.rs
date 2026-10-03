@@ -32,6 +32,22 @@ const DATABRICKS: &str = r#"{
 }"#;
 
 #[test]
+fn reviewer_model_reads_from_provider_data_and_is_none_when_absent() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","reviewer_model":"fast","models":[]}"#,
+    );
+    assert_eq!(
+        read_providers(&dir).unwrap()[0].reviewer_model,
+        Some("fast".into())
+    );
+    setup.write(&dir.join("providers/p.json"), r#"{"name":"p","models":[]}"#);
+    assert_eq!(read_providers(&dir).unwrap()[0].reviewer_model, None);
+}
+
+#[test]
 fn the_documented_provider_data_reads() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");

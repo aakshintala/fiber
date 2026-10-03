@@ -49,6 +49,12 @@ impl Endpoint {
     pub fn reference(&self) -> String {
         format!("{}/{}", self.provider, self.model)
     }
+
+    /// The output limit to send: the smaller of the request's limit and the
+    /// model's when both are set (`docs/errors.md`, "Output tokens").
+    pub fn output_limit(&self, request: Option<u64>) -> Option<u64> {
+        request.into_iter().chain(self.max_output_tokens).min()
+    }
 }
 
 /// Compatibility flags (`docs/configuration.md`, "A provider's data"). A
@@ -94,3 +100,7 @@ impl Compat {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "endpoint_tests.rs"]
+mod endpoint_tests;

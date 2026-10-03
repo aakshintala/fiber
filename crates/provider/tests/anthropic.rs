@@ -83,6 +83,7 @@ fn request() -> ModelRequest {
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "session_1".into(),
         previous_end: None,
+        max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
@@ -623,6 +624,31 @@ fn max_tokens_is_the_models_limit_and_never_exceeds_it() {
         .map(|n| sent_body(&server, n)["max_tokens"].clone())
         .collect();
     assert_eq!(sent, [json!(64_000), json!(1024), json!(64_000)]);
+}
+
+#[test]
+fn the_requests_own_output_limit_is_capped_by_the_models() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let limited = Endpoint {
+        max_output_tokens: Some(4096),
+        ..endpoint(&server)
+    };
+    let low = ModelRequest {
+        max_output_tokens: Some(1),
+        ..request()
+    };
+    let high = ModelRequest {
+        max_output_tokens: Some(9000),
+        ..request()
+    };
+    run(Box::new(Messages::new(limited.clone()).request(&low)))
+        .0
+        .unwrap();
+    run(Box::new(Messages::new(limited).request(&high)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["max_tokens"], 1);
+    assert_eq!(sent_body(&server, 1)["max_tokens"], 4096);
 }
 
 #[test]

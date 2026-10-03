@@ -163,6 +163,13 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         body.insert("store".into(), json!(store));
     }
     body.extend(endpoint.extra_body.clone());
+    if let Some(limit) = request
+        .max_output_tokens
+        .and_then(|request_limit| endpoint.output_limit(Some(request_limit)))
+    {
+        // The Responses API rejects values below 16.
+        body.insert("max_output_tokens".into(), json!(limit.max(16)));
+    }
     Value::Object(body).to_string().into_bytes()
 }
 

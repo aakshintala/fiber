@@ -98,6 +98,7 @@ fn request() -> ModelRequest {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
         previous_end: None,
+        max_output_tokens: None,
     }
 }
 
@@ -390,6 +391,29 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
     assert!(!String::from_utf8_lossy(&sent.body).contains("sk-secret"));
     assert!(sent.header("user-agent").unwrap().starts_with("fiber/"));
     assert_eq!(sent.header("accept"), Some("text/event-stream"));
+}
+
+#[test]
+fn the_requests_own_output_limit_is_sent_and_capped_by_the_models() {
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply()]).unwrap();
+    let limited = Endpoint {
+        max_output_tokens: Some(4096),
+        ..endpoint(&server)
+    };
+    let responses = Responses::new(limited);
+    let low = ModelRequest {
+        max_output_tokens: Some(1),
+        ..request()
+    };
+    let high = ModelRequest {
+        max_output_tokens: Some(9000),
+        ..request()
+    };
+    run(Box::new(responses.request(&low))).0.unwrap();
+    run(Box::new(responses.request(&high))).0.unwrap();
+    assert_eq!(sent_body(&server, 0)["max_output_tokens"], 16);
+    assert_eq!(sent_body(&server, 1)["max_output_tokens"], 4096);
 }
 
 #[test]
