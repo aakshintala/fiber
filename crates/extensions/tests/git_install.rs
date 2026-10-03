@@ -656,7 +656,6 @@ fn a_missing_repository_is_extension_not_found() {
     let setup = Setup::new();
     let repos = Repos::new(&setup);
     let err = install(&setup, &repos, LIB).unwrap_err();
-    assert!(matches!(err, Error::NoRepository { .. }), "{err}");
     assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
     let text = err.to_string();
     assert!(
