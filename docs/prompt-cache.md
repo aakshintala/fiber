@@ -185,8 +185,10 @@ less than the one rebuild warming guards against. The default cap is chosen by
 replaying the owner's real gaps ([#436](https://github.com/aakshintala/fiber/issues/436)).
 
 A `fiber ask` session and a delegate never warm: each exits when its run ends.
-Both keys are person-only, because warming spends the person's money while
-nobody is there.
+A repository may set both keys, as a company's policy for its repository:
+the worst a hostile value can do is spend money, bounded by the cap's ceiling
+(`docs/configuration.md`, "What a repository may set"). The person's
+per-project file overrides them.
 
 ## Switching model
 
