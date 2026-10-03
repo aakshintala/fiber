@@ -1,7 +1,9 @@
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
 
-use super::{Invocation, MENU, Run, command, parse_from, usage_sentence, version_line};
+use clap::error::ContextValue;
+
+use super::{Commands, Invocation, MENU, command, parse_from, usage_sentence, version_line};
 
 fn menu() -> String {
     format!("{MENU}\n")
@@ -41,7 +43,7 @@ fn the_menu_is_hand_grouped_and_names_every_subcommand() {
 
     for args in [&["fiber", "--help"][..], &["fiber", "-h"]] {
         let parsed = parse_from(args.iter().copied());
-        if let Invocation::Help(error) = parsed {
+        if let Invocation::Print(error) = parsed {
             assert_eq!(error.to_string(), menu(), "{args:?}");
         } else {
             panic!("{args:?} did not print help: {parsed:?}");
@@ -49,7 +51,10 @@ fn the_menu_is_hand_grouped_and_names_every_subcommand() {
     }
     let parsed = parse_from(["fiber", "help"]);
     assert!(
-        matches!(parsed, Invocation::Run(Run::Help(None))),
+        matches!(
+            parsed,
+            Invocation::Run(Some(Commands::Help { command: None }))
+        ),
         "{parsed:?}"
     );
     assert_eq!(super::render_help(None).unwrap(), menu());
@@ -61,7 +66,7 @@ fn version_is_the_package_version_and_there_is_no_capital_v() {
     assert_eq!(version_line(), line);
     for args in [&["fiber", "-v"][..], &["fiber", "--version"]] {
         let parsed = parse_from(args.iter().copied());
-        if let Invocation::Version(error) = parsed {
+        if let Invocation::Print(error) = parsed {
             assert_eq!(error.to_string(), line, "{args:?}");
         } else {
             panic!("{args:?}: {parsed:?}");
@@ -69,7 +74,7 @@ fn version_is_the_package_version_and_there_is_no_capital_v() {
     }
     let parsed = parse_from(["fiber", "version"]);
     assert!(
-        matches!(parsed, Invocation::Run(Run::Version)),
+        matches!(parsed, Invocation::Run(Some(Commands::Version))),
         "{parsed:?}"
     );
     assert_eq!(
@@ -156,43 +161,29 @@ fn other_parse_errors_are_one_sentence() {
 #[test]
 fn ask_takes_one_prompt_then_an_optional_dash() {
     let parsed = parse_from(["fiber", "ask", "hi", "-"]);
-    if let Invocation::Run(Run::Ask {
-        model: None,
-        prompt: Some(prompt),
-        dash: true,
-    }) = parsed
-    {
-        assert_eq!(prompt, "hi");
-    } else {
+    let Invocation::Run(Some(Commands::Ask(args))) = parsed else {
         panic!("{parsed:?}");
-    }
-
-    let parsed = parse_from(["fiber", "ask", "-"]);
-    assert!(
-        matches!(
-            parsed,
-            Invocation::Run(Run::Ask {
-                prompt: None,
-                dash: true,
-                ..
-            })
-        ),
-        "{parsed:?}"
+    };
+    assert_eq!(args.model, None);
+    assert_eq!(
+        super::ask_parts(&args.prompt).unwrap(),
+        (Some("hi".to_owned()), true)
     );
 
-    let parsed = parse_from(["fiber", "ask", "hi"]);
-    if let Invocation::Run(Run::Ask {
-        prompt: Some(prompt),
-        dash: false,
-        ..
-    }) = parsed
-    {
-        assert_eq!(prompt, "hi");
-    } else {
-        panic!("{parsed:?}");
-    }
+    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "-"]) else {
+        panic!("dash");
+    };
+    assert_eq!(super::ask_parts(&args.prompt).unwrap(), (None, true));
 
-    assert!(matches!(parse_from(["fiber"]), Invocation::Run(Run::Bare)));
+    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "hi"]) else {
+        panic!("prompt");
+    };
+    assert_eq!(
+        super::ask_parts(&args.prompt).unwrap(),
+        (Some("hi".to_owned()), false)
+    );
+
+    assert!(matches!(parse_from(["fiber"]), Invocation::Run(None)));
 
     let shape = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
     for args in [
@@ -200,8 +191,67 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
         &["fiber", "ask", "-", "a"],
         &["fiber", "ask", "-", "-"],
     ] {
-        let (ask, sentence) = usage(args);
-        assert!(ask, "{args:?}");
-        assert_eq!(sentence, shape, "{args:?}");
+        let Invocation::Run(Some(Commands::Ask(ask))) = parse_from(args.iter().copied()) else {
+            panic!("{args:?}");
+        };
+        assert_eq!(
+            super::ask_parts(&ask.prompt).unwrap_err(),
+            shape,
+            "{args:?}"
+        );
+    }
+}
+
+#[test]
+fn a_commands_help_matches_its_flag_and_names_fiber() {
+    let cmd = command();
+    let names: Vec<String> = cmd
+        .get_subcommands()
+        .map(|sub| sub.get_name().to_owned())
+        .collect();
+    assert!(!names.is_empty());
+    for name in &names {
+        let rendered = super::render_help(Some(name)).unwrap();
+        let Invocation::Print(error) = parse_from(["fiber", name, "--help"]) else {
+            panic!("{name} did not print help");
+        };
+        assert_eq!(rendered, error.to_string(), "{name}");
+        assert!(
+            rendered
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
+            "{name}\n{rendered}"
+        );
+    }
+    assert_eq!(
+        super::render_help(Some("nope")).unwrap_err(),
+        sentence(&["fiber", "nope"])
+    );
+}
+
+#[test]
+fn suggestions_are_the_text_clap_stored() {
+    assert_eq!(
+        super::all_suggestions(&ContextValue::String("install".to_owned())),
+        ["install".to_owned()]
+    );
+    assert_eq!(
+        super::all_suggestions(&ContextValue::Strings(vec![
+            "list".to_owned(),
+            "install".to_owned()
+        ])),
+        ["list".to_owned(), "install".to_owned()]
+    );
+    for value in [
+        ContextValue::None,
+        ContextValue::Bool(true),
+        ContextValue::Number(1),
+        ContextValue::StyledStr("install".into()),
+        ContextValue::StyledStrs(vec!["install".into()]),
+    ] {
+        assert!(
+            super::all_suggestions(&value).is_empty(),
+            "{value:?} is not a suggestion"
+        );
     }
 }

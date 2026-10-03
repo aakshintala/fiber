@@ -49,19 +49,21 @@ fn run() -> i32 {
     // Help and version print before anything reads the home, configuration,
     // credentials, or stdin.
     match cli::parse() {
-        cli::Invocation::Help(error) | cli::Invocation::Version(error) => {
+        cli::Invocation::Print(error) => {
             // A closed stdout leaves nobody to tell, as `fiber list` does.
             error.print().unwrap_or(());
             0
         }
-        cli::Invocation::Run(cli::Run::Version) => {
+        cli::Invocation::Run(Some(cli::Commands::Version)) => {
             let mut out = io::stdout().lock();
             write!(out, "{}", cli::version_line()).unwrap_or(());
             0
         }
-        cli::Invocation::Run(cli::Run::Help(name)) => print_help(name.as_deref()),
+        cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
+            print_help(command.as_deref())
+        }
         // The terminal door needs a tty and the hub; neither is built.
-        cli::Invocation::Run(cli::Run::Bare) => {
+        cli::Invocation::Run(None) => {
             eprintln!(
                 "fiber: The terminal door is not built; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage."
             );
@@ -78,15 +80,25 @@ fn run() -> i32 {
             eprintln!("fiber: {sentence}");
             2
         }
-        cli::Invocation::Run(cli::Run::Ask {
-            model,
-            prompt,
-            dash,
-        }) => ask(model, prompt, dash),
-        cli::Invocation::Run(cli::Run::Install(name)) => install("install", &name),
-        cli::Invocation::Run(cli::Run::Update(name)) => install("update", &name),
-        cli::Invocation::Run(cli::Run::Remove(name)) => remove(&name),
-        cli::Invocation::Run(cli::Run::List) => list(),
+        cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
+            match cli::ask_parts(&args.prompt) {
+                Ok((prompt, dash)) => ask(args.model, prompt, dash),
+                Err(sentence) => ask_failed(usage(sentence)),
+            }
+        }
+        cli::Invocation::Run(Some(cli::Commands::Install { name_or_path })) => {
+            let request = if extensions::is_path(&name_or_path) {
+                Request::Path(PathBuf::from(name_or_path))
+            } else {
+                Request::Install(name_or_path)
+            };
+            install(request)
+        }
+        cli::Invocation::Run(Some(cli::Commands::Update { name })) => {
+            install(Request::Update(name))
+        }
+        cli::Invocation::Run(Some(cli::Commands::Remove { name })) => remove(&name),
+        cli::Invocation::Run(Some(cli::Commands::List)) => list(),
     }
 }
 
@@ -94,16 +106,8 @@ fn run() -> i32 {
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
-fn install(command: &str, typed: &str) -> i32 {
-    let request = if command == "install" && extensions::is_path(typed) {
-        Request::Path(PathBuf::from(typed))
-    } else if command == "install" {
-        Request::Install(typed.to_owned())
-    } else {
-        Request::Update(typed.to_owned())
-    };
-    let installed = install_request(request);
-    match installed {
+fn install(request: Request) -> i32 {
+    match install_request(request) {
         Ok(Some(names)) => {
             for name in names {
                 eprintln!("fiber: installed {name}");

@@ -269,6 +269,7 @@ fn kill_group(group: u32) {
 /// stderr.
 struct Run {
     code: Option<i32>,
+    stdout: String,
     raw: Vec<String>,
     lines: Vec<Value>,
     stderr: String,
@@ -285,6 +286,7 @@ impl From<Output> for Run {
             .collect();
         Self {
             code: output.status.code(),
+            stdout,
             raw,
             lines,
             stderr: String::from_utf8(output.stderr).unwrap(),
@@ -465,8 +467,8 @@ fn a_prompt_on_stdin_runs_one_turn() {
     let run = setup.fiber(&["ask"], Some("review the brief\n"));
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "review the brief\n");
-    assert_eq!(run.kinds().first(), Some(&"fiber_started"));
     assert_eq!(run.last()["payload"]["text"], "Hello.");
 }
 
@@ -655,6 +657,30 @@ fn ask_help_prints_no_event_stream() {
 }
 
 #[test]
+fn help_for_every_command_matches_the_flag() {
+    let setup = Setup::new();
+    for name in [
+        "ask", "install", "update", "remove", "list", "version", "help",
+    ] {
+        let via_help = setup.fiber(&["help", name], None);
+        let via_flag = setup.fiber(&[name, "--help"], None);
+        assert_eq!(via_help.code, Some(0), "{name}: {}", via_help.stderr);
+        assert_eq!(via_flag.code, Some(0), "{name}: {}", via_flag.stderr);
+        assert_eq!(via_help.stderr, "");
+        assert_eq!(via_flag.stderr, "");
+        assert_eq!(via_help.stdout, via_flag.stdout, "{name}");
+        assert!(
+            via_flag
+                .stdout
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
+            "{name}: {}",
+            via_flag.stdout
+        );
+    }
+}
+
+#[test]
 fn each_command_prints_its_own_help() {
     let setup = Setup::new();
     let commands = [
@@ -756,6 +782,7 @@ fn a_prompt_argument_does_not_wait_on_an_open_stdin() {
     let run = setup.fiber_with_stdio(&["ask", "hi"], Stdio::from(reader));
     drop(writer);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi");
 }
 
@@ -766,6 +793,7 @@ fn a_prompt_argument_leaves_stdin_unread() {
     setup.provider(&server);
     let run = setup.fiber(&["ask", "hi"], Some("and this"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi");
 }
 
@@ -776,6 +804,7 @@ fn a_prompt_and_a_dash_append_stdin() {
     setup.provider(&server);
     let run = setup.fiber(&["ask", "hi", "-"], Some("more"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi\nmore");
 }
 
@@ -786,6 +815,7 @@ fn a_dash_reads_stdin_as_the_prompt() {
     setup.provider(&server);
     let run = setup.fiber(&["ask", "-"], Some("brief"));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "brief");
 }
 
@@ -822,6 +852,7 @@ fn a_prompt_argument_with_stdin_on_a_terminal_runs_without_reading_it() {
     let run = setup.fiber_on_terminal(&["ask", "hi"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi");
     assert_eq!(run.last()["payload"]["text"], "Hello.");
 }

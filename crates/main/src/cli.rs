@@ -43,12 +43,10 @@ const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quo
 /// What `fiber` was asked to do, or the parse error.
 #[derive(Debug)]
 pub(crate) enum Invocation {
-    /// Help, printed with clap's printer.
-    Help(clap::Error),
-    /// `-v` or `--version`, printed with clap's printer.
-    Version(clap::Error),
-    /// A command, or `fiber` with no arguments.
-    Run(Run),
+    /// Help or version, printed with clap's printer.
+    Print(clap::Error),
+    /// A command, or no arguments.
+    Run(Option<Commands>),
     /// A usage error. `ask` is whether argv's first argument is `ask`.
     Usage {
         /// Whether the invocation's first argument is `ask`.
@@ -56,34 +54,6 @@ pub(crate) enum Invocation {
         /// The one sentence, without the `fiber: ` prefix.
         sentence: String,
     },
-}
-
-/// A parsed command. `ask`'s prompt is decided here and read later.
-#[derive(Debug)]
-pub(crate) enum Run {
-    /// One session. `dash` is the trailing `-`.
-    Ask {
-        /// `--model`, when it was given.
-        model: Option<String>,
-        /// The prompt argument, when it was given.
-        prompt: Option<String>,
-        /// Whether `-` asked for stdin.
-        dash: bool,
-    },
-    /// `fiber install`.
-    Install(String),
-    /// `fiber update`.
-    Update(String),
-    /// `fiber remove`.
-    Remove(String),
-    /// `fiber list`.
-    List,
-    /// `fiber version`.
-    Version,
-    /// `fiber help`, or `fiber help <command>`.
-    Help(Option<String>),
-    /// No arguments: the terminal door, which is not built.
-    Bare,
 }
 
 #[derive(Parser)]
@@ -99,8 +69,8 @@ struct Cli {
     command: Option<Commands>,
 }
 
-#[derive(Subcommand)]
-enum Commands {
+#[derive(Debug, Subcommand)]
+pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
     /// Install an extension and its dependencies
@@ -133,15 +103,15 @@ enum Commands {
     },
 }
 
-#[derive(clap::Args)]
-struct AskArgs {
+#[derive(Debug, clap::Args)]
+pub(crate) struct AskArgs {
     /// The model for this run, as a person types it.
     #[arg(long, value_name = "model")]
-    model: Option<String>,
+    pub(crate) model: Option<String>,
 
     /// The prompt. A final `-` reads stdin.
     #[arg(value_name = "prompt", num_args = 0..)]
-    prompt: Vec<String>,
+    pub(crate) prompt: Vec<String>,
 }
 
 /// Parses the process arguments.
@@ -159,21 +129,15 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
     let ask = args.get(1).is_some_and(|arg| arg == "ask");
     match command().try_get_matches_from(&args) {
         Ok(matches) => match Cli::from_arg_matches(&matches) {
-            Ok(cli) => match run(cli) {
-                Ok(run) => Invocation::Run(run),
-                Err(sentence) => Invocation::Usage {
-                    ask: true,
-                    sentence,
-                },
-            },
+            Ok(cli) => Invocation::Run(cli.command),
             Err(error) => usage(error, ask),
         },
         Err(error) => {
             let kind = error.kind();
-            if kind == clap::error::ErrorKind::DisplayHelp {
-                Invocation::Help(error)
-            } else if kind == clap::error::ErrorKind::DisplayVersion {
-                Invocation::Version(error)
+            if kind == clap::error::ErrorKind::DisplayHelp
+                || kind == clap::error::ErrorKind::DisplayVersion
+            {
+                Invocation::Print(error)
             } else {
                 usage(error, ask)
             }
@@ -193,26 +157,6 @@ fn command() -> clap::Command {
     )
 }
 
-fn run(cli: Cli) -> Result<Run, String> {
-    Ok(match cli.command {
-        None => Run::Bare,
-        Some(Commands::Ask(args)) => {
-            let (prompt, dash) = ask_parts(&args.prompt)?;
-            Run::Ask {
-                model: args.model,
-                prompt,
-                dash,
-            }
-        }
-        Some(Commands::Install { name_or_path }) => Run::Install(name_or_path),
-        Some(Commands::Update { name }) => Run::Update(name),
-        Some(Commands::Remove { name }) => Run::Remove(name),
-        Some(Commands::List) => Run::List,
-        Some(Commands::Version) => Run::Version,
-        Some(Commands::Help { command }) => Run::Help(command),
-    })
-}
-
 /// The menu, or one command's help. An unknown name is the same sentence
 /// as invoking that name directly.
 pub(crate) fn render_help(name: Option<&str>) -> Result<String, String> {
@@ -220,6 +164,9 @@ pub(crate) fn render_help(name: Option<&str>) -> Result<String, String> {
     let Some(name) = name else {
         return Ok(cmd.render_help().to_string());
     };
+    // The usage line names the parent (`fiber ask`) only after the parent
+    // builds bin names, which `fiber ask --help` does while parsing.
+    cmd.build();
     let Some(sub) = cmd.find_subcommand_mut(name) else {
         let error = match command().try_get_matches_from(["fiber", name]) {
             Err(error) => error,
@@ -231,7 +178,7 @@ pub(crate) fn render_help(name: Option<&str>) -> Result<String, String> {
 }
 
 /// `-` is only the last positional. Anything else is one prompt too many.
-fn ask_parts(positionals: &[String]) -> Result<(Option<String>, bool), String> {
+pub(crate) fn ask_parts(positionals: &[String]) -> Result<(Option<String>, bool), String> {
     match positionals {
         [] => Ok((None, false)),
         [only] if only == "-" => Ok((None, true)),
@@ -302,9 +249,6 @@ fn all_suggestions(value: &ContextValue) -> Vec<String> {
     let texts = match value {
         ContextValue::String(text) => vec![text.clone()],
         ContextValue::Strings(texts) => texts.clone(),
-        ContextValue::StyledStr(text) => vec![text.to_string()],
-        ContextValue::StyledStrs(texts) => texts.iter().map(ToString::to_string).collect(),
-        ContextValue::None | ContextValue::Bool(_) | ContextValue::Number(_) => Vec::new(),
         _ => Vec::new(),
     };
     texts.into_iter().filter(|text| !text.is_empty()).collect()
