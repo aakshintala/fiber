@@ -38,6 +38,7 @@ fn not_built(command: &str) -> String {
 }
 
 struct Conn {
+    id: u64,
     gate: Arc<Gate>,
     direct: Option<UnixStream>,
     writer: Option<UnixStream>,
@@ -47,14 +48,20 @@ struct Conn {
     gone: bool,
 }
 
-/// Reads `stream` until the client hangs up.
-pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>) {
+/// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
+/// the reader in.
+pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
+    let _finish = Finish {
+        gate: Arc::clone(&gate),
+        id,
+    };
     let (direct, writer, shutdown) = match clones(&stream) {
         Some(clones) => clones,
         None => return,
     };
-    gate.push_shutdown(shutdown);
+    gate.set_shutdown(id, shutdown);
     let mut conn = Conn {
+        id,
         gate,
         direct: Some(direct),
         writer: Some(writer),
@@ -88,6 +95,19 @@ pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>) {
     }
 }
 
+struct Finish {
+    gate: Arc<Gate>,
+    id: u64,
+}
+
+impl Drop for Finish {
+    fn drop(&mut self) {
+        #[cfg(test)]
+        crate::session::park_reader_for_test();
+        self.gate.finish(self.id);
+    }
+}
+
 fn clones(stream: &UnixStream) -> Option<(UnixStream, UnixStream, UnixStream)> {
     let direct = stream.try_clone().ok()?;
     let writer = stream.try_clone().ok()?;
@@ -117,12 +137,7 @@ fn on_line(bytes: &[u8], conn: &mut Conn) {
         return;
     }
     if !built(&line.command) {
-        reject(
-            conn,
-            Some(line.id),
-            ErrorCode::UnknownCommand,
-            &not_built(&line.command),
-        );
+        unknown(conn, line.id, &line.command);
         return;
     }
     let parsed = match serde_json::from_value::<CommandLine>(line.value) {
@@ -229,23 +244,28 @@ fn dispatch(conn: &mut Conn, line: CommandLine) {
 }
 
 fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
-    let Some(log) = conn.gate.log.upgrade() else {
-        reject(conn, Some(id), ErrorCode::Closing, ENDED);
-        return;
-    };
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
-    let watcher = if summary {
-        log.watch()
-    } else {
-        match log.watch_all() {
-            Ok(watcher) => watcher,
-            Err(_) => {
-                reject(conn, Some(id), ErrorCode::InvalidArguments, UNFIT);
-                return;
+    // The log is dropped before `flush`, which waits. A connection that kept
+    // it would hold the session lock across that wait.
+    let (watcher, injector) = {
+        let Some(log) = conn.gate.log.upgrade() else {
+            reject(conn, Some(id), ErrorCode::Closing, ENDED);
+            return;
+        };
+        let watcher = if summary {
+            log.watch()
+        } else {
+            match log.watch_all() {
+                Ok(watcher) => watcher,
+                Err(_) => {
+                    reject(conn, Some(id), ErrorCode::InvalidArguments, UNFIT);
+                    return;
+                }
             }
-        }
+        };
+        let injector = watcher.injector();
+        (watcher, injector)
     };
-    let injector = watcher.injector();
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
     accept(conn, id, None);
@@ -275,7 +295,7 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
     let Some(stream) = conn.writer.take() else {
         return;
     };
-    spawn_writer(Arc::clone(&conn.gate), watcher, stream, summary);
+    spawn_writer(Arc::clone(&conn.gate), conn.id, watcher, stream, summary);
     // The writer is the only writer from here.
     drop(conn.direct.take());
 }
@@ -437,7 +457,13 @@ impl Drop for Once {
     }
 }
 
-fn spawn_writer(gate: Arc<Gate>, watcher: log::Watcher, stream: UnixStream, summary: bool) {
+fn spawn_writer(
+    gate: Arc<Gate>,
+    id: u64,
+    watcher: log::Watcher,
+    stream: UnixStream,
+    summary: bool,
+) {
     gate.begin_writer();
     let ended = Arc::clone(&gate);
     match thread::Builder::new()
@@ -446,7 +472,7 @@ fn spawn_writer(gate: Arc<Gate>, watcher: log::Watcher, stream: UnixStream, summ
             let _end = WriterEnd(ended);
             write_loop(watcher, stream, summary);
         }) {
-        Ok(handle) => gate.push_writer(handle),
+        Ok(handle) => gate.push_writer(id, handle),
         Err(_) => gate.end_writer(),
     }
 }

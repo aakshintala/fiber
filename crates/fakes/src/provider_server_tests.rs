@@ -1,6 +1,6 @@
 use std::io::{Cursor, Read, Write};
 use std::net::TcpStream;
-use std::sync::{PoisonError, mpsc};
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -74,14 +74,10 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
         tx.send(body).unwrap();
     });
 
-    let guard = lock(&server.state);
-    let (guard, _) = server
-        .arrived
-        .wait_timeout_while(guard, Duration::from_secs(2), |state| state.holding == 0)
-        .unwrap_or_else(PoisonError::into_inner);
-    assert!(guard.holding >= 1, "the response is held");
-    assert_eq!(guard.requests.len(), 1);
-    drop(guard);
+    assert!(
+        server.await_requests(1, Duration::from_secs(2)),
+        "the request is recorded while the response is held"
+    );
     assert!(
         rx.try_recv().is_err(),
         "the client has no body while the response is held"

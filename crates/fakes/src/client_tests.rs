@@ -15,19 +15,25 @@ fn a_paused_client_reads_nothing_until_told() {
     let (mut server, _) = listener.accept().unwrap();
     server.write_all(b"{\"ok\":true}\n").unwrap();
     server.set_nonblocking(true).unwrap();
-    let big = vec![b'y'; 64 * 1024];
-    let mut wrote = 0;
-    loop {
-        match server.write(big.get(wrote..).unwrap_or(&[])) {
+    let chunk = vec![b'y'; 64 * 1024];
+    let cap = 64 * 1024 * 1024;
+    let mut wrote = 0usize;
+    let mut blocked = false;
+    while wrote < cap {
+        match server.write(&chunk) {
             Ok(0) => break,
             Ok(n) => wrote += n,
-            Err(error) if error.kind() == ErrorKind::WouldBlock => break,
+            Err(error) if error.kind() == ErrorKind::Interrupted => {}
+            Err(error) if error.kind() == ErrorKind::WouldBlock => {
+                blocked = true;
+                break;
+            }
             Err(error) => panic!("{error}"),
         }
     }
     assert!(
-        wrote < big.len(),
-        "a paused client reads nothing, so the socket buffer fills"
+        blocked,
+        "a paused client reads nothing, so a write blocks before {cap} bytes"
     );
 
     client.slow(false);

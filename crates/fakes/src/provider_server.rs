@@ -108,8 +108,6 @@ struct State {
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
-    /// How many requests are waiting in [`ProviderServer::hold`].
-    holding: usize,
 }
 
 /// A fake provider listening on a local port. Each request gets the next
@@ -261,12 +259,9 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
             }),
         };
         if state.hold {
-            state.holding += 1;
-            arrived.notify_all();
             while state.hold && !state.stopping {
                 state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);
             }
-            state.holding -= 1;
         }
         response
     };

@@ -145,7 +145,12 @@ impl Opened {
             _temp,
             ..
         } = self;
-        session.close(log);
+        let (tx, rx) = mpsc::channel();
+        thread::spawn(move || {
+            session.close(log);
+            if let Ok(()) = tx.send(()) {}
+        });
+        rx.recv_timeout(DEADLINE).expect("close returned");
         _temp
     }
 }
@@ -371,6 +376,30 @@ fn a_bad_line_is_malformed_and_only_a_string_id_is_echoed() {
             let answer: Value = serde_json::from_slice(&buf).unwrap();
             assert_eq!(rejection(&answer), ("malformed", MALFORMED));
             assert_eq!(command_id(&answer), None);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn a_command_without_a_trailing_newline_is_answered() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), move |_inbox| {
+            let mut raw = UnixStream::connect(&socket).unwrap();
+            raw.write_all(br#"{"id":"c_nl","command":"tools"}"#)
+                .unwrap();
+            raw.shutdown(std::net::Shutdown::Write).unwrap();
+            raw.set_read_timeout(Some(DEADLINE)).unwrap();
+            let mut line = String::new();
+            BufReader::new(&raw)
+                .read_line(&mut line)
+                .expect("a command without a trailing newline is answered");
+            let value: Value = serde_json::from_str(line.trim_end()).unwrap();
+            assert_eq!(command_id(&value), Some("c_nl"));
             Ok(())
         })
         .unwrap();
@@ -665,6 +694,18 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
                 .map(|line| line["seq"].as_u64().unwrap())
                 .collect();
             assert_eq!(got, vec![2, 3, 4]);
+            send(
+                &client,
+                r#"{"id":"c_one","command":"history","args":{"from_seq":4,"to_seq":4}}"#,
+            );
+            let one = response(&client, "c_one");
+            let one: Vec<u64> = one["payload"]["result"]["lines"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|line| line["seq"].as_u64().unwrap())
+                .collect();
+            assert_eq!(one, vec![4]);
             assert!(
                 matches!(inbox.try_recv(), Ok(Delivery::Prompt(_, _))),
                 "the prompt was waiting unread while tools and history answered"

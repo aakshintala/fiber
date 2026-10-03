@@ -75,11 +75,18 @@ struct Snap {
     flushed: u64,
 }
 
+struct Live {
+    reader: Option<JoinHandle<()>>,
+    writer: Option<JoinHandle<()>>,
+    shutdown: Option<UnixStream>,
+}
+
 struct Conns {
-    readers: Vec<JoinHandle<()>>,
-    writers: Vec<JoinHandle<()>>,
-    shutdowns: Vec<UnixStream>,
+    live: Vec<(u64, Live)>,
     writers_open: u32,
+    /// The next connection id. Starts at 1, so a missed store cannot look
+    /// like the first connection.
+    next: u64,
 }
 
 impl Session {
@@ -150,9 +157,9 @@ impl Session {
     /// (the last handle, which releases the lock), waits up to [`GRACE`] for
     /// each writer, then shuts down whatever is still open.
     pub fn close(self, log: Arc<Log>) {
-        self.gate.stop.store(true, Ordering::Relaxed);
-        // Wakes `accept` if it is blocked. A connection during teardown is
-        // dropped, not served.
+        self.gate.mark_stopped();
+        // Wakes `accept` if it is blocked in `accept`. A connection during
+        // teardown is dropped, not served.
         match UnixStream::connect(&self.socket) {
             Ok(_) | Err(_) => {}
         }
@@ -166,7 +173,6 @@ impl Session {
         }
         drop(log);
         self.gate.wait_writers();
-        self.gate.shutdown_all();
         self.gate.join_clients();
         join(self.cache);
         join(self.printer);
@@ -214,24 +220,13 @@ impl Gate {
         }
     }
 
-    fn shutdown_all(&self) {
-        for stream in &lock(&self.conns).shutdowns {
-            match stream.shutdown(std::net::Shutdown::Both) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-    }
-
     fn join_clients(&self) {
-        let (readers, writers) = {
+        let live = {
             let mut conns = lock(&self.conns);
-            (
-                std::mem::take(&mut conns.readers),
-                std::mem::take(&mut conns.writers),
-            )
+            std::mem::take(&mut conns.live)
         };
-        for handle in readers.into_iter().chain(writers) {
-            join(handle);
+        for (_, live) in live {
+            reap(live);
         }
     }
 
@@ -241,9 +236,11 @@ impl Gate {
         let _one = lock(&self.flush_lock);
         let token = self.flush_seq.fetch_add(1, Ordering::Relaxed) + 1;
         self.cache_injector
-            .push(control_line(&self.session_id, client::FLUSH, token));
+            .push_kept(control_line(&self.session_id, client::FLUSH, token));
         let mut snap = lock(&self.snap);
         while snap.flushed < token && !self.stop.load(Ordering::Relaxed) {
+            #[cfg(test)]
+            tests::note_flush_wait();
             snap = self
                 .snap_ready
                 .wait(snap)
@@ -284,12 +281,77 @@ impl Gate {
         }
     }
 
-    pub(crate) fn push_shutdown(&self, stream: UnixStream) {
-        lock(&self.conns).shutdowns.push(stream);
+    /// Records `handle` and returns the id `serve` finishes the connection with.
+    pub(crate) fn push_reader(&self, handle: JoinHandle<()>) -> u64 {
+        let mut conns = lock(&self.conns);
+        let id = conns.next;
+        conns.next = conns.next.wrapping_add(1);
+        conns.live.push((
+            id,
+            Live {
+                reader: Some(handle),
+                writer: None,
+                shutdown: None,
+            },
+        ));
+        id
     }
 
-    pub(crate) fn push_reader(&self, handle: JoinHandle<()>) {
-        lock(&self.conns).readers.push(handle);
+    pub(crate) fn set_shutdown(&self, id: u64, stream: UnixStream) {
+        let mut conns = lock(&self.conns);
+        if let Some((_, live)) = conns.live.iter_mut().find(|(slot, _)| *slot == id) {
+            live.shutdown = Some(stream);
+        }
+    }
+
+    pub(crate) fn push_writer(&self, id: u64, handle: JoinHandle<()>) {
+        let mut conns = lock(&self.conns);
+        if let Some((_, live)) = conns.live.iter_mut().find(|(slot, _)| *slot == id) {
+            live.writer = Some(handle);
+        }
+        drop(conns);
+        self.writers.notify_all();
+    }
+
+    /// Drops this connection's socket and joins its writer. The reader calls
+    /// it as it exits.
+    pub(crate) fn finish(&self, id: u64) {
+        let taken = {
+            let mut conns = lock(&self.conns);
+            let pos = conns.live.iter().position(|(slot, _)| *slot == id);
+            pos.map(|pos| conns.live.swap_remove(pos).1)
+        };
+        if let Some(live) = taken {
+            reap(live);
+        }
+        self.writers.notify_all();
+    }
+
+    fn mark_stopped(&self) {
+        {
+            let _snap = lock(&self.snap);
+            self.stop.store(true, Ordering::Relaxed);
+            self.snap_ready.notify_all();
+        }
+        {
+            let _conns = lock(&self.conns);
+            self.stop.store(true, Ordering::Relaxed);
+            self.writers.notify_all();
+        }
+        #[cfg(test)]
+        tests::release_cache();
+    }
+
+    fn wait_for_room(&self) {
+        let conns = lock(&self.conns);
+        if self.stopped() {
+            return;
+        }
+        drop(
+            self.writers
+                .wait(conns)
+                .unwrap_or_else(PoisonError::into_inner),
+        );
     }
 
     pub(crate) fn begin_writer(&self) {
@@ -301,10 +363,6 @@ impl Gate {
         conns.writers_open = conns.writers_open.saturating_sub(1);
         drop(conns);
         self.writers.notify_all();
-    }
-
-    pub(crate) fn push_writer(&self, handle: JoinHandle<()>) {
-        lock(&self.conns).writers.push(handle);
     }
 
     pub(crate) fn stopped(&self) -> bool {
@@ -360,10 +418,9 @@ fn open_in(
         snap_ready: Condvar::new(),
         writers: Condvar::new(),
         conns: Mutex::new(Conns {
-            readers: Vec::new(),
-            writers: Vec::new(),
-            shutdowns: Vec::new(),
+            live: Vec::new(),
             writers_open: 0,
+            next: 1,
         }),
     });
     // The session's `Arc<Gate>` keeps this subscription alive: the weak
@@ -425,25 +482,73 @@ fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                 if gate.stopped() {
                     return;
                 }
-                let gate = Arc::clone(&gate);
-                let spawned = Arc::clone(&gate);
-                if let Ok(handle) = spawn("client", move || client::serve(stream, spawned)) {
-                    gate.push_reader(handle);
+                let (tx, rx) = mpsc::channel();
+                let child = Arc::clone(&gate);
+                if let Ok(handle) = spawn("client", move || {
+                    let Ok(id) = rx.recv() else {
+                        return;
+                    };
+                    client::serve(stream, child, id);
+                }) {
+                    let id = gate.push_reader(handle);
+                    if tx.send(id).is_err() {
+                        gate.finish(id);
+                    }
                 }
             }
-            Err(_) => {
+            // `Interrupted` is a stale wake. Any other error, such as too
+            // many open files, waits until a connection ends or the session
+            // stops, so the loop does not spin.
+            Err(error) => {
                 if gate.stopped() {
                     return;
+                }
+                if error.kind() != io::ErrorKind::Interrupted {
+                    gate.wait_for_room();
                 }
             }
         }
     }
 }
 
+/// Shuts the connection's socket and joins the threads still running on it.
+/// A reader reaping itself detaches its own handle; joining it would deadlock.
+fn reap(live: Live) {
+    if let Some(stream) = live.shutdown {
+        match stream.shutdown(std::net::Shutdown::Both) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    if let Some(writer) = live.writer {
+        join(writer);
+    }
+    if let Some(reader) = live.reader {
+        if reader.thread().id() == thread::current().id() {
+            drop(reader);
+        } else {
+            join(reader);
+        }
+    }
+}
+
+#[cfg(test)]
+fn before_cache_line(gate: &Gate) {
+    tests::before_cache_line(gate);
+}
+
+#[cfg(not(test))]
+fn before_cache_line(_: &Gate) {}
+
+#[cfg(test)]
+pub(crate) fn park_reader_for_test() {
+    tests::park_reader();
+}
+
 /// Keeps the latest `session_status` and `extensions_loaded`. A flush line
 /// marks that every line queued before it has been recorded.
 fn cache(mut watcher: Watcher, gate: &Gate) {
     while let Ok(Some(line)) = watcher.recv() {
+        before_cache_line(gate);
         if line.kind == client::FLUSH {
             let token = line
                 .payload
@@ -583,3 +688,7 @@ pub(crate) fn envelope(
         },
     }
 }
+
+#[cfg(test)]
+#[path = "session_tests.rs"]
+mod tests;

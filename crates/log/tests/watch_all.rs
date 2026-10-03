@@ -114,6 +114,30 @@ fn an_injected_line_arrives_in_push_order_and_is_dropped_when_lagged() {
 }
 
 #[test]
+fn a_kept_line_is_delivered_after_the_watcher_was_lagged() {
+    let (_tmp, log) = open("kept");
+    let watcher = log.watch();
+    let injector = watcher.injector();
+    for _ in 0..1_100 {
+        log.append(&delta("x"), None, None).unwrap();
+    }
+    injector.push_kept(marked("flush"));
+    let rx = relay(watcher);
+    let mut saw_flush = false;
+    for _ in 0..2_000 {
+        let line = rx
+            .recv_timeout(DEADLINE)
+            .expect("a kept line arrives after a full queue")
+            .expect("the log stays open until the kept line arrives");
+        if line.kind == "flush" {
+            saw_flush = true;
+            break;
+        }
+    }
+    assert!(saw_flush, "a kept line arrives after a full queue");
+}
+
+#[test]
 fn pushing_to_a_dropped_watchers_injector_does_nothing() {
     let (_tmp, log) = open("inject-drop");
     let watcher = log.watch();
