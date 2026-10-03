@@ -174,6 +174,18 @@ and asks for one token of output, so a person who returns after a long pause fin
 cache still warm. The refresh is logged as `usage_recorded` like any request,
 so its cost shows in the session's spend.
 
+A refresh is the session's last request with its output capped at one token,
+so it reads the cache only when every other byte is the same. A session sends
+no refresh when lowering the output cap would change anything else in the
+request. On Anthropic, a thinking level sent as a token budget is that case:
+`budget_tokens` must stay below `max_tokens`, so a one-token cap forces a
+different budget, and a change of thinking parameters invalidates Anthropic's
+cached messages ([research/prompt-cache/README.md](../research/prompt-cache/README.md)).
+The refresh would miss and pay for a full rebuild. A level sent as
+adaptive thinking or an effort parameter does not depend on the cap, and
+warms. pi skips warming in the same case (`isReplayable` in its
+`cache-warmer.js`).
+
 Warming stops at `cache.warm_cap` after the last turn, whether or not a client
 is connected. A connected client is not a signal: a terminal left open is
 connected all weekend (`docs/invocation.md`, "Lifecycle"). While warming, the
