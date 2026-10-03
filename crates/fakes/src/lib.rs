@@ -4,12 +4,14 @@
 //! (`docs/architecture.md`, "The call rules").
 
 pub mod clock;
+mod process_group;
 mod provider_server;
 mod scripted_provider;
 mod temp_dir;
 
 use std::path::PathBuf;
 
+pub use process_group::{WATCHDOG_SCRIPT, kill_group};
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
 pub use temp_dir::TempDir;
