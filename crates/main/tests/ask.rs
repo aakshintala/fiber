@@ -178,7 +178,7 @@ impl Setup {
         let output = match finished.recv_timeout(DEADLINE) {
             Ok(output) => output.unwrap(),
             Err(_) => {
-                kill_group(group);
+                fakes::kill_group(group, "KILL").unwrap();
                 // Reaps the killed child, so the check below sees the group
                 // as the kill left it.
                 let reaped = finished.recv_timeout(DEADLINE).is_ok();
@@ -232,12 +232,7 @@ fn write(file: &Path, value: &Value) {
 
 /// Whether any process remains in process group `group`.
 fn group_alive(group: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &format!("-{group}")])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    fakes::kill_group(group, "0").unwrap()
 }
 
 /// A pseudo-terminal, opened through rustix's safe calls. The main side
@@ -267,13 +262,6 @@ impl Terminal {
     }
 }
 
-fn kill_group(group: u32) {
-    Command::new("kill")
-        .args(["-KILL", "--", &format!("-{group}")])
-        .status()
-        .unwrap();
-}
-
 /// Spawns `command` in a new process group, then a watchdog in its own
 /// group. The watchdog's stdin is a pipe only this process holds: a newline
 /// means the child is reaped, and EOF means this process died, so the
@@ -287,12 +275,7 @@ fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
     let group_arg = group.to_string();
     let mut shell = Command::new("sh");
     shell
-        .args([
-            "-c",
-            r#"read -r line || kill -s KILL -- "-$1""#,
-            "watchdog",
-            group_arg.as_str(),
-        ])
+        .args(["-c", fakes::WATCHDOG_SCRIPT, "watchdog", group_arg.as_str()])
         .stdin(Stdio::piped())
         .stdout(Stdio::null())
         .stderr(Stdio::null())
@@ -355,10 +338,7 @@ impl Drop for KillGroup {
     fn drop(&mut self) {
         // A panic between spawn and reap still kills the group. Failure
         // here is ignored: the process may already be gone.
-        match Command::new("kill")
-            .args(["-KILL", "--", &format!("-{}", self.0)])
-            .status()
-        {
+        match fakes::kill_group(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }

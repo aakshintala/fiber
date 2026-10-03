@@ -246,6 +246,11 @@ reports the number of tests run on each target, so an empty suite cannot pass.
 Each test uses its own temporary directory and checks only its own processes
 and files, never a machine-wide count.
 
+Every process-group signal in a test goes through the guarded helper in
+`fakes`, which refuses a group id of 1 or less: `kill(-1)` signals every
+process the user owns. Mutation testing runs in CI only, never on a developer
+machine.
+
 ### Waits and timeouts
 
 A test waits for the signal that proves the operation it needs: a socket
