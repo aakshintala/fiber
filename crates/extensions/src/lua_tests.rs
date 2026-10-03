@@ -11,6 +11,12 @@ use super::*;
 /// Wall-clock bound on a wait for the VM, a server, or a thread.
 const WAIT: Duration = Duration::from_secs(5);
 
+/// Hub-state polling bound from origin/main's `until` helper.
+const WAIT_UNTIL: Duration = Duration::from_secs(2);
+
+/// How long to wait for a hold-server accept signal.
+const WAIT_SERVER: Duration = Duration::from_secs(3);
+
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
 /// where it reaches the Rust caller past the `pcall`; Fiber's builds abort at
@@ -406,7 +412,7 @@ fn serve_after(
 /// Waits until `check` holds for the hub's state, or two seconds pass.
 fn until(hub: &Hub, check: impl Fn(&Shared) -> bool) -> bool {
     let shared = hub.lock();
-    hub.wait_for(shared, WAIT, check)
+    hub.wait_for(shared, WAIT_UNTIL, check)
 }
 
 fn stop(hub: &Hub) {
@@ -429,7 +435,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     let clock = FakeClock::new();
     let (hub, hold, done) = serve_after(&dir, "hold", &clock);
     accepted_rx
-        .recv_timeout(WAIT)
+        .recv_timeout(WAIT_UNTIL)
         .expect("waited for hold to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
@@ -437,7 +443,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     )));
     let later = hub.lock().push(command("later"), Value::Null, clock.now());
     stop(&hub);
-    done.recv_timeout(WAIT)
+    done.recv_timeout(WAIT_UNTIL)
         .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
@@ -471,7 +477,7 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         s.calls.get(&spin),
         Some(Progress::Done(_))
     )));
-    done.recv_timeout(WAIT)
+    done.recv_timeout(WAIT_UNTIL)
         .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
@@ -574,11 +580,11 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
     park_accepted
-        .recv_timeout(WAIT)
+        .recv_timeout(WAIT_SERVER)
         .expect("waited for park to reach the server");
     run("models", |e| e.provider_call("p", "models", Value::Null));
     models_accepted
-        .recv_timeout(WAIT)
+        .recv_timeout(WAIT_SERVER)
         .expect("waited for models to reach the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
@@ -586,7 +592,7 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         .expect("waited for sign to pass its clock check");
     let abandon = asked + Duration::from_millis(50) + GRACE;
     assert!(
-        clock.await_parked(abandon, WAIT),
+        clock.await_parked(abandon, WAIT_SERVER),
         "waited for sign to park at its grace"
     );
     clock.advance(Duration::from_millis(50) + GRACE);

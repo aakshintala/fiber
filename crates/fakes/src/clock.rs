@@ -16,7 +16,6 @@ struct Parked {
 }
 
 struct State {
-    origin: Instant,
     offset: Duration,
     parked: Vec<Parked>,
     next_id: u64,
@@ -28,6 +27,7 @@ struct State {
 /// it never reads again. [`FakeClock::advance`] and [`Clock::sleep`] are the
 /// only things that move it.
 pub struct FakeClock {
+    origin: Instant,
     state: Mutex<State>,
     parked_cv: Condvar,
 }
@@ -44,8 +44,8 @@ impl FakeClock {
         // reading of the process clock.
         let origin = Instant::now();
         Arc::new(Self {
+            origin,
             state: Mutex::new(State {
-                origin,
                 offset: Duration::ZERO,
                 parked: Vec::new(),
                 next_id: 0,
@@ -57,7 +57,7 @@ impl FakeClock {
 
     /// The monotonic instant `now()` returned at construction.
     pub fn origin(&self) -> Instant {
-        lock(&self.state).origin
+        self.origin
     }
 
     /// Moves `now()` and `wall()` forward by `d`, then wakes every live
@@ -110,11 +110,7 @@ impl FakeClock {
 
 impl Clock for FakeClock {
     fn now(&self) -> Instant {
-        let state = lock(&self.state);
-        state
-            .origin
-            .checked_add(state.offset)
-            .unwrap_or(state.origin)
+        now_in(&lock(&self.state), self.origin)
     }
 
     fn wall(&self) -> SystemTime {
@@ -132,10 +128,7 @@ impl Clock for FakeClock {
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
         let id = {
             let mut state = lock(&self.state);
-            let now = state
-                .origin
-                .checked_add(state.offset)
-                .unwrap_or(state.origin);
+            let now = now_in(&state, self.origin);
             if until.is_some_and(|until| until <= now) {
                 None
             } else {
@@ -173,6 +166,10 @@ impl Drop for Leave<'_> {
             .parked
             .retain(|parked| parked.id != self.id);
     }
+}
+
+fn now_in(state: &State, origin: Instant) -> Instant {
+    origin.checked_add(state.offset).unwrap_or(origin)
 }
 
 fn parked_count(state: &State, until: Instant) -> usize {

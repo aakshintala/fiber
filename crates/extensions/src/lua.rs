@@ -331,7 +331,6 @@ pub(crate) use setup::Deadline;
 struct Vm {
     lua: Lua,
     name: String,
-    clock: Arc<dyn Clock>,
     deadline: Deadline,
     /// What `host.http` yields, so a callback's own yield is not a request.
     http_tag: mlua::Value,
@@ -392,7 +391,6 @@ impl Vm {
         let vm = Self {
             lua,
             name: name.to_owned(),
-            clock,
             deadline,
             http_tag,
             commands,
@@ -558,8 +556,7 @@ impl Vm {
         deadline: Option<Instant>,
     ) -> Result<setup::Poll, Error> {
         self.deadline.restore(deadline);
-        let now = self.clock.now();
-        if expired(deadline, now) {
+        if self.deadline.passed() {
             return Err(self.timed_out(callback, timeout));
         }
         let values = match thread.resume::<MultiValue>(args) {

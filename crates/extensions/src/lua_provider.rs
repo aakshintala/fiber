@@ -10,6 +10,7 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{ModelData, Secret};
+use contract::clock::Clock;
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
@@ -87,8 +88,7 @@ impl LuaProvider {
     pub fn token(self: &Arc<Self>) -> Result<Secret, Error> {
         let mut state = lock(&self.token);
         if let Some((token, expires)) = &state.current
-            && let Ok(left) =
-                expires.duration_since(contract::clock::Clock::wall(self.extension.clock()))
+            && let Ok(left) = expires.duration_since(self.extension.clock().wall())
             && !left.is_zero()
         {
             let token = token.clone();
