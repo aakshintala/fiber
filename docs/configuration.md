@@ -107,7 +107,7 @@ set the key.
 | `handoff.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
 | `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
-| `cache.warm_cap` | set by the replay in [#436](https://github.com/aakshintala/fiber/issues/436) | yes | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes. |
+| `cache.warm_cap` | `"2h"` | yes | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes (`docs/prompt-cache.md`, "Warming while idle"). |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
