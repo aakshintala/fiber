@@ -162,6 +162,7 @@ impl Setup {
             .spawn()
             .unwrap();
         let group = child.id();
+        let mut guard = KillGroup::arm(group);
         // Taking the pipe closes it once written.
         if let Some(mut pipe) = child.stdin.take()
             && let Some(text) = text
@@ -191,6 +192,7 @@ impl Setup {
             !group_alive(group),
             "`fiber` left a process in its group behind"
         );
+        guard.disarm();
         Run::from(output)
     }
 
@@ -253,6 +255,60 @@ fn kill_group(group: u32) {
         .args(["-KILL", "--", &format!("-{group}")])
         .status()
         .unwrap();
+}
+
+/// Kills process group `group` on drop, unless [`KillGroup::disarm`] ran
+/// after the child was reaped and the group was empty.
+struct KillGroup {
+    group: Option<u32>,
+}
+
+impl KillGroup {
+    fn arm(group: u32) -> Self {
+        Self { group: Some(group) }
+    }
+
+    fn disarm(&mut self) {
+        self.group = None;
+    }
+}
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        if let Some(group) = self.group.take() {
+            // A panic between spawn and reap still kills the group. Failure
+            // here is ignored: the process may already be gone.
+            match Command::new("kill")
+                .args(["-KILL", "--", &format!("-{group}")])
+                .status()
+            {
+                Ok(_) | Err(_) => {}
+            }
+        }
+    }
+}
+
+#[test]
+fn dropping_the_group_guard_kills_the_group() {
+    let mut child = Command::new("sleep")
+        .arg("30")
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let group = child.id();
+    drop(KillGroup::arm(group));
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        while group_alive(group) {
+            thread::yield_now();
+        }
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+    });
+    rx.recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the process group to die"));
+    child.wait().unwrap();
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
