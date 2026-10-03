@@ -51,16 +51,158 @@ fn the_schema_is_command_workdir_and_timeout() {
     assert_eq!(properties["timeout_ms"]["minimum"], 0);
 }
 
-#[test]
-fn effects_are_executes_and_not_reversible() {
-    let effects = shell().effects(&args("echo hi")).unwrap();
+fn effects(shell: &Shell, command: &str) -> contract::tool::Effects {
+    shell.effects(&args(command)).unwrap()
+}
+
+fn assert_closed(effects: &contract::tool::Effects) {
     assert_eq!(effects.declared.effects, vec![Effect::Executes]);
     assert!(!effects.declared.reversible);
     assert!(effects.declared.paths.is_none());
-    assert!(effects.subject.is_none());
-    assert!(effects.prefix.is_none());
-    let again = shell().effects(&Map::new()).unwrap();
-    assert_eq!(again, effects);
+}
+
+#[test]
+fn a_listed_command_reads_and_names_its_subject() {
+    let dir = fakes::TempDir::new("fiber-shell-effects");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let root = dir.path().to_str().unwrap().to_owned();
+    let git = effects(&shell, "git status");
+    assert_eq!(git.declared.effects, vec![Effect::Reads]);
+    assert!(git.declared.reversible);
+    assert_eq!(git.subject.as_deref(), Some("git status"));
+    assert_eq!(git.prefix.as_deref(), Some("git status"));
+    assert_eq!(git.declared.paths, Some(vec![root]));
+}
+
+#[test]
+fn a_plain_command_offers_its_prefix() {
+    let dir = fakes::TempDir::new("fiber-shell-effects");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let npm = effects(&shell, "npm test -- --watch");
+    assert_closed(&npm);
+    assert_eq!(npm.subject.as_deref(), Some("npm test -- --watch"));
+    assert_eq!(npm.prefix.as_deref(), Some("npm test"));
+    let spaced = effects(&shell, "npm  test -- --watch");
+    assert_eq!(spaced.subject.as_deref(), Some("npm test -- --watch"));
+    assert_eq!(spaced.prefix.as_deref(), Some("npm test"));
+    let remove = effects(&shell, "rm -rf build");
+    assert_closed(&remove);
+    assert_eq!(remove.subject.as_deref(), Some("rm -rf build"));
+    assert_eq!(remove.prefix.as_deref(), Some("rm"));
+    let quoted = effects(&shell, "'npm' test");
+    assert_eq!(quoted.subject.as_deref(), Some("'npm' test"));
+    assert!(quoted.prefix.is_none());
+    let dotted = effects(&shell, "npm test.js");
+    assert_eq!(dotted.prefix.as_deref(), Some("npm"));
+    let path = effects(&shell, "cat foo/bar");
+    assert_eq!(path.prefix.as_deref(), Some("cat"));
+}
+
+#[test]
+fn paths_are_absolute_operands_and_the_workdir_when_there_are_none() {
+    let dir = fakes::TempDir::new("fiber-shell-effects");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let root = dir.path().to_str().unwrap().to_owned();
+    let src = dir.path().join("src");
+    assert_eq!(
+        effects(&shell, "ls").declared.paths,
+        Some(vec![root.clone()])
+    );
+    assert_eq!(
+        effects(&shell, "cat src").declared.paths,
+        Some(vec![src.to_str().unwrap().to_owned()])
+    );
+    assert_eq!(
+        effects(&shell, "cat /etc/hosts").declared.paths,
+        Some(vec!["/etc/hosts".to_owned()])
+    );
+    assert_eq!(
+        effects(&shell, "cat /etc//hosts").declared.paths,
+        Some(vec!["/etc//hosts".to_owned()])
+    );
+    assert_eq!(
+        effects(&shell, "cat src /etc/hosts").declared.paths,
+        Some(vec![
+            src.to_str().unwrap().to_owned(),
+            "/etc/hosts".to_owned()
+        ])
+    );
+    assert_eq!(
+        effects(&shell, "ls ..").declared.paths,
+        Some(vec![dir.path().join("..").to_str().unwrap().to_owned()])
+    );
+    let listed = effects(&shell, "ls 'src'");
+    assert_eq!(listed.subject.as_deref(), Some("ls 'src'"));
+    assert_eq!(listed.prefix.as_deref(), Some("ls"));
+    assert_eq!(
+        listed.declared.paths,
+        Some(vec![src.to_str().unwrap().to_owned()])
+    );
+    let both = effects(&shell, "ls src && git status");
+    assert_eq!(both.declared.effects, vec![Effect::Reads]);
+    assert!(both.declared.reversible);
+    assert!(both.subject.is_none());
+    assert!(both.prefix.is_none());
+    assert_eq!(
+        both.declared.paths,
+        Some(vec![src.to_str().unwrap().to_owned(), root])
+    );
+    let sub = dir.path().join("sub");
+    std::fs::create_dir(&sub).unwrap();
+    let mut arguments = args("ls file");
+    arguments.insert("workdir".into(), json!("sub"));
+    let nested = shell.effects(&arguments).unwrap();
+    assert_eq!(
+        nested.declared.paths,
+        Some(vec![sub.join("file").to_str().unwrap().to_owned()])
+    );
+}
+
+#[test]
+fn an_unknown_or_flagged_command_declares_no_paths() {
+    let dir = fakes::TempDir::new("fiber-shell-effects");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let python = effects(&shell, "python -c 'open(\"/tmp/x\")'");
+    assert_closed(&python);
+    assert_eq!(
+        python.subject.as_deref(),
+        Some("python -c 'open(\"/tmp/x\")'")
+    );
+    assert_eq!(python.prefix.as_deref(), Some("python"));
+    let diff = effects(&shell, "git diff --output=out.txt");
+    assert_closed(&diff);
+    assert_eq!(diff.subject.as_deref(), Some("git diff --output=out.txt"));
+    assert_eq!(diff.prefix.as_deref(), Some("git diff"));
+    let sort = effects(&shell, "sort -o x y");
+    assert_closed(&sort);
+    assert_eq!(sort.subject.as_deref(), Some("sort -o x y"));
+    assert_eq!(sort.prefix.as_deref(), Some("sort"));
+    let substituted = effects(&shell, "cat $(echo x)");
+    assert_closed(&substituted);
+    assert!(substituted.subject.is_none());
+    assert!(substituted.prefix.is_none());
+    let assigned = effects(&shell, "FOO=bar ls");
+    assert_closed(&assigned);
+    assert!(assigned.subject.is_none());
+    assert!(assigned.prefix.is_none());
+}
+
+#[test]
+fn an_invalid_call_is_executes_with_no_subject() {
+    let dir = fakes::TempDir::new("fiber-shell-effects");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let mut bad_timeout = args("git status");
+    bad_timeout.insert("timeout_ms".into(), json!(-1));
+    let mut bad_dir = args("git status");
+    bad_dir.insert("workdir".into(), json!("no/such/directory"));
+    let mut not_string = Map::new();
+    not_string.insert("command".into(), json!(1));
+    for arguments in [Map::new(), bad_timeout, bad_dir, not_string] {
+        let effects = shell.effects(&arguments).unwrap();
+        assert_closed(&effects);
+        assert!(effects.subject.is_none());
+        assert!(effects.prefix.is_none());
+    }
 }
 
 #[test]
