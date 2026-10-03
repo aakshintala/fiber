@@ -46,7 +46,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 | Tool | Arguments | What it does |
 |---|---|---|
 | `delegate_spawn` | `description`, `prompt`, `model`, `isolation`, `workspace`, `timeout_ms` | Starts a delegate. Returns a receipt with the delegate id and the output path. |
-| `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model or effort: see "Forks". |
+| `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model or thinking level: see "Forks". |
 | `delegate_message` | `id`, `message` | Steers a running delegate, or resumes a finished one. |
 | `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, and the quota of each provider and harness (`docs/tools.md`, "Provider quota"). |
 | `jobs` | as `docs/tools.md` | Lists, waits for and stops delegates. |
@@ -69,9 +69,12 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 ## Choosing a model
 
 - `model` is a configured role name, or a full reference
-  `harness:provider/model:effort`, such as `claude:opus:high`,
-  `fiber:openai/gpt-5.6:xhigh` or `cursor-agent:composer-2.5` (cursor-agent
-  writes effort inside its model name).
+  `harness:provider/model:level`, such as `claude:opus:high`,
+  `fiber:openai/gpt-5.6:xhigh` or `cursor-agent:composer-2.5`. The last part
+  is the harness's own word: for Fiber it is a thinking level
+  (`docs/model-routing.md`, "Thinking"), for another harness it is passed to
+  that harness's flag, such as Claude Code's `--effort` (cursor-agent writes
+  it inside its model name).
 - It is required and checked when the call is made. An invalid value fails with
   `invalid_arguments` and lists the valid roles and references.
 - Neither the roles nor the references appear in any tool definition or the
@@ -259,8 +262,8 @@ final message, any questions, usage totals and worktree state. Their keys are
   clones (`docs/state.md`).
 - A fork exists to share its parent's prompt cache. Its first request must match
   the parent's byte for byte up to the new content, so:
-  - It takes no model or effort. It runs on the parent's model, effort and
-    thinking configuration, and every request setting that changes the prefix.
+  - It takes no model or thinking level. It runs on the parent's model and
+    thinking level, and every request setting that changes the prefix.
   - It sends the parent's latest preamble before its point, as logged in
     `preamble_built`, so its tool set, system prompt and request settings
     match (`docs/prompt-cache.md`, "The preamble").
@@ -313,7 +316,7 @@ As Lua, none of which runs on a model request:
 
 - **Configuration.** The harness loads the person's configuration for it.
   `command` passes only what drives the program: print mode, the JSON output
-  stream, the session id, the model and effort, the auto-mode flags, resume, and where
+  stream, the session id, the model and its effort flag, the auto-mode flags, resume, and where
   the harness takes one per run, `fiber mcp serve` ("Delegates on another
   harness").
 - **Session id.** Fiber fixes the harness's session id before the program

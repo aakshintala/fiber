@@ -91,7 +91,7 @@ groups, then the flags and examples.
 | Command | What it does |
 |---|---|
 | `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
-| `ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). |
+| `ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
 | `resume [<id>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
 | `continue` | Opens the most recent session in this project, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
 | `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
@@ -425,7 +425,8 @@ id is a usage error, because `ask` has no list to show.
 
 **A session exits when it has been idle for `session.idle_exit_ms`**, 30 minutes
 by default (`docs/configuration.md`), whoever is connected. Idle means no turn
-running and no jobs running. Waiting on an approval or a question is idle,
+running, no jobs running and no cache warming (`docs/prompt-cache.md`,
+"Warming while idle"). Waiting on an approval or a question is idle,
 because nothing is in flight. Connected clients do not keep a session alive: a
 phone or a terminal left open is connected all the time. Leaving never
 cancels. When the delay passes, Fiber gives the ending notice and exits.
@@ -700,11 +701,16 @@ web and mobile clients are
 ## Isolation
 
 Fiber accepts a workspace path, runs in it, and records it on
-`session_started`. Fiber creates a worktree only for a delegate that asks for
-one (`docs/delegates.md`). A supervisor starting Fiber still makes the tree
-and passes the path; it needs git anyway to report what changed. This follows
-`docs/architecture.md`'s "`main` holds no feature logic" and keeps git out of
-the binary.
+`session_started`. Fiber creates a worktree when one is asked for: by a
+delegate's `isolation: worktree` (`docs/delegates.md`), by the terminal's
+"new worktree" switch (`docs/tui.md`, "Home"), or by `fiber ask --worktree`.
+All three use the same rules (`docs/delegates.md`, "Worktrees"): a new branch
+from the workspace's HEAD in a worktree under
+`~/.fiber/projects/<key>/worktrees/<id>`, removed at the end when it holds
+nothing uncommitted and no commits beyond its base, kept otherwise, and
+`invalid_arguments` outside a git repository. Fiber runs the `git` program; no
+git library is linked in. A supervisor that wants its own tree still makes it
+and passes the path.
 
 ## The delegation supervisor is external
 
