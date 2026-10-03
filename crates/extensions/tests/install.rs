@@ -166,3 +166,24 @@ fn a_source_holding_fiber_home_or_inside_it_is_refused() {
     assert!(matches!(err, Error::Overlaps { .. }), "{err:?}");
     assert!(inner.join("extension.json").is_file());
 }
+
+#[test]
+fn unsettled_wrong_name_and_a_taken_directory_have_their_codes() {
+    assert_eq!(Error::Unresolved.code(), ErrorCode::VersionConflict);
+    assert_eq!(
+        Error::WrongName {
+            asked: "github.com/acme/asked".into(),
+            found: "github.com/acme/found".into(),
+        }
+        .code(),
+        ErrorCode::ExtensionNotFound
+    );
+    assert_eq!(
+        Error::SlugTaken {
+            name: "github.com/a-b/c".into(),
+            other: "github.com/a/b-c".into(),
+        }
+        .code(),
+        ErrorCode::Usage
+    );
+}

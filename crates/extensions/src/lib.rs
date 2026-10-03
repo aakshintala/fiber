@@ -93,11 +93,19 @@ pub enum Error {
     /// `git` is not on the `PATH`.
     #[error("`git` is not installed. Install git, then run the command again.")]
     GitMissing,
-    /// A `git` command failed, such as a fetch of an unknown repository.
+    /// A `git` command failed.
     #[error("`git {command}` failed: {why}")]
     Git {
         /// The arguments.
         command: String,
+        /// What `git` said.
+        why: String,
+    },
+    /// `git ls-remote` reported that the repository does not exist.
+    #[error("`{name}` was not found: {why}")]
+    NoRepository {
+        /// The repository `git` was asked for.
+        name: String,
         /// What `git` said.
         why: String,
     },
@@ -309,24 +317,20 @@ impl Error {
         match self {
             Self::Config(e) => e.code(),
             Self::Io { .. } => ErrorCode::IoFailed,
-            Self::Overlaps { .. } | Self::GitMissing => ErrorCode::Usage,
-            Self::Git { .. }
-            | Self::Busy
+            Self::Overlaps { .. } | Self::GitMissing | Self::SlugTaken { .. } => ErrorCode::Usage,
+            Self::Git { .. } | Self::Download { .. } => ErrorCode::FetchFailed,
+            Self::Busy
             | Self::BadRecord { .. }
             | Self::InstallStep { .. }
-            | Self::Download { .. }
             | Self::BinaryChecksum { .. }
             | Self::Rollback { .. } => ErrorCode::IoFailed,
             Self::InstallExited { .. } => ErrorCode::NonzeroExit,
-            // debt: weakens docs/errors.md, "Registry" (config_invalid); fixed
-            // by #365 (MajorConflict, NoVersion, NoTag) and #384 (Unresolved,
-            // WrongName, SlugTaken). All six map to config_invalid.
-            Self::MajorConflict { .. }
-            | Self::NoVersion { .. }
-            | Self::Unresolved
-            | Self::WrongName { .. }
-            | Self::SlugTaken { .. }
-            | Self::NoTag { .. } => ErrorCode::ConfigInvalid,
+            Self::MajorConflict { .. } | Self::NoVersion { .. } | Self::Unresolved => {
+                ErrorCode::VersionConflict
+            }
+            Self::NoRepository { .. } | Self::NoTag { .. } | Self::WrongName { .. } => {
+                ErrorCode::ExtensionNotFound
+            }
             Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
             // debt: weakens docs/extensions.md, "Installing"; fixed by #363.
             // Usage stands in for extension_incompatible.

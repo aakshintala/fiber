@@ -38,22 +38,47 @@ pub fn is_path(typed: &str) -> bool {
     typed.starts_with(['.', '/', '~']) || Path::new(typed).join("extension.json").is_file()
 }
 
-/// A name as its repository and the directory inside it: the first three
-/// segments are the repository (`github.com/owner/repo`).
-// debt: weakens docs/extensions.md, "Names"; fixed by #365. The first three
-// parts are always the repository; a .git marker for subgroups is not read.
+/// A name as its repository and the directory inside it
+/// (`docs/extensions.md`, "Names").
+///
+/// Without a `.git` marker, the first three segments are the repository
+/// (`github.com/owner/repo`). A segment that is `<x>.git`, with `<x>`
+/// non-empty, marks where the repository ends, so a repository inside
+/// subgroups can be named. The marker stays on the repository string.
 pub(crate) fn split(name: &str) -> Result<(&str, &str), Error> {
-    let (repo, dir) = match name.match_indices('/').nth(2) {
-        Some((i, _)) => {
-            let (repo, rest) = name.split_at(i);
-            (repo, rest.strip_prefix('/').unwrap_or(rest))
-        }
-        None => (name, ""),
-    };
-    if repo.split('/').count() != 3 || repo.split('/').any(str::is_empty) {
+    let end = git_marker_end(name)
+        .or_else(|| name.match_indices('/').nth(2).map(|(i, _)| i))
+        .unwrap_or(name.len());
+    let (repo, rest) = name.split_at(end);
+    let dir = rest.strip_prefix('/').unwrap_or(rest);
+    // A marked repository needs at least three segments; an unmarked one
+    // is exactly the first three, so fewer than three is the same refusal.
+    if repo.split('/').count() < 3 || repo.split('/').any(str::is_empty) {
         return Err(Error::BadName { name: name.into() });
     }
     Ok((repo, dir))
+}
+
+/// The byte index just past the first `<x>.git` segment, when the name has one.
+fn git_marker_end(name: &str) -> Option<usize> {
+    let mut end = 0;
+    for segment in name.split('/') {
+        end += segment.len();
+        if segment.len() > ".git".len() && segment.ends_with(".git") {
+            return Some(end);
+        }
+        end += 1;
+    }
+    None
+}
+
+/// Whether `ls-remote`'s stderr means the repository is not there.
+/// "Could not read from remote repository" is not enough: an SSH
+/// authentication failure prints it too, and a host that asks for
+/// credentials cannot be told apart from a missing repository.
+fn repository_missing(why: &str) -> bool {
+    let why = why.to_lowercase();
+    why.contains("not found") || why.contains("does not appear to be a git repository")
 }
 
 /// Where extensions are fetched from.
@@ -104,7 +129,16 @@ impl Origin {
     /// The repository's tags.
     pub(crate) fn tags(&self, repo: &str) -> Result<Vec<String>, Error> {
         let url = (self.url)(repo);
-        let out = self.run(&["ls-remote", "--tags", "--refs", &url], None)?;
+        let out = match self.run(&["ls-remote", "--tags", "--refs", &url], None) {
+            Ok(out) => out,
+            Err(Error::Git { why, .. }) if repository_missing(&why) => {
+                return Err(Error::NoRepository {
+                    name: repo.into(),
+                    why,
+                });
+            }
+            Err(err) => return Err(err),
+        };
         Ok(out
             .lines()
             .filter_map(|l| l.split_once("refs/tags/").map(|(_, t)| t.to_owned()))
@@ -147,6 +181,7 @@ impl Origin {
 #[cfg(test)]
 mod tests {
     use super::{SHORT_NAMES, full_name, is_path, split};
+    use crate::Error;
 
     #[test]
     fn every_short_name_is_a_first_party_provider() {
@@ -181,8 +216,50 @@ mod tests {
             split("github.com/a/b/p/q").unwrap(),
             ("github.com/a/b", "p/q")
         );
-        for bad in ["muse", "a/b", "a//b", "/a/b"] {
-            assert!(split(bad).is_err(), "{bad}");
+        assert_eq!(
+            split("gitlab.com/g/s/repo.git/p/q").unwrap(),
+            ("gitlab.com/g/s/repo.git", "p/q")
+        );
+        assert_eq!(
+            split("gitlab.com/g/s/repo.git").unwrap(),
+            ("gitlab.com/g/s/repo.git", "")
+        );
+        assert_eq!(
+            split("github.com/a/b.git/p").unwrap(),
+            ("github.com/a/b.git", "p")
+        );
+        assert_eq!(split("github.com/a/b/p").unwrap(), ("github.com/a/b", "p"));
+        // The first `.git` segment ends the repository; a later one is a directory.
+        assert_eq!(
+            split("gitlab.com/g/s/repo.git/nested.git/p").unwrap(),
+            ("gitlab.com/g/s/repo.git", "nested.git/p")
+        );
+        assert_eq!(
+            split("github.com/a/x.git.git").unwrap(),
+            ("github.com/a/x.git.git", "")
+        );
+        // A bare `.git` segment is not a marker.
+        assert_eq!(
+            split("gitlab.com/g/s/.git/p").unwrap(),
+            ("gitlab.com/g/s", ".git/p")
+        );
+        // `repo.gitx` is not a marker, so the first three parts stay the repository.
+        assert_eq!(
+            split("github.com/a/repo.gitx/p").unwrap(),
+            ("github.com/a/repo.gitx", "p")
+        );
+        assert_eq!(split("github.com/a/b/").unwrap(), ("github.com/a/b", ""));
+        for bad in [
+            "muse",
+            "a/b",
+            "a//b",
+            "/a/b",
+            "a/b.git/p",
+            "gitlab.com//repo.git/p",
+            ".git/p",
+            "github.com/a.git/b",
+        ] {
+            assert!(matches!(split(bad), Err(Error::BadName { .. })), "{bad}");
         }
     }
 }

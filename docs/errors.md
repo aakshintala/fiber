@@ -253,7 +253,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
 | `usage` | exit | the invocation or its environment is wrong; exits 2 |
-| `version_conflict` | exit | an install needs two majors of one dependency, or no tag meets a minimum; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
+| `version_conflict` | exit | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
 
 Notices, for a failure outside any action:
 
