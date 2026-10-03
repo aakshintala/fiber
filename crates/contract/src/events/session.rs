@@ -52,6 +52,9 @@ pub struct FinalMessage {
 pub struct SessionStarted {
     /// The workspace root.
     pub workspace: String,
+    /// The environment variables the session runs commands with, without
+    /// their values (`docs/invocation.md`, "A session's environment").
+    pub variables: Variables,
     /// For a delegate, its parent (`docs/delegates.md`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub parent: Option<Parent>,
@@ -61,6 +64,27 @@ pub struct SessionStarted {
     /// For a rewind, what rides after the history.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rewind: Option<Rewind>,
+}
+
+/// A session's environment variables, without their values.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Variables {
+    /// The `PATH`.
+    pub path: String,
+    /// The other variables' names, sorted.
+    pub names: Vec<String>,
+    /// Where the environment came from.
+    pub source: VariablesSource,
+}
+
+/// Where a session's environment came from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VariablesSource {
+    /// The hub's login-shell capture succeeded.
+    LoginShell,
+    /// The capture failed, or no hub started the session.
+    Inherited,
 }
 
 /// A delegate's parent session.

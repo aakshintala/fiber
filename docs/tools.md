@@ -406,8 +406,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 ### Running a command
 
 - The command runs as `/bin/bash -c <command>`, or `sh -c` where `/bin/bash`
-  does not exist. It gets the environment Fiber was launched with and reads
-  no shell startup files.
+  does not exist. It gets the session's environment and reads no shell
+  startup files (`docs/invocation.md`, "A session's environment"). That
+  environment already holds the `PATH` and variables the person's startup
+  files set; aliases and shell functions are not carried.
 - It runs in a new process session and its own process group, with no
   controlling terminal, and standard input connected to nothing
   (`/dev/null`). Standard output and standard error are one stream, in the

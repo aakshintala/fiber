@@ -959,3 +959,29 @@ fn a_negative_budget_refuses_the_first_request() {
         "The session reached its spending budget of $-1.00 (budget.usd)."
     );
 }
+
+#[test]
+fn session_started_records_the_path_and_the_other_names_without_values() {
+    let mut session = Session::new(vec![Scripted::text("Done.")], None);
+    session.inbox.send(delivery("one")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let variables = &lines[0].payload["variables"];
+    // No hub starts this session, so it keeps the environment it was given
+    // (`docs/invocation.md`, "A session's environment").
+    assert_eq!(variables["source"], "inherited");
+    assert_eq!(variables["path"], std::env::var("PATH").unwrap());
+    let names: Vec<&str> = variables["names"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|name| name.as_str().unwrap())
+        .collect();
+    assert!(!names.contains(&"PATH"));
+    let mut expected: Vec<String> = std::env::vars_os()
+        .map(|(name, _)| name.to_string_lossy().into_owned())
+        .filter(|name| name != "PATH")
+        .collect();
+    expected.sort();
+    assert_eq!(names, expected);
+}
