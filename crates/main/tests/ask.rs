@@ -23,7 +23,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Request, Response, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 
@@ -207,6 +207,16 @@ impl Setup {
     fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
         self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
     }
+}
+
+/// The recorded credential header equals the fingerprint of `value`, the
+/// bytes that package sends (`docs/testing.md`, "Model calls").
+fn assert_fingerprint(request: &Request, header: &str, value: &str) {
+    assert_eq!(
+        request.header(header).map(str::to_owned),
+        Some(fingerprint(value)),
+        "{header}"
+    );
 }
 
 fn write(file: &Path, value: &Value) {
@@ -486,7 +496,7 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
-    assert_eq!(requests[0].header("authorization"), Some("<masked>"));
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test");
     assert!(String::from_utf8_lossy(&requests[0].body).contains("\"hi\""));
 }
 
@@ -1442,7 +1452,7 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
             "opencode-go/muse-spark-1.3-contributor",
             "What is the weather in Paris?",
         ],
-        &[("OPENCODE_API_KEY", "sk-test")],
+        &[("OPENCODE_API_KEY", "sk-test-opencode-go")],
     );
 
     assert_weather(&run);
@@ -1450,6 +1460,7 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.path, "/zen/go/v1/responses");
+        assert_fingerprint(request, "authorization", "Bearer sk-test-opencode-go");
         assert_eq!(request.header("x-opencode-session"), Some(run.session_id()));
         assert!(request.header("user-agent").unwrap().starts_with("fiber/"));
     }
@@ -1534,7 +1545,7 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "muse/muse-spark-1.3-contributor", "hi"],
-        &[("META_API_KEY", "sk-test")],
+        &[("META_API_KEY", "sk-test-muse")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1560,6 +1571,7 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-muse");
     assert_eq!(requests[0].header("x-opencode-session"), None);
     assert!(
         requests[0]
@@ -1610,7 +1622,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             "anthropic/claude-sonnet-5-5",
             "What is the weather in Paris? Use the tool.",
         ],
-        &[("ANTHROPIC_API_KEY", "sk-test")],
+        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1644,7 +1656,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.path, "/v1/messages");
-        assert_eq!(request.header("x-api-key"), Some("<masked>"));
+        assert_fingerprint(request, "x-api-key", "sk-test-anthropic");
     }
 }
 
@@ -1674,7 +1686,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
             "openai/gpt-6-luna",
             "Call f with a=\"x\".",
         ],
-        &[("OPENAI_API_KEY", "sk-test")],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1704,7 +1716,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.path, "/v1/responses");
-        assert_eq!(request.header("authorization"), Some("<masked>"));
+        assert_fingerprint(request, "authorization", "Bearer sk-test-openai");
         let body: Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(body["store"], Value::Bool(false));
     }
@@ -1740,7 +1752,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             "gemini/gemini-3.1-flash-lite",
             "Plot point x=3 y=4 with v \"a\".",
         ],
-        &[("GEMINI_API_KEY", "sk-test")],
+        &[("GEMINI_API_KEY", "sk-test-gemini")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1784,7 +1796,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             request.path,
             "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
         );
-        assert_eq!(request.header("x-goog-api-key"), Some("<masked>"));
+        assert_fingerprint(request, "x-goog-api-key", "sk-test-gemini");
     }
 }
 
@@ -1799,7 +1811,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "anthropic/claude-sonnet-5-5", "hi"],
-        &[("ANTHROPIC_API_KEY", "sk-test")],
+        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1808,6 +1820,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/messages");
+    assert_fingerprint(&requests[0], "x-api-key", "sk-test-anthropic");
 }
 
 #[test]
@@ -1821,7 +1834,7 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "openai/gpt-6-luna", "hi"],
-        &[("OPENAI_API_KEY", "sk-test")],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1830,6 +1843,7 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openai");
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["store"], Value::Bool(false));
 }
@@ -1849,7 +1863,7 @@ fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "gemini/gemini-3.1-flash-lite", "hi"],
-        &[("GEMINI_API_KEY", "sk-test")],
+        &[("GEMINI_API_KEY", "sk-test-gemini")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1861,6 +1875,7 @@ fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
         requests[0].path,
         "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
     );
+    assert_fingerprint(&requests[0], "x-goog-api-key", "sk-test-gemini");
 }
 
 #[test]
@@ -1994,7 +2009,7 @@ fn a_zen_model_is_sent_to_zens_url() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "opencode-zen/muse-spark-1.3", "hi"],
-        &[("OPENCODE_API_KEY", "sk-test")],
+        &[("OPENCODE_API_KEY", "sk-test-zen")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -2002,6 +2017,7 @@ fn a_zen_model_is_sent_to_zens_url() {
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
     assert_eq!(requests[0].path, "/zen/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-zen");
     assert_eq!(
         requests[0].header("x-opencode-session"),
         Some(run.session_id())
