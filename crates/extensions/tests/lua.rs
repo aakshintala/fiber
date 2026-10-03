@@ -486,7 +486,16 @@ fn a_second_command_waits_until_the_parked_command_finishes() {
     accepted_rx
         .recv_timeout(WAIT)
         .expect("waited for the first command to reach the server");
-    assert_eq!(ext.provider_functions("p").unwrap(), ["sign"]);
+    let (listed_tx, listed_rx) = mpsc::channel();
+    let listed = Arc::clone(&ext);
+    std::thread::spawn(move || listed_tx.send(listed.provider_functions("p")));
+    assert_eq!(
+        listed_rx
+            .recv_timeout(WAIT)
+            .expect("waited for the provider's functions")
+            .unwrap(),
+        ["sign"]
+    );
     let second = start(&ext, "second");
     assert!(
         second.recv_timeout(Duration::from_millis(200)).is_err(),

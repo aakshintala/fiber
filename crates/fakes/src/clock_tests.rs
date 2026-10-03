@@ -170,15 +170,93 @@ fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
     );
     let clock_t = Arc::clone(&clock);
     let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        let _ = tx.send(clock_t.await_parked(until, Duration::from_secs(30)));
-    });
+    thread::spawn(
+        move || match tx.send(clock_t.await_parked(until, Duration::from_secs(30))) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        },
+    );
     assert!(
         rx.recv_timeout(Duration::from_secs(5))
             .expect("waited for await_parked to see the thread already parked")
     );
     release_tx.send(()).unwrap();
     parked.join().unwrap();
+}
+
+/// `await_parked_count` on a helper. A mutant that waits out its 30 s `within`
+/// fails this 5 s wait.
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+fn await_count(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let clock = Arc::clone(clock);
+    thread::spawn(move || {
+        match tx.send(clock.await_parked_count(until, count, Duration::from_secs(30))) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("waited for await_parked_count")
+}
+
+/// Parks `n` threads at `until`. Each reports from inside `wait_until`, which
+/// is past the park, then waits at most 5 s to be released. The returned
+/// lock is `false` until the test sets it and notifies.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+fn park_n(
+    clock: &Arc<FakeClock>,
+    until: std::time::Instant,
+    n: usize,
+) -> Arc<(Mutex<bool>, Condvar)> {
+    let release = Arc::new((Mutex::new(false), Condvar::new()));
+    let (parked_tx, parked_rx) = mpsc::channel();
+    for _ in 0..n {
+        let clock = Arc::clone(clock);
+        let release = Arc::clone(&release);
+        let parked_tx = parked_tx.clone();
+        thread::spawn(move || {
+            clock.wait_until(Some(until), &mut |_bound| {
+                match parked_tx.send(()) {
+                    Ok(()) | Err(mpsc::SendError(())) => {}
+                }
+                let (lock, cv) = &*release;
+                let guard = lock.lock().unwrap();
+                drop(cv.wait_timeout_while(guard, Duration::from_secs(5), |go| !*go));
+            });
+        });
+    }
+    for _ in 0..n {
+        parked_rx
+            .recv_timeout(Duration::from_secs(5))
+            .expect("waited for a thread to park");
+    }
+    release
+}
+
+#[test]
+fn await_parked_count_is_false_before_any_thread_parks() {
+    let clock = FakeClock::new();
+    assert!(!clock.await_parked_count(clock.origin() + Duration::from_secs(5), 1, Duration::ZERO));
+}
+
+#[test]
+fn await_parked_count_is_true_when_the_count_is_already_parked() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let release = park_n(&clock, until, 1);
+    assert!(await_count(&clock, until, 1));
+    *release.0.lock().unwrap() = true;
+    release.1.notify_all();
+}
+
+#[test]
+fn await_parked_count_is_true_when_more_than_the_count_are_parked() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let release = park_n(&clock, until, 2);
+    assert!(await_count(&clock, until, 1));
+    *release.0.lock().unwrap() = true;
+    release.1.notify_all();
 }
 
 #[test]

@@ -289,9 +289,11 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
 fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
     let (tx, rx) = mpsc::channel();
     let server = Arc::clone(server);
-    thread::spawn(move || {
-        let _ = tx.send(server.await_requests(count, Duration::from_secs(30)));
-    });
+    thread::spawn(
+        move || match tx.send(server.await_requests(count, Duration::from_secs(30))) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        },
+    );
     rx.recv_timeout(Duration::from_secs(5))
         .expect("waited for await_requests")
 }

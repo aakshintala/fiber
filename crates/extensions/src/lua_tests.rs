@@ -328,13 +328,28 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
 /// An extension dropped while running is stopped, so its thread quits.
 #[test]
 fn dropping_the_extension_stops_it() {
-    let ext = LuaExtension::new(
+    let ext = Arc::new(LuaExtension::new(
         "fixture",
         fakes::lua_fixture(),
         "/nonexistent-fiber-home",
         FakeClock::new(),
+    ));
+    let caller = Arc::clone(&ext);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = caller.command("echo", "hi");
+        drop(caller);
+        match done_tx.send(result) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    assert_eq!(
+        done_rx
+            .recv_timeout(WAIT)
+            .expect("waited for echo")
+            .unwrap(),
+        "hi"
     );
-    assert_eq!(ext.command("echo", "hi").unwrap(), "hi");
     let hub = Arc::clone(&ext.hub);
     drop(ext);
     assert!(matches!(
