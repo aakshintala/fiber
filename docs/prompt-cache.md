@@ -13,7 +13,8 @@ Vocabulary is `GLOSSARY.md`: prompt cache, preamble, session, turn, step.
 A request is the preamble, then the conversation.
 
 The preamble is the system prompt, the tool definitions and the request
-settings: model, thinking level, `tool_choice` and cache lifetime. The
+settings: model, thinking level, `tool_choice`, cache lifetime and credential
+label. The
 conversation is everything the session log adds after it, rendered in log
 order.
 
@@ -38,7 +39,7 @@ The preamble is built at four points, and only these:
 | Session start | Built before the first request. |
 | Resume | Built again from current inputs: the person's system prompt files, extension prompt texts, the model's addendum, the servers' tool lists. Instruction files and the date are not inputs: they live in the logged opening message (`docs/system-prompt.md`). If nothing changed, the bytes match and the cache still hits. |
 | `reload` | Built again with the new tool set (`docs/mcp.md`, "Reload"). |
-| Switch | Built again with the new model or thinking level ("Switching model"). |
+| Switch | Built again with the new model, thinking level or credential label ("Switching model"). |
 
 Each build is logged as `preamble_built` (`docs/events.md`), carrying the
 reason, the request settings, the system prompt text and the full tool
@@ -198,7 +199,9 @@ per-project file overrides them.
 ## Switching model
 
 A person switches model or thinking level with `/model` or `/thinking`, and a driver with
-the `model` command (`docs/invocation.md`). The switch applies at the next turn
+the `model` command (`docs/invocation.md`). A credential label switches the
+same way, with `/credential` or the `credential` command: a vendor holds its
+cache per account or workspace, so the new label starts with a cold cache. The switch applies at the next turn
 boundary. Before it applies, the person sees one line saying the switch
 rebuilds the cache, with its size from the last `usage_recorded`, for example
 "switching rebuilds the cache: about 180,000 tokens". No confirmation is asked.

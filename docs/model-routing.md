@@ -459,27 +459,78 @@ extension, which a person approves before it loads.
 
 ## Credentials
 
-Each provider has one credential, stored in a file only the owner can read
-(mode 0600) in [Fiber home](state.md) at `credentials/<name>`: its own name,
-unless its provider data names a shared credential.
+A provider may hold several credentials, such as two subscriptions or a work
+and a personal key. Each has a credential label, such as `work` or
+`alice@example.com`. A stored credential is a file only the owner can read
+(mode 0600) in [Fiber home](state.md) at `credentials/<name>/<label>`.
+`<name>` is the provider's own name, unless its provider data names a shared
+credential.
+
 A key can come from:
 
-- the stored credential
+- a stored credential
 - an environment variable
 - a file
 - the output of a command, run once per process
 
-A person can override where a key comes from in configuration
-(`docs/configuration.md`, "Secrets"), never from a repository.
+A key that is not stored takes its label from the configuration that points at
+it. A person sets these at `providers."<name>".credentials."<label>"`
+(`docs/configuration.md`, "Secrets"), never from a repository. The source a
+provider's data declares has the label `default`.
 
-A stored credential owns its provider. If it fails, Fiber reports the failure.
-It does not fall back to an environment variable.
+A stored credential owns its label. If it fails, Fiber reports the failure. It
+does not fall back to an environment variable or a command under the same
+label.
 
-Fiber looks for the session model's credential at startup, before the session
+### Logging in
+
+`fiber login <provider> --as <label>` stores a credential under that label.
+Without `--as`, the label is the account's email when the login reveals one,
+as an OAuth token does, and `default` otherwise. A login whose label is
+already stored is refused, and the message names `--as`. The first label a
+provider stores is written to `providers."<name>".credential` in the global
+file, unless that key is already set.
+
+### Which credential a session uses
+
+A session fixes its credential label when it starts. Fiber picks it in this
+order:
+
+1. `--credential <label>` on a resume, which both doors accept.
+2. The label a resumed session was using.
+3. For a delegate started with a role, the role's `credential`
+   (`docs/delegates.md`, "Choosing a model").
+4. `providers."<name>".credential`, from any layer except a repository's.
+
+A label that names no credential fails with `credential_missing`, naming the
+labels the provider has.
+
+The label is part of the request settings, so `preamble_built` records it
+(`docs/events.md`, "Preamble"). A resume with `--credential` that changes it
+records `model_changed`, as a switch does.
+
+A person switches credential with `/credential <label>`, and a driver with the
+`credential` command (`docs/invocation.md`). The switch applies at the next
+turn boundary and rebuilds the prompt cache, because a vendor holds the cache
+per account or workspace (`docs/prompt-cache.md`, "Switching model"). The
+terminal saves the label to the global `providers."<name>".credential`, unless
+the person marks the switch as this session only. A per-project file can pin a
+label for one project. A switch never changes a session that is already
+running.
+
+Fiber never changes a session's credential by itself. It does not rotate
+credentials, and it does not move to another label when one runs out of quota
+or is rejected. The failure is reported as any other.
+
+### When a credential is missing or fails
+
+Fiber looks for the session's credential at startup, before the session
 starts. A run with none fails there with `credential_missing`
 (`docs/errors.md`, "Before a session exists"). A credential that is stored but
 cannot be used, or a `credential()` call that errors, fails with
 `credential_failed`. Neither is retried.
+
+### Keys, tokens and OAuth
 
 Most first-party providers use a key. The table in
 [Protocols and providers](#protocols-and-providers) says which use something

@@ -41,6 +41,8 @@ pub struct UsageRecorded {
 pub struct QuotaNoticed {
     /// The provider's name.
     pub provider: String,
+    /// The credential label whose quota crossed.
+    pub credential: String,
     /// The window's name, as the provider reports it.
     pub window: String,
     /// The percent used when the notice was given.
@@ -137,6 +139,10 @@ pub struct PreambleBuilt {
     pub tool_choice: String,
     /// The cache lifetime.
     pub cache_lifetime: CacheLifetime,
+    /// The credential label every later request uses; absent when the
+    /// provider takes no credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
     /// The system prompt text as sent.
     pub system_prompt: String,
     /// Each tool as sent.
@@ -170,6 +176,9 @@ pub struct ModelSettings {
     pub thinking: Option<String>,
     /// The cache lifetime.
     pub cache_lifetime: CacheLifetime,
+    /// The credential label; absent when the provider takes no credential.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub credential: Option<String>,
 }
 
 /// Who asked for a model switch.

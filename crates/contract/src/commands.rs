@@ -86,6 +86,8 @@ pub enum Command {
     History(HistoryArgs),
     /// Switches model, effort or thinking at the next turn boundary.
     Model(ModelArgs),
+    /// Switches the credential label at the next turn boundary.
+    Credential(CredentialArgs),
     /// Sets the session's name.
     Name(Name),
     /// Starts a handoff.
@@ -275,6 +277,14 @@ pub struct ModelArgs {
     /// The thinking level.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub thinking: Option<String>,
+}
+
+/// The `args` of `credential`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CredentialArgs {
+    /// A credential label of the session model's provider.
+    pub label: String,
 }
 
 /// How much of the stream a connection receives (`docs/invocation.md`,

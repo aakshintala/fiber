@@ -91,8 +91,8 @@ groups, then the flags and examples.
 | Command | What it does |
 |---|---|
 | `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
-| `ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
-| `resume [<id>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
+| `ask [--model <model>] [-c <key>=<value>]... [--resume <id> [--credential <label>]] [--worktree] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). `--worktree` runs it in a new worktree ("Isolation"); with `--resume` it is a usage error, because a resumed session keeps its workspace. |
+| `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
 | `continue` | Opens the most recent session in this project, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
 | `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
 | `models [<search>]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. It takes `--json`. |
@@ -113,20 +113,26 @@ discovery").
 `--model`, and it may be given more than once. The terminal passes it to each
 session it asks the hub to start.
 
+`--credential <label>` on a resume switches the session to another credential
+label, and the log records the switch (`docs/model-routing.md`, "Which
+credential a session uses"). A new session takes its label from
+`providers."<name>".credential`, which `-c` can set for one run.
+
 **Fiber itself.**
 
 | Command | What it does |
 |---|---|
 | `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. |
-| `login [<provider>]` | Stores a provider's key (`docs/configuration.md`, "Secrets"). With no provider, a terminal offers the installed providers; without a terminal, it is a usage error. |
-| `logout <provider>` | Deletes a provider's stored key. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
+| `login [<provider>] [--as <label>]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"). Without `--as`, the label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. With no provider, a terminal offers the installed providers; without a terminal, it is a usage error. |
+| `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
 | `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
 
 `doctor` prints the version, the default model and the provider it needs, each
-installed provider and where its key comes from, the permission mode, the
+installed provider with one line per credential label and where its key comes
+from, the selected label marked, the permission mode, the
 number of MCP servers, and whether the hub is running. A line that stops a
 session from starting carries its fix, such as
 `` no key for openrouter: run `fiber login openrouter` ``. It exits non-zero
@@ -290,6 +296,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `tools` | none |
 | `history` | `from_seq` (integer), `to_seq` (integer, optional) |
 | `model` | `model` (string), a model reference as a person types one (`docs/model-routing.md`, "Naming a model"); `effort` (string, optional); `thinking` (string, optional) |
+| `credential` | `label` (string), a credential label of the session model's provider |
 | `name` | `text` (string); empty clears the name |
 | `handoff` | `instructions` (string, optional) |
 | `rewind` | `from_session_id` (string, optional), `seq` (integer, optional), `summarise` (boolean, default false), `adopt` (array of strings, default empty) |
@@ -314,6 +321,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `history` | Answers, in its `command_accepted`, with the session's durable lines from `from_seq` to `to_seq` inclusive, or to the latest when `to_seq` is absent, at most 256 lines; a client pages for more. This is how every client pages history, the local terminal included: no client reads a session's log from disk (`docs/tui.md`, "History and paging"). Rejected `invalid_arguments` when `from_seq` is past the latest line. |
 | `tools` | Answers with every declared tool: its source, whether it is full, deferred or loaded, and its approximate size (`docs/tools.md`, "Seeing the tools"). |
 | `model` | Switches model, effort or thinking at the next turn boundary. Takes a model reference and optional effort and thinking. The switch rebuilds the prompt cache, and the terminal says so with the rebuild's size first (`docs/prompt-cache.md`, "Switching model"). Rejected `invalid_arguments` for an unknown model. |
+| `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `invalid_arguments` for a label the provider does not have. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
 | `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |

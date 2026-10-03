@@ -48,7 +48,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
 | `delegate_spawn` | `description`, `prompt`, `model`, `isolation`, `workspace`, `timeout_ms` | Starts a delegate. Returns a receipt with the delegate id and the output path. |
 | `delegate_fork` | `description`, `prompt`, `isolation`, `timeout_ms` | Starts a Fiber delegate from the parent's conversation. No model or thinking level: see "Forks". |
 | `delegate_message` | `id`, `message` | Steers a running delegate, or resumes a finished one. |
-| `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, and the quota of each provider and harness (`docs/tools.md`, "Provider quota"). |
+| `delegate_models` | none | Returns the configured roles, what each maps to now, the full references available, and the quota of each provider credential label and harness (`docs/tools.md`, "Provider quota"). |
 | `jobs` | as `docs/tools.md` | Lists, waits for and stops delegates. |
 
 - `description` is a short label for people.
@@ -83,7 +83,11 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   during a session misses the whole prompt cache. `delegate_models` returns them
   as a tool result instead.
 - A role is a name for a model reference, for example `deep` for
-  `claude:opus:high`. Written instructions such as skills, prompt templates and
+  `claude:opus:high`. A role may also name a credential label, so one
+  project's delegates can run on different subscriptions of one provider
+  (`docs/model-routing.md`, "Which credential a session uses"). A delegate
+  started with a full reference uses the provider's configured label. The
+  model sees only role names, never labels. Written instructions such as skills, prompt templates and
   AGENTS.md name roles, so they survive a model being withdrawn and work on any
   machine. Remapping a role changes nothing the model sees.
 - The model is fixed when the delegate starts and never changes.
