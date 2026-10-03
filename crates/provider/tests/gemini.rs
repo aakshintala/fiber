@@ -1253,3 +1253,42 @@ fn a_signed_text_from_another_model_loses_its_signature_and_an_empty_one_adds_no
         json!([{"role": "user", "parts": [{"text": "What is the weather in Paris? Use the tool."}]}])
     );
 }
+
+#[test]
+fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
+    // A call signature with no `functionCall` before the next user message
+    // goes out on an empty text part, ahead of that message. A later call
+    // does not inherit it.
+    let mut conversation = request().conversation;
+    conversation.extend([
+        Input::Reasoning {
+            model: REFERENCE.into(),
+            text: String::new(),
+            provider_item: Some(json!({"thoughtSignature": "c2ln"})),
+        },
+        Input::User {
+            text: "And tomorrow?".into(),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_later".into()),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: None,
+                repair: None,
+            },
+        },
+    ]);
+    let (contents, _) = sent_contents(conversation);
+    assert_eq!(
+        contents,
+        json!([
+            {"role": "user", "parts": [
+                {"text": "What is the weather in Paris? Use the tool."}]},
+            {"role": "model", "parts": [{"text": "", "thoughtSignature": "c2ln"}]},
+            {"role": "user", "parts": [{"text": "And tomorrow?"}]},
+            {"role": "model", "parts": [
+                {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        ])
+    );
+}

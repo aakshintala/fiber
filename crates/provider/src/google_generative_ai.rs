@@ -577,12 +577,8 @@ impl Decoder {
         }));
     }
 
-    /// Logs one text part. A part with neither text nor a provider item is
-    /// not logged.
+    /// Logs one text part.
     fn push_text(&mut self, text: String, provider_item: Option<Value>) {
-        if text.is_empty() && provider_item.is_none() {
-            return;
-        }
         self.actions.push(ReplyAction::Text(TextCompleted {
             text,
             provider_item,

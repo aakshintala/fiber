@@ -213,3 +213,7 @@ pub enum CallError {
     /// [`ModelCall::cancel`] ended it.
     Cancelled,
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod tests;

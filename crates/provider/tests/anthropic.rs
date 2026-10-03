@@ -1330,3 +1330,26 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
         ]})
     );
 }
+
+#[test]
+fn an_empty_text_block_is_not_logged() {
+    // A text block with no deltas, then one that has text. A part with
+    // neither text nor a provider item is not logged.
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        stopped(0),
+        text_block(1, "B")[0].clone(),
+        text_block(1, "B")[1].clone(),
+        stopped(1),
+        finished("end_turn")[0].clone(),
+        finished("end_turn")[1].clone(),
+    ]));
+    let reply = reply.unwrap();
+    assert_eq!(reply.text(), "B");
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [ReplyAction::Text(part)] if part.text == "B" && part.provider_item.is_none()
+    ));
+}
