@@ -135,7 +135,7 @@ impl LuaProvider {
         // A token that is already expired, or whose expiry is this instant,
         // was never usable. Returning it would send a request that the
         // vendor will reject (`docs/model-routing.md`, "Credentials").
-        if expires <= contract::clock::Clock::wall(self.extension.clock()) {
+        if expires <= self.extension.clock().wall() {
             return Err(self.bad_return("credential", "a token that has already expired".into()));
         }
         Ok((Secret::new(token.to_owned()), expires))
