@@ -10,7 +10,8 @@ use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallRequested,
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
@@ -366,8 +367,8 @@ fn role_of(input: &Input) -> &'static str {
 fn block_of(input: &Input, reference: &str, call_ids: &BTreeMap<&ActionId, &str>) -> Option<Value> {
     match input {
         Input::User { text } => Some(json!({"type": "text", "text": text})),
-        Input::Assistant { text } if text.is_empty() => None,
-        Input::Assistant { text } => Some(json!({"type": "text", "text": text})),
+        Input::Assistant { text, .. } if text.is_empty() => None,
+        Input::Assistant { text, .. } => Some(json!({"type": "text", "text": text})),
         // Reasoning goes back unchanged, only to the model that produced it,
         // and never as plain text.
         Input::Reasoning {
@@ -443,7 +444,6 @@ enum Block {
 #[derive(Default)]
 struct Decoder {
     id: String,
-    text: String,
     actions: Vec<ReplyAction>,
     blocks: BTreeMap<u64, Block>,
     /// Each tool-use block's position among tool calls, by its index.
@@ -584,7 +584,13 @@ impl Decoder {
     /// A content block Anthropic just closed, folded into the reply.
     fn stop(&mut self, index: u64) {
         match self.blocks.remove(&index) {
-            Some(Block::Text(text)) => self.text.push_str(&text),
+            Some(Block::Text(text)) if !text.is_empty() => {
+                self.actions.push(ReplyAction::Text(TextCompleted {
+                    text,
+                    provider_item: None,
+                }));
+            }
+            Some(Block::Text(_)) => {}
             Some(Block::Thinking {
                 thinking,
                 signature,
@@ -653,7 +659,6 @@ impl Decoder {
             }
         };
         Ok(Reply {
-            text: std::mem::take(&mut self.text),
             actions: std::mem::take(&mut self.actions),
             finish,
             generation_id: GenerationId(std::mem::take(&mut self.id)),

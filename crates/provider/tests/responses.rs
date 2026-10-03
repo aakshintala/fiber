@@ -250,14 +250,14 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
                 })
                 .collect();
             let streamed = deltas
                 .iter()
                 .any(|d| matches!(d, Delta::Text(_) | Delta::ToolCallArguments(_)));
             if streamed {
-                assert_eq!(text, reply.text, "{label}");
+                assert_eq!(text, reply.text(), "{label}");
                 for (index, call) in calls.iter().enumerate() {
                     let raw: String = deltas
                         .iter()
@@ -280,7 +280,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 continue;
             };
             checked += 1;
-            assert_eq!(reply.text, want.text, "{label}");
+            assert_eq!(reply.text(), want.text, "{label}");
             assert_eq!(calls.len(), want.calls.len(), "{label}");
             for (call, item) in calls.iter().zip(&want.calls) {
                 assert_eq!(call.name, item["name"].as_str().unwrap(), "{label}");
@@ -293,7 +293,12 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                     serde_json::from_str(item["arguments"].as_str().unwrap()).unwrap();
                 assert_eq!(call.arguments, arguments, "{label}");
             }
-            assert_eq!(reply.actions.len() - calls.len(), want.reasoning, "{label}");
+            let reasoning = reply
+                .actions
+                .iter()
+                .filter(|action| matches!(action, ReplyAction::Reasoning(_)))
+                .count();
+            assert_eq!(reasoning, want.reasoning, "{label}");
             let cached = want.usage["input_tokens_details"]["cached_tokens"]
                 .as_u64()
                 .unwrap();
@@ -320,15 +325,18 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
     let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_0.sse")).unwrap();
     let (reply, deltas) = decoded(&bytes);
     let reply = reply.unwrap();
-    assert_eq!(reply.text, "I'll check the weather in Paris for you.");
+    assert_eq!(reply.text(), "I'll check the weather in Paris for you.");
     assert_eq!(reply.generation_id.0, "resp_6abe177dec230a748c9f42a9");
     let [
         ReplyAction::Reasoning(reasoning),
+        ReplyAction::Text(part),
         ReplyAction::ToolCall(call),
     ] = reply.actions.as_slice()
     else {
         panic!("{:?}", reply.actions);
     };
+    assert_eq!(part.text, reply.text());
+    assert_eq!(part.provider_item.as_ref().unwrap()["type"], "message");
     let item = reasoning.provider_item.as_ref().unwrap();
     assert_eq!(item["type"], "reasoning");
     assert!(item["encrypted_content"].as_str().unwrap().len() > 100);
@@ -353,7 +361,7 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
 
     let bytes = std::fs::read(research("opencode-probe/raw/go_stream_tools_1.sse")).unwrap();
     let reply = decoded(&bytes).0.unwrap();
-    assert_eq!(reply.text, "The weather in Paris is 18°C and clear.");
+    assert_eq!(reply.text(), "The weather in Paris is 18°C and clear.");
     assert_eq!(
         (
             reply.tokens.input,
@@ -492,7 +500,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
     else {
         panic!("{:?}", reply.actions);
     };
-    let ReplyAction::ToolCall(call) = &reply.actions[1] else {
+    let ReplyAction::ToolCall(call) = &reply.actions[2] else {
         panic!("{:?}", reply.actions);
     };
     let mut conversation = request().conversation;
@@ -508,7 +516,9 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             provider_item: Some(item.clone()),
         },
         Input::Assistant {
-            text: reply.text.clone(),
+            model: "opencode/muse-spark-1.3-contributor".into(),
+            text: reply.text().clone(),
+            provider_item: None,
         },
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
@@ -917,7 +927,9 @@ fn reasoning_deltas_stream_as_reasoning_and_an_empty_reply_text_is_not_sent() {
     .unwrap();
     let mut request = request();
     request.conversation.push(Input::Assistant {
+        model: "opencode/muse-spark-1.3-contributor".into(),
         text: String::new(),
+        provider_item: None,
     });
     run(Box::new(
         Responses::new(endpoint(&server)).request(&request),
@@ -927,5 +939,54 @@ fn reasoning_deltas_stream_as_reasoning_and_an_empty_reply_text_is_not_sent() {
     assert_eq!(
         sent_body(&server, 0)["input"],
         json!([{"role": "user", "content": "What is the weather in Paris? Use the tool."}])
+    );
+}
+
+#[test]
+fn a_message_item_replays_unchanged_to_its_model_and_as_text_to_another() {
+    let item = json!({
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "phase": "final_answer",
+        "content": [{"type": "output_text", "text": "Hi."}]
+    });
+    let (reply, _) = decoded(&stream(&[
+        json!({"type": "response.output_item.done", "item": item}),
+        completed("completed", json!({})),
+    ]));
+    let reply = reply.unwrap();
+    let [ReplyAction::Text(part)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(part.text, "Hi.");
+    assert_eq!(
+        part.provider_item.as_ref().unwrap()["phase"],
+        "final_answer"
+    );
+
+    let send = |model: &str| {
+        let server = ProviderServer::start([Response::stream(stream(&[completed(
+            "completed",
+            json!({}),
+        )]))])
+        .unwrap();
+        let mut request = request();
+        request.conversation.push(Input::Assistant {
+            model: model.into(),
+            text: "Hi.".into(),
+            provider_item: Some(item.clone()),
+        });
+        run(Box::new(
+            Responses::new(endpoint(&server)).request(&request),
+        ))
+        .0
+        .unwrap();
+        sent_body(&server, 0)["input"].clone()
+    };
+    assert_eq!(send("opencode/muse-spark-1.3-contributor")[1], item);
+    assert_eq!(
+        send("openai/gpt-6-luna")[1],
+        json!({"role": "assistant", "content": "Hi."})
     );
 }

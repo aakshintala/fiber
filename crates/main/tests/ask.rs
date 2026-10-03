@@ -413,7 +413,7 @@ fn gemini_hello() -> Response {
 }
 
 /// The event kinds of a turn answered by [`hello`].
-const HELLO_KINDS: [&str; 11] = [
+const HELLO_KINDS: [&str; 12] = [
     "fiber_started",
     "session_started",
     "turn_started",
@@ -421,6 +421,7 @@ const HELLO_KINDS: [&str; 11] = [
     "assistant_message_started",
     "assistant_message_delta",
     "assistant_message_delta",
+    "text_completed",
     "usage_recorded",
     "assistant_message_completed",
     "turn_completed",
@@ -1395,6 +1396,7 @@ fn assert_weather(run: &Run) {
         "tool_call_arguments_delta",
         "reasoning_started",
         "reasoning_completed",
+        "text_completed",
         "tool_call_requested",
         "usage_recorded",
         "assistant_message_completed",
@@ -1405,6 +1407,7 @@ fn assert_weather(run: &Run) {
     kinds.extend([
         "reasoning_started",
         "reasoning_completed",
+        "text_completed",
         "usage_recorded",
         "assistant_message_completed",
         "turn_completed",
@@ -1577,6 +1580,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     ]);
     kinds.extend(["assistant_message_delta"; 3]);
     kinds.extend([
+        "text_completed",
         "usage_recorded",
         "assistant_message_completed",
         "turn_completed",
@@ -1636,6 +1640,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
+            "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
@@ -1688,8 +1693,8 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     // The `functionCall` part carries a `thoughtSignature`, which decodes
-    // as reasoning; the unknown tool's result ends the step and the turn
-    // goes on to the second recording.
+    // as reasoning. The second recording joins its text fragments and
+    // trailing signature into one text part.
     assert_eq!(
         run.kinds(),
         [
@@ -1709,8 +1714,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
-            "reasoning_started",
-            "reasoning_completed",
+            "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",

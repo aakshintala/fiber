@@ -4,7 +4,7 @@
 //! it writes it, and a resume renders the log the same way, so the two never
 //! differ.
 
-use contract::events::{AssistantMessageCompleted, CallStatus, Event, InputItem, MessageOutcome};
+use contract::events::{CallStatus, Event, InputItem};
 use contract::provider::Input;
 use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope};
@@ -24,9 +24,10 @@ pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
 }
 
 /// Adds what `event`, about `action`, puts in the conversation. `model` is
-/// the model reference in force, which produced any reasoning.
+/// the model reference in force, which produced any reasoning or text part.
 // debt: the model reference is the session's one model until `/model`
-// switches it; then it comes from the log's `model_changed`.
+// switches it; then it comes from the log's `model_changed`. A text part's
+// `provider_item` is stamped with that same reference.
 pub(crate) fn render(
     conversation: &mut Vec<Input>,
     event: &Event,
@@ -53,11 +54,11 @@ pub(crate) fn render(
             text: reasoning.text.clone(),
             provider_item: reasoning.provider_item.clone(),
         }),
-        Event::AssistantMessageCompleted(AssistantMessageCompleted {
-            outcome: MessageOutcome::Completed,
-            text,
-            ..
-        }) => conversation.push(Input::Assistant { text: text.clone() }),
+        Event::TextCompleted(part) => conversation.push(Input::Assistant {
+            model: model.to_owned(),
+            text: part.text.clone(),
+            provider_item: part.provider_item.clone(),
+        }),
         Event::ToolCallRequested(call) => {
             if let Some(action) = action {
                 conversation.push(Input::ToolCall {
@@ -75,11 +76,9 @@ pub(crate) fn render(
                 });
             }
         }
-        // A failed call sends nothing; its retry is a new action.
-        Event::AssistantMessageCompleted(AssistantMessageCompleted {
-            outcome: MessageOutcome::Failed,
-            ..
-        })
+        // A reply's closing line sends nothing: its text parts were already
+        // rendered, and a failed call sends nothing. Its retry is a new action.
+        Event::AssistantMessageCompleted(_)
         // Every other kind adds nothing the model reads. Each is listed, so a
         // new kind does not compile until it is placed.
         | Event::FiberStarted(_)

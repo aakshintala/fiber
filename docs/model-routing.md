@@ -141,6 +141,15 @@ A `functionCall` that arrives without an `id` is logged with no `provider_id`
 (`docs/events.md`, `tool_call_requested`). Fiber pairs the call with its result
 by its action id, which stays local. Only an id the model emitted is sent back.
 
+A reply's text fragments, `thought` parts and `functionCall` parts each carry
+their own `thoughtSignature` when the model gave one. Unsigned text fragments
+join into one part. A signed fragment is its own part. An empty signed
+fragment's signature rides on the text before it. Fiber logs each part as its
+own item, in the order the model sent it, and each part replays in that order
+with its own signature (`docs/loop.md`, "What the model is sent"). A reply
+that repeats the same text in two parts is replayed as two parts, each with
+its own signature.
+
 Because a replayed `functionCall` needs the signature its own model gave it, a
 tool call and its result that another model reference made are sent to Gemini
 as plain text, not as `functionCall` and `functionResponse` parts

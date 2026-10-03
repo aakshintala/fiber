@@ -12,7 +12,9 @@
 
 mod support;
 
-use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, TurnOutcome};
+use contract::events::{
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested, TurnOutcome,
+};
 use contract::provider::{Delta, Input, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, Seq};
@@ -20,14 +22,34 @@ use fakes::{Scripted, reply};
 use r#loop::rebuild;
 use serde_json::{Value, json};
 
-use support::{MODEL, Session, kinds, message, reasoning_item, reasoning_reply, tool_call_reply};
+use support::{
+    MODEL, Session, TestTool, kinds, message, reasoning_item, reasoning_reply, tool_call_reply,
+};
 
 fn user(text: &str) -> Input {
     Input::User { text: text.into() }
 }
 
 fn assistant(text: &str) -> Input {
-    Input::Assistant { text: text.into() }
+    Input::Assistant {
+        model: MODEL.into(),
+        text: text.into(),
+        provider_item: None,
+    }
+}
+
+/// `reasoning_reply` keeps only the reasoning action. Put the text part back
+/// after it, which is the order a reply logs them.
+fn reasoning_then_text(thought: &str, text: &str) -> Scripted {
+    let mut scripted = reasoning_reply(thought, text);
+    let Ok(reply) = &mut scripted.end else {
+        return scripted;
+    };
+    reply.actions.push(ReplyAction::Text(TextCompleted {
+        text: text.into(),
+        provider_item: None,
+    }));
+    scripted
 }
 
 /// The durable kinds of `lines`, in order.
@@ -55,6 +77,7 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
             "assistant_message_started",
             "assistant_message_delta",
             "assistant_message_delta",
+            "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
@@ -101,13 +124,15 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
         assert_eq!(delta.seq, None);
         assert_eq!(delta.action_id.as_ref(), Some(&action));
     }
+    let part = lines.iter().find(|l| l.kind == "text_completed").unwrap();
+    assert_eq!(part.action_id.as_ref(), Some(&action));
+    assert_eq!(part.payload["text"], "Hello there.");
     let completed = lines
         .iter()
         .find(|l| l.kind == "assistant_message_completed")
         .unwrap();
     assert_eq!(completed.action_id.as_ref(), Some(&action));
     assert_eq!(completed.payload["outcome"], "completed");
-    assert_eq!(completed.payload["text"], "Hello there.");
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(usage.action_id.as_ref(), Some(&action));
     assert_eq!(usage.payload["model"], MODEL);
@@ -120,7 +145,7 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let durable: Vec<_> = lines.into_iter().filter(|l| l.seq.is_some()).collect();
     assert_eq!(log::read(&session.dir).unwrap(), durable);
     let seqs: Vec<Seq> = durable.iter().map(|l| l.seq.unwrap()).collect();
-    assert_eq!(seqs, (0..7).map(Seq).collect::<Vec<_>>());
+    assert_eq!(seqs, (0..8).map(Seq).collect::<Vec<_>>());
 }
 
 #[test]
@@ -139,11 +164,13 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "step_started",
             "steering_applied",
             "assistant_message_started",
+            "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
@@ -238,7 +265,7 @@ fn the_conversation_is_kept_in_memory_not_reread_from_the_log() {
 fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     let mut session = Session::new(
         vec![
-            reasoning_reply("Think.", "Hi."),
+            reasoning_then_text("Think.", "Hi."),
             tool_call_reply("Checking.", &["get_weather", "get_time"]),
             Scripted::text("Done."),
         ],
@@ -257,8 +284,8 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     let sent = session.requests().pop().unwrap().conversation;
     assert_eq!(rebuild(&lines[..last], MODEL).unwrap(), sent);
 
-    // In log order: the calls come before the message's text completes,
-    // and their results after it.
+    // In log order: a reply's text parts sit among its calls, and the
+    // calls' results follow the reply.
     let call = |n: usize| {
         let Input::ToolCall { action_id, call } = &sent[n] else {
             panic!("{:?}", sent[n]);
@@ -282,13 +309,13 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     assert!(matches!(sent[1], Input::Reasoning { .. }));
     assert_eq!(sent[2], assistant("Hi."));
     assert_eq!(sent[3], user("steer"));
-    let (first, first_name) = call(4);
-    let (second, second_name) = call(5);
+    assert_eq!(sent[4], assistant("Checking."));
+    let (first, first_name) = call(5);
+    let (second, second_name) = call(6);
     assert_eq!(
         (first_name.as_str(), second_name.as_str()),
         ("get_weather", "get_time")
     );
-    assert_eq!(sent[6], assistant("Checking."));
     assert_eq!(result(7), first);
     assert_eq!(result(8), second);
     assert_eq!(sent[9], assistant("Done."));
@@ -315,7 +342,10 @@ fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
 #[test]
 fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     let mut session = Session::new(
-        vec![reasoning_reply("Think.", "Hi."), Scripted::text("Again.")],
+        vec![
+            reasoning_then_text("Think.", "Hi."),
+            Scripted::text("Again."),
+        ],
         None,
     );
     session.inbox.send(message("one")).unwrap();
@@ -360,8 +390,11 @@ fn each_reasoning_action_keeps_the_id_it_was_first_seen_with() {
     let fragment = |text: &str| Delta::Reasoning(TextDelta { text: text.into() });
     let mut end = reply("Done.");
     // An item with no readable text streams nothing; the two readable ones
-    // stream with text between them.
+    // stream with text between them. The text part stays after them: the
+    // reply's actions are replaced below, and `reply` had put it first.
+    let text = std::mem::take(&mut end.actions);
     end.actions = vec![reasoning(""), reasoning("First."), reasoning("Second.")];
+    end.actions.extend(text);
     let script = Scripted {
         deltas: vec![
             fragment("Fir"),
@@ -431,6 +464,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
             "tool_call_completed",
             "step_started",
             "assistant_message_started",
+            "text_completed",
             "usage_recorded",
             "assistant_message_completed",
             "turn_completed",
@@ -457,9 +491,8 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
     assert_eq!(completed.payload["error"]["code"], "unknown_tool");
     let sent = &session.requests()[1].conversation;
     assert!(matches!(&sent[1], Input::ToolCall { call, .. } if call.name == "get_weather"));
-    assert_eq!(sent[2], assistant(""));
     assert_eq!(
-        sent[3],
+        sent[2],
         Input::ToolResult {
             action_id: requested.action_id.clone().unwrap(),
             text: completed.payload["content"][0]["text"]
@@ -497,7 +530,6 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     let call = &lines[4].payload;
     assert_eq!(call["outcome"], "failed");
     assert_eq!(call["attempt"], 1);
-    assert_eq!(call["text"], "");
     assert_eq!(call["error"]["code"], "connection_failed");
     assert_eq!(lines[5].payload["outcome"], "failed");
     assert_eq!(lines[5].payload["error"], call["error"]);
@@ -506,6 +538,99 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
         rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap(),
         [user("hi")]
     );
+}
+
+#[test]
+fn a_reply_logs_each_text_part_among_its_other_items() {
+    let part = |text: &str| {
+        ReplyAction::Text(TextCompleted {
+            text: text.into(),
+            provider_item: None,
+        })
+    };
+    let mut first = reply("");
+    first.actions = vec![
+        part("A"),
+        ReplyAction::ToolCall(ToolCallRequested {
+            name: "get_weather".into(),
+            arguments: json!({"city": "Paris"}),
+            provider_id: None,
+            repair: None,
+        }),
+        part("B"),
+    ];
+    let mut last = reply("");
+    last.actions = vec![part("A"), part("B")];
+    let mut session = Session::with_tools(
+        vec![
+            Scripted {
+                deltas: Vec::new(),
+                end: Ok(first),
+            },
+            Scripted {
+                deltas: Vec::new(),
+                end: Ok(last),
+            },
+        ],
+        None,
+        vec![std::sync::Arc::new(TestTool::reads(
+            "get_weather",
+            "Sunny.",
+        ))],
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+
+    let lines = session.lines();
+    let started: Vec<usize> = lines
+        .iter()
+        .enumerate()
+        .filter(|(_, l)| l.kind == "assistant_message_started")
+        .map(|(i, _)| i)
+        .collect();
+    let span = &lines[started[0]..started[1]];
+    let message_id = span[0].action_id.clone();
+    assert_eq!(
+        durable(span),
+        [
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+        ]
+    );
+    let texts: Vec<&str> = span
+        .iter()
+        .filter(|l| l.kind == "text_completed")
+        .map(|l| {
+            assert_eq!(l.action_id, message_id);
+            l.payload["text"].as_str().unwrap()
+        })
+        .collect();
+    assert_eq!(texts, ["A", "B"]);
+
+    let sent = session.requests()[1].conversation.clone();
+    let logged = log::read(&session.dir).unwrap();
+    let opened = logged
+        .iter()
+        .rposition(|l| l.kind == "assistant_message_started")
+        .unwrap();
+    assert_eq!(rebuild(&logged[..opened], MODEL).unwrap(), sent);
+    assert_eq!(sent[0], user("hi"));
+    assert_eq!(sent[1], assistant("A"));
+    assert!(matches!(&sent[2], Input::ToolCall { call, .. } if call.name == "get_weather"));
+    assert_eq!(sent[3], assistant("B"));
+    assert!(matches!(&sent[4], Input::ToolResult { text, .. } if text == "Sunny."));
+
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(())).unwrap();
+    let exited = log::read(&session.dir).unwrap();
+    assert_eq!(exited.last().unwrap().kind, "fiber_exited");
+    assert_eq!(exited.last().unwrap().payload["text"], "AB");
 }
 
 #[test]

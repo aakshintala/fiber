@@ -16,8 +16,8 @@ pub use action::{
     Decision, Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
     InteractionResolved, MessageOutcome, PermissionRequested, PermissionResolved, Progress,
     ReasoningCompleted, Repair, RepairFix, ResolvedBy, ReviewerRef, RuleOffer, RuleScope,
-    StandingRule, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested,
-    ToolCallStarted,
+    StandingRule, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
+    ToolCallRequested, ToolCallStarted,
 };
 pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,
@@ -128,6 +128,7 @@ kinds! {
     AssistantMessageStarted(Empty) = "assistant_message_started", Durable;
     AssistantMessageDelta(TextDelta) = "assistant_message_delta", Ephemeral;
     AssistantMessageCompleted(AssistantMessageCompleted) = "assistant_message_completed", Durable;
+    TextCompleted(TextCompleted) = "text_completed", Durable;
     ToolCallArgumentsDelta(ToolCallArgumentsDelta) = "tool_call_arguments_delta", Ephemeral;
     ReasoningStarted(Empty) = "reasoning_started", Durable;
     ReasoningDelta(TextDelta) = "reasoning_delta", Ephemeral;

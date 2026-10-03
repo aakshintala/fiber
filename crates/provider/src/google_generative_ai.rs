@@ -10,7 +10,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 
-use contract::events::{ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use contract::events::{
+    ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+};
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
 };
@@ -281,31 +283,62 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .collect();
 
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
-    // The open reply's reasoning and calls, in the order they were logged.
-    // A reply's `assistant_message_completed` follows its actions, so its
-    // text closes it. A user message, a tool result or the end of the
-    // conversation closes a reply whose text was never logged.
-    let mut logged: Vec<&Input> = Vec::new();
+    // A signature on a `functionCall`, waiting for that call. It never
+    // rides onto text or into the next reply.
+    let mut signature = None;
     for input in &request.conversation {
         match input {
             Input::User { text } => {
-                close_reply(&mut out, &mut logged, "");
+                park(&mut out, &mut signature);
                 push(&mut out, "user", json!({"text": text}));
             }
-            Input::Assistant { text } => close_reply(&mut out, &mut logged, text),
+            Input::Assistant {
+                model,
+                text,
+                provider_item,
+            } => {
+                if *model == reference
+                    && let Some(item) = provider_item
+                {
+                    push(&mut out, "model", item.clone());
+                } else if !text.is_empty() {
+                    push(&mut out, "model", json!({"text": text}));
+                }
+            }
             // Reasoning goes back unchanged, only to the model that
-            // produced it, and never as plain text.
+            // produced it, and never as plain text. A bare signature waits
+            // for its call.
             Input::Reasoning {
                 model,
-                provider_item: Some(_),
+                provider_item: Some(item),
                 ..
-            } if *model == reference => logged.push(input),
+            } if *model == reference => {
+                if let Some(sig) = waiting_signature(item) {
+                    if let Some(earlier) = signature.replace(sig) {
+                        push(&mut out, "model", carrier(earlier));
+                    }
+                } else {
+                    push(&mut out, "model", item.clone());
+                }
+            }
             Input::Reasoning { .. } => {}
-            Input::ToolCall { .. } => logged.push(input),
+            Input::ToolCall { call, .. } => {
+                // Only an id the model emitted is sent back
+                // (`docs/model-routing.md`, "Google Generative AI wire facts").
+                let function = with(
+                    json!({"name": call.name, "args": call.arguments}),
+                    call.provider_id.as_ref().map(|id| json!({"id": id.0})),
+                );
+                push(
+                    &mut out,
+                    "model",
+                    with(json!({ "functionCall": function }), signature.take()),
+                );
+            }
             Input::ToolResult {
                 action_id, text, ..
             } => {
-                close_reply(&mut out, &mut logged, "");
+                park(&mut out, &mut signature);
                 let call = calls.get(action_id);
                 let response = with(
                     json!({
@@ -319,84 +352,18 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             }
         }
     }
-    close_reply(&mut out, &mut logged, "");
+    park(&mut out, &mut signature);
     out.into_iter()
         .map(|(role, parts)| json!({"role": role, "parts": parts}))
         .collect()
 }
 
-/// Emits the open reply's model parts, from its logged items and `text`,
-/// and drops the items, so nothing carries into the next reply.
-fn close_reply(out: &mut Vec<(&'static str, Vec<Value>)>, logged: &mut Vec<&Input>, text: &str) {
-    for part in replay_reply(logged, text) {
-        push(out, "model", part);
+/// Sends a call signature that never met its call, on an empty text part,
+/// and clears it so it cannot ride onto the next part.
+fn park(out: &mut Vec<(&'static str, Vec<Value>)>, signature: &mut Option<Value>) {
+    if let Some(sig) = signature.take() {
+        push(out, "model", carrier(sig));
     }
-    logged.clear();
-}
-
-/// One reply's parts, from its own logged items, in the order they were
-/// logged. Each text segment once: the reply's text is those segments in
-/// order, so the words before a signed segment go out before that part,
-/// and the part keeps the signature it arrived with. A signature that
-/// arrived on a call rides on the call. Nothing in here is kept for the
-/// next reply (`docs/loop.md`, "What the model is sent").
-fn replay_reply(logged: &[&Input], text: &str) -> Vec<Value> {
-    let mut parts = Vec::new();
-    let mut cursor = 0;
-    let mut signature = None;
-    for input in logged {
-        match input {
-            Input::Reasoning {
-                provider_item: Some(item),
-                ..
-            } => {
-                if let Some(sig) = waiting_signature(item) {
-                    if let Some(earlier) = signature.replace(sig) {
-                        parts.push(carrier(earlier));
-                    }
-                } else if stored_text(item) {
-                    cursor = lay_text(&mut parts, text, cursor, item);
-                } else {
-                    parts.push(item.clone());
-                }
-            }
-            Input::ToolCall { call, .. } => {
-                // Only an id the model emitted is sent back
-                // (`docs/model-routing.md`, "Google Generative AI wire facts").
-                let function = with(
-                    json!({"name": call.name, "args": call.arguments}),
-                    call.provider_id.as_ref().map(|id| json!({"id": id.0})),
-                );
-                parts.push(with(json!({ "functionCall": function }), signature.take()));
-            }
-            Input::User { .. }
-            | Input::Assistant { .. }
-            | Input::Reasoning { .. }
-            | Input::ToolResult { .. } => {}
-        }
-    }
-    if let Some(rest) = text.get(cursor..).filter(|rest| !rest.is_empty()) {
-        parts.push(with(json!({"text": rest}), signature.take()));
-    } else if let Some(sig) = signature {
-        parts.push(carrier(sig));
-    }
-    parts
-}
-
-/// The signed text `item`, after the unsigned words that precede it in
-/// this reply's text. `cursor` is how much of that text is already placed.
-fn lay_text(parts: &mut Vec<Value>, text: &str, mut cursor: usize, item: &Value) -> usize {
-    if let Some(segment) = item.get("text").and_then(Value::as_str)
-        && let Some(rest) = text.get(cursor..)
-        && let Some(at) = rest.find(segment)
-    {
-        if let Some(prefix) = rest.get(..at).filter(|prefix| !prefix.is_empty()) {
-            parts.push(json!({"text": prefix}));
-        }
-        cursor += at + segment.len();
-    }
-    parts.push(item.clone());
-    cursor
 }
 
 /// Adds `part` to the last content when it has `role`, or opens one.
@@ -407,32 +374,15 @@ fn push(out: &mut Vec<(&'static str, Vec<Value>)>, role: &'static str, part: Val
     }
 }
 
-/// The bare signature waiting for its part: off a `functionCall` part,
-/// or on an empty text part that holds no words of its own. Only the
-/// signature waits; an empty text must never overwrite the reply's text.
-/// A text part with words of its own is not waiting (`stored_text`): that
-/// part is replayed unchanged, in its place in the reply.
+/// A bare `{"thoughtSignature": ...}` waiting for the `functionCall` it
+/// arrived on. A text part's signature is the part itself, not this.
 fn waiting_signature(item: &Value) -> Option<Value> {
     let map = item.as_object()?;
     let sig = map.get("thoughtSignature")?;
-    if map.len() == 1 || map.get("text").and_then(Value::as_str) == Some("") {
+    if map.len() == 1 {
         return Some(json!({ "thoughtSignature": sig }));
     }
     None
-}
-
-/// Whether a stored item is a text part with words of its own: it
-/// replays verbatim, in place. A `thought` part is not text, even with a
-/// signature; an explicit `"thought": false` still marks plain text.
-/// What the decoder stores decides the rest: a text part is stored whole
-/// only with a signature, and never with a `functionCall`.
-fn stored_text(item: &Value) -> bool {
-    item.as_object().is_some_and(|map| {
-        map.get("text")
-            .and_then(Value::as_str)
-            .is_some_and(|text| !text.is_empty())
-            && map.get("thought").and_then(Value::as_bool) != Some(true)
-    })
 }
 
 /// `object` with the fields of `extra` added, such as a signature that
@@ -475,7 +425,8 @@ struct Thought {
 #[derive(Default)]
 struct Decoder {
     id: String,
-    text: String,
+    /// Unsigned text fragments joined into the open run.
+    run: String,
     actions: Vec<ReplyAction>,
     thought: Option<Thought>,
     calls: u32,
@@ -535,6 +486,7 @@ impl Decoder {
             .get("thoughtSignature")
             .map(|s| json!({ "thoughtSignature": s }));
         if part.get("thought").and_then(Value::as_bool) == Some(true) {
+            self.close_run();
             let piece = str_at(part, "text");
             let thought = self.thought.get_or_insert(Thought {
                 text: String::new(),
@@ -553,6 +505,7 @@ impl Decoder {
         }
         self.close_thought();
         if let Some(call) = part.get("functionCall") {
+            self.close_run();
             // A signature on a `functionCall` part is kept as reasoning,
             // in place, and sent back on that call (`docs/loop.md`,
             // "What the model is sent").
@@ -583,26 +536,66 @@ impl Decoder {
                     .map(|id| ProviderCallId(id.to_owned())),
                 repair: None,
             }));
-        } else {
-            // A signature on a text part is kept with the part, and sent
-            // back on the reply's text, never on a following
-            // `functionCall` (`docs/loop.md`, "What the model is sent").
-            if signature.is_some() {
-                self.actions
-                    .push(ReplyAction::Reasoning(ReasoningCompleted {
-                        text: String::new(),
-                        provider_item: Some(part.clone()),
-                    }));
-            }
-            if let Some(text) = part.get("text").and_then(Value::as_str)
-                && !text.is_empty()
-            {
-                self.text.push_str(text);
-                sink(Delta::Text(TextDelta {
-                    text: text.to_owned(),
-                }));
-            }
+            return;
         }
+        self.text_fragment(part, sink);
+    }
+
+    /// A text fragment: no `thought: true` and no `functionCall`. Unsigned
+    /// fragments join one run. A signed fragment is its own part, and an
+    /// empty signed fragment's signature rides on the run before it.
+    fn text_fragment(&mut self, part: &Value, sink: &mut dyn FnMut(Delta)) {
+        let text = part.get("text").and_then(Value::as_str).unwrap_or("");
+        let signed = part.get("thoughtSignature").is_some();
+        if text.is_empty() && !signed {
+            return;
+        }
+        if signed && text.is_empty() {
+            if self.run.is_empty() {
+                self.push_text(String::new(), Some(part.clone()));
+            } else {
+                let run = std::mem::take(&mut self.run);
+                let mut item = part.clone();
+                if let Some(map) = item.as_object_mut() {
+                    map.insert("text".into(), Value::String(run.clone()));
+                }
+                self.push_text(run, Some(item));
+            }
+            return;
+        }
+        if signed {
+            self.close_run();
+            self.push_text(text.to_owned(), Some(part.clone()));
+            sink(Delta::Text(TextDelta {
+                text: text.to_owned(),
+            }));
+            return;
+        }
+        self.run.push_str(text);
+        sink(Delta::Text(TextDelta {
+            text: text.to_owned(),
+        }));
+    }
+
+    /// Logs one text part. A part with neither text nor a provider item is
+    /// not logged.
+    fn push_text(&mut self, text: String, provider_item: Option<Value>) {
+        if text.is_empty() && provider_item.is_none() {
+            return;
+        }
+        self.actions.push(ReplyAction::Text(TextCompleted {
+            text,
+            provider_item,
+        }));
+    }
+
+    /// Logs the open unsigned run, when it holds any text.
+    fn close_run(&mut self) {
+        if self.run.is_empty() {
+            return;
+        }
+        let text = std::mem::take(&mut self.run);
+        self.push_text(text, None);
     }
 
     /// Folds the open thought, if any, into the reply as one `thought` part.
@@ -622,6 +615,7 @@ impl Decoder {
     /// (`docs/errors.md`, "A failed model call").
     fn finish(mut self) -> Result<Reply, Error> {
         self.close_thought();
+        self.close_run();
         let Some(reason) = self.finish_reason.take() else {
             return Err(Error::StreamIncomplete(
                 "it ended before a finishReason".into(),
@@ -666,7 +660,6 @@ impl Decoder {
             _ => return Err(Error::UnknownStopReason(reason)),
         };
         Ok(Reply {
-            text: self.text,
             actions: self.actions,
             finish,
             generation_id: GenerationId(self.id),

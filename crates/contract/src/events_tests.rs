@@ -284,9 +284,13 @@ fn samples() -> Vec<(&'static str, Value)> {
         ("assistant_message_delta", json!({"text": "Hel"})),
         (
             "assistant_message_completed",
-            json!({"outcome": "failed", "text": "", "error": error,
-            "attempt": 2}),
+            json!({"outcome": "failed", "error": error, "attempt": 2}),
         ),
+        (
+            "text_completed",
+            json!({"text": "Yo", "provider_item": {"text": "Yo", "thoughtSignature": "c2ln"}}),
+        ),
+        ("text_completed", json!({"text": "Checking the file."})),
         (
             "tool_call_arguments_delta",
             json!({"index": 0, "name": "read", "text": "{\"pa"}),

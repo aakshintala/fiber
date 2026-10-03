@@ -10,7 +10,8 @@ use std::io::{BufRead, BufReader};
 use std::sync::Arc;
 
 use contract::events::{
-    CacheLifetime, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallRequested,
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
@@ -353,8 +354,8 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     "content": text,
                 })));
             }
-            Input::Assistant { text } if text.is_empty() => {}
-            Input::Assistant { text } => {
+            Input::Assistant { text, .. } if text.is_empty() => {}
+            Input::Assistant { text, .. } => {
                 let mut m = take_assistant(&mut out, &["content"]);
                 m.insert("content".into(), json!(text));
                 out.push(m);
@@ -733,6 +734,12 @@ impl Decoder {
                 provider_item,
             }));
         }
+        if !self.text.is_empty() {
+            actions.push(ReplyAction::Text(TextCompleted {
+                text: self.text,
+                provider_item: None,
+            }));
+        }
         let mut calls: Vec<StreamedCall> = self.calls.into_values().collect();
         calls.sort_by_key(|c| c.position);
         actions.extend(calls.into_iter().map(|call| {
@@ -748,7 +755,6 @@ impl Decoder {
             })
         }));
         Ok(Reply {
-            text: self.text,
             actions,
             finish,
             generation_id: GenerationId(self.id),

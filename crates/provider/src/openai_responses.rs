@@ -8,7 +8,9 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
 use std::sync::Arc;
 
-use contract::events::{ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested};
+use contract::events::{
+    ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+};
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
 };
@@ -190,8 +192,21 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
         .iter()
         .filter_map(|input| match input {
             Input::User { text } => Some(json!({ "role": "user", "content": text })),
-            Input::Assistant { text } if text.is_empty() => None,
-            Input::Assistant { text } => Some(json!({ "role": "assistant", "content": text })),
+            Input::Assistant {
+                model,
+                text,
+                provider_item,
+            } => {
+                if *model == reference
+                    && let Some(item) = provider_item
+                {
+                    Some(item.clone())
+                } else if text.is_empty() {
+                    None
+                } else {
+                    Some(json!({ "role": "assistant", "content": text }))
+                }
+            }
             // Reasoning goes back unchanged, only to the model that produced
             // it, and never as plain text.
             Input::Reasoning {
@@ -245,7 +260,6 @@ pub fn decode(stream: impl BufRead, sink: &mut dyn FnMut(Delta)) -> Result<Reply
 /// What a reply has produced so far.
 #[derive(Default)]
 struct Decoder {
-    text: String,
     /// What the model said when it refused on policy grounds.
     refusal: Option<String>,
     actions: Vec<ReplyAction>,
@@ -330,11 +344,15 @@ impl Decoder {
         };
         match str_at(item, "type") {
             "message" => {
-                self.text
-                    .push_str(&texts("content", &["output_text"]).concat());
+                let text = texts("content", &["output_text"]).concat();
                 let refusal = texts("content", &["refusal"]);
                 if !refusal.is_empty() {
                     self.refusal = Some(refusal.concat());
+                } else {
+                    self.actions.push(ReplyAction::Text(TextCompleted {
+                        text,
+                        provider_item: Some(item.clone()),
+                    }));
                 }
             }
             "reasoning" => {
@@ -416,7 +434,6 @@ impl Decoder {
             return Err(Error::Refused(format!("the model refused: {refusal}")));
         }
         Ok(Reply {
-            text: std::mem::take(&mut self.text),
             actions: std::mem::take(&mut self.actions),
             finish,
             generation_id: GenerationId(str_at(response, "id").to_owned()),

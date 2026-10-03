@@ -16,7 +16,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use common::*;
-use contract::events::Event;
+use contract::events::{Event, TextCompleted};
 use contract::{ActionId, ErrorCode, TurnId};
 use fakes::clock::FakeClock;
 use log::{Error, Log};
@@ -142,6 +142,24 @@ fn a_quiet_text_turn_costs_two_fsyncs_bracketing_the_model_request() {
             ("turn_completed", 2),
         ]
     );
+}
+
+#[test]
+fn text_completed_under_an_action_adds_no_fsync() {
+    let tmp = TestDir::new("fsync-part");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    log.append(&session_started(), None, None).unwrap();
+    let before = log.fsyncs();
+    log.append(
+        &Event::TextCompleted(TextCompleted {
+            text: "Hi.".into(),
+            provider_item: None,
+        }),
+        Some(TurnId("t_1".into())),
+        Some(ActionId("a_1".into())),
+    )
+    .unwrap();
+    assert_eq!(log.fsyncs(), before);
 }
 
 #[test]

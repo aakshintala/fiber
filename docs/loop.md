@@ -210,10 +210,20 @@ replayed `functionCall` that has no thought signature. Reasoning is never sent b
 protocol or after a model switch. What a provider cannot take in its own form
 is left out.
 
-Each item goes only to the model that produced it, by its whole model
+A reply is logged as its items in the order the model produced them: each
+text part, each piece of reasoning and each tool call is its own item
+(`docs/events.md`, `text_completed`). A text part keeps its own thought
+signature or other opaque data. The reply is rebuilt for a request from those
+items in that order, so every part, a repeated text included, goes back to
+the model that produced it unchanged. A text part's opaque data goes only to
+the model that produced it; its words go to every model.
+
+Each reasoning item goes only to the model that produced it, by its whole model
 reference, `provider/model` (`docs/model-routing.md`). After `/model` or the
 `model` command switches to another model reference, a request leaves out
-every item another one produced: both the opaque part and its readable text.
+every reasoning item another one produced: both the opaque part and its readable text.
+A text part's words go to every model; its opaque data goes only to the model
+that produced it.
 A change of effort or thinking alone keeps the model, so its items are still
 sent. A fork keeps its parent's model and sends them unchanged. Probed on
 Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.

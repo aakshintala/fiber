@@ -232,7 +232,6 @@ impl Loop {
                 self.append(
                     &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                         outcome: MessageOutcome::Failed,
-                        text: String::new(),
                         error: Some(failure.clone()),
                         attempt: Some(1),
                     }),
@@ -324,6 +323,9 @@ impl Loop {
         let mut calls = Vec::new();
         for action in reply.actions {
             match action {
+                ReplyAction::Text(completed) => {
+                    self.append(&Event::TextCompleted(completed), turn, Some(message))?;
+                }
                 ReplyAction::Reasoning(completed) => {
                     let streamed = if completed.text.is_empty() {
                         None
@@ -367,7 +369,6 @@ impl Loop {
         self.append(
             &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                 outcome: MessageOutcome::Completed,
-                text: reply.text,
                 error: None,
                 attempt: None,
             }),
