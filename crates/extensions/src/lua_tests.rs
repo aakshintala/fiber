@@ -8,14 +8,8 @@ use fakes::clock::FakeClock;
 use super::hub::Progress;
 use super::*;
 
-/// Wall-clock bound on a wait for the VM, a server, or a thread. The load
-/// soak runs this process at background priority, so a few seconds is not
-/// enough for the VM to reach a test server.
-const WAIT: Duration = Duration::from_secs(60);
-
-/// A callback timeout whose `host.http` must stay open across [`WAIT`].
-/// ureq's bound is this plus the grace, and that bound is wall time.
-const HOLD_MS: u64 = 180_000;
+/// Wall-clock bound on a wait for the VM, a server, or a thread.
+const WAIT: Duration = Duration::from_secs(10);
 
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
@@ -406,7 +400,7 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     let dir = extension(
         "parked",
         &format!(
-            "fiber.command(\"hold\", {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+            "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
              fiber.command(\"later\", {{ timeout = 5000, run = function() return \"later\" end }})\n"
         ),
     );
@@ -491,8 +485,9 @@ fn hold_open(dir: &Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
-        match release_rx.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
+        match release_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
         }
         drop(held);
     });
@@ -512,8 +507,9 @@ fn hold_server() -> (String, mpsc::Receiver<()>) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
         let (_block_tx, block_rx) = mpsc::channel::<()>();
-        match block_rx.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
+        match block_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
         }
         drop(sock);
     });
@@ -530,10 +526,10 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
     let dir = extension(
         "abandon",
         &format!(
-            "fiber.command(\"park\", {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
+            "fiber.command(\"park\", {{ timeout = 8000, run = function() return host.http({{ url = \"{park_url}\" }}).body end }})\n\
              fiber.command(\"queued\", {{ timeout = 8000, run = function() return \"ran\" end }})\n\
              fiber.provider(\"p\", {{\n\
-               models = {{ timeout = {HOLD_MS}, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
+               models = {{ timeout = 8000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
                sign = {{ timeout = 50, run = function() setmetatable({{}}, {{ __gc = function() require(\"hold\") end }}); collectgarbage() end }},\n\
              }})\n"
         ),

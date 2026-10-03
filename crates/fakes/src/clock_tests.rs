@@ -133,7 +133,7 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
         clock_t.wait_until(Some(until), &mut |bound| {
             assert_eq!(bound, None);
             release_rx
-                .recv()
+                .recv_timeout(Duration::from_secs(5))
                 .expect("waited for the test to release the parked thread");
         });
     });

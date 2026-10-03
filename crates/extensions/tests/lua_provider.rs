@@ -28,8 +28,7 @@ use fakes::{ProviderServer, Response};
 use serde_json::json;
 
 /// How long a test waits for one call, or for a background refresh.
-/// Wall time, so the load soak's background priority still fits.
-const WAIT: Duration = Duration::from_secs(60);
+const WAIT: Duration = Duration::from_secs(10);
 
 /// Runs `f` on its own thread under `WAIT`, so a call that never returns
 /// fails the test instead of hanging it.
@@ -377,8 +376,9 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
             return;
         }
         let (_hold_tx, hold_rx) = mpsc::channel::<()>();
-        match hold_rx.recv() {
-            Ok(()) | Err(mpsc::RecvError) => {}
+        match hold_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
         }
     });
     let home = setup.home();
