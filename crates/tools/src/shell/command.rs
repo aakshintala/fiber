@@ -413,18 +413,15 @@ fn after(clock: &dyn Clock, delay: Duration) -> Instant {
 }
 
 fn group_alive(pgid: u32) -> bool {
-    // Group 1 or 0 is not a command. Signalling it reaches other processes,
-    // and waiting on it would loop: nothing of this run is there.
-    if pgid <= 1 {
+    // Waiting on group 1 or 0 would loop: nothing of this run is there.
+    if refused_group(pgid) {
         return false;
     }
     pid(pgid).is_some_and(|pid| rustix::process::test_kill_process_group(pid).is_ok())
 }
 
 fn signal_group(pgid: u32, signal: Signal) {
-    // Group 1 or 0 is not a command. `kill(-1)` reaches every process the
-    // user owns, and `kill(0)` this process's own group.
-    if pgid <= 1 {
+    if refused_group(pgid) {
         return;
     }
     let Some(pid) = pid(pgid) else {
@@ -433,6 +430,14 @@ fn signal_group(pgid: u32, signal: Signal) {
     match rustix::process::kill_process_group(pid, signal) {
         Ok(()) | Err(_) => {}
     }
+}
+
+/// Group 1 or 0 is not a command's group: `kill(-1)` reaches every process
+/// the user owns, and `kill(0)` this process's own group. No test passes such
+/// an id to [`signal_group`], so a mutant of this check sends nothing; its own
+/// test pins it.
+fn refused_group(pgid: u32) -> bool {
+    pgid <= 1
 }
 
 fn pid(raw: u32) -> Option<Pid> {

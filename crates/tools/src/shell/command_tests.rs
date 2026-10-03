@@ -7,11 +7,10 @@ use std::time::{Duration, Instant, SystemTime};
 use contract::clock::{Clock, Wake};
 use fakes::CancelToken;
 use fakes::clock::FakeClock;
-use rustix::process::Signal;
 
 use super::{
     Inner, Shared, StopKind, already_woken, bump, finish, group_alive, lock, note_eof, park,
-    poll_while_occupied, read_output, signal_group, suppress_term,
+    poll_while_occupied, read_output, refused_group, suppress_term,
 };
 
 #[test]
@@ -262,12 +261,24 @@ fn survived(mut sentinel: Child) -> bool {
 }
 
 #[test]
-fn group_zero_and_one_are_not_signalled() {
+fn group_zero_and_one_are_refused() {
+    assert!(refused_group(0));
+    assert!(refused_group(1));
+    assert!(!refused_group(2));
+}
+
+/// Only the probe runs here. A test never hands 0 or 1 to `signal_group`:
+/// a mutant of its guard would then send that signal to every process the
+/// user owns.
+#[test]
+fn group_zero_and_one_are_never_occupied() {
     for group in [0, 1] {
         let sentinel = sentinel();
         assert!(!group_alive(group), "group {group} looked occupied");
-        signal_group(group, Signal::KILL);
-        assert!(survived(sentinel), "group {group} signalled the sentinel");
+        assert!(
+            survived(sentinel),
+            "group {group} probe touched the sentinel"
+        );
     }
 }
 
