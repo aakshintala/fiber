@@ -708,6 +708,7 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `provider` | string | yes | the provider's name |
+| `credential` | string | yes | the credential label whose quota crossed (`docs/model-routing.md`, "Credentials") |
 | `window` | string | yes | the window's name, as the provider reports it |
 | `percent_used` | number | yes | the percent used when the notice was given |
 | `resets_at` | integer | no | when the window resets, where the provider reports it |
@@ -768,6 +769,7 @@ Durable.
 | `thinking` | string | no | the thinking level, where the model takes one (`docs/model-routing.md`, "Thinking") |
 | `tool_choice` | string | yes | the tool choice as sent |
 | `cache_lifetime` | string | yes | `5m` or `1h` |
+| `credential` | string | no | the credential label every later request uses (`docs/model-routing.md`, "Which credential a session uses"); absent when the provider takes no credential |
 | `system_prompt` | string | yes | the system prompt text as sent |
 | `tools` | array | yes | each tool as sent: `name` (string), `registered_by` (string: `builtin` for Fiber's own tools, otherwise the name of the extension or MCP server that registered it), `deferred` (boolean) and `definition` (object, the definition in the protocol's own shape) |
 | `replaced` | array | no | each tool registered under a name already taken: `name` (string), `from` (string, the `registered_by` of the tool replaced) and `to` (string, the `registered_by` of the tool that replaced it); absent when no tool was replaced |
@@ -778,10 +780,13 @@ Durable.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `before` | object | yes | `model`, `effort`, `thinking` and `cache_lifetime` before the switch, as on `preamble_built` |
+| `before` | object | yes | `model`, `effort`, `thinking`, `cache_lifetime` and `credential` before the switch, as on `preamble_built` |
 | `after` | object | yes | the same keys after it |
 | `source` | string | yes | who asked for it: `driver` or `extension`, as in "Where a message came from" |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
+
+A switch of credential label, by `/credential`, the `credential` driver command
+or `--credential` on a resume, is a `model_changed` whose `credential` differs.
 
 `preamble_built` follows `session_started` or `fiber_started`, `reloaded`, or
 `model_changed`, before the next model request. A fork or a rewind sends the

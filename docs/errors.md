@@ -78,7 +78,7 @@ asked for the session.
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
 | `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
-| `credential_missing` | the session model's credential cannot be found | 1 |
+| `credential_missing` | the session model's credential cannot be found, or its credential label names none | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
@@ -209,7 +209,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
-| `credential_missing` | exit | no credential was found for the session's model |
+| `credential_missing` | exit | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit | the provider of a `provider/model` is not installed |

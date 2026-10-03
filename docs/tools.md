@@ -835,7 +835,7 @@ backend.
 - A backend registers with `fiber.search_backend` (`docs/extensions.md`). Its
   function takes the query and the domain filter, and returns a list of
   results, each a title, a URL and a snippet. Fiber writes the result.
-- A backend's key is stored at `credentials/<backend>`, as a provider's is,
+- A backend's key is an extension secret, stored at `credentials/<backend>`
   and read with `host.secret`.
 - With more than one backend installed, `web_search.backend`
   (`docs/configuration.md`) names the one used.
@@ -975,7 +975,9 @@ model"), and Fiber never switches it on the model's behalf.
 ### Where it comes from
 
 A provider supplies quota through an optional Lua `quota()` function
-(`docs/model-routing.md`, "Quota"). A provider without one reports no quota. Of
+(`docs/model-routing.md`, "Quota"). It is called once per credential label,
+because each label is its own account (`docs/model-routing.md`,
+"Credentials"). A provider without one reports no quota. Of
 the first-party providers:
 
 | Provider | Source | Reports |
@@ -1000,8 +1002,8 @@ reaches only by running Claude Code.
 
 ### What the model sees
 
-`delegate_models` returns one quota entry per provider and per harness
-beside the models it lists (`docs/delegates.md`, "The tools"). There is no separate quota tool.
+`delegate_models` returns one quota entry per provider credential label and
+per harness beside the models it lists (`docs/delegates.md`, "The tools"). There is no separate quota tool.
 Each entry is one of:
 
 - windows, each with its name, percent used and reset time where the provider
@@ -1017,7 +1019,7 @@ tool definition or the system prompt (`docs/prompt-cache.md`, "Tools").
 ### The notice
 
 When a window crosses `quota.notice_at` percent used (default 80), one line
-naming the provider, the window and its reset time goes into the model's next
+naming the provider, the credential label, the window and its reset time goes into the model's next
 turn input. It fires once per crossing, and again for that window only after
 it resets. The notice is the durable event `quota_noticed`
 (`docs/events.md`, "Usage and notices"). OpenRouter credit has a percentage
@@ -1025,7 +1027,7 @@ only when the key has a limit, so a key without one never gives a notice.
 
 ### Fetching
 
-Each provider has one cache holding its last value, when it was fetched, and
+Each provider credential label has one cache holding its last value, when it was fetched, and
 any fetch in flight. Concurrent readers share one fetch. What the person is
 shown reads the same cache, and shows no age.
 

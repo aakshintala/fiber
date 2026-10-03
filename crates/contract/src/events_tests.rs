@@ -180,8 +180,8 @@ fn samples() -> Vec<(&'static str, Value)> {
     let tokens =
         json!({"input": 1, "cache_read": 2, "cache_write": {"5m": 3, "1h": 4}, "output": 5});
     let usage = json!({"tokens": tokens, "cost": 0.5, "subscription_cost": 0.1});
-    let settings =
-        json!({"model": "p/m", "effort": "high", "thinking": "on", "cache_lifetime": "5m"});
+    let settings = json!({"model": "p/m", "effort": "high", "thinking": "on", "cache_lifetime": "5m",
+            "credential": "work"});
     vec![
         (
             "fiber_started",
@@ -417,7 +417,7 @@ fn samples() -> Vec<(&'static str, Value)> {
         ),
         (
             "quota_noticed",
-            json!({"provider": "p", "window": "5h", "percent_used": 80.5,
+            json!({"provider": "p", "credential": "work", "window": "5h", "percent_used": 80.5,
             "resets_at": 17, "notice_at": 80.0}),
         ),
         (
@@ -432,7 +432,7 @@ fn samples() -> Vec<(&'static str, Value)> {
             "preamble_built",
             json!({"reason": "switch", "model": "p/m", "context_window": 200000,
             "trigger_at": 140000, "effort": "high", "thinking": "on", "tool_choice": "auto",
-            "cache_lifetime": "1h", "system_prompt": "s",
+            "cache_lifetime": "1h", "credential": "work", "system_prompt": "s",
             "tools": [{"name": "read", "registered_by": "e", "deferred": false,
             "definition": {"type": "object"}}],
             "replaced": [{"name": "read", "from": "builtin", "to": "e"}]}),

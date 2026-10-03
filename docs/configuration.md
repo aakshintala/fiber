@@ -46,8 +46,8 @@ Databricks model, unless the person's `projects/<key>/config.json` sets
 another, or they pass `-c model=...` for one run.
 
 Objects merge key by key, so a layer changes only the keys it names. Any other
-value, a list included, replaces the one below it. A provider's `credential` replaces
-the one below it as a whole: it does not merge key by key.
+value, a list included, replaces the one below it. Each entry under a provider's
+`credentials` replaces the one below it as a whole: it does not merge key by key.
 
 The per-project file is the person's own setting for one project. It lives in
 Fiber home, not the repository, so it covers every worktree of the project
@@ -96,7 +96,7 @@ set the key.
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `thinking` | the model's own default | yes | The thinking level for a new session (`docs/model-routing.md`, "Thinking"). |
 | `scoped_models` | none | yes | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
-| `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
+| `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"`, or an object with `model`, the reference, and `credential`, the credential label the delegate uses (`docs/delegates.md`). A repository's role cannot name a credential: its `credential` is ignored with a `notice`. |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
@@ -125,7 +125,8 @@ set the key.
 | `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |
 | `extensions."<name>".hook_timeout_ms` | the hook's own | no | Overrides the timeout of every hook the extension registers. |
 | `hooks.order."<hook point>"` | none | no | Extension names in the order their hooks run at that point (`docs/extensions.md`, "When several hooks share a point"). |
-| `providers."<name>".credential` | the provider's own | no | Where the provider's credential comes from ("Secrets"). |
+| `providers."<name>".credential` | the first label `fiber login` stored | no | The credential label a new session uses (`docs/model-routing.md`, "Which credential a session uses"). |
+| `providers."<name>".credentials."<label>"` | none | no | Where that label's key comes from, when it is not stored in Fiber home ("Secrets"). |
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as a card too (`docs/tui.md`, "The panel"). The status line of the narrow layout follows the same order. |
 | `tui.theme` | none | no | The theme's name: `dark`, `light` or a theme file in Fiber home. With none, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
 | `tui.reduced_motion` | false | no | Whether every animation takes its still form. On whenever a screen reader is detected (`docs/tui.md`, "Reduced motion"). |
@@ -214,12 +215,12 @@ A separate file means an extension never rewrites the person's `config.json`.
 
 ## Secrets
 
-A secret is a file in `credentials/` in Fiber home, mode 0600:
-`credentials/<name>`. Provider credentials are already stored there
+A secret is a file in `credentials/` in Fiber home, mode 0600. A provider's
+credentials are `credentials/<name>/<label>`, one file per credential label
 (`docs/model-routing.md`, "Credentials"). An extension's secrets share the
-same directory and the same names. `host.secret(name)` reads
-`credentials/<name>`. By convention, an extension prefixes its names with its
-own name, such as `acme.api_key`. `fiber login <name>` stores one.
+directory as single files: `host.secret(name)` reads `credentials/<name>`. By
+convention, an extension prefixes its names with its own name, such as
+`acme.api_key`. `fiber login <name>` stores one.
 
 This is one namespace, not a wall between extensions. An extension runs with
 the account's full rights and could read `credentials/` with `host.fs` anyway
@@ -227,9 +228,9 @@ the account's full rights and could read `credentials/` with `host.fs` anyway
 directory from tool calls, not from extensions
 (`docs/permissions.md`, "Credentials").
 
-A provider's data declares how its credential is found. A person can override
-that at `providers."<name>".credential` in the global or per-project file, with
-one of:
+A provider's data declares how its `default` credential is found. A person
+adds or overrides a label at `providers."<name>".credentials."<label>"` in the
+global or per-project file, with one of:
 
 ```json
 { "env": "OPENROUTER_API_KEY" }
@@ -238,17 +239,19 @@ one of:
 ```
 
 A command runs once per process. A repository can never set this, because a
-command runs a program and a changed source sends the key elsewhere.
+command runs a program and a changed source sends the key elsewhere. A
+credential stored under the same label comes first.
 
 Providers in one package that share a key read one stored credential: each
-names the stored file in its provider data (`credential_name`, defaulting to
-its own name). `fiber login <provider>` stores the key in the stored
-credential that provider reads, so `fiber login opencode-go` and
-`fiber login opencode-zen` both store `credentials/opencode`.
+names the stored directory in its provider data (`credential_name`, defaulting
+to its own name). `fiber login <provider>` stores the key in the directory
+that provider reads, so `fiber login opencode-go` and
+`fiber login opencode-zen` both store under `credentials/opencode/`.
 
-`fiber logout <provider>` deletes that stored credential. When the provider's
-key comes from an environment variable, a file outside Fiber home or a
-command, `fiber logout` cannot remove it: it names the source and exits
+`fiber logout <provider>` deletes the provider's stored credential. When the
+provider has several labels, it refuses unless given `--as <label>` or `--all`.
+When the key comes from an environment variable, a file outside Fiber home or
+a command, `fiber logout` cannot remove it: it names the source and exits
 non-zero.
 
 ## When Fiber reads configuration
@@ -280,6 +283,9 @@ Fiber writes configuration in these places:
 - the model picker saves the global `model`, and a thinking level as
   `models."<provider/model>".thinking`, unless the choice is marked as this
   session only (`docs/tui.md`, "Swapped views")
+- `/credential` saves the global `providers."<name>".credential`, unless the
+  switch is marked as this session only, and `fiber login` writes it when it
+  stores a provider's first label (`docs/model-routing.md`, "Credentials")
 - `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
   saves the global `keys`, only the bindings that differ from the defaults
 - `host.config.set` writes an extension's settings file
@@ -390,11 +396,11 @@ provider extension declares") lists:
 }
 ```
 
-- `credential` says how the key is found: `env`, `file` or `command` as in
-  "Secrets". A stored credential always comes first
-  (`docs/model-routing.md`, "Credentials"): the provider reads the file its
-  `credential_name` names, or `credentials/<name>` when it names none, so
-  providers in one package that share a key name the same file. A provider
+- `credential` says how the `default` key is found: `env`, `file` or `command`
+  as in "Secrets". A stored credential always comes first
+  (`docs/model-routing.md`, "Credentials"): the provider reads the directory
+  its `credential_name` names, or `credentials/<name>/` when it names none, so
+  providers in one package that share a key name the same directory. A provider
   whose token expires, such as an OAuth login, declares a Lua `credential()`
   function instead.
 - `compat` is a flat object of the flags the protocol reads. Fiber never

@@ -638,6 +638,7 @@ release still applies.
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
 | `/thinking <level>` | Sets the thinking level, as choosing a chip in the model picker does: saved for the model unless marked as this session only (`docs/model-routing.md`, "Thinking"). |
+| `/credential <label>` | Switches the session's credential label, saved as the provider's `credential` unless marked as this session only (`docs/model-routing.md`, "Which credential a session uses"). The terminal first says the switch rebuilds the cache, with its size. With no label, it lists the provider's labels. |
 | `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |

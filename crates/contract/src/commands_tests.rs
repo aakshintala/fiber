@@ -91,6 +91,7 @@ fn samples() -> Vec<Value> {
         json!({"id": "c", "command": "model",
             "args": {"model": "opus", "effort": "high", "thinking": "on"}}),
         json!({"id": "c", "command": "model", "args": {"model": "opus"}}),
+        json!({"id": "c", "command": "credential", "args": {"label": "work"}}),
         json!({"id": "c", "command": "name", "args": {"text": ""}}),
         json!({"id": "c", "command": "handoff", "args": {"instructions": "i"}}),
         json!({"id": "c", "command": "handoff", "args": {}}),

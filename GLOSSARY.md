@@ -176,8 +176,9 @@ _Avoid_: context file, project doc, memory file
 
 ### Role
 
-A configured name for a delegate's model reference, so that written
-instructions survive a model being withdrawn.
+A configured name for a delegate's model reference, and optionally its
+credential label, so that written instructions survive a model being
+withdrawn.
 _Avoid_: preset, alias, tier
 
 ### Artifact
@@ -310,6 +311,13 @@ _Avoid_: MCP tool server, plugin
 An endpoint Fiber sends model requests to: a name, a credential and a list of
 models. Every provider is an extension. See `docs/model-routing.md`.
 _Avoid_: connection, backend, vendor
+
+### Credential label
+
+The name of one of a provider's credentials, such as `work` or an account's
+email, so one provider can hold several accounts. A session uses one label at
+a time. See `docs/model-routing.md`, "Credentials".
+_Avoid_: account, profile, credential name
 
 ### Protocol
 

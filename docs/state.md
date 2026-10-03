@@ -23,7 +23,8 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   extensions/<name>/              installed extensions, one directory each
   data/<extension>/               an extension's data for this machine
   approvals/<content-hash>        one file per approved MCP server declaration
-  credentials/<name>               one file per stored credential, mode 0600
+  credentials/<name>/<label>       one file per stored provider credential, mode 0600
+  credentials/<name>              one file per extension secret, mode 0600
   run/<session_id>                one local socket per running session
   run/hub                         the hub's local socket
   recent.jsonl                    recently exited sessions, a rebuildable index
@@ -133,8 +134,10 @@ declaration is approved; deleting it revokes the approval. Recorded per
 machine, so a declaration approved in one repository is not asked about again
 in another (`docs/mcp.md`, "A repository's servers").
 
-**Credentials.** One file per stored credential at `credentials/<name>`,
-usually one per provider, mode 0600, in a 0700 directory. There is no OS keychain. OAuth refresh takes a
+**Credentials.** One file per stored provider credential at
+`credentials/<name>/<label>`, one per credential label, and one file per
+extension secret at `credentials/<name>`, each mode 0600, in 0700
+directories. There is no OS keychain. OAuth refresh takes a
 lock on the credential file (`docs/model-routing.md`). Every tool call
 touching `credentials/` is refused
 ([docs/permissions.md](permissions.md#credentials)).
