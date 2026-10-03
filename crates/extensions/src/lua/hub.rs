@@ -391,6 +391,7 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::BadName { .. }
         | Error::GitMissing
         | Error::Git { .. }
+        | Error::NoRepository { .. }
         | Error::MajorConflict { .. }
         | Error::NoVersion { .. }
         | Error::Unresolved

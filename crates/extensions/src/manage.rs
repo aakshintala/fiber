@@ -447,7 +447,10 @@ impl Ctx<'_> {
 
     /// Each reachable extension's dependencies and, for an installed one the
     /// plan leaves alone, the dependencies it has: name to requirer to
-    /// minimum.
+    /// minimum. A version a person installed or updated by name stays a
+    /// minimum for that extension, under `your install`, until its record
+    /// is gone (`docs/extensions.md`, "Versions"). The plan's root is left
+    /// out: this install or update replaces that minimum with the new version.
     fn wants(&self, plan: &Plan) -> BTreeMap<String, BTreeMap<String, String>> {
         let mut wants: BTreeMap<String, BTreeMap<String, String>> = BTreeMap::new();
         let mut add = |name: &str, depends: &BTreeMap<String, String>| {
@@ -464,6 +467,14 @@ impl Ctx<'_> {
         for have in self.installed {
             if !plan.items.contains_key(&have.name) {
                 add(&have.name, &have.depends);
+            }
+        }
+        for have in self.installed {
+            if have.requested && have.name != plan.root {
+                wants
+                    .entry(have.name.clone())
+                    .or_default()
+                    .insert("your install".into(), have.version.clone());
             }
         }
         wants

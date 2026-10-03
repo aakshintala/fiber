@@ -195,6 +195,26 @@ fn an_extension_in_a_directory_of_a_repository_installs_from_there() {
 }
 
 #[test]
+fn a_git_marker_names_a_repository_inside_subgroups() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let repo = "gitlab.com/group/subgroup/repo.git";
+    let name = "gitlab.com/group/subgroup/repo.git/ext";
+    repos.tag(repo, "ext", "v1.0.0", &manifest(name), &[]);
+    install(&setup, &repos, name).unwrap();
+    let dir = setup
+        .home()
+        .join("extensions/gitlab.com-group-subgroup-repo.git-ext");
+    assert!(dir.join("extension.json").is_file());
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].name, name);
+    assert_eq!(uninstall(&setup.home(), name).unwrap(), [name]);
+    assert!(!dir.exists());
+    assert!(dirs(&setup).is_empty());
+}
+
+#[test]
 fn a_short_name_installs_the_first_party_extension() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
@@ -381,6 +401,7 @@ fn two_majors_of_one_dependency_stop_the_install_naming_both() {
         assert!(text.contains(part), "{text}");
     }
     assert!(text.contains(b) && text.contains("2.0"), "{text}");
+    assert_eq!(err.code(), ErrorCode::VersionConflict);
     assert_eq!(dirs(&setup), before);
     assert_eq!(versions(&setup)[dep], "v1.2.0");
 }
@@ -396,6 +417,7 @@ fn a_failed_install_installs_nothing() {
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "3.0")]), &[]);
     let err = install(&setup, &repos, top).unwrap_err();
     assert!(matches!(err, Error::NoVersion { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::VersionConflict);
     assert!(dirs(&setup).is_empty());
 
     // A dependency that needs a newer Fiber.
@@ -439,6 +461,7 @@ fn a_manifest_that_names_another_extension_is_refused() {
     repos.tag(LIB, "", "v1.0.0", &manifest("example.com/acme/other"), &[]);
     let err = install(&setup, &repos, LIB).unwrap_err();
     assert!(matches!(err, Error::WrongName { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
     assert!(dirs(&setup).is_empty());
 }
 
@@ -629,6 +652,43 @@ fn missing_git_fails_with_the_usage_code_and_says_to_install_it() {
 }
 
 #[test]
+fn a_missing_repository_is_extension_not_found() {
+    let setup = Setup::new();
+    let repos = Repos::new(&setup);
+    let err = install(&setup, &repos, LIB).unwrap_err();
+    assert!(matches!(err, Error::NoRepository { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
+    let text = err.to_string();
+    assert!(
+        text.contains(LIB) && text.contains("was not found"),
+        "{text}"
+    );
+    assert!(
+        text.contains("does not appear to be a git repository"),
+        "{text}"
+    );
+    assert!(dirs(&setup).is_empty());
+}
+
+#[test]
+fn a_refused_connection_is_fetch_failed() {
+    let setup = Setup::new();
+    let origin = Origin::new("git", |repo| format!("https://127.0.0.1:1/{repo}"));
+    let Err(err) = plan(
+        &setup.home(),
+        &Request::Install(LIB.into()),
+        FIBER,
+        &origin,
+        &*fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("planned")
+    };
+    assert!(matches!(err, Error::Git { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::FetchFailed);
+    assert!(dirs(&setup).is_empty());
+}
+
+#[test]
 fn a_name_that_is_not_where_and_what_is_refused_before_any_fetch() {
     let setup = Setup::new();
     let origin = Origin::new("fiber-no-such-git-program", |repo| repo.to_owned());
@@ -753,6 +813,7 @@ fn two_names_with_one_directory_are_refused_naming_both() {
     common::install(&setup.home(), &one, FIBER).unwrap();
     let err = common::install(&setup.home(), &two, FIBER).unwrap_err();
     assert!(matches!(err, Error::SlugTaken { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::Usage);
     let text = err.to_string();
     assert!(
         text.contains("example.com/a-b/c") && text.contains("example.com/a/b-c"),
@@ -919,6 +980,79 @@ fn updating_a_dependency_an_installed_dependent_pins_to_an_older_major_stops() {
 }
 
 #[test]
+fn an_update_by_name_is_kept_when_a_later_install_allows_an_older_version() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.0.0", "v1.5.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    let (a, b) = ("example.com/acme/a", "example.com/acme/b");
+    repos.tag(a, "", "v1.0.0", &named(a, &[(dep, "1.0")]), &[]);
+    install(&setup, &repos, a).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.0.0");
+    plan(
+        &setup.home(),
+        &Request::Update(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+    repos.tag(b, "", "v1.0.0", &named(b, &[(dep, "1.0")]), &[]);
+    install(&setup, &repos, b).unwrap();
+    assert_eq!(versions(&setup)[dep], "v1.5.0");
+}
+
+#[test]
+fn a_requested_major_stops_an_install_that_needs_another() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    for tag in ["v1.0.0", "v2.0.0"] {
+        repos.tag(dep, "", tag, &manifest(dep), &[]);
+    }
+    install(&setup, &repos, dep).unwrap();
+    assert_eq!(versions(&setup)[dep], "v2.0.0");
+    let user = "example.com/acme/user";
+    repos.tag(user, "", "v1.0.0", &named(user, &[(dep, "1.0")]), &[]);
+    let err = install(&setup, &repos, user).unwrap_err();
+    assert!(matches!(err, Error::MajorConflict { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::VersionConflict);
+    let text = err.to_string();
+    assert!(
+        text.contains("your install") && text.contains(user),
+        "{text}"
+    );
+    assert_eq!(versions(&setup)[dep], "v2.0.0");
+    assert!(!versions(&setup).contains_key(user));
+}
+
+#[test]
+fn an_update_replaces_the_minimum_from_the_version_it_moves_off() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
+    install(&setup, &repos, dep).unwrap();
+    repos.tag(dep, "", "v2.0.0", &manifest(dep), &[]);
+    plan(
+        &setup.home(),
+        &Request::Update(dep.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(versions(&setup)[dep], "v2.0.0");
+}
+
+#[test]
 fn a_repository_with_no_version_tag_is_refused() {
     let setup = Setup::new();
     let mut repos = Repos::new(&setup);
@@ -926,6 +1060,7 @@ fn a_repository_with_no_version_tag_is_refused() {
     repos.tag(LIB, "", "latest", &manifest(LIB), &[]);
     let err = install(&setup, &repos, LIB).unwrap_err();
     assert!(matches!(err, Error::NoTag { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::ExtensionNotFound);
     assert!(dirs(&setup).is_empty());
 }
 
@@ -1266,6 +1401,7 @@ fn a_binary_that_cannot_be_downloaded_aborts() {
     let source = setup.source("local", &m, &[]);
     let err = common::install(&setup.home(), &source, FIBER).unwrap_err();
     assert!(matches!(err, Error::Download { .. }), "{err}");
+    assert_eq!(err.code(), ErrorCode::FetchFailed, "{err}");
     assert!(dirs(&setup).is_empty());
 }
 
