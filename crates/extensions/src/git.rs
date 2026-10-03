@@ -238,6 +238,11 @@ mod tests {
             split("github.com/a/x.git.git").unwrap(),
             ("github.com/a/x.git.git", "")
         );
+        // A bare `.git` segment is not a marker.
+        assert_eq!(
+            split("gitlab.com/g/s/.git/p").unwrap(),
+            ("gitlab.com/g/s", ".git/p")
+        );
         // `repo.gitx` is not a marker, so the first three parts stay the repository.
         assert_eq!(
             split("github.com/a/repo.gitx/p").unwrap(),
