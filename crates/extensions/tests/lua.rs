@@ -452,7 +452,7 @@ end })"#,
 }
 
 #[test]
-fn a_raised_cap_still_bounds_file_reads() {
+fn a_raised_cap_reads_a_file_past_the_default_cap() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(&dir.join("init.lua"), "local m = require(\"big\")\n");

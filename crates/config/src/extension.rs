@@ -180,7 +180,7 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
     if let Some(n) = manifest.memory_mib
         && (n == 0
             || n.checked_mul(MIB)
-                .is_none_or(|bytes| bytes > usize::MAX as u64))
+                .is_none_or(|bytes| usize::try_from(bytes).is_err()))
     {
         return Err(ConfigError::WrongType {
             source_name: file.display().to_string(),
