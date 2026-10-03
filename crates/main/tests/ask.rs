@@ -13,17 +13,17 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Request, Response, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 
@@ -32,6 +32,10 @@ mod probes;
 
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
+
+/// Set on the re-exec of [`sleep_stands_in_for_fiber`]. Unset, that test
+/// returns without spawning anything.
+const WATCHDOG_STAND_IN_ENV: &str = "FIBER_WATCHDOG_STAND_IN";
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -138,6 +142,7 @@ impl Setup {
     /// Runs `fiber` in its own process group, waits for it under
     /// [`DEADLINE`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
+    /// A watchdog beside it kills that group if this process dies first.
     fn run(
         &self,
         home: &str,
@@ -146,7 +151,8 @@ impl Setup {
         text: Option<&str>,
         env: &[(&str, &str)],
     ) -> Run {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fiber"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
             .args(args)
             .current_dir(self.root.path().join("w"))
             .env_clear()
@@ -157,10 +163,8 @@ impl Setup {
             .envs(env.iter().copied())
             .stdin(stdin)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
         // Taking the pipe closes it once written.
@@ -192,8 +196,10 @@ impl Setup {
             !group_alive(group),
             "`fiber` left a process in its group behind"
         );
-        // The group is empty. Skip the drop, which would kill it again.
+        // The group is empty. Skip the drop, which would kill it again,
+        // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
+        watchdog.stand_down();
         Run::from(output)
     }
 
@@ -207,6 +213,16 @@ impl Setup {
     fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
         self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
     }
+}
+
+/// The recorded credential header equals the fingerprint of `value`, the
+/// bytes that package sends (`docs/testing.md`, "Model calls").
+fn assert_fingerprint(request: &Request, header: &str, value: &str) {
+    assert_eq!(
+        request.header(header),
+        Some(fingerprint(value).as_str()),
+        "{header}"
+    );
 }
 
 fn write(file: &Path, value: &Value) {
@@ -258,6 +274,79 @@ fn kill_group(group: u32) {
         .unwrap();
 }
 
+/// Spawns `command` in a new process group, then a watchdog in its own
+/// group. The watchdog's stdin is a pipe only this process holds: a newline
+/// means the child is reaped, and EOF means this process died, so the
+/// watchdog kills the group. The watchdog is started immediately after the
+/// child; a kill in the gap between the two spawns can still orphan it.
+fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
+    let child = command.process_group(0).spawn().unwrap();
+    let group = child.id();
+    // A failed watchdog spawn still kills the child on unwind.
+    let guard = KillGroup(group);
+    let group_arg = group.to_string();
+    let mut shell = Command::new("sh");
+    shell
+        .args([
+            "-c",
+            r#"read -r line || kill -s KILL -- "-$1""#,
+            "watchdog",
+            group_arg.as_str(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut spawned = shell.spawn().unwrap();
+    std::mem::forget(guard);
+    let stdin = spawned.stdin.take().unwrap();
+    (
+        child,
+        Watchdog {
+            stdin: Some(stdin),
+            child: Some(spawned),
+        },
+    )
+}
+
+/// Kills the spawned group when this process dies. Dropping it closes
+/// stdin, which is that signal. [`Watchdog::stand_down`] writes a newline
+/// and reaps the watchdog, so a finished run sends no signal.
+struct Watchdog {
+    stdin: Option<std::process::ChildStdin>,
+    child: Option<Child>,
+}
+
+impl Watchdog {
+    /// The child is reaped. Tell the watchdog to exit without signalling,
+    /// and wait for it under [`DEADLINE`].
+    fn stand_down(mut self) {
+        if let Some(mut stdin) = self.stdin.take() {
+            match writeln!(stdin) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        let mut child = match self.child.take() {
+            Some(child) => child,
+            None => return,
+        };
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap());
+        assert!(
+            finished.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the watchdog to exit"
+        );
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        // EOF on stdin: the watchdog kills the group and exits. A panicking
+        // test has already failed, so the watchdog is not waited on.
+        drop(self.stdin.take());
+    }
+}
+
 /// Kills process group `group` on drop. After the child is reaped and the
 /// group is empty, [`std::mem::forget`] skips that kill.
 struct KillGroup(u32);
@@ -294,6 +383,86 @@ fn dropping_the_group_guard_kills_the_group() {
     };
     assert_eq!(status.signal(), Some(9));
     assert!(!group_alive(group));
+}
+
+/// Run by [`a_killed_test_kills_the_stand_in_group`]: `sleep` through
+/// [`spawn_watched`], stdout inherited so the stand-in holds the pipe the
+/// parent reads. Prints its group and waits. On its own it does nothing.
+#[test]
+#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+fn sleep_stands_in_for_fiber() {
+    let Ok(_) = std::env::var(WATCHDOG_STAND_IN_ENV) else {
+        return;
+    };
+    let mut command = Command::new("sleep");
+    command.arg("60").stdout(Stdio::inherit());
+    let (child, _watchdog) = spawn_watched(&mut command);
+    println!("group {}", child.id());
+    std::io::stdout().flush().unwrap();
+    let mut rest = String::new();
+    std::io::stdin().read_line(&mut rest).unwrap();
+}
+
+/// SIGKILL of the test process is EOF to the watchdog, which kills the
+/// stand-in's group. EOF on the inherited stdout arrives only once that
+/// group is gone (`docs/testing.md`, "Running tests").
+#[test]
+fn a_killed_test_kills_the_stand_in_group() {
+    let mut helper = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "sleep_stands_in_for_fiber", "--nocapture"])
+        .env(WATCHDOG_STAND_IN_ENV, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = helper.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = std::io::BufReader::new(stdout);
+        // libtest prints its own lines before the helper's.
+        let group = (&mut reader)
+            .lines()
+            .map_while(Result::ok)
+            .find_map(|line| line.strip_prefix("group ")?.parse().ok());
+        send_group(&tx, group);
+        // EOF comes once every process holding the pipe has exited.
+        match std::io::copy(&mut reader, &mut std::io::sink()) {
+            Ok(_) | Err(_) => {}
+        }
+        send_group(&tx, None);
+    });
+    let group = match rx.recv_timeout(DEADLINE) {
+        Ok(Some(group)) => group,
+        Ok(None) => panic!("the stand-in exited before printing its group"),
+        Err(_) => panic!("waited {DEADLINE:?} for the stand-in to print its group"),
+    };
+    // Dropping this kills the group if the test fails before the watchdog does.
+    let _guard = KillGroup(group);
+    match helper.kill() {
+        Ok(()) | Err(_) => {}
+    }
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(helper.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the killed test process to exit"),
+    };
+    assert_eq!(status.signal(), Some(9));
+    match rx.recv_timeout(DEADLINE) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => {
+            panic!("waited {DEADLINE:?} for stand-in group {group} to die")
+        }
+    }
+}
+
+fn send_group(tx: &mpsc::Sender<Option<u32>>, message: Option<u32>) {
+    match tx.send(message) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    }
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
@@ -486,7 +655,7 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
-    assert_eq!(requests[0].header("authorization"), Some("<masked>"));
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test");
     assert!(String::from_utf8_lossy(&requests[0].body).contains("\"hi\""));
 }
 
@@ -1442,7 +1611,7 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
             "opencode-go/muse-spark-1.3-contributor",
             "What is the weather in Paris?",
         ],
-        &[("OPENCODE_API_KEY", "sk-test")],
+        &[("OPENCODE_API_KEY", "sk-test-opencode-go")],
     );
 
     assert_weather(&run);
@@ -1450,6 +1619,7 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.path, "/zen/go/v1/responses");
+        assert_fingerprint(request, "authorization", "Bearer sk-test-opencode-go");
         assert_eq!(request.header("x-opencode-session"), Some(run.session_id()));
         assert!(request.header("user-agent").unwrap().starts_with("fiber/"));
     }
@@ -1534,7 +1704,7 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "muse/muse-spark-1.3-contributor", "hi"],
-        &[("META_API_KEY", "sk-test")],
+        &[("META_API_KEY", "sk-test-muse")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1560,6 +1730,7 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-muse");
     assert_eq!(requests[0].header("x-opencode-session"), None);
     assert!(
         requests[0]
@@ -1610,7 +1781,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             "anthropic/claude-sonnet-5-5",
             "What is the weather in Paris? Use the tool.",
         ],
-        &[("ANTHROPIC_API_KEY", "sk-test")],
+        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1644,7 +1815,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.path, "/v1/messages");
-        assert_eq!(request.header("x-api-key"), Some("<masked>"));
+        assert_fingerprint(request, "x-api-key", "sk-test-anthropic");
     }
 }
 
@@ -1674,7 +1845,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
             "openai/gpt-6-luna",
             "Call f with a=\"x\".",
         ],
-        &[("OPENAI_API_KEY", "sk-test")],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1704,7 +1875,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
     assert_eq!(requests.len(), 2);
     for request in &requests {
         assert_eq!(request.path, "/v1/responses");
-        assert_eq!(request.header("authorization"), Some("<masked>"));
+        assert_fingerprint(request, "authorization", "Bearer sk-test-openai");
         let body: Value = serde_json::from_slice(&request.body).unwrap();
         assert_eq!(body["store"], Value::Bool(false));
     }
@@ -1740,7 +1911,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             "gemini/gemini-3.1-flash-lite",
             "Plot point x=3 y=4 with v \"a\".",
         ],
-        &[("GEMINI_API_KEY", "sk-test")],
+        &[("GEMINI_API_KEY", "sk-test-gemini")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1784,7 +1955,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
             request.path,
             "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
         );
-        assert_eq!(request.header("x-goog-api-key"), Some("<masked>"));
+        assert_fingerprint(request, "x-goog-api-key", "sk-test-gemini");
     }
 }
 
@@ -1799,7 +1970,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "anthropic/claude-sonnet-5-5", "hi"],
-        &[("ANTHROPIC_API_KEY", "sk-test")],
+        &[("ANTHROPIC_API_KEY", "sk-test-anthropic")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1808,6 +1979,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_a_scripted_stream() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/messages");
+    assert_fingerprint(&requests[0], "x-api-key", "sk-test-anthropic");
 }
 
 #[test]
@@ -1821,7 +1993,7 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "openai/gpt-6-luna", "hi"],
-        &[("OPENAI_API_KEY", "sk-test")],
+        &[("OPENAI_API_KEY", "sk-test-openai")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1830,6 +2002,7 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openai");
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["store"], Value::Bool(false));
 }
@@ -1849,7 +2022,7 @@ fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "gemini/gemini-3.1-flash-lite", "hi"],
-        &[("GEMINI_API_KEY", "sk-test")],
+        &[("GEMINI_API_KEY", "sk-test-gemini")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -1861,6 +2034,7 @@ fn gemini_installed_by_path_completes_a_turn_on_a_scripted_stream() {
         requests[0].path,
         "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
     );
+    assert_fingerprint(&requests[0], "x-goog-api-key", "sk-test-gemini");
 }
 
 #[test]
@@ -1994,7 +2168,7 @@ fn a_zen_model_is_sent_to_zens_url() {
 
     let run = setup.fiber_with_env(
         &["ask", "--model", "opencode-zen/muse-spark-1.3", "hi"],
-        &[("OPENCODE_API_KEY", "sk-test")],
+        &[("OPENCODE_API_KEY", "sk-test-zen")],
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
@@ -2002,6 +2176,7 @@ fn a_zen_model_is_sent_to_zens_url() {
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     let requests = server.requests();
     assert_eq!(requests[0].path, "/zen/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-zen");
     assert_eq!(
         requests[0].header("x-opencode-session"),
         Some(run.session_id())

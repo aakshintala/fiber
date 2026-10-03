@@ -126,8 +126,8 @@ tests come from two sources:
 
 The fake server binds a free local port and returns its address, which a
 test puts in a provider definition's base URL. It also records every request
-it receives, and tests assert on it: the path, the headers with credentials
-masked, and the body bytes. This is
+it receives, and tests assert on it: the path, the headers with each
+credential replaced by its fingerprint, and the body bytes. This is
 how a test proves the prompt-cache rule that "two requests built from the same
 inputs are the same bytes" (`docs/prompt-cache.md`), across turns, resume and
 fork.
@@ -233,7 +233,9 @@ until the next code change in that crate runs mutants against it.
 Tests run under cargo-nextest. Each test runs in its own process and is killed
 past its timeout. That does not contain what the test starts: a binary-level
 test runs Fiber in its own process group, and at the end it asserts that no
-child of its own remains, including after a timeout. A filter that matches no
+child of its own remains, including after a timeout. A watchdog the test
+starts beside Fiber kills Fiber's process group when the test process dies.
+A filter that matches no
 tests fails: nextest exits 4 with "no tests to run", where `cargo test` prints
 "0 passed" and exits 0. Doc-tests run under `cargo test --doc`.
 

@@ -265,6 +265,7 @@ name = "fakes"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "ring",
  "serde_json",
 ]
 

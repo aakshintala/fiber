@@ -113,13 +113,13 @@ mod tests {
         let request = Request {
             method: "POST".to_owned(),
             path: "/v1/messages".to_owned(),
-            headers: vec![("x-api-key".to_owned(), "<masked>".to_owned())],
+            headers: vec![("x-api-key".to_owned(), "sha256:746b4ad1".to_owned())],
             body: b"{}".to_vec(),
         };
 
         assert_eq!(
             show(&request),
-            "POST /v1/messages\nx-api-key: <masked>\n{}\n\n"
+            "POST /v1/messages\nx-api-key: sha256:746b4ad1\n{}\n\n"
         );
     }
 }

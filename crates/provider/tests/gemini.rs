@@ -29,7 +29,7 @@ use contract::provider::{
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, ErrorCode, ProviderCallId};
-use fakes::{ProviderServer, Response};
+use fakes::{ProviderServer, Response, fingerprint};
 use provider::Endpoint;
 use provider::google_generative_ai::{Gemini, decode};
 use serde_json::{Value, json};
@@ -364,7 +364,10 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
         sent.path,
         "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
     );
-    assert_eq!(sent.header("x-goog-api-key"), Some("<masked>"));
+    assert_eq!(
+        sent.header("x-goog-api-key"),
+        Some(fingerprint("AIza-secret").as_str())
+    );
     assert_eq!(sent.header("authorization"), None);
     assert!(!String::from_utf8_lossy(&sent.body).contains("AIza-secret"));
     assert!(sent.header("user-agent").unwrap().starts_with("fiber/"));

@@ -16,7 +16,7 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Request, Response};
+use fakes::{ProviderServer, Request, Response, fingerprint};
 
 /// The deadline on each wait: connecting, writing the whole request, and
 /// reading the whole reply. A stall fails naming the wait. A test makes at
@@ -174,8 +174,15 @@ fn a_request_past_the_end_of_the_script_gets_a_500_naming_why() {
     assert_eq!(server.requests().len(), 2);
 }
 
+/// `printf 'sk-secret' | shasum -a 256` begins `746b4ad1`. Pinning that
+/// literal here means [`fingerprint`] cannot drift from SHA-256.
 #[test]
-fn it_records_each_request_with_credentials_masked() {
+fn fingerprint_of_sk_secret_is_the_prefix_computed_outside_rust() {
+    assert_eq!(fingerprint("sk-secret"), "sha256:746b4ad1");
+}
+
+#[test]
+fn it_records_each_request_with_credential_fingerprints() {
     let server = ProviderServer::start([Response::stream("a"), Response::stream("b")]).unwrap();
 
     post(
@@ -186,6 +193,8 @@ fn it_records_each_request_with_credentials_masked() {
             ("x-api-key", "sk-secret"),
             ("X-Goog-Api-Key", "sk-secret"),
             ("api-key", "sk-secret"),
+            ("cookie", "sk-secret"),
+            ("Proxy-Authorization", "Bearer sk-secret"),
             ("anthropic-version", "2023-06-01"),
         ],
         br#"{"model":"m"}"#,
@@ -203,8 +212,12 @@ fn it_records_each_request_with_credentials_masked() {
     assert_eq!(first.method, "POST");
     assert_eq!(first.path, "/v1/messages");
     assert_eq!(first.body, br#"{"model":"m"}"#);
-    for name in ["authorization", "x-api-key", "x-goog-api-key", "api-key"] {
-        assert_eq!(first.header(name), Some("<masked>"), "{name}");
+    let secret = fingerprint("sk-secret");
+    let bearer = fingerprint("Bearer sk-secret");
+    assert_eq!(first.header("authorization"), Some(bearer.as_str()));
+    assert_eq!(first.header("proxy-authorization"), Some(bearer.as_str()));
+    for name in ["x-api-key", "x-goog-api-key", "api-key", "cookie"] {
+        assert_eq!(first.header(name), Some(secret.as_str()), "{name}");
     }
     assert_eq!(first.header("anthropic-version"), Some("2023-06-01"));
     assert_eq!(first.header("content-length"), Some("13"));
@@ -212,7 +225,7 @@ fn it_records_each_request_with_credentials_masked() {
     let second = &requests[1];
     assert_eq!(
         second.path,
-        "/v1beta/models/m:streamGenerateContent?alt=sse&key=<masked>"
+        format!("/v1beta/models/m:streamGenerateContent?alt=sse&key={secret}")
     );
     assert_eq!(second.body, b"second");
     let everything = format!("{requests:?}");
