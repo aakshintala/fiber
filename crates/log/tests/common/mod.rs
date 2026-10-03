@@ -66,7 +66,11 @@ pub(crate) fn empty(kind: &str) -> Event {
 }
 
 pub(crate) fn session_started() -> Event {
-    event("session_started", json!({"workspace": "/w"}))
+    event(
+        "session_started",
+        json!({"workspace": "/w",
+            "variables": {"path": "/usr/bin", "names": [], "source": "inherited"}}),
+    )
 }
 
 pub(crate) fn delta(text: &str) -> Event {

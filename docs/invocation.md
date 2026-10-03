@@ -133,7 +133,10 @@ credential a session uses"). A new session takes its label from
 `doctor` prints the version, the default model and the provider it needs, each
 installed provider with one line per credential label and where its key comes
 from, the selected label marked, the permission mode, the
-number of MCP servers, and whether the hub is running. A line that stops a
+number of MCP servers, and whether the hub is running. When it is, `doctor`
+also prints the environment its sessions get: the `PATH`, the names of the
+other variables and whether the login-shell capture succeeded ("A session's
+environment"). A line that stops a
 session from starting carries its fix, such as
 `` no key for openrouter: run `fiber login openrouter` ``. It exits non-zero
 when a session cannot start. It never touches the network, so it does not
@@ -706,6 +709,43 @@ Every client reaches sessions through the hub, the local terminal included.
 What the hub speaks, how a client gets and revokes its token, and who builds
 web and mobile clients are
 [Remote access: what the hub speaks](https://github.com/aakshintala/fiber/issues/86).
+
+### A session's environment
+
+Every session the hub starts gets the same environment, built by the hub,
+whichever client asked for the session, local or remote. The hub ignores the
+environment it inherited: an installed hub inherits the service manager's
+bare one, and a hub a terminal started inherits that terminal's.
+
+- **The hub captures the person's login shell when it starts.** It runs
+  `$SHELL` as an interactive login shell, from an environment holding only
+  `HOME`, `USER` and `SHELL`, and takes the variables that shell ends with.
+  `SHELL` is set even under launchd and systemd, so the hub finds the shell
+  without being told. The result is every session's environment, so the
+  `PATH` the person's startup files build reaches every command.
+- **The capture sees what a fresh login terminal sees.** zsh reads all its
+  startup files. An interactive login bash reads the first of
+  `~/.bash_profile`, `~/.bash_login` and `~/.profile`, and reads `~/.bashrc`
+  only when that file sources it.
+- **The capture has 10 seconds.** If the shell fails or runs out of time, the
+  hub uses the environment it inherited instead. `fiber doctor` says so, and
+  every session started from it says so when it starts.
+- **A session's environment is fixed when the session starts.** A tool
+  installed into a directory already on `PATH` is found without a rebuild.
+  A changed `PATH` in a startup file reaches new sessions after a refresh
+  command rebuilds the hub's environment; that command is one of the `hub`
+  commands left to
+  [#86](https://github.com/aakshintala/fiber/issues/86).
+- **A delegate gets its parent's environment**, and a session started by
+  `fiber ask` gets its caller's.
+- **Fiber reads no per-directory environment**, such as direnv's `.envrc`.
+  A tool that reads its own per-directory file, such as Bazel's `.bazelrc`,
+  works unchanged, because a command runs in its working directory.
+- **The log records the variables without their secrets.** `session_started`
+  carries `variables`: the `PATH`, the names of the other variables, never
+  their values, and whether the login-shell capture succeeded
+  (`docs/events.md`). None of it enters the opening message, so it never
+  touches the prompt cache.
 
 ## Isolation
 

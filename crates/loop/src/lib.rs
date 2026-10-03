@@ -17,7 +17,7 @@ use std::sync::mpsc::Receiver;
 use contract::events::{
     AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, Grant, InputItem,
     MessageOutcome, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
-    UsageRecorded,
+    UsageRecorded, Variables, VariablesSource,
 };
 use contract::inbox::{Delivery, Message};
 use contract::provider::{
@@ -155,6 +155,7 @@ impl Loop {
         let started = log.append(
             &Event::SessionStarted(SessionStarted {
                 workspace: permissions.workspace,
+                variables: variables(),
                 parent: None,
                 forked_from: None,
                 rewind: None,
@@ -565,4 +566,26 @@ fn ended(outcome: TurnOutcome, error: Option<Failure>) -> TurnCompleted {
 /// `RandomState` seeds its keys from the operating system's randomness.
 pub(crate) fn mint(prefix: &str) -> String {
     format!("{prefix}{:016x}", RandomState::new().hash_one(()))
+}
+
+/// This process's environment, as `session_started` records it: the `PATH`
+/// and the other names, never a value. No hub starts a session yet, so the
+/// source is always `inherited` (`docs/invocation.md`, "A session's
+/// environment").
+fn variables() -> Variables {
+    let mut path = String::new();
+    let mut names = Vec::new();
+    for (name, value) in std::env::vars_os() {
+        if name == "PATH" {
+            path = value.to_string_lossy().into_owned();
+        } else {
+            names.push(name.to_string_lossy().into_owned());
+        }
+    }
+    names.sort();
+    Variables {
+        path,
+        names,
+        source: VariablesSource::Inherited,
+    }
 }
