@@ -4,7 +4,12 @@ use super::*;
 fn watchers_attached_and_dropped_while_idle_leave_nothing_behind() {
     let sessions = std::env::temp_dir().join(format!("log-unit-idle-{}", std::process::id()));
     fs::remove_dir_all(&sessions).unwrap_or(());
-    let log = Log::create(&sessions, SessionId("s_1".into())).unwrap();
+    let log = Log::create(
+        &sessions,
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
     let kept = log.watch();
     for _ in 0..1000 {
         drop(log.watch());
@@ -31,7 +36,12 @@ fn watchers_attached_and_dropped_while_idle_leave_nothing_behind() {
 fn an_artifact_lands_in_the_session_artifacts_and_a_path_is_refused() {
     let sessions = std::env::temp_dir().join(format!("log-unit-artifact-{}", std::process::id()));
     fs::remove_dir_all(&sessions).unwrap_or(());
-    let log = Log::create(&sessions, SessionId("s_1".into())).unwrap();
+    let log = Log::create(
+        &sessions,
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
     let (relative, path) = log.write_artifact("a_1.txt", b"full").unwrap();
     assert_eq!(relative, "artifacts/a_1.txt");
     assert_eq!(path, sessions.join("s_1/artifacts/a_1.txt"));

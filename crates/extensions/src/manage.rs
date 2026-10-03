@@ -8,6 +8,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use config::{Manifest, ProviderData};
+use contract::clock::Clock;
 
 use crate::Error;
 use crate::git::{Origin, full_name, split};
@@ -145,8 +146,9 @@ pub fn plan(
     request: &Request,
     fiber_version: &str,
     origin: &Origin,
+    clock: &dyn Clock,
 ) -> Result<Plan, Error> {
-    let lock = lock(home)?;
+    let lock = lock(home, clock)?;
     let installed = read(home)?;
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));

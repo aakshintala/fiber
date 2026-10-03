@@ -67,7 +67,7 @@ mod tests {
 
     /// A session directory the log wrote, of three durable lines.
     fn session(tmp: &TestDir) -> std::path::PathBuf {
-        let log = Log::create(tmp.path(), id("s_1")).unwrap();
+        let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
         log.append(&session_started(), None, None).unwrap();
         log.append(&delta("x"), None, None).unwrap();
         log.append(&empty("step_started"), None, None).unwrap();

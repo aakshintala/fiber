@@ -88,6 +88,7 @@ pub(crate) fn install(home: &Path, source: &Path, fiber: &str) -> Result<String,
         &Request::Path(source.into()),
         fiber,
         &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
     )?
     .commit()?;
     Ok(names.into_iter().next().unwrap())

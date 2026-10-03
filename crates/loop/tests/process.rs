@@ -36,7 +36,12 @@ impl Session {
         let n = NEXT.fetch_add(1, Ordering::Relaxed);
         let root = std::env::temp_dir().join(format!("fiber-process-{}-{n}", std::process::id()));
         fs::remove_dir_all(&root).unwrap_or(());
-        let log = Log::create(&root, SessionId("s_1".into())).unwrap();
+        let log = Log::create(
+            &root,
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap();
         Self {
             dir: root.join("s_1"),
             root,

@@ -54,7 +54,7 @@ fn next(rx: &Receiver<Option<Envelope>>) -> Option<Envelope> {
 #[test]
 fn a_reader_gets_every_durable_line_and_stops_at_the_last_complete_one() {
     let tmp = TestDir::new("read");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     let written = log.append(&session_started(), None, None).unwrap();
     log.append(&delta("x"), None, None).unwrap();
     let dir = tmp.session(&id("s_1"));
@@ -69,7 +69,7 @@ fn a_reader_gets_every_durable_line_and_stops_at_the_last_complete_one() {
 #[test]
 fn a_reader_refuses_a_complete_line_that_does_not_parse_and_names_it() {
     let tmp = TestDir::new("read-bad");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     log.append(&session_started(), None, None).unwrap();
     let dir = tmp.session(&id("s_1"));
     let mut file = fs::OpenOptions::new()
@@ -92,7 +92,7 @@ fn reading_a_missing_session_is_not_found() {
 #[test]
 fn a_watcher_receives_what_is_written_after_it_subscribes() {
     let tmp = TestDir::new("watch");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     log.append(&session_started(), None, None).unwrap();
     let rx = relay(log.watch());
     let step = log.append(&empty("step_started"), None, None).unwrap();
@@ -104,7 +104,7 @@ fn a_watcher_receives_what_is_written_after_it_subscribes() {
 #[test]
 fn a_watcher_ends_with_its_log_once_it_has_every_line() {
     let tmp = TestDir::new("watch-end");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     let rx = relay(log.watch());
     let written = [
         log.append(&session_started(), None, None).unwrap(),
@@ -119,7 +119,7 @@ fn a_watcher_ends_with_its_log_once_it_has_every_line() {
 #[test]
 fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
     let tmp = TestDir::new("watch-lag");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     let watcher = log.watch();
     // Past any bounded queue while nobody receives, ending on a durable line.
     let durable: Vec<Envelope> = (0..600)
@@ -150,7 +150,7 @@ fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
 #[test]
 fn a_dropped_watcher_does_not_stop_the_log() {
     let tmp = TestDir::new("watch-drop");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     drop(log.watch());
     let rx = relay(log.watch());
     let line = log.append(&session_started(), None, None).unwrap();
@@ -170,7 +170,12 @@ fn child_holding_a_session() {
     let Ok(sessions) = std::env::var("LOG_TEST_SESSIONS") else {
         return;
     };
-    let log = Log::open(std::path::Path::new(&sessions), id("s_1")).unwrap();
+    let log = Log::open(
+        std::path::Path::new(&sessions),
+        id("s_1"),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
     println!("holding");
     std::io::stdout().flush().unwrap();
     let mut rest = String::new();
@@ -181,7 +186,7 @@ fn child_holding_a_session() {
 #[test]
 fn a_writer_in_another_process_holds_the_session() {
     let tmp = TestDir::new("lock-child");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     log.append(&session_started(), None, None).unwrap();
     drop(log);
 
@@ -199,7 +204,7 @@ fn a_writer_in_another_process_holds_the_session() {
         assert_ne!(out.read_line(&mut line).unwrap(), 0, "the child exited");
     }
 
-    let Err(err) = Log::open(tmp.path(), id("s_1")) else {
+    let Err(err) = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()) else {
         panic!("opened a session another process holds");
     };
     assert!(
@@ -209,5 +214,5 @@ fn a_writer_in_another_process_holds_the_session() {
 
     drop(child.stdin.take());
     assert!(child.wait().unwrap().success());
-    assert!(Log::open(tmp.path(), id("s_1")).is_ok());
+    assert!(Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).is_ok());
 }

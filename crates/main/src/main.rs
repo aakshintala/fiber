@@ -8,6 +8,8 @@
     reason = "main prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 
+mod clock;
+
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -44,6 +46,7 @@ fn main() -> ExitCode {
 }
 
 fn run() -> i32 {
+    let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
     let args: Vec<String> = match std::env::args_os()
         .skip(1)
         .map(|a| a.into_string())
@@ -53,12 +56,12 @@ fn run() -> i32 {
         Err(_) => return ask_failed(usage("An argument is not UTF-8 text.")),
     };
     match args.split_first() {
-        Some((door, rest)) if door == "ask" => ask(rest),
+        Some((door, rest)) if door == "ask" => ask(rest, clock),
         Some((command, rest)) if command == "install" || command == "update" => {
-            install(command, rest)
+            install(command, rest, clock.as_ref())
         }
-        Some((command, rest)) if command == "remove" => remove(rest),
-        Some((command, rest)) if command == "list" => list(rest),
+        Some((command, rest)) if command == "remove" => remove(rest, clock.as_ref()),
+        Some((command, rest)) if command == "list" => list(rest, clock.as_ref()),
         // The terminal door needs a tty and the hub; neither is built, so
         // every other invocation is called wrongly.
         Some(_) | None => {
@@ -73,13 +76,13 @@ fn run() -> i32 {
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
-fn install(command: &str, args: &[String]) -> i32 {
+fn install(command: &str, args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
     let installed = match (command, args) {
         ("install", [typed]) if extensions::is_path(typed) => {
-            install_request(Request::Path(PathBuf::from(typed)))
+            install_request(Request::Path(PathBuf::from(typed)), clock)
         }
-        ("install", [typed]) => install_request(Request::Install(typed.clone())),
-        ("update", [typed]) => install_request(Request::Update(typed.clone())),
+        ("install", [typed]) => install_request(Request::Install(typed.clone()), clock),
+        ("update", [typed]) => install_request(Request::Update(typed.clone()), clock),
         ("install", _) => Err(usage("Usage: fiber install <name or path>.")),
         _ => Err(usage("Usage: fiber update <name>.")),
     };
@@ -103,13 +106,17 @@ fn install(command: &str, args: &[String]) -> i32 {
 
 /// Installs what `request` needs once approved; `None` when the person
 /// declined.
-fn install_request(request: Request) -> Result<Option<Vec<String>>, Failure> {
+fn install_request(
+    request: Request,
+    clock: &dyn contract::clock::Clock,
+) -> Result<Option<Vec<String>>, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let plan = extensions::plan(
         &home,
         &request,
         env!("CARGO_PKG_VERSION"),
         &Origin::github(),
+        clock,
     )
     .map_err(|e| failed(e.code(), e))?;
     let summaries: Vec<doors::InstallSummary> = plan
@@ -151,14 +158,15 @@ fn install_request(request: Request) -> Result<Option<Vec<String>>, Failure> {
 
 /// `fiber remove <name>`: removes an extension, the dependencies nothing
 /// else uses, and their data and settings, asking first in a terminal.
-fn remove(args: &[String]) -> i32 {
+fn remove(args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
     let [typed] = args else {
         return fail(usage("Usage: fiber remove <name>."));
     };
     let removed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
-            let removal = extensions::removal(&home, typed).map_err(|e| failed(e.code(), e))?;
+            let removal =
+                extensions::removal(&home, typed, clock).map_err(|e| failed(e.code(), e))?;
             let stdin = io::stdin();
             let terminal = stdin.is_terminal();
             let approved = doors::remove_approved(
@@ -191,13 +199,13 @@ fn remove(args: &[String]) -> i32 {
 }
 
 /// `fiber list`: one line per installed extension: name, version and commit.
-fn list(args: &[String]) -> i32 {
+fn list(args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
     if !args.is_empty() {
         return fail(usage("Usage: fiber list."));
     }
     let listed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
-        .and_then(|home| extensions::list(&home).map_err(|e| failed(e.code(), e)));
+        .and_then(|home| extensions::list(&home, clock).map_err(|e| failed(e.code(), e)));
     match listed {
         Ok(installed) => {
             let mut out = io::stdout().lock();
@@ -221,7 +229,7 @@ fn fail(e: Failure) -> i32 {
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.
-fn ask(args: &[String]) -> i32 {
+fn ask(args: &[String], clock: Arc<dyn contract::clock::Clock>) -> i32 {
     let (model, args) = match args {
         [flag, model, rest @ ..] if flag == "--model" => (Some(model.clone()), rest),
         [flag] if flag == "--model" => {
@@ -253,7 +261,7 @@ fn ask(args: &[String]) -> i32 {
     };
     let id = SessionId(doors::mint("s_"));
     let dir = parts.sessions.join(&id.0);
-    let log = match Log::create(&parts.sessions, id) {
+    let log = match Log::create(&parts.sessions, id, clock) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };

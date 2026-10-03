@@ -37,7 +37,7 @@ enum Work {
 /// Runs the entry script, under the deadline `load_by`, then serves calls
 /// until the extension is stopped.
 pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by: Option<Instant>) {
-    let loaded = Vm::load(name, dir, home, load_by);
+    let loaded = Vm::load(name, dir, home, hub.clock_handle(), load_by);
     let vm = {
         let mut shared = hub.lock();
         if !matches!(shared.phase, Phase::Registering { .. }) {
@@ -85,10 +85,11 @@ pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by
 fn next(name: &str, hub: &Hub, parked: &mut Vec<Parked>) -> Option<Work> {
     let mut shared = hub.lock();
     loop {
+        let now = hub.clock().now();
         if !matches!(shared.phase, Phase::Ready(_)) {
             return None;
         }
-        if let Some(pos) = parked.iter().position(|p| expired(p.deadline)) {
+        if let Some(pos) = parked.iter().position(|p| expired(p.deadline, now)) {
             let p = parked.swap_remove(pos);
             shared.finish(p.id, Err(timed_out(name, &p.target, p.timeout)));
             hub.notify();

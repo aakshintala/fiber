@@ -93,8 +93,10 @@ pub(crate) fn sha256_hex(bytes: &[u8]) -> String {
 }
 
 /// One `host.http` call, copied out of Lua so it can run off the extension's
-/// thread. `timeout` is the callback's own deadline, plus a grace so the
-/// scheduler, not this request, is what stops the callback.
+/// thread. `timeout` is a fixed real-time backstop: the callback's declared
+/// timeout plus the grace, or the entry script's load bound plus the grace.
+/// It does not follow the time still left on the clock. The scheduler, on
+/// the injected clock, is what stops the callback.
 pub(crate) struct HttpRequest {
     method: String,
     url: String,
@@ -103,7 +105,9 @@ pub(crate) struct HttpRequest {
     timeout: Option<Duration>,
 }
 
-/// Reads the request `host.http` yielded.
+/// Reads the request `host.http` yielded. `timeout` is the real-time
+/// backstop from [`HttpRequest`]: the declared timeout plus the grace, fixed
+/// when the request is made, not the time still left on the clock.
 pub(crate) fn request_from(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpRequest> {
     let url: String = opts.get("url")?;
     let method = opts
