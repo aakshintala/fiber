@@ -243,7 +243,7 @@ fn ask(args: &[String]) -> i32 {
     };
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
-    let prompt = match doors::prompt(arg, &mut stdin.lock(), terminal) {
+    let prompt = match doors::prompt(arg, false, &mut stdin.lock(), terminal) {
         Ok(prompt) => prompt,
         Err(e) => return ask_failed(e),
     };

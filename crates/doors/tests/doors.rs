@@ -85,40 +85,94 @@ impl io::Read for Untouched {
     }
 }
 
-fn code(result: Result<String, Failure>) -> ErrorCode {
-    result.unwrap_err().code
+fn failure_of(result: Result<String, Failure>) -> Failure {
+    result.unwrap_err()
+}
+
+const NO_PROMPT: &str = "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.";
+
+/// A reader whose `read` fails with an error that is not invalid UTF-8.
+struct BrokenRead;
+
+impl io::Read for BrokenRead {
+    fn read(&mut self, _: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("closed"))
+    }
 }
 
 #[test]
-fn the_prompt_is_the_argument_or_stdin_and_never_both_or_neither() {
+fn the_prompt_comes_from_the_arguments_alone() {
+    // P1: an argument and no `-` is the prompt, and stdin is never read.
     assert_eq!(
-        prompt(Some("hi".into()), &mut Untouched, true).unwrap(),
+        prompt(Some("hi".into()), false, &mut Untouched, true).unwrap(),
         "hi"
     );
     assert_eq!(
-        prompt(Some("hi".into()), &mut &b""[..], false).unwrap(),
+        prompt(Some("hi".into()), false, &mut Untouched, false).unwrap(),
         "hi"
     );
     assert_eq!(
-        prompt(None, &mut &b"brief\n"[..], false).unwrap(),
+        failure_of(prompt(Some(" ".into()), false, &mut Untouched, false)).message,
+        NO_PROMPT
+    );
+
+    // P2: no argument, no `-`, stdin on a terminal is the usage error, unread.
+    assert_eq!(
+        failure_of(prompt(None, false, &mut Untouched, true)),
+        failure(ErrorCode::Usage, NO_PROMPT)
+    );
+
+    // P3: no argument, no `-`, stdin not a terminal is the prompt.
+    assert_eq!(
+        prompt(None, false, &mut &b"brief\n"[..], false).unwrap(),
         "brief\n"
     );
+
+    // P4: `-` reads stdin to its end, terminal or not.
     assert_eq!(
-        code(prompt(Some("hi".into()), &mut &b"brief"[..], false)),
-        ErrorCode::Usage
-    );
-    assert_eq!(code(prompt(None, &mut Untouched, true)), ErrorCode::Usage);
-    assert_eq!(
-        code(prompt(None, &mut &b" \n"[..], false)),
-        ErrorCode::Usage
+        prompt(None, true, &mut &b"brief"[..], true).unwrap(),
+        "brief"
     );
     assert_eq!(
-        code(prompt(Some(" ".into()), &mut Untouched, true)),
-        ErrorCode::Usage
+        prompt(None, true, &mut &b"brief"[..], false).unwrap(),
+        "brief"
+    );
+
+    // P5: an argument and `-` is the argument, a newline, then stdin.
+    assert_eq!(
+        prompt(Some("hi".into()), true, &mut &b"more"[..], false).unwrap(),
+        "hi\nmore"
+    );
+
+    // P6: a whitespace-only part is dropped; nothing left is the P2 error.
+    assert_eq!(
+        prompt(Some("hi".into()), true, &mut &b" \n"[..], false).unwrap(),
+        "hi"
     );
     assert_eq!(
-        code(prompt(None, &mut &[0xff, 0xfe][..], false)),
-        ErrorCode::Usage
+        prompt(Some(" ".into()), true, &mut &b"more"[..], true).unwrap(),
+        "more"
+    );
+    assert_eq!(
+        failure_of(prompt(Some(" ".into()), true, &mut &b" \n"[..], false)).message,
+        NO_PROMPT
+    );
+    assert_eq!(
+        failure_of(prompt(None, false, &mut &b" \n"[..], false)).message,
+        NO_PROMPT
+    );
+
+    // P7: a read that happens reports UTF-8 as usage and any other error as
+    // io_failed; a read that does not happen never sees the bytes (P1, P2).
+    assert_eq!(
+        failure_of(prompt(None, false, &mut &[0xff, 0xfe][..], false)),
+        failure(ErrorCode::Usage, "stdin is not UTF-8 text.")
+    );
+    let broken = failure_of(prompt(None, true, &mut BrokenRead, true));
+    assert_eq!(broken.code, ErrorCode::IoFailed);
+    assert_eq!(
+        broken.message,
+        format!("stdin could not be read: {}", io::Error::other("closed"))
     );
 }
 
