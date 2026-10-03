@@ -84,7 +84,7 @@ fn no_prompt() -> Failure {
     )
 }
 
-/// What `fiber install` shows before it installs (`docs/extensions.md`,
+/// What `fiber extension install` shows before it installs (`docs/extensions.md`,
 /// "What an install shows"): what the manifest and the files tell. Tools,
 /// hooks, watchers and commands are not shown until `docs/extensions.md`
 /// settles how Fiber learns them before the extension runs.
@@ -111,7 +111,7 @@ pub struct InstallSummary {
     pub staged: PathBuf,
 }
 
-/// Whether `fiber install` goes ahead (`docs/extensions.md`, "Installing"):
+/// Whether `fiber extension install` goes ahead (`docs/extensions.md`, "Installing"):
 /// in a terminal it writes each of `summaries` to `out` and asks once, and
 /// only `y` or `yes` goes ahead; `s` shows every file and asks again.
 /// Without a terminal it goes ahead without asking.
@@ -219,7 +219,7 @@ fn show_source(name: &str, dir: &Path, out: &mut dyn Write) -> io::Result<()> {
     Ok(())
 }
 
-/// Whether `fiber remove` goes ahead: in a terminal it lists what it will
+/// Whether `fiber extension remove` goes ahead: in a terminal it lists what it will
 /// delete, the extensions and their data and settings, and asks; without a
 /// terminal it goes ahead (`docs/state.md`, "Extension data").
 pub fn remove_approved(

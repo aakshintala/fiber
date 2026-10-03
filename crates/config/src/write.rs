@@ -39,7 +39,7 @@ pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigErro
 }
 
 /// Deletes an extension's settings in the global and every per-project layer
-/// (`fiber remove`).
+/// (`fiber extension remove`).
 pub fn remove_extension_settings(home: &Path, extension: &str) -> Result<(), ConfigError> {
     let mut dirs = vec![home.to_path_buf()];
     match fs::read_dir(home.join("projects")) {

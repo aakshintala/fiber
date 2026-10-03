@@ -1,4 +1,4 @@
-//! What is installed, and `fiber remove` (`docs/extensions.md`, "Installing").
+//! What is installed, and `fiber extension remove` (`docs/extensions.md`, "Installing").
 
 use std::collections::BTreeMap;
 use std::fs::{self, File, TryLockError};
@@ -108,7 +108,7 @@ pub(crate) fn read(home: &Path) -> Result<Vec<Installed>, Error> {
     Ok(found)
 }
 
-/// What `fiber remove` will delete, worked out under the lock. Dropping it
+/// What `fiber extension remove` will delete, worked out under the lock. Dropping it
 /// deletes nothing.
 pub struct Removal {
     /// The extensions that go: the one asked for, then each dependency

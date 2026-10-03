@@ -28,7 +28,7 @@ use serde_json::{Value, json};
 
 const FIBER: &str = "0.1.0";
 
-/// Removes `typed` and what nothing else needs, as `fiber remove` does
+/// Removes `typed` and what nothing else needs, as `fiber extension remove` does
 /// without a terminal, and returns the names removed.
 fn uninstall(home: &Path, typed: &str) -> Result<Vec<String>, Error> {
     let removal = removal(home, typed, &*fakes::clock::FakeClock::new())?;

@@ -146,7 +146,7 @@ pub enum Error {
     },
     /// Another install, update or remove holds the lock over `extensions/`.
     #[error(
-        "Another `fiber install`, `update` or `remove` is running. Run the command again when it ends."
+        "Another `fiber extension install`, `update` or `remove` is running. Run the command again when it ends."
     )]
     Busy,
     /// Two names whose directory is the same.
@@ -212,14 +212,16 @@ pub enum Error {
         stuck: Vec<PathBuf>,
     },
     /// A model reference whose provider is not installed.
-    #[error("The provider `{provider}` is not installed. Run `fiber install {provider}`.")]
+    #[error(
+        "The provider `{provider}` is not installed. Run `fiber extension install {provider}`."
+    )]
     ProviderMissing {
         /// The provider.
         provider: String,
     },
     /// A bare model id no installed provider has.
     #[error(
-        "No installed provider has the model `{id}`. Install its provider with `fiber install <name>`."
+        "No installed provider has the model `{id}`. Install its provider with `fiber extension install <name>`."
     )]
     ModelMissing {
         /// The id as typed.

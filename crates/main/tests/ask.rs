@@ -669,15 +669,15 @@ Usage: fiber <command> [arguments]
 Sessions:
   ask [--model <model>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
-Extensions:
-  install <name or path>  Install an extension and its dependencies
-  update <name>           Update an installed extension to its newest tag
-  remove <name>           Remove an extension, the dependencies nothing else uses, and their data
-  list                    List installed extensions: name, version and commit
-
-Other:
+Fiber itself:
   help [<command>]  Print this menu, or a command's help
   version           Print the version
+
+Extensions:
+  extension install <name or path>  Install an extension and its dependencies
+  extension update [<name>]         Update one extension, or every installed extension, to its newest tag
+  extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
+  extension list                    List installed extensions: name, version and commit
 
 Flags:
   -h, --help     Print this menu
@@ -687,7 +687,7 @@ Examples:
   fiber ask "review the diff on this branch"
   fiber ask < brief.md
   git diff | fiber ask "review this diff" -
-  fiber install openrouter
+  fiber extension install openrouter
   fiber help ask
 "#;
 
@@ -730,9 +730,7 @@ fn ask_help_prints_no_event_stream() {
 #[test]
 fn help_for_every_command_matches_the_flag() {
     let setup = Setup::new();
-    for name in [
-        "ask", "install", "update", "remove", "list", "version", "help",
-    ] {
+    for name in ["ask", "extension", "version", "help"] {
         let via_help = setup.fiber(&["help", name], None);
         let via_flag = setup.fiber(&[name, "--help"], None);
         assert_eq!(via_help.code, Some(0), "{name}: {}", via_help.stderr);
@@ -740,13 +738,31 @@ fn help_for_every_command_matches_the_flag() {
         assert_eq!(via_help.stderr, "");
         assert_eq!(via_flag.stderr, "");
         assert_eq!(via_help.stdout, via_flag.stdout, "{name}");
+        let usage_prefix = if name == "extension" {
+            "Usage: fiber extension".to_owned()
+        } else {
+            format!("Usage: fiber {name}")
+        };
         assert!(
             via_flag
                 .stdout
                 .lines()
-                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
+                .any(|line| line.starts_with(&usage_prefix)),
             "{name}: {}",
             via_flag.stdout
+        );
+    }
+    for verb in ["install", "update", "remove", "list"] {
+        let args = ["extension", verb, "--help"];
+        let run = setup.fiber(&args, None);
+        assert_eq!(run.code, Some(0), "{args:?}: {}", run.stderr);
+        assert_eq!(run.stderr, "");
+        assert!(
+            run.stdout
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber extension {verb}"))),
+            "{verb}: {}",
+            run.stdout
         );
     }
 }
@@ -755,22 +771,33 @@ fn help_for_every_command_matches_the_flag() {
 fn each_command_prints_its_own_help() {
     let setup = Setup::new();
     let commands = [
-        ("install", "Install an extension and its dependencies"),
-        ("update", "Update an installed extension to its newest tag"),
         (
-            "remove",
+            "extension install",
+            "Install an extension and its dependencies",
+        ),
+        (
+            "extension update",
+            "Update one extension, or every installed extension, to its newest tag",
+        ),
+        (
+            "extension remove",
             "Remove an extension, the dependencies nothing else uses, and their data",
         ),
         (
-            "list",
+            "extension list",
             "List installed extensions: name, version and commit",
         ),
         ("version", "Print the version"),
         ("help", "Print this menu, or a command's help"),
     ];
     for (name, about) in commands {
-        for args in [vec![name, "--help"], vec!["help", name]] {
-            assert_help(&setup.fiber(&args, None), about);
+        if name.starts_with("extension ") {
+            let verb = name.strip_prefix("extension ").unwrap();
+            assert_help(&setup.fiber(&["extension", verb, "--help"], None), about);
+        } else {
+            for args in [vec![name, "--help"], vec!["help", name]] {
+                assert_help(&setup.fiber(&args, None), about);
+            }
         }
     }
 }
@@ -814,12 +841,12 @@ fn a_capital_v_is_an_unknown_argument() {
 #[test]
 fn an_unknown_subcommand_suggests_the_nearest() {
     let setup = Setup::new();
-    let run = setup.fiber(&["instal", "x"], None);
+    let run = setup.fiber(&["extension", "i"], None);
     assert_eq!(run.code, Some(2));
     assert!(run.lines.is_empty());
     assert_eq!(
         run.stderr,
-        "fiber: Unrecognized subcommand 'instal'; did you mean 'install'? Run `fiber --help` for usage.\n"
+        "fiber: Unrecognized subcommand 'i'; did you mean 'install'? Run `fiber --help` for usage.\n"
     );
 }
 
@@ -948,6 +975,23 @@ fn package(name: &str) -> PathBuf {
         .join(name)
 }
 
+fn copy_dir_all(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let dest = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_dir_all(&entry.path(), &dest);
+        } else {
+            fs::copy(entry.path(), dest).unwrap();
+        }
+    }
+}
+
+fn copy_package(name: &str, to: &Path) {
+    copy_dir_all(&package(name), to);
+}
+
 /// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
 /// recorded tool call, then the probe's answer after the tool result.
 fn go_exchange() -> [Response; 2] {
@@ -960,10 +1004,10 @@ fn go_exchange() -> [Response; 2] {
     ]
 }
 
-/// Installs the package at `path` with `fiber install`, stdin not a
+/// Installs the package at `path` with `fiber extension install`, stdin not a
 /// terminal, so it does not ask.
 fn install(setup: &Setup, path: &Path) {
-    let run = setup.fiber(&["install", path.to_str().unwrap()], None);
+    let run = setup.fiber(&["extension", "install", path.to_str().unwrap()], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert!(!run.stderr.contains("Go ahead?"), "{}", run.stderr);
 }
@@ -977,11 +1021,11 @@ fn install_in_a_terminal_shows_the_providers_and_their_urls_and_asks() {
         .home()
         .join("extensions/github.com-aakshintala-fiber-providers-opencode");
 
-    let declined = setup.fiber_typing(&["install", path], "n\n");
+    let declined = setup.fiber_typing(&["extension", "install", path], "n\n");
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
     assert!(!installed.exists());
 
-    let run = setup.fiber_typing(&["install", path], "y\n");
+    let run = setup.fiber_typing(&["extension", "install", path], "y\n");
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(
         run.stderr,
@@ -1004,17 +1048,17 @@ fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
     let muse = package("muse");
     install(&setup, &muse);
     let name = "github.com/aakshintala/fiber/providers/muse";
-    let listed = setup.fiber(&["list"], None);
+    let listed = setup.fiber(&["extension", "list"], None);
     assert_eq!(listed.code, Some(0), "stderr: {}", listed.stderr);
     assert_eq!(listed.raw, [format!("{name} 0.0.0 local")]);
-    let updated = setup.fiber(&["update", "muse"], None);
+    let updated = setup.fiber(&["extension", "update", "muse"], None);
     assert_eq!(updated.code, Some(0), "stderr: {}", updated.stderr);
     assert_eq!(updated.stderr, format!("fiber: installed {name}\n"));
-    let removed = setup.fiber(&["remove", "muse"], None);
+    let removed = setup.fiber(&["extension", "remove", "muse"], None);
     assert_eq!(removed.code, Some(0), "stderr: {}", removed.stderr);
     assert_eq!(removed.stderr, format!("fiber: removed {name}\n"));
-    assert!(setup.fiber(&["list"], None).raw.is_empty());
-    let again = setup.fiber(&["remove", "muse"], None);
+    assert!(setup.fiber(&["extension", "list"], None).raw.is_empty());
+    let again = setup.fiber(&["extension", "remove", "muse"], None);
     assert_eq!(again.code, Some(1));
     assert!(
         again.stderr.contains("is not installed"),
@@ -1026,7 +1070,7 @@ fn list_and_remove_show_and_delete_what_an_install_put_in_home() {
 #[test]
 fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
     let setup = Setup::new();
-    let run = setup.fiber_with_env(&["install", "openrouter"], &[("PATH", "")]);
+    let run = setup.fiber_with_env(&["extension", "install", "openrouter"], &[("PATH", "")]);
     assert_eq!(run.code, Some(2), "{}", run.stderr);
     assert!(run.stderr.contains("Install git"), "{}", run.stderr);
 }
@@ -1035,14 +1079,83 @@ fn install_by_name_without_git_fails_as_usage_and_says_to_install_it() {
 fn the_extension_commands_take_their_arguments() {
     let setup = Setup::new();
     for args in [
-        vec!["install"],
-        vec!["install", "a", "b"],
-        vec!["update"],
-        vec!["remove"],
-        vec!["list", "x"],
+        vec!["extension", "install"],
+        vec!["extension", "install", "a", "b"],
+        vec!["extension", "remove"],
+        vec!["extension", "list", "x"],
+        vec!["extension", "update", "a", "b"],
     ] {
         let run = setup.fiber(&args, None);
         assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
+    }
+}
+
+#[test]
+fn extension_update_all_updates_every_requested_extension() {
+    let setup = Setup::new();
+    install(&setup, &package("muse"));
+    install(&setup, &package("opencode"));
+    let run = setup.fiber(&["extension", "update"], None);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert!(run.raw.is_empty());
+    assert!(
+        run.stderr
+            .contains("fiber: installed github.com/aakshintala/fiber/providers/muse")
+    );
+    assert!(
+        run.stderr
+            .contains("fiber: installed github.com/aakshintala/fiber/providers/opencode")
+    );
+}
+
+#[test]
+fn extension_update_all_on_an_empty_home_exits_zero() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["extension", "update"], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stderr, "");
+    assert!(run.raw.is_empty());
+}
+
+#[test]
+fn extension_update_all_stops_at_the_first_failure() {
+    let setup = Setup::new();
+    let muse = setup.root.path().join("muse-copy");
+    let opencode = setup.root.path().join("opencode-copy");
+    copy_package("muse", &muse);
+    copy_package("opencode", &opencode);
+    install(&setup, &muse);
+    install(&setup, &opencode);
+    fs::remove_dir_all(&muse).unwrap();
+    let run = setup.fiber(&["extension", "update"], None);
+    assert_ne!(run.code, Some(0), "{}", run.stderr);
+    assert!(
+        !run.stderr
+            .contains("installed github.com/aakshintala/fiber/providers/opencode"),
+        "{}",
+        run.stderr
+    );
+}
+
+#[test]
+fn old_extension_command_names_are_unknown() {
+    let setup = Setup::new();
+    for args in [
+        &["install", "x"][..],
+        &["update"][..],
+        &["remove", "x"][..],
+        &["list"][..],
+    ] {
+        let run = setup.fiber(args, None);
+        assert_eq!(run.code, Some(2), "{args:?}: {}", run.stderr);
+        assert!(run.raw.is_empty());
+        let lines: Vec<_> = run.stderr.lines().collect();
+        assert_eq!(lines.len(), 1, "{args:?}: {:?}", lines);
+        assert!(
+            lines[0].starts_with("fiber: Unrecognized subcommand"),
+            "{}",
+            lines[0]
+        );
     }
 }
 
@@ -1113,10 +1226,10 @@ fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     let commit = git(&gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
-    let run = setup.fiber_with_env(&["install", "muse"], &gh.env());
+    let run = setup.fiber_with_env(&["extension", "install", "muse"], &gh.env());
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stderr, format!("fiber: installed {MUSE}\n"));
-    let listed = setup.fiber_with_env(&["list"], &[]);
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
     assert_eq!(listed.raw, [format!("{MUSE} v0.1.0 {commit}")]);
     assert!(
         setup
@@ -1134,7 +1247,7 @@ fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source(
     let installed = setup
         .home()
         .join("extensions/github.com-aakshintala-fiber-providers-muse");
-    let declined = setup.fiber_typing_env(&["install", "muse"], "n\n", &gh.env());
+    let declined = setup.fiber_typing_env(&["extension", "install", "muse"], "n\n", &gh.env());
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
     assert!(
         declined.stderr.contains("Version v0.1.0\n"),
@@ -1142,7 +1255,7 @@ fn install_by_name_in_a_terminal_shows_the_version_asks_and_can_show_the_source(
         declined.stderr
     );
     assert!(!installed.exists());
-    let run = setup.fiber_typing_env(&["install", "muse"], "s\ny\n", &gh.env());
+    let run = setup.fiber_typing_env(&["extension", "install", "muse"], "s\ny\n", &gh.env());
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.stderr.matches("Go ahead?").count(), 2, "{}", run.stderr);
     assert!(run.stderr.contains("--- NOTES.md"), "{}", run.stderr);
@@ -1155,17 +1268,17 @@ fn update_moves_to_the_newest_tag_and_a_terminal_shows_what_changed() {
     let setup = Setup::new();
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
-    let run = setup.fiber_with_env(&["install", "muse"], &gh.env());
+    let run = setup.fiber_with_env(&["extension", "install", "muse"], &gh.env());
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     gh.release("v0.2.0");
-    let declined = setup.fiber_typing_env(&["update", "muse"], "n\n", &gh.env());
+    let declined = setup.fiber_typing_env(&["extension", "update", "muse"], "n\n", &gh.env());
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
     assert!(declined.stderr.contains("Update "), "{}", declined.stderr);
     assert!(declined.stderr.contains("NOTES.md"), "{}", declined.stderr);
-    assert!(setup.fiber_with_env(&["list"], &[]).raw[0].contains("v0.1.0"));
-    let run = setup.fiber_with_env(&["update", "muse"], &gh.env());
+    assert!(setup.fiber_with_env(&["extension", "list"], &[]).raw[0].contains("v0.1.0"));
+    let run = setup.fiber_with_env(&["extension", "update", "muse"], &gh.env());
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert!(setup.fiber_with_env(&["list"], &[]).raw[0].contains(" v0.2.0 "));
+    assert!(setup.fiber_with_env(&["extension", "list"], &[]).raw[0].contains(" v0.2.0 "));
 }
 
 #[test]
@@ -1174,7 +1287,9 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
     let gh = Github::new(&setup);
     gh.release("v0.1.0");
     assert_eq!(
-        setup.fiber_with_env(&["install", "muse"], &gh.env()).code,
+        setup
+            .fiber_with_env(&["extension", "install", "muse"], &gh.env())
+            .code,
         Some(0)
     );
     let data = setup
@@ -1187,7 +1302,7 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
     fs::create_dir_all(settings.parent().unwrap()).unwrap();
     fs::write(data.join("index"), "x").unwrap();
     fs::write(&settings, "{}").unwrap();
-    let declined = setup.fiber_typing(&["remove", "muse"], "n\n");
+    let declined = setup.fiber_typing(&["extension", "remove", "muse"], "n\n");
     assert_eq!(declined.code, Some(1), "stderr: {}", declined.stderr);
     assert!(
         declined
@@ -1204,17 +1319,24 @@ fn remove_in_a_terminal_lists_the_data_and_asks_and_headless_goes_ahead() {
         declined.stderr
     );
     assert!(data.join("index").exists() && settings.exists());
-    let approved = setup.fiber_typing(&["remove", "muse"], "y\n");
+    let approved = setup.fiber_typing(&["extension", "remove", "muse"], "y\n");
     assert_eq!(approved.code, Some(0), "stderr: {}", approved.stderr);
     assert!(!data.exists() && !settings.exists());
-    assert!(setup.fiber_with_env(&["list"], &[]).raw.is_empty());
+    assert!(
+        setup
+            .fiber_with_env(&["extension", "list"], &[])
+            .raw
+            .is_empty()
+    );
 
     assert_eq!(
-        setup.fiber_with_env(&["install", "muse"], &gh.env()).code,
+        setup
+            .fiber_with_env(&["extension", "install", "muse"], &gh.env())
+            .code,
         Some(0)
     );
     fs::create_dir_all(&data).unwrap();
-    let headless = setup.fiber(&["remove", "muse"], None);
+    let headless = setup.fiber(&["extension", "remove", "muse"], None);
     assert_eq!(headless.code, Some(0), "stderr: {}", headless.stderr);
     assert!(!data.exists());
 }
@@ -1820,19 +1942,19 @@ fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
 #[test]
 fn install_takes_one_name_or_path() {
     let setup = Setup::new();
-    let missing = setup.fiber(&["install"], None);
+    let missing = setup.fiber(&["extension", "install"], None);
     assert_eq!(missing.code, Some(2));
     assert_eq!(
         missing.stderr,
         "fiber: The following required arguments were not provided: <name or path>. Run `fiber --help` for usage.\n"
     );
-    let extra = setup.fiber(&["install", "a", "b"], None);
+    let extra = setup.fiber(&["extension", "install", "a", "b"], None);
     assert_eq!(extra.code, Some(2));
     assert_eq!(
         extra.stderr,
         "fiber: Unexpected argument 'b' found. Run `fiber --help` for usage.\n"
     );
-    let run = setup.fiber(&["install", "/nonexistent"], None);
+    let run = setup.fiber(&["extension", "install", "/nonexistent"], None);
     assert_eq!(run.code, Some(1));
     let root = setup.home().join("extensions");
     let installed = fs::read_dir(&root).is_ok_and(|entries| {

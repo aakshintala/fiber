@@ -1,4 +1,4 @@
-//! `fiber install` and `fiber update` (`docs/extensions.md`, "Installing"): a
+//! `fiber extension install` and `fiber extension update` (`docs/extensions.md`, "Installing"): a
 //! [`Plan`] fetches, resolves and checks everything first, and its commit
 //! puts everything in place or nothing.
 
