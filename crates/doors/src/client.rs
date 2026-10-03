@@ -21,9 +21,6 @@ use crate::session::{self, Gate};
 
 /// Wakes a connection's writer so it leaves `recv`.
 pub(crate) const STOP: &str = "doors.stop";
-/// Marks the cache thread's queue, so a subscriber sees every line already
-/// written. It is never a session event.
-pub(crate) const FLUSH: &str = "doors.flush";
 
 const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
 const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
@@ -51,24 +48,22 @@ struct Conn {
 }
 
 /// Reads `stream` until the client hangs up. `id` is the slot [`Gate`] stored
-/// the reader in. The writer and the shutdown are the socket's other clones.
+/// the reader in, with the shutdown that unblocks it. The writer is the
+/// socket's other clone.
 pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
     let Some(writer) = stream.try_clone().ok() else {
         return;
     };
-    let Some(shutdown) = stream.try_clone().ok() else {
-        return;
-    };
-    serve_connection(stream, Box::new(writer), shutdown_both(shutdown), gate, id);
+    serve_connection(stream, Box::new(writer), gate, id);
 }
 
-/// Reads `stream` and writes through `writer`. `shutdown` ends a blocked
-/// `writer`, which is how [`crate::session::Session::close`] reaps the
-/// connection. Production builds all three from one socket.
+/// Reads `stream` and writes through `writer`. The connection's shutdown was
+/// stored with its reader, which is how [`crate::session::Session::close`]
+/// reaps a blocked writer. Production builds the reader and the writer from
+/// one socket.
 pub(crate) fn serve_connection(
     stream: UnixStream,
     writer: Box<dyn Write + Send>,
-    shutdown: Box<dyn Fn() + Send + Sync>,
     gate: Arc<Gate>,
     id: u64,
 ) {
@@ -79,7 +74,6 @@ pub(crate) fn serve_connection(
     let Some(direct) = stream.try_clone().ok() else {
         return;
     };
-    gate.set_shutdown(id, shutdown);
     let mut conn = Conn {
         id,
         gate,
@@ -276,9 +270,10 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
 
 fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
-    // The log is dropped before `flush`, which waits. A connection that kept
-    // it would hold the session lock across that wait.
-    let (watcher, injector) = {
+    // The watcher is registered before `latest` is read. A line written in
+    // between is queued and may also be in `latest`; the latest wins. The
+    // log is dropped here so this connection does not hold the session lock.
+    let (watcher, status, extensions) = {
         let Some(log) = conn.gate.log.upgrade() else {
             reject(conn, Some(id), ErrorCode::Closing, ENDED);
             return;
@@ -294,16 +289,21 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
                 }
             }
         };
-        let injector = watcher.injector();
-        (watcher, injector)
+        let status = log.latest("session_status");
+        let extensions = if summary {
+            log.latest("extensions_loaded")
+        } else {
+            None
+        };
+        (watcher, status, extensions)
     };
+    let injector = watcher.injector();
     // The acknowledgement is written here, before the writer starts, so it
     // is the first line the client reads.
     accept(conn, id, None);
     if conn.gone {
         return;
     }
-    let (status, extensions) = conn.gate.flush();
     if summary {
         for line in [status, extensions].into_iter().flatten() {
             if let Some(direct) = conn.direct.as_mut()
@@ -314,7 +314,8 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
             }
         }
     } else if let Some(status) = status {
-        // A log event, so a lagging connection drops it and catches up.
+        // Ephemeral, so the fold does not have it. This subscriber just
+        // registered, and a later one reads the log's latest the same way.
         injector.push(status);
     }
     conn.subscribed = true;
@@ -538,9 +539,6 @@ pub(crate) fn write_loop(
         if line.kind == STOP {
             return;
         }
-        if line.kind == FLUSH {
-            continue;
-        }
         if summary && !summary_line(&line.kind) {
             continue;
         }
@@ -565,7 +563,7 @@ pub(crate) fn write_line(stream: &mut dyn Write, line: &Envelope) -> std::io::Re
     stream.flush()
 }
 
-/// A control line for `session`. `token` tells one flush from the next.
+/// A control line for `session`, such as the one that stops its writer.
 pub(crate) fn control_line(session: &SessionId, kind: &str, token: u64) -> Envelope {
     let mut payload = Map::new();
     payload.insert("token".to_owned(), Value::from(token));

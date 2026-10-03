@@ -8,7 +8,7 @@ use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
@@ -20,10 +20,10 @@ use contract::events::{Clients, Event, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
 use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId};
-use log::{Injector, Log, Watcher};
-use serde_json::{Map, Value};
+use log::{Log, Watcher};
+use serde_json::Map;
 
-use crate::client::{self, control_line};
+use crate::client;
 use crate::{failure, mint};
 
 /// The longest socket path the platform binds: `sun_path` less its
@@ -41,7 +41,6 @@ pub struct Session {
     dir: PathBuf,
     socket: PathBuf,
     printer: JoinHandle<()>,
-    cache: JoinHandle<()>,
     gate: Arc<Gate>,
     listener: Mutex<Option<UnixListener>>,
     accept: Mutex<Option<JoinHandle<()>>>,
@@ -58,21 +57,9 @@ pub(crate) struct Gate {
     inbox: Mutex<Option<Sender<Delivery>>>,
     stop: AtomicBool,
     clients: Mutex<u32>,
-    snap: Mutex<Snap>,
-    flush_seq: AtomicU64,
-    flush_lock: Mutex<()>,
-    cache_injector: Injector,
-    /// Paired with [`Gate::snap`]. A condvar is waited on with one mutex.
-    snap_ready: Condvar,
     /// Paired with [`Gate::conns`].
     writers: Condvar,
     conns: Mutex<Conns>,
-}
-
-struct Snap {
-    status: Option<contract::Envelope>,
-    extensions: Option<contract::Envelope>,
-    flushed: u64,
 }
 
 struct Live {
@@ -174,7 +161,6 @@ impl Session {
         drop(log);
         self.gate.wait_writers();
         self.gate.join_clients();
-        join(self.cache);
         join(self.printer);
     }
 
@@ -228,25 +214,6 @@ impl Gate {
         for (_, live) in live {
             reap(live);
         }
-    }
-
-    /// The latest `session_status` and `extensions_loaded` the cache thread
-    /// has, after every line already queued for it.
-    pub(crate) fn flush(&self) -> (Option<contract::Envelope>, Option<contract::Envelope>) {
-        let _one = lock(&self.flush_lock);
-        let token = self.flush_seq.fetch_add(1, Ordering::Relaxed) + 1;
-        self.cache_injector
-            .push_kept(control_line(&self.session_id, client::FLUSH, token));
-        let mut snap = lock(&self.snap);
-        while snap.flushed < token && !self.stop.load(Ordering::Relaxed) {
-            #[cfg(test)]
-            tests::note_flush_wait();
-            snap = self
-                .snap_ready
-                .wait(snap)
-                .unwrap_or_else(PoisonError::into_inner);
-        }
-        (snap.status.clone(), snap.extensions.clone())
     }
 
     /// One more `full` connection, and the `clients` line for it.
@@ -303,13 +270,6 @@ impl Gate {
         id
     }
 
-    pub(crate) fn set_shutdown(&self, id: u64, shutdown: Box<dyn Fn() + Send + Sync>) {
-        let mut conns = lock(&self.conns);
-        if let Some((_, live)) = conns.live.iter_mut().find(|(slot, _)| *slot == id) {
-            live.shutdown = Some(shutdown);
-        }
-    }
-
     pub(crate) fn push_writer(&self, id: u64, handle: JoinHandle<()>) {
         let mut conns = lock(&self.conns);
         if let Some((_, live)) = conns.live.iter_mut().find(|(slot, _)| *slot == id) {
@@ -334,18 +294,9 @@ impl Gate {
     }
 
     fn mark_stopped(&self) {
-        {
-            let _snap = lock(&self.snap);
-            self.stop.store(true, Ordering::Relaxed);
-            self.snap_ready.notify_all();
-        }
-        {
-            let _conns = lock(&self.conns);
-            self.stop.store(true, Ordering::Relaxed);
-            self.writers.notify_all();
-        }
-        #[cfg(test)]
-        tests::release_cache();
+        let _conns = lock(&self.conns);
+        self.stop.store(true, Ordering::Relaxed);
+        self.writers.notify_all();
     }
 
     fn wait_for_room(&self) {
@@ -403,9 +354,6 @@ fn open_in(
             .into_owned(),
     );
     let printer_watcher = log.watch();
-    let printer_stop = printer_watcher.injector();
-    let cache_watcher = log.watch_latest(&["session_status", "extensions_loaded"]);
-    let cache_injector = cache_watcher.injector();
     let gate = Arc::new(Gate {
         log: Arc::downgrade(log),
         clock: Arc::clone(&clock),
@@ -415,15 +363,6 @@ fn open_in(
         inbox: Mutex::new(None),
         stop: AtomicBool::new(false),
         clients: Mutex::new(0),
-        snap: Mutex::new(Snap {
-            status: None,
-            extensions: None,
-            flushed: 0,
-        }),
-        flush_seq: AtomicU64::new(0),
-        flush_lock: Mutex::new(()),
-        cache_injector,
-        snap_ready: Condvar::new(),
         writers: Condvar::new(),
         conns: Mutex::new(Conns {
             live: Vec::new(),
@@ -443,21 +382,10 @@ fn open_in(
             return Err(error);
         }
     };
-    let cache_gate = Arc::clone(&gate);
-    let cache = match spawn("session-status", move || cache(cache_watcher, &cache_gate)) {
-        Ok(cache) => cache,
-        Err(error) => {
-            client::stop_writer(&printer_stop, &gate.session_id);
-            join(printer);
-            remove_socket(&socket);
-            return Err(error);
-        }
-    };
     Ok(Session {
         dir: dir.to_owned(),
         socket,
         printer,
-        cache,
         gate,
         listener: Mutex::new(Some(listener)),
         accept: Mutex::new(None),
@@ -554,48 +482,8 @@ fn reap(live: Live) {
 }
 
 #[cfg(test)]
-fn before_cache_line(gate: &Gate) {
-    tests::before_cache_line(gate);
-}
-
-#[cfg(not(test))]
-fn before_cache_line(_: &Gate) {}
-
-#[cfg(test)]
 pub(crate) fn park_reader_for_test() {
     tests::park_reader();
-}
-
-/// Keeps the latest `session_status` and `extensions_loaded`. A flush line
-/// marks that every line queued before it has been recorded.
-fn cache(mut watcher: Watcher, gate: &Gate) {
-    while let Ok(Some(line)) = watcher.recv() {
-        before_cache_line(gate);
-        if line.kind == client::FLUSH {
-            let token = line
-                .payload
-                .get("token")
-                .and_then(Value::as_u64)
-                .unwrap_or(0);
-            let mut snap = lock(&gate.snap);
-            snap.flushed = snap.flushed.max(token);
-            drop(snap);
-            gate.snap_ready.notify_all();
-            continue;
-        }
-        if line.kind == "session_status" || line.kind == "extensions_loaded" {
-            let mut snap = lock(&gate.snap);
-            if line.kind == "session_status" {
-                snap.status = Some(line);
-            } else {
-                snap.extensions = Some(line);
-            }
-            drop(snap);
-            gate.snap_ready.notify_all();
-        }
-    }
-    let _snap = lock(&gate.snap);
-    gate.snap_ready.notify_all();
 }
 
 /// Whether the session's log has a `turn_started`. A log that cannot be read
@@ -665,12 +553,10 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
         if line.kind == client::STOP {
             return;
         }
-        // A line that cannot be serialized is skipped. A reader that went
-        // away stops the copy, never the session.
-        match client::write_line(out.as_mut(), &line) {
-            Ok(()) => {}
-            Err(error) if error.kind() == io::ErrorKind::InvalidData => continue,
-            Err(_) => return,
+        // A reader that went away, or a line that cannot be written, stops
+        // the copy, never the session.
+        if client::write_line(out.as_mut(), &line).is_err() {
+            return;
         }
         if line.kind == "fiber_exited" {
             return;

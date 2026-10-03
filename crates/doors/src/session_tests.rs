@@ -1,4 +1,4 @@
-//! Connections leaving, a full status-cache queue, and close waking a subscribe.
+//! Connections leaving, a lagging connection, and close joining a reader.
 
 #![allow(
     clippy::unwrap_used,
@@ -34,12 +34,6 @@ use super::{Gate, Session};
 const DEADLINE: Duration = Duration::from_secs(10);
 
 struct Control {
-    pause: Mutex<bool>,
-    pause_cv: Condvar,
-    cache_entered: AtomicUsize,
-    flush_waiting: AtomicUsize,
-    flush_mu: Mutex<()>,
-    flush_cv: Condvar,
     hold_reader: AtomicBool,
     hold_mu: Mutex<()>,
     hold_cv: Condvar,
@@ -52,12 +46,6 @@ struct Control {
 }
 
 static CONTROL: Control = Control {
-    pause: Mutex::new(false),
-    pause_cv: Condvar::new(),
-    cache_entered: AtomicUsize::new(0),
-    flush_waiting: AtomicUsize::new(0),
-    flush_mu: Mutex::new(()),
-    flush_cv: Condvar::new(),
     hold_reader: AtomicBool::new(false),
     hold_mu: Mutex::new(()),
     hold_cv: Condvar::new(),
@@ -71,31 +59,6 @@ static CONTROL: Control = Control {
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-pub(super) fn before_cache_line(gate: &Gate) {
-    let pause = lock(&CONTROL.pause);
-    CONTROL.cache_entered.fetch_add(1, Ordering::Relaxed);
-    CONTROL.pause_cv.notify_all();
-    let (pause, _) = CONTROL
-        .pause_cv
-        .wait_timeout_while(pause, DEADLINE, |pause| *pause && !gate.stopped())
-        .unwrap_or_else(PoisonError::into_inner);
-    assert!(
-        !*pause || gate.stopped(),
-        "the status cache is still paused"
-    );
-}
-
-pub(super) fn note_flush_wait() {
-    let _held = lock(&CONTROL.flush_mu);
-    CONTROL.flush_waiting.fetch_add(1, Ordering::Relaxed);
-    CONTROL.flush_cv.notify_all();
-}
-
-pub(super) fn release_cache() {
-    *lock(&CONTROL.pause) = false;
-    CONTROL.pause_cv.notify_all();
 }
 
 fn wait_until_accept_waits() {
@@ -141,9 +104,6 @@ pub(super) fn note_accept_wait() {
 }
 
 fn reset() {
-    *lock(&CONTROL.pause) = false;
-    CONTROL.cache_entered.store(0, Ordering::Relaxed);
-    CONTROL.flush_waiting.store(0, Ordering::Relaxed);
     CONTROL.hold_reader.store(false, Ordering::Relaxed);
     CONTROL.hold_cv.notify_all();
     CONTROL.parked.store(0, Ordering::Relaxed);
@@ -156,7 +116,6 @@ impl Drop for Release {
     fn drop(&mut self) {
         CONTROL.hold_reader.store(false, Ordering::Relaxed);
         CONTROL.hold_cv.notify_all();
-        release_cache();
     }
 }
 
@@ -227,34 +186,6 @@ fn recv(client: &Client) -> serde_json::Value {
     client
         .recv(DEADLINE)
         .expect("a line arrived before the deadline")
-}
-
-fn wait_until_cache_pauses() {
-    let pause = lock(&CONTROL.pause);
-    let (_pause, _) = CONTROL
-        .pause_cv
-        .wait_timeout_while(pause, DEADLINE, |_| {
-            CONTROL.cache_entered.load(Ordering::Relaxed) == 0
-        })
-        .unwrap_or_else(PoisonError::into_inner);
-    assert!(
-        CONTROL.cache_entered.load(Ordering::Relaxed) > 0,
-        "the status cache pauses before it records a line"
-    );
-}
-
-fn wait_until_flush_waits() {
-    let guard = lock(&CONTROL.flush_mu);
-    let (_guard, _) = CONTROL
-        .flush_cv
-        .wait_timeout_while(guard, DEADLINE, |_| {
-            CONTROL.flush_waiting.load(Ordering::Relaxed) == 0
-        })
-        .unwrap_or_else(PoisonError::into_inner);
-    assert!(
-        CONTROL.flush_waiting.load(Ordering::Relaxed) > 0,
-        "subscribe waits for the status cache"
-    );
 }
 
 fn descriptors() -> usize {
@@ -381,55 +312,42 @@ fn close_joins_a_reader_that_is_still_connected() {
 }
 
 #[test]
-fn subscribe_waits_out_a_full_cache_queue_and_close_wakes_it() {
+fn a_lagging_connection_does_not_hide_the_latest_from_a_subscriber() {
     reset();
-    let _release = Release;
     let opened = open();
     let socket = opened.socket.clone();
+    let gate = Arc::clone(&opened.session.gate);
     let log = Arc::clone(&opened.log);
-    *lock(&CONTROL.pause) = true;
     opened
         .session
         .run(Vec::new(), move |_inbox| {
-            log.append(&extensions(), None, None).unwrap();
-            wait_until_cache_pauses();
-            for i in 0..1_200 {
-                log.append(&status(&format!("s{i}")), None, None).unwrap();
+            log.append(&status("stale"), None, None).unwrap();
+            let watcher = log.watch();
+            let held = Held::new(Hold::Wait);
+            attach_held(&gate, &held, watcher);
+            log.append(&notice(), None, None).unwrap();
+            held.wait_blocked();
+            for _ in 0..1_200 {
+                log.append(&notice(), None, None).unwrap();
             }
+            log.append(&status("newest"), None, None).unwrap();
+            log.append(&extensions(), None, None).unwrap();
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sum", "summary");
             assert_eq!(recv(&client)["payload"]["command_id"], "c_sum");
-            wait_until_flush_waits();
-            release_cache();
-            let line = recv(&client);
-            assert_eq!(line["kind"], "session_status");
+            let status_line = recv(&client);
+            assert_eq!(status_line["kind"], "session_status");
             assert_eq!(
-                line["payload"]["name"], "s1199",
-                "a status emitted after the cache queue is full is the one a subscriber is sent"
+                status_line["payload"]["name"], "newest",
+                "a status emitted after a connection's queue is full still reaches a later subscriber"
             );
-            let line = recv(&client);
-            assert_eq!(line["kind"], "extensions_loaded");
-            Ok(())
-        })
-        .unwrap();
-    close_within(opened.session, opened.log);
-}
-
-#[test]
-fn close_wakes_a_subscribe_waiting_on_the_cache() {
-    reset();
-    let _release = Release;
-    let opened = open();
-    let socket = opened.socket.clone();
-    *lock(&CONTROL.pause) = true;
-    opened
-        .session
-        .run(Vec::new(), move |_inbox| {
-            let client = Client::connect(&socket).unwrap();
-            subscribe(&client, "c_sum", "summary");
-            assert_eq!(recv(&client)["payload"]["command_id"], "c_sum");
-            wait_until_flush_waits();
-            drop(client);
+            let extensions_line = recv(&client);
+            assert_eq!(extensions_line["kind"], "extensions_loaded");
+            assert_eq!(
+                extensions_line["payload"]["extensions"][0]["name"], "demo",
+                "a summary subscriber is sent the latest extensions"
+            );
+            held.release();
             Ok(())
         })
         .unwrap();

@@ -4,9 +4,11 @@ use std::time::Duration;
 
 use super::*;
 use contract::ErrorCode;
-use contract::events::{Empty, Event, FiberStarted, Notice, TextDelta};
-use serde_json::Value;
-
+use contract::events::{
+    Empty, Event, ExtensionsLoaded, FiberStarted, LoadedExtension, Notice, SessionState,
+    SessionStatus, TextDelta,
+};
+use contract::shapes::{Tokens, Usage};
 const DEADLINE: Duration = Duration::from_secs(10);
 
 fn relay(mut watcher: Watcher) -> mpsc::Receiver<Option<Envelope>> {
@@ -105,7 +107,7 @@ fn a_line_written_between_registration_and_the_read_arrives_once() {
     .unwrap();
     log.append(&started(), None, None).unwrap();
     log.append(&step(), None, None).unwrap();
-    let armed = log.arm(true, None);
+    let armed = log.arm(true);
     let between = log.append(&step(), None, None).unwrap();
     let ephemeral = log.append(&delta(), None, None).unwrap();
     let watcher = log.finish(armed).unwrap();
@@ -148,14 +150,43 @@ fn notice(message: &str) -> Event {
     })
 }
 
-fn payload_message(line: &Envelope) -> Option<&str> {
-    line.payload.get("message").and_then(Value::as_str)
+fn status(name: &str) -> Event {
+    Event::SessionStatus(SessionStatus {
+        name: name.to_owned(),
+        workspace: "/w".into(),
+        parent: None,
+        model: "m".into(),
+        state: SessionState::Idle,
+        since: 0,
+        spend: Usage {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: std::collections::BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        delegates: 0,
+        jobs: 0,
+    })
 }
 
-/// More `notice` lines than the queue holds. The oldest is gone, the newest
-/// is kept, and a durable line of another kind is not queued.
+fn extensions(name: &str) -> Event {
+    Event::ExtensionsLoaded(ExtensionsLoaded {
+        extensions: vec![LoadedExtension {
+            name: name.to_owned(),
+            version: "1".into(),
+        }],
+    })
+}
+
+/// No watcher is attached. After more lines than a queue would hold, `latest`
+/// is the newest line of each latest-wins kind, and reopening keeps the
+/// durable one.
 #[test]
-fn a_latest_watcher_keeps_the_newest_of_its_kind_once_the_queue_is_full() {
+fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
     let sessions = fakes::TempDir::new("log-unit-latest");
     let log = Log::create(
         sessions.path(),
@@ -163,29 +194,30 @@ fn a_latest_watcher_keeps_the_newest_of_its_kind_once_the_queue_is_full() {
         fakes::clock::FakeClock::new(),
     )
     .unwrap();
-    let watcher = log.watch_latest(&["notice"]);
+    let mut last_status = None;
     for n in 0..1_100 {
         log.append(&notice(&n.to_string()), None, None).unwrap();
+        last_status = Some(log.append(&status(&format!("s{n}")), None, None).unwrap());
     }
     log.append(&step(), None, None).unwrap();
-    log.append(&notice("newest"), None, None).unwrap();
-    let rx = relay(watcher);
-    drop(log);
-
-    let mut messages = Vec::new();
-    while let Some(line) = rx
-        .recv_timeout(DEADLINE)
-        .expect("the latest watcher ends before the deadline")
-    {
-        assert_ne!(
-            line.kind, "step_started",
-            "a latest watcher drops other kinds"
-        );
-        messages.push(payload_message(&line).unwrap().to_owned());
-    }
-    assert_eq!(messages.last().map(String::as_str), Some("newest"));
-    assert!(
-        !messages.iter().any(|message| message == "0"),
-        "the oldest notice is dropped once the queue is full"
+    let last_extensions = log.append(&extensions("last"), None, None).unwrap();
+    assert_eq!(log.latest("session_status").as_ref(), last_status.as_ref());
+    assert_eq!(
+        log.latest("extensions_loaded").as_ref(),
+        Some(&last_extensions)
     );
+    assert!(log.latest("notice").is_none());
+    assert!(log.latest("step_started").is_none());
+    drop(log);
+    let reopened = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        reopened.latest("extensions_loaded").as_ref(),
+        Some(&last_extensions)
+    );
+    assert!(reopened.latest("session_status").is_none());
 }
