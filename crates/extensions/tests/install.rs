@@ -1,5 +1,5 @@
 //! `docs/extensions.md`, "Installing" and "The extension API version":
-//! `fiber install <local path>` copies an extension into
+//! `fiber extension install <local path>` copies an extension into
 //! `extensions/<name>/`, and refuses one this Fiber cannot run.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]

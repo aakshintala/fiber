@@ -3,7 +3,10 @@ use std::os::unix::ffi::OsStringExt;
 
 use clap::error::ContextValue;
 
-use super::{Commands, Invocation, MENU, command, parse_from, usage_sentence, version_line};
+use super::{
+    Commands, ExtensionCommands, Invocation, MENU, command, parse_from, usage_sentence,
+    version_line,
+};
 
 fn menu() -> String {
     format!("{MENU}\n")
@@ -103,8 +106,51 @@ fn version_is_the_package_version_and_there_is_no_capital_v() {
 #[test]
 fn an_unknown_subcommand_keeps_claps_suggestion() {
     assert_eq!(
-        sentence(&["fiber", "instal", "x"]),
+        sentence(&["fiber", "extension", "instal", "x"]),
         "Unrecognized subcommand 'instal'; did you mean 'install'? Run `fiber --help` for usage."
+    );
+    assert_eq!(
+        sentence(&["fiber", "extension", "i"]),
+        "Unrecognized subcommand 'i'; did you mean 'install'? Run `fiber --help` for usage."
+    );
+}
+
+#[test]
+fn extension_update_parses_an_optional_name() {
+    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update { name }))) =
+        parse_from(["fiber", "extension", "update"])
+    else {
+        panic!("update with no name");
+    };
+    assert_eq!(name, None);
+    let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update { name }))) =
+        parse_from(["fiber", "extension", "update", "x"])
+    else {
+        panic!("update with name");
+    };
+    assert_eq!(name.as_deref(), Some("x"));
+}
+
+#[test]
+fn extension_alone_is_a_one_line_usage_sentence() {
+    assert_eq!(
+        sentence(&["fiber", "extension"]),
+        "'fiber extension' requires a subcommand but one was not provided [subcommands: install, update, remove, list]. Run `fiber --help` for usage."
+    );
+}
+
+#[test]
+fn extension_help_matches_help_extension() {
+    let rendered = super::render_help(Some("extension")).unwrap();
+    let Invocation::Print(error) = parse_from(["fiber", "extension", "--help"]) else {
+        panic!("extension --help did not print");
+    };
+    assert_eq!(rendered, error.to_string());
+    assert!(
+        rendered
+            .lines()
+            .any(|line| line.starts_with("Usage: fiber extension")),
+        "{rendered}"
     );
 }
 
@@ -139,7 +185,7 @@ fn an_unknown_flag_drops_the_double_dash_tip() {
 #[test]
 fn a_missing_required_argument_names_the_value() {
     assert_eq!(
-        sentence(&["fiber", "install"]),
+        sentence(&["fiber", "extension", "install"]),
         "The following required arguments were not provided: <name or path>. Run `fiber --help` for usage."
     );
 }

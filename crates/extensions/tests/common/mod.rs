@@ -68,7 +68,7 @@ pub(crate) fn provider(name: &str, ids: &[&str]) -> Value {
     json!({ "name": name, "credential": { "env": "FIBER_TEST_UNSET_KEY" }, "models": models })
 }
 
-/// Installs the extension in `source` the way `fiber install <path>` does
+/// Installs the extension in `source` the way `fiber extension install <path>` does
 /// and returns its name.
 pub(crate) fn install(home: &Path, source: &Path, fiber: &str) -> Result<String, Error> {
     let names = plan(

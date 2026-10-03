@@ -16,15 +16,15 @@ Usage: fiber <command> [arguments]
 Sessions:
   ask [--model <model>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
-Extensions:
-  install <name or path>  Install an extension and its dependencies
-  update <name>           Update an installed extension to its newest tag
-  remove <name>           Remove an extension, the dependencies nothing else uses, and their data
-  list                    List installed extensions: name, version and commit
-
-Other:
+Fiber itself:
   help [<command>]  Print this menu, or a command's help
   version           Print the version
+
+Extensions:
+  extension install <name or path>  Install an extension and its dependencies
+  extension update [<name>]         Update one extension, or every installed extension, to its newest tag
+  extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
+  extension list                    List installed extensions: name, version and commit
 
 Flags:
   -h, --help     Print this menu
@@ -34,7 +34,7 @@ Examples:
   fiber ask "review the diff on this branch"
   fiber ask < brief.md
   git diff | fiber ask "review this diff" -
-  fiber install openrouter
+  fiber extension install openrouter
   fiber help ask"#;
 
 const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
@@ -73,17 +73,33 @@ struct Cli {
 pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
+    /// Manage extensions
+    #[command(subcommand, arg_required_else_help = false)]
+    Extension(ExtensionCommands),
+    /// Print the version
+    Version,
+    /// Print this menu, or a command's help
+    Help {
+        /// The command to describe. Absent prints the menu.
+        #[arg(value_name = "command")]
+        command: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
+pub(crate) enum ExtensionCommands {
     /// Install an extension and its dependencies
     Install {
         /// The extension's name, or a path to its package.
         #[arg(value_name = "name or path")]
         name_or_path: String,
     },
-    /// Update an installed extension to its newest tag
+    /// Update one extension, or every installed extension, to its newest tag
     Update {
         /// The installed extension's name.
         #[arg(value_name = "name")]
-        name: String,
+        name: Option<String>,
     },
     /// Remove an extension, the dependencies nothing else uses, and their data
     Remove {
@@ -93,14 +109,6 @@ pub(crate) enum Commands {
     },
     /// List installed extensions: name, version and commit
     List,
-    /// Print the version
-    Version,
-    /// Print this menu, or a command's help
-    Help {
-        /// The command to describe. Absent prints the menu.
-        #[arg(value_name = "command")]
-        command: Option<String>,
-    },
 }
 
 #[derive(Debug, clap::Args)]

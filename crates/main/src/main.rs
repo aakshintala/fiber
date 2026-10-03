@@ -52,7 +52,7 @@ fn run() -> i32 {
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
     match cli::parse() {
         cli::Invocation::Print(error) => {
-            // A closed stdout leaves nobody to tell, as `fiber list` does.
+            // A closed stdout leaves nobody to tell, as `fiber extension list` does.
             error.print().unwrap_or(());
             0
         }
@@ -88,23 +88,49 @@ fn run() -> i32 {
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
-        cli::Invocation::Run(Some(cli::Commands::Install { name_or_path })) => {
+        cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
+    }
+}
+
+fn extension(cmd: cli::ExtensionCommands, clock: &dyn contract::clock::Clock) -> i32 {
+    match cmd {
+        cli::ExtensionCommands::Install { name_or_path } => {
             let request = if extensions::is_path(&name_or_path) {
                 Request::Path(PathBuf::from(name_or_path))
             } else {
                 Request::Install(name_or_path)
             };
-            install(request, clock.as_ref())
+            install(request, clock)
         }
-        cli::Invocation::Run(Some(cli::Commands::Update { name })) => {
-            install(Request::Update(name), clock.as_ref())
+        cli::ExtensionCommands::Update { name: Some(name) } => {
+            install(Request::Update(name), clock)
         }
-        cli::Invocation::Run(Some(cli::Commands::Remove { name })) => remove(&name, clock.as_ref()),
-        cli::Invocation::Run(Some(cli::Commands::List)) => list(clock.as_ref()),
+        cli::ExtensionCommands::Update { name: None } => update_all(clock),
+        cli::ExtensionCommands::Remove { name } => remove(&name, clock),
+        cli::ExtensionCommands::List => list(clock),
     }
 }
 
-/// `fiber install <name or path>` and `fiber update <name>`: fetches and
+/// `fiber extension update` with no name: each extension a person asked for.
+fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
+    let home = match config::fiber_home_from_env() {
+        Ok(home) => home,
+        Err(e) => return fail(failed(e.code(), e)),
+    };
+    let installed = match extensions::list(&home, clock) {
+        Ok(list) => list,
+        Err(e) => return fail(failed(e.code(), e)),
+    };
+    for ext in installed.iter().filter(|i| i.requested) {
+        let code = install(Request::Update(ext.name.clone()), clock);
+        if code != 0 {
+            return code;
+        }
+    }
+    0
+}
+
+/// `fiber extension install <name or path>` and `fiber extension update <name>`: fetches and
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
@@ -179,7 +205,7 @@ fn install_request(
     plan.commit().map(Some).map_err(|e| failed(e.code(), e))
 }
 
-/// `fiber remove <name>`: removes an extension, the dependencies nothing
+/// `fiber extension remove <name>`: removes an extension, the dependencies nothing
 /// else uses, and their data and settings, asking first in a terminal.
 fn remove(typed: &str, clock: &dyn contract::clock::Clock) -> i32 {
     let removed = config::fiber_home_from_env()
@@ -218,7 +244,7 @@ fn remove(typed: &str, clock: &dyn contract::clock::Clock) -> i32 {
     }
 }
 
-/// `fiber list`: one line per installed extension: name, version and commit.
+/// `fiber extension list`: one line per installed extension: name, version and commit.
 fn list(clock: &dyn contract::clock::Clock) -> i32 {
     let listed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
@@ -243,7 +269,7 @@ fn list(clock: &dyn contract::clock::Clock) -> i32 {
 fn print_help(name: Option<&str>) -> i32 {
     match cli::render_help(name) {
         Ok(text) => {
-            // A closed stdout leaves nobody to tell, as `fiber list` does.
+            // A closed stdout leaves nobody to tell, as `fiber extension list` does.
             let mut out = io::stdout().lock();
             write!(out, "{text}").unwrap_or(());
             0
