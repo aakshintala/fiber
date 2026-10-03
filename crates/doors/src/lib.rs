@@ -40,40 +40,48 @@ pub fn exit_code(failure: &Failure) -> i32 {
     }
 }
 
-/// `fiber ask`'s prompt (`docs/invocation.md`, "Getting a prompt in"): the
-/// argument, or stdin when it is not a terminal. Both, or neither, is a
-/// `usage` failure. Stdin that is not a terminal is read to its end, so
-/// empty stdin beside an argument is not a second prompt.
+/// `fiber ask`'s prompt (`docs/invocation.md`, "Getting a prompt in").
+///
+/// The source is the arguments alone. Stdin is read only when `dash` is set,
+/// or when `arg` is absent and stdin is not a terminal. A whitespace-only
+/// part is dropped. When both parts remain, the prompt is the argument, a
+/// newline, then stdin.
 pub fn prompt(
     arg: Option<String>,
+    dash: bool,
     stdin: &mut dyn Read,
     terminal: bool,
 ) -> Result<String, Failure> {
+    let supplied = arg.is_some();
+    let kept = arg.filter(|text| !text.trim().is_empty());
+    // An argument and no `-` never reads stdin, even when the argument is blank.
+    if !dash && supplied {
+        return kept.ok_or_else(no_prompt);
+    }
+    if !dash && terminal {
+        return Err(no_prompt());
+    }
     let mut piped = String::new();
-    // debt: an argument with stdin left as an open pipe blocks here until
-    // the pipe closes; how to tell that case apart is #333.
-    if !terminal {
-        stdin.read_to_string(&mut piped).map_err(|e| {
-            if e.kind() == io::ErrorKind::InvalidData {
-                failure(ErrorCode::Usage, "stdin is not UTF-8 text.")
-            } else {
-                failure(ErrorCode::IoFailed, format!("stdin could not be read: {e}"))
-            }
-        })?;
-    }
+    stdin.read_to_string(&mut piped).map_err(|e| {
+        if e.kind() == io::ErrorKind::InvalidData {
+            failure(ErrorCode::Usage, "stdin is not UTF-8 text.")
+        } else {
+            failure(ErrorCode::IoFailed, format!("stdin could not be read: {e}"))
+        }
+    })?;
     let piped = (!piped.trim().is_empty()).then_some(piped);
-    let arg = arg.filter(|a| !a.trim().is_empty());
-    match (arg, piped) {
+    match (kept, piped) {
+        (Some(prompt), Some(stdin)) => Ok(format!("{prompt}\n{stdin}")),
         (Some(prompt), None) | (None, Some(prompt)) => Ok(prompt),
-        (Some(_), Some(_)) => Err(failure(
-            ErrorCode::Usage,
-            "The prompt came both as an argument and on stdin; give one.",
-        )),
-        (None, None) => Err(failure(
-            ErrorCode::Usage,
-            "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.",
-        )),
+        (None, None) => Err(no_prompt()),
     }
+}
+
+fn no_prompt() -> Failure {
+    failure(
+        ErrorCode::Usage,
+        "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.",
+    )
 }
 
 /// What `fiber install` shows before it installs (`docs/extensions.md`,

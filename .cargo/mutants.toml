@@ -1,0 +1,3 @@
+# Runs nextest's `mutants` profile (docs/ci.md, "On every pull request that changes code"): a hung test is
+# stopped as soon as a faster test catches the mutant.
+additional_cargo_test_args = ["--profile", "mutants"]

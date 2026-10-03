@@ -8,6 +8,7 @@
     reason = "main prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 
+mod cli;
 mod clock;
 
 use std::fmt::Display;
@@ -46,29 +47,60 @@ fn main() -> ExitCode {
 }
 
 fn run() -> i32 {
+    // Help and version print before anything reads the home, configuration,
+    // credentials, or stdin.
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
-    let args: Vec<String> = match std::env::args_os()
-        .skip(1)
-        .map(|a| a.into_string())
-        .collect()
-    {
-        Ok(args) => args,
-        Err(_) => return ask_failed(usage("An argument is not UTF-8 text.")),
-    };
-    match args.split_first() {
-        Some((door, rest)) if door == "ask" => ask(rest, clock),
-        Some((command, rest)) if command == "install" || command == "update" => {
-            install(command, rest, clock.as_ref())
+    match cli::parse() {
+        cli::Invocation::Print(error) => {
+            // A closed stdout leaves nobody to tell, as `fiber list` does.
+            error.print().unwrap_or(());
+            0
         }
-        Some((command, rest)) if command == "remove" => remove(rest, clock.as_ref()),
-        Some((command, rest)) if command == "list" => list(rest, clock.as_ref()),
-        // The terminal door needs a tty and the hub; neither is built, so
-        // every other invocation is called wrongly.
-        Some(_) | None => {
-            let message = "Usage: fiber ask [--model <model>] \"<prompt>\", fiber ask < <file>, fiber install <name or path>, fiber update <name>, fiber remove <name>, or fiber list.";
-            eprintln!("fiber: {message}");
+        cli::Invocation::Run(Some(cli::Commands::Version)) => {
+            let mut out = io::stdout().lock();
+            write!(out, "{}", cli::version_line()).unwrap_or(());
+            0
+        }
+        cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
+            print_help(command.as_deref())
+        }
+        // The terminal door needs a tty and the hub; neither is built.
+        cli::Invocation::Run(None) => {
+            eprintln!(
+                "fiber: The terminal door is not built; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage."
+            );
             2
         }
+        cli::Invocation::Usage {
+            ask: true,
+            sentence,
+        } => ask_failed(usage(sentence)),
+        cli::Invocation::Usage {
+            ask: false,
+            sentence,
+        } => {
+            eprintln!("fiber: {sentence}");
+            2
+        }
+        cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
+            match cli::ask_parts(&args.prompt) {
+                Ok((prompt, dash)) => ask(args.model, prompt, dash, clock),
+                Err(sentence) => ask_failed(usage(sentence)),
+            }
+        }
+        cli::Invocation::Run(Some(cli::Commands::Install { name_or_path })) => {
+            let request = if extensions::is_path(&name_or_path) {
+                Request::Path(PathBuf::from(name_or_path))
+            } else {
+                Request::Install(name_or_path)
+            };
+            install(request, clock.as_ref())
+        }
+        cli::Invocation::Run(Some(cli::Commands::Update { name })) => {
+            install(Request::Update(name), clock.as_ref())
+        }
+        cli::Invocation::Run(Some(cli::Commands::Remove { name })) => remove(&name, clock.as_ref()),
+        cli::Invocation::Run(Some(cli::Commands::List)) => list(clock.as_ref()),
     }
 }
 
@@ -76,17 +108,8 @@ fn run() -> i32 {
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
-fn install(command: &str, args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
-    let installed = match (command, args) {
-        ("install", [typed]) if extensions::is_path(typed) => {
-            install_request(Request::Path(PathBuf::from(typed)), clock)
-        }
-        ("install", [typed]) => install_request(Request::Install(typed.clone()), clock),
-        ("update", [typed]) => install_request(Request::Update(typed.clone()), clock),
-        ("install", _) => Err(usage("Usage: fiber install <name or path>.")),
-        _ => Err(usage("Usage: fiber update <name>.")),
-    };
-    match installed {
+fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
+    match install_request(request, clock) {
         Ok(Some(names)) => {
             for name in names {
                 eprintln!("fiber: installed {name}");
@@ -158,10 +181,7 @@ fn install_request(
 
 /// `fiber remove <name>`: removes an extension, the dependencies nothing
 /// else uses, and their data and settings, asking first in a terminal.
-fn remove(args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
-    let [typed] = args else {
-        return fail(usage("Usage: fiber remove <name>."));
-    };
+fn remove(typed: &str, clock: &dyn contract::clock::Clock) -> i32 {
     let removed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
@@ -199,10 +219,7 @@ fn remove(args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
 }
 
 /// `fiber list`: one line per installed extension: name, version and commit.
-fn list(args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
-    if !args.is_empty() {
-        return fail(usage("Usage: fiber list."));
-    }
+fn list(clock: &dyn contract::clock::Clock) -> i32 {
     let listed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| extensions::list(&home, clock).map_err(|e| failed(e.code(), e)));
@@ -223,35 +240,36 @@ fn list(args: &[String], clock: &dyn contract::clock::Clock) -> i32 {
     }
 }
 
+fn print_help(name: Option<&str>) -> i32 {
+    match cli::render_help(name) {
+        Ok(text) => {
+            // A closed stdout leaves nobody to tell, as `fiber list` does.
+            let mut out = io::stdout().lock();
+            write!(out, "{text}").unwrap_or(());
+            0
+        }
+        Err(sentence) => {
+            eprintln!("fiber: {sentence}");
+            2
+        }
+    }
+}
+
 fn fail(e: Failure) -> i32 {
     eprintln!("fiber: {}", e.message);
     doors::exit_code(&e)
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.
-fn ask(args: &[String], clock: Arc<dyn contract::clock::Clock>) -> i32 {
-    let (model, args) = match args {
-        [flag, model, rest @ ..] if flag == "--model" => (Some(model.clone()), rest),
-        [flag] if flag == "--model" => {
-            return ask_failed(usage("`--model` takes a model, such as `provider/model`."));
-        }
-        _ => (None, args),
-    };
-    let arg = match args {
-        [] => None,
-        [flag, ..] if flag.starts_with('-') => {
-            return ask_failed(usage(format!("`fiber ask` takes no flag `{flag}`.")));
-        }
-        [prompt] => Some(prompt.clone()),
-        [_, _, ..] => {
-            return ask_failed(usage(
-                "`fiber ask` takes one prompt; quote it, or put it on stdin.",
-            ));
-        }
-    };
+fn ask(
+    model: Option<String>,
+    arg: Option<String>,
+    dash: bool,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
-    let prompt = match doors::prompt(arg, &mut stdin.lock(), terminal) {
+    let prompt = match doors::prompt(arg, dash, &mut stdin.lock(), terminal) {
         Ok(prompt) => prompt,
         Err(e) => return ask_failed(e),
     };

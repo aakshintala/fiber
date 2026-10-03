@@ -101,6 +101,10 @@ On Linux x86_64 alone:
 - mutation testing: `cargo-mutants --in-diff`, split across 6 runners. Each
   lists its own share of the diff's mutants and stops when it has none. The
   number was picked, not measured; it is reset from the first real runs.
+  Mutants run under nextest's `mutants` profile (`.cargo/mutants.toml`),
+  which stops every running test at the first failure. A mutant that makes
+  one test hang until its deadline is then caught by a faster test, not
+  reported as a timeout.
 - for a pull request whose ticket, the issue its body resolves, is labelled
   `bug`, its new and changed tests run against the base commit, and at least
   one must fail there

@@ -202,6 +202,13 @@ impl Setup {
     fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
         self.fiber_with_home(self.home().to_str().unwrap(), args, stdin)
     }
+
+    /// `stdin` is the child's standard input as given. A write end the caller
+    /// still holds stays open until this returns, so an unread pipe is open
+    /// when `fiber` exits.
+    fn fiber_with_stdio(&self, args: &[&str], stdin: Stdio) -> Run {
+        self.run(self.home().to_str().unwrap(), args, stdin, None, &[])
+    }
 }
 
 impl Drop for Setup {
@@ -263,6 +270,7 @@ fn kill_group(group: u32) {
 /// stderr.
 struct Run {
     code: Option<i32>,
+    stdout: String,
     raw: Vec<String>,
     lines: Vec<Value>,
     stderr: String,
@@ -279,6 +287,7 @@ impl From<Output> for Run {
             .collect();
         Self {
             code: output.status.code(),
+            stdout,
             raw,
             lines,
             stderr: String::from_utf8(output.stderr).unwrap(),
@@ -459,8 +468,8 @@ fn a_prompt_on_stdin_runs_one_turn() {
     let run = setup.fiber(&["ask"], Some("review the brief\n"));
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "review the brief\n");
-    assert_eq!(run.kinds().first(), Some(&"fiber_started"));
     assert_eq!(run.last()["payload"]["text"], "Hello.");
 }
 
@@ -514,7 +523,6 @@ fn two_prompts_or_none_is_a_usage_error() {
     let server = ProviderServer::start([]).unwrap();
     setup.provider(&server);
 
-    assert_pre_session(&setup.fiber(&["ask", "hi"], Some("and this")), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "a", "b"], None), 2, "usage");
     assert_pre_session(&setup.fiber(&["ask", "--model", "x"], None), 2, "usage");
@@ -527,7 +535,8 @@ fn two_prompts_or_none_is_a_usage_error() {
     let run = setup.fiber(&["ask", "--model"], None);
     assert_pre_session(&run, 2, "usage");
     assert!(
-        run.stderr.contains("`--model` takes a model"),
+        run.stderr
+            .contains("A value is required for '--model <model>' but none was supplied."),
         "{}",
         run.stderr
     );
@@ -567,14 +576,273 @@ fn a_missing_credential_fails_before_the_session() {
 fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
     let setup = Setup::new();
 
-    for args in [&[][..], &["hi"][..]] {
-        let run = setup.fiber(args, None);
+    let bare = setup.fiber(&[], None);
+    assert_eq!(bare.code, Some(2));
+    assert!(bare.stderr.contains("fiber ask"), "stderr: {}", bare.stderr);
+    assert!(bare.lines.is_empty());
 
-        assert_eq!(run.code, Some(2));
-        assert!(run.stderr.contains("fiber ask"), "stderr: {}", run.stderr);
-        // Not `fiber ask`, so no event line.
-        assert!(run.lines.is_empty());
+    let unknown = setup.fiber(&["hi"], None);
+    assert_eq!(unknown.code, Some(2));
+    assert!(unknown.lines.is_empty());
+    assert!(
+        unknown.stderr.contains("Unrecognized subcommand 'hi'"),
+        "stderr: {}",
+        unknown.stderr
+    );
+}
+
+/// The menu clap prints, including the trailing newline it appends.
+const MENU: &str = r#"Fiber, a coding agent.
+
+Usage: fiber <command> [arguments]
+
+Sessions:
+  ask [--model <model>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+
+Extensions:
+  install <name or path>  Install an extension and its dependencies
+  update <name>           Update an installed extension to its newest tag
+  remove <name>           Remove an extension, the dependencies nothing else uses, and their data
+  list                    List installed extensions: name, version and commit
+
+Other:
+  help [<command>]  Print this menu, or a command's help
+  version           Print the version
+
+Flags:
+  -h, --help     Print this menu
+  -v, --version  Print the version
+
+Examples:
+  fiber ask "review the diff on this branch"
+  fiber ask < brief.md
+  git diff | fiber ask "review this diff" -
+  fiber install openrouter
+  fiber help ask
+"#;
+
+fn printed(run: &Run) -> String {
+    if run.raw.is_empty() {
+        String::new()
+    } else {
+        format!("{}\n", run.raw.join("\n"))
     }
+}
+
+fn assert_help(run: &Run, about: &str) {
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, "");
+    let text = printed(run);
+    assert!(text.contains(about), "{text}");
+    assert!(!text.contains("fiber_exited"), "{text}");
+}
+
+#[test]
+fn help_prints_the_menu() {
+    let setup = Setup::new();
+    for args in [&["-h"][..], &["--help"], &["help"]] {
+        let run = setup.fiber(args, None);
+        assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
+        assert_eq!(run.stderr, "");
+        assert_eq!(printed(&run), MENU, "{args:?}");
+    }
+}
+
+#[test]
+fn ask_help_prints_no_event_stream() {
+    let setup = Setup::new();
+    for args in [&["ask", "--help"][..], &["ask", "-h"], &["help", "ask"]] {
+        let run = setup.fiber(args, None);
+        assert_help(&run, "Run one session of one turn; its events go to stdout");
+    }
+}
+
+#[test]
+fn help_for_every_command_matches_the_flag() {
+    let setup = Setup::new();
+    for name in [
+        "ask", "install", "update", "remove", "list", "version", "help",
+    ] {
+        let via_help = setup.fiber(&["help", name], None);
+        let via_flag = setup.fiber(&[name, "--help"], None);
+        assert_eq!(via_help.code, Some(0), "{name}: {}", via_help.stderr);
+        assert_eq!(via_flag.code, Some(0), "{name}: {}", via_flag.stderr);
+        assert_eq!(via_help.stderr, "");
+        assert_eq!(via_flag.stderr, "");
+        assert_eq!(via_help.stdout, via_flag.stdout, "{name}");
+        assert!(
+            via_flag
+                .stdout
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
+            "{name}: {}",
+            via_flag.stdout
+        );
+    }
+}
+
+#[test]
+fn each_command_prints_its_own_help() {
+    let setup = Setup::new();
+    let commands = [
+        ("install", "Install an extension and its dependencies"),
+        ("update", "Update an installed extension to its newest tag"),
+        (
+            "remove",
+            "Remove an extension, the dependencies nothing else uses, and their data",
+        ),
+        (
+            "list",
+            "List installed extensions: name, version and commit",
+        ),
+        ("version", "Print the version"),
+        ("help", "Print this menu, or a command's help"),
+    ];
+    for (name, about) in commands {
+        for args in [vec![name, "--help"], vec!["help", name]] {
+            assert_help(&setup.fiber(&args, None), about);
+        }
+    }
+}
+
+#[test]
+fn version_prints_the_package_version() {
+    let setup = Setup::new();
+    let line = match option_env!("FIBER_COMMIT") {
+        Some(commit) => {
+            assert!(
+                commit.len() >= 4
+                    && commit
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+                "{commit}"
+            );
+            format!("fiber 0.0.0 ({commit})\n")
+        }
+        None => "fiber 0.0.0\n".to_owned(),
+    };
+    for args in [&["-v"][..], &["--version"], &["version"]] {
+        let run = setup.fiber(args, None);
+        assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
+        assert_eq!(run.stderr, "");
+        assert_eq!(printed(&run), line, "{args:?}");
+    }
+}
+
+#[test]
+fn a_capital_v_is_an_unknown_argument() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["-V"], None);
+    assert_eq!(run.code, Some(2));
+    assert!(run.lines.is_empty());
+    assert_eq!(
+        run.stderr,
+        "fiber: Unexpected argument '-V' found. Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn an_unknown_subcommand_suggests_the_nearest() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["instal", "x"], None);
+    assert_eq!(run.code, Some(2));
+    assert!(run.lines.is_empty());
+    assert_eq!(
+        run.stderr,
+        "fiber: Unrecognized subcommand 'instal'; did you mean 'install'? Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn an_ask_parse_error_is_one_exited_line() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["ask", "--modle", "x", "hi"], None);
+    assert_pre_session(&run, 2, "usage");
+    assert_eq!(
+        run.stderr,
+        "fiber: Unexpected argument '--modle' found; did you mean '--model'? Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn ask_with_the_wrong_shape_is_one_exited_line() {
+    let setup = Setup::new();
+    let sentence = "fiber: `fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.\n";
+    for args in [&["ask", "a", "b"][..], &["ask", "-", "a"]] {
+        let run = setup.fiber(args, None);
+        assert_pre_session(&run, 2, "usage");
+        assert_eq!(run.stderr, sentence, "{args:?}");
+    }
+}
+
+#[test]
+fn bare_fiber_names_ask_and_prints_nothing() {
+    let setup = Setup::new();
+    let run = setup.fiber(&[], None);
+    assert_eq!(run.code, Some(2));
+    assert!(run.lines.is_empty());
+    assert_eq!(
+        run.stderr,
+        "fiber: The terminal door is not built; run `fiber ask \"<prompt>\"`. Run `fiber --help` for usage.\n"
+    );
+}
+
+#[test]
+fn a_prompt_argument_does_not_wait_on_an_open_stdin() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let (reader, writer) = std::io::pipe().unwrap();
+    let run = setup.fiber_with_stdio(&["ask", "hi"], Stdio::from(reader));
+    drop(writer);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi");
+}
+
+#[test]
+fn a_prompt_argument_leaves_stdin_unread() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let run = setup.fiber(&["ask", "hi"], Some("and this"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi");
+}
+
+#[test]
+fn a_prompt_and_a_dash_append_stdin() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let run = setup.fiber(&["ask", "hi", "-"], Some("more"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "hi\nmore");
+}
+
+#[test]
+fn a_dash_reads_stdin_as_the_prompt() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let run = setup.fiber(&["ask", "-"], Some("brief"));
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(turn_input(&run), "brief");
+}
+
+#[test]
+fn help_does_not_read_home_or_a_provider() {
+    let setup = Setup::new();
+    let menu = setup.fiber_with_home("", &["--help"], None);
+    assert_eq!(menu.code, Some(0), "stderr: {}", menu.stderr);
+    assert_eq!(menu.stderr, "");
+    assert_eq!(printed(&menu), MENU);
+
+    let ask = setup.fiber(&["ask", "--help"], None);
+    assert_help(&ask, "Run one session of one turn; its events go to stdout");
 }
 
 #[test]
@@ -598,6 +866,7 @@ fn a_prompt_argument_with_stdin_on_a_terminal_runs_without_reading_it() {
     let run = setup.fiber_on_terminal(&["ask", "hi"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "hi");
     assert_eq!(run.last()["payload"]["text"], "Hello.");
 }
@@ -1420,15 +1689,18 @@ fn every_go_model_is_a_subscription_on_gos_url_and_every_zen_model_is_not() {
 #[test]
 fn install_takes_one_name_or_path() {
     let setup = Setup::new();
-    for args in [&["install"][..], &["install", "a", "b"][..]] {
-        let run = setup.fiber(args, None);
-        assert_eq!(run.code, Some(2));
-        assert!(
-            run.stderr.contains("fiber install <name or path>"),
-            "{}",
-            run.stderr
-        );
-    }
+    let missing = setup.fiber(&["install"], None);
+    assert_eq!(missing.code, Some(2));
+    assert_eq!(
+        missing.stderr,
+        "fiber: The following required arguments were not provided: <name or path>. Run `fiber --help` for usage.\n"
+    );
+    let extra = setup.fiber(&["install", "a", "b"], None);
+    assert_eq!(extra.code, Some(2));
+    assert_eq!(
+        extra.stderr,
+        "fiber: Unexpected argument 'b' found. Run `fiber --help` for usage.\n"
+    );
     let run = setup.fiber(&["install", "/nonexistent"], None);
     assert_eq!(run.code, Some(1));
     let root = setup.home().join("extensions");
