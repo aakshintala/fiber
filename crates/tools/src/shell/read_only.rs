@@ -17,6 +17,8 @@ pub(super) struct Command {
     pub(super) flags: &'static [Flag],
     /// Whether an operand is a path. `echo` and `pwd` name none.
     pub(super) paths: bool,
+    /// Whether `--` ends flags. `find` still reads a primary after `--`.
+    pub(super) ends_flags: bool,
 }
 
 const fn flag(spelling: &'static str) -> Flag {
@@ -179,11 +181,13 @@ pub(super) const COMMANDS: &[Command] = &[
         name: "pwd",
         flags: &[],
         paths: false,
+        ends_flags: true,
     },
     Command {
         name: "echo",
         flags: &[flag("-n")],
         paths: false,
+        ends_flags: true,
     },
     Command {
         name: "ls",
@@ -200,6 +204,7 @@ pub(super) const COMMANDS: &[Command] = &[
             flag("-F"),
         ],
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "cat",
@@ -213,60 +218,72 @@ pub(super) const COMMANDS: &[Command] = &[
             flag("-v"),
         ],
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "head",
         flags: HEAD_TAIL,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "tail",
         flags: HEAD_TAIL,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "wc",
         flags: &[flag("-l"), flag("-w"), flag("-c"), flag("-m")],
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "grep",
         flags: GREP,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "rg",
         flags: RG,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "find",
         flags: FIND,
         paths: true,
+        ends_flags: false,
     },
     Command {
         name: "sort",
         flags: SORT,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "git status",
         flags: GIT_STATUS,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "git diff",
         flags: GIT_DIFF,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "git log",
         flags: GIT_LOG,
         paths: true,
+        ends_flags: true,
     },
     Command {
         name: "git show",
         flags: GIT_SHOW,
         paths: true,
+        ends_flags: true,
     },
 ];

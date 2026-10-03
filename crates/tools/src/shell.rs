@@ -10,7 +10,7 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Process};
+use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use rustix::process::Signal;
 use serde_json::{Map, Value, json};
@@ -91,15 +91,7 @@ impl Tool for Shell {
         // `timeout_ms` or `workdir` off the read-only fast path.
         match parse(arguments, &self.workspace) {
             Ok(parsed) => Ok(classify(&parsed.command, &parsed.workdir)),
-            Err(_) => Ok(Effects {
-                declared: DeclaredEffects {
-                    effects: vec![Effect::Executes],
-                    reversible: false,
-                    paths: None,
-                },
-                subject: None,
-                prefix: None,
-            }),
+            Err(_) => Ok(classify::executes(None, None)),
         }
     }
 

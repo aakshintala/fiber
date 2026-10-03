@@ -4,7 +4,7 @@ use contract::shapes::Effect;
 use contract::tool::Effects;
 
 use super::super::read_only::COMMANDS;
-use super::{Part, Word, classify, lex};
+use super::{Lexer, Part, Word, classify};
 
 fn plain(text: &str) -> Word {
     Word {
@@ -21,11 +21,13 @@ fn quoted(raw: &str, cooked: &str) -> Word {
 }
 
 fn lexed(command: &str) -> Vec<Part> {
-    lex(command).unwrap_or_else(|| panic!("unreadable: {command:?}"))
+    Lexer::new(command)
+        .run()
+        .unwrap_or_else(|| panic!("unreadable: {command:?}"))
 }
 
 fn assert_unreadable(command: &str) {
-    assert!(lex(command).is_none(), "readable: {command:?}");
+    assert!(Lexer::new(command).run().is_none(), "readable: {command:?}");
 }
 
 #[test]
@@ -464,6 +466,46 @@ fn an_unlisted_flag_is_not_read_only() {
 fn a_read_only_part_beside_a_closed_part_is_not_read_only() {
     assert_closed("git status && sort -o out");
     assert_closed("pwd && ls --help");
+}
+
+#[test]
+fn double_dash_ends_flags_only_where_the_command_says_so() {
+    for command in [
+        "find -- x -delete",
+        "find -- x -exec /bin/echo x ';'",
+        "find x -- -delete",
+    ] {
+        assert_closed(command);
+        assert!(classified(command).subject.is_some(), "{command}");
+    }
+    assert_reads("grep -- -x file");
+    assert_reads("git diff -- path");
+}
+
+#[test]
+fn every_command_states_whether_double_dash_ends_flags() {
+    let stated = [
+        ("pwd", true),
+        ("echo", true),
+        ("ls", true),
+        ("cat", true),
+        ("head", true),
+        ("tail", true),
+        ("wc", true),
+        ("grep", true),
+        ("rg", true),
+        ("find", false),
+        ("sort", true),
+        ("git status", true),
+        ("git diff", true),
+        ("git log", true),
+        ("git show", true),
+    ];
+    assert_eq!(COMMANDS.len(), stated.len());
+    for (command, (name, ends_flags)) in COMMANDS.iter().zip(stated) {
+        assert_eq!(command.name, name);
+        assert_eq!(command.ends_flags, ends_flags, "{name}");
+    }
 }
 
 #[test]

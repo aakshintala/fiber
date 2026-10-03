@@ -11,14 +11,13 @@ use super::read_only::{COMMANDS, Command};
 /// read plainly, or any part not on the read-only list, is `executes` with
 /// no paths. One plain part is the subject.
 pub(super) fn classify(command: &str, workdir: &Path) -> Effects {
-    let Some(parts) = lex(command) else {
+    let Some(parts) = Lexer::new(command).run() else {
         return executes(None, None);
     };
     let (subject, prefix) = subject_and_prefix(&parts);
     match outcome(&parts, workdir) {
         Outcome::Reads(paths) => reads(paths, subject, prefix),
         Outcome::Executes => executes(subject, prefix),
-        Outcome::Unreadable => executes(None, None),
     }
 }
 
@@ -32,7 +31,8 @@ fn reads(paths: Vec<String>, subject: Option<String>, prefix: Option<String>) ->
     )
 }
 
-fn executes(subject: Option<String>, prefix: Option<String>) -> Effects {
+/// Declares `executes`, not reversible, with no paths.
+pub(super) fn executes(subject: Option<String>, prefix: Option<String>) -> Effects {
     declared(Effect::Executes, false, None, subject, prefix)
 }
 
@@ -100,7 +100,6 @@ fn plain_word(raw: &str) -> bool {
 }
 
 enum Outcome {
-    Unreadable,
     Executes,
     Reads(Vec<String>),
 }
@@ -110,7 +109,6 @@ fn outcome(parts: &[Part], workdir: &Path) -> Outcome {
     let mut paths = Vec::new();
     for part in parts {
         match part_outcome(part, workdir) {
-            Outcome::Unreadable => return Outcome::Unreadable,
             Outcome::Executes => saw_executes = true,
             Outcome::Reads(more) => paths.extend(more),
         }
@@ -124,10 +122,10 @@ fn outcome(parts: &[Part], workdir: &Path) -> Outcome {
 
 fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     let Some(first) = part.words.first() else {
-        return Outcome::Unreadable;
+        return Outcome::Executes;
     };
     if first.cooked.contains('=') {
-        return Outcome::Unreadable;
+        return Outcome::Executes;
     }
     let Some((entry, start)) = lookup(&part.words) else {
         return Outcome::Executes;
@@ -136,9 +134,8 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
     let mut index = start;
     let mut ended = false;
     let mut saw_operand = false;
-    while index < part.words.len() {
-        match word_at(&part.words, index, ended) {
-            WordAt::Missing => break,
+    while let Some(word) = part.words.get(index) {
+        match word_at(word, ended, entry.ends_flags) {
             WordAt::Operand(cooked) => {
                 if entry.paths {
                     let Some(path) = resolve(workdir, &cooked) else {
@@ -171,19 +168,15 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
 }
 
 enum WordAt {
-    Missing,
     Operand(String),
     EndFlags,
     Flag,
 }
 
-fn word_at(words: &[Word], index: usize, ended: bool) -> WordAt {
-    let Some(word) = words.get(index) else {
-        return WordAt::Missing;
-    };
+fn word_at(word: &Word, ended: bool, ends_flags: bool) -> WordAt {
     if ended || !word.cooked.starts_with('-') {
         WordAt::Operand(word.cooked.clone())
-    } else if word.cooked == "--" {
+    } else if ends_flags && word.cooked == "--" {
         WordAt::EndFlags
     } else {
         WordAt::Flag
@@ -290,22 +283,6 @@ struct Part {
     words: Vec<Word>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Quote {
-    None,
-    Single,
-    Double,
-}
-
-/// Splits `command` into parts and words. `None` when the command is not
-/// plain: an empty part, an operator this classifier does not read (`;;`,
-/// `|&`, a lone `&`), an unterminated quote, or a character outside the
-/// plain set.
-fn lex(command: &str) -> Option<Vec<Part>> {
-    let mut lexer = Lexer::new(command);
-    lexer.run()
-}
-
 struct Lexer {
     chars: Vec<char>,
     index: usize,
@@ -314,7 +291,7 @@ struct Lexer {
     raw: String,
     cooked: String,
     in_word: bool,
-    quote: Quote,
+    quote: Option<char>,
 }
 
 impl Lexer {
@@ -327,15 +304,19 @@ impl Lexer {
             raw: String::new(),
             cooked: String::new(),
             in_word: false,
-            quote: Quote::None,
+            quote: None,
         }
     }
 
+    /// Splits the command into parts and words. `None` when the command is
+    /// not plain: an empty part, an operator this classifier does not read
+    /// (`;;`, `|&`, a lone `&`), an unterminated quote, or a character
+    /// outside the plain set.
     fn run(&mut self) -> Option<Vec<Part>> {
         while let Some(ch) = self.chars.get(self.index).copied() {
             self.step(ch)?;
         }
-        if self.quote != Quote::None || !self.finish_part() {
+        if self.quote.is_some() || !self.finish_part() {
             return None;
         }
         Some(std::mem::take(&mut self.parts))
@@ -343,24 +324,21 @@ impl Lexer {
 
     /// `None` is a syntax this classifier refuses.
     fn step(&mut self, ch: char) -> Option<()> {
-        match self.quote {
-            Quote::Single => self.quoted(ch, '\''),
-            // `$`, backticks and backslash expand inside double quotes, so
-            // the command names something this classifier cannot see.
-            Quote::Double => {
-                if ch == '$' || ch == '`' || ch == '\\' {
-                    return None;
-                }
-                self.quoted(ch, '"')
-            }
-            Quote::None => self.unquoted(ch),
+        let Some(closer) = self.quote else {
+            return self.unquoted(ch);
+        };
+        // `$`, backticks and backslash expand inside double quotes, so
+        // the command names something this classifier cannot see.
+        if closer == '"' && matches!(ch, '$' | '`' | '\\') {
+            return None;
         }
+        self.quoted(ch, closer)
     }
 
     fn quoted(&mut self, ch: char, closer: char) -> Option<()> {
         self.raw.push(ch);
         if ch == closer {
-            self.quote = Quote::None;
+            self.quote = None;
         } else {
             self.cooked.push(ch);
         }
@@ -375,13 +353,9 @@ impl Lexer {
             return Some(());
         }
         if ch == '\'' || ch == '"' {
-            self.begin_word();
+            self.in_word = true;
             self.raw.push(ch);
-            self.quote = if ch == '\'' {
-                Quote::Single
-            } else {
-                Quote::Double
-            };
+            self.quote = Some(ch);
             self.index += 1;
             return Some(());
         }
@@ -400,7 +374,7 @@ impl Lexer {
                 if !plain_char(ch) {
                     return None;
                 }
-                self.begin_word();
+                self.in_word = true;
                 self.raw.push(ch);
                 self.cooked.push(ch);
                 self.index += 1;
@@ -427,10 +401,6 @@ impl Lexer {
             },
             _ => Operator::None,
         }
-    }
-
-    fn begin_word(&mut self) {
-        self.in_word = true;
     }
 
     fn finish_word(&mut self) {
