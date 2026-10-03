@@ -26,8 +26,10 @@ impl Config {
             why,
         };
         if let Some(secret) = read_secret(&self.home, stored)? {
-            return usable(secret.expose())
-                .ok_or_else(|| missing(format!("credentials/{stored} is empty")));
+            return usable(secret.expose()).ok_or_else(|| ConfigError::CredentialFailed {
+                provider: name.clone(),
+                why: format!("credentials/{stored} is empty"),
+            });
         }
         let configured = self
             .merged(None)

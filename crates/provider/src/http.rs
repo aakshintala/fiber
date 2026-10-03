@@ -99,10 +99,6 @@ pub(crate) fn post_signed(
                 headers,
                 body,
             })
-            // debt: weakens docs/model-routing.md, "Signing a request"; fixed
-            // by #363. Error::Sign maps to connection_failed, not
-            // credential_failed. A sign failure is not retried
-            // (Error::should_retry).
             .map_err(Error::Sign)?,
         None => Vec::new(),
     };

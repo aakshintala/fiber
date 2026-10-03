@@ -70,10 +70,7 @@ impl Providers {
             let manifest = config::read_manifest(&dir)?;
             if manifest.api != API {
                 notices.push(Notice {
-                    // debt: weakens docs/extensions.md, "The extension API
-                    // version"; fixed by #363. The notice carries
-                    // extension_failed, not extension_incompatible.
-                    code: ErrorCode::ExtensionFailed,
+                    code: ErrorCode::ExtensionIncompatible,
                     message: Error::ApiVersion {
                         name: manifest.name.clone(),
                         api: manifest.api,

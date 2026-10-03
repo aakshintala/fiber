@@ -309,6 +309,9 @@ pub enum Error {
     /// Neither a resumed session nor configuration chose a model.
     #[error("No model was chosen. Pass `--model provider/model`, or set `model` in configuration.")]
     NoModel,
+    /// A `credential()` call failed. Only from [`LuaProvider::fetch_token`].
+    #[error(transparent)]
+    Credential(Box<Error>),
 }
 
 impl Error {
@@ -332,9 +335,9 @@ impl Error {
                 ErrorCode::ExtensionNotFound
             }
             Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
-            // debt: weakens docs/extensions.md, "Installing"; fixed by #363.
-            // Usage stands in for extension_incompatible.
-            Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => ErrorCode::Usage,
+            Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => {
+                ErrorCode::ExtensionIncompatible
+            }
             Self::BadVersion { .. } | Self::BadName { .. } => ErrorCode::ConfigInvalid,
             Self::ProviderMissing { .. } | Self::ModelMissing { .. } => ErrorCode::ExtensionMissing,
             Self::Lua { .. }
@@ -344,12 +347,9 @@ impl Error {
             | Self::BadReturn { .. }
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
-            // debt: weakens docs/errors.md, "Before a session exists"; fixed by
-            // #363. Ambiguous reports no_model, its message listing the matches,
-            // not model_ambiguous.
-            Self::UnknownModel { .. } | Self::Ambiguous { .. } | Self::NoModel => {
-                ErrorCode::NoModel
-            }
+            Self::UnknownModel { .. } | Self::NoModel => ErrorCode::NoModel,
+            Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
+            Self::Credential(_) => ErrorCode::CredentialFailed,
         }
     }
 }

@@ -63,10 +63,7 @@ impl Error {
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
             Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
-            // debt: weakens docs/model-routing.md, "Signing a request"; fixed
-            // by #363. A failed sign() is connection_failed, not
-            // credential_failed. It is not retried.
-            Self::Sign(_) => ErrorCode::ConnectionFailed,
+            Self::Sign(_) => ErrorCode::CredentialFailed,
         }
     }
 
@@ -75,8 +72,7 @@ impl Error {
     pub fn should_retry(&self) -> Option<bool> {
         match self {
             Self::Status { should_retry, .. } => *should_retry,
-            // A failed signature is not a transport failure, so the retry
-            // policy's default for `connection_failed` does not apply.
+            // A failed signature is not retried.
             Self::Sign(_) => Some(false),
             Self::Connection(_)
             | Self::StreamIncomplete(_)

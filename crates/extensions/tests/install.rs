@@ -85,6 +85,7 @@ fn an_extension_needing_a_newer_fiber_is_refused_and_nothing_is_installed() {
     for running in ["0.2.9", "0.2.10", "v0.2.99"] {
         let err = install(&setup.home(), &source, running).unwrap_err();
         assert!(matches!(err, Error::NeedsNewerFiber { .. }), "{err:?}");
+        assert_eq!(err.code(), ErrorCode::ExtensionIncompatible);
         assert!(err.to_string().contains("0.3.0"), "{err}");
     }
     assert!(!setup.home().join("extensions/acme").exists());
@@ -102,6 +103,7 @@ fn an_extension_for_another_api_major_is_refused() {
         let source = setup.source(&format!("api{api}"), &other, &[]);
         let err = install(&setup.home(), &source, "9.0.0").unwrap_err();
         assert!(matches!(err, Error::ApiVersion { .. }), "{err:?}");
+        assert_eq!(err.code(), ErrorCode::ExtensionIncompatible);
         assert!(err.to_string().contains(&format!("API {api}")), "{err}");
     }
     assert!(!setup.home().join("extensions/acme").exists());

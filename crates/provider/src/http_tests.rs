@@ -111,7 +111,7 @@ fn a_request_that_cannot_be_signed_is_never_sent() {
         panic!("not a sign failure: {err:?}");
     };
     assert!(why.to_string().contains("no key"), "{why}");
-    assert_eq!(err.code(), contract::ErrorCode::ConnectionFailed);
+    assert_eq!(err.code(), contract::ErrorCode::CredentialFailed);
     assert_eq!(
         err.should_retry(),
         Some(false),
