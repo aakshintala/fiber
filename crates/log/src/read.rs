@@ -45,7 +45,7 @@ pub(crate) fn complete_len(bytes: &[u8]) -> usize {
     bytes.iter().rposition(|b| *b == b'\n').map_or(0, |i| i + 1)
 }
 
-// ponytail: 1,024 is picked, not measured. The queue grows only as lines
+// debt: 1,024 is picked, not measured. The queue grows only as lines
 // wait in it. The busy-session memory budget (`docs/performance.md`) and a
 // slow watcher's measured lag would set it.
 /// How many events a watcher's queue holds before it falls behind.
@@ -162,7 +162,7 @@ impl Watcher {
                 None => match self.take() {
                     Taken::Line(line) => line,
                     Taken::CatchUp => {
-                        // ponytail: re-reads the whole log to find the lines it
+                        // debt: re-reads the whole log to find the lines it
                         // missed; a read from an offset by `seq` when logs grow
                         // large enough for a lagging watcher to notice.
                         self.backlog = read(&self.dir)?.into();

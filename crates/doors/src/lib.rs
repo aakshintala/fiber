@@ -50,7 +50,7 @@ pub fn prompt(
     terminal: bool,
 ) -> Result<String, Failure> {
     let mut piped = String::new();
-    // ponytail: an argument with stdin left as an open pipe blocks here until
+    // debt: an argument with stdin left as an open pipe blocks here until
     // the pipe closes; how to tell that case apart is #333.
     if !terminal {
         stdin.read_to_string(&mut piped).map_err(|e| {

@@ -682,7 +682,7 @@ impl Decoder {
 /// provider's, so an overflowing sum fails the reply instead of panicking
 /// (`docs/code-quality.md`, "Panics").
 ///
-/// ponytail: `toolUsePromptTokenCount` (a hosted tool's prompt) is not
+/// debt: `toolUsePromptTokenCount` (a hosted tool's prompt) is not
 /// counted; Fiber sends no hosted tool on this protocol yet.
 fn tokens(usage: &Value) -> Result<Tokens, Error> {
     let count = |key: &str| usage.get(key).and_then(Value::as_u64).unwrap_or(0);

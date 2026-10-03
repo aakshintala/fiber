@@ -318,9 +318,9 @@ impl Error {
             | Self::BinaryChecksum { .. }
             | Self::Rollback { .. } => ErrorCode::IoFailed,
             Self::InstallExited { .. } => ErrorCode::NonzeroExit,
-            // ponytail: docs/errors.md has no code for a dependency that
-            // cannot be met; `config_invalid` stands in until the owner
-            // names one.
+            // debt: weakens docs/errors.md, "Registry" (config_invalid); fixed
+            // by #365 (MajorConflict, NoVersion, NoTag) and #384 (Unresolved,
+            // WrongName, SlugTaken). All six map to config_invalid.
             Self::MajorConflict { .. }
             | Self::NoVersion { .. }
             | Self::Unresolved
@@ -328,14 +328,11 @@ impl Error {
             | Self::SlugTaken { .. }
             | Self::NoTag { .. } => ErrorCode::ConfigInvalid,
             Self::NotInstalled { .. } => ErrorCode::ExtensionMissing,
-            // ponytail: docs/errors.md has no code for an extension this
-            // Fiber cannot run; `usage` stands in until the owner names one.
+            // debt: weakens docs/extensions.md, "Installing"; fixed by #363.
+            // Usage stands in for extension_incompatible.
             Self::NeedsNewerFiber { .. } | Self::ApiVersion { .. } => ErrorCode::Usage,
             Self::BadVersion { .. } | Self::BadName { .. } => ErrorCode::ConfigInvalid,
             Self::ProviderMissing { .. } | Self::ModelMissing { .. } => ErrorCode::ExtensionMissing,
-            // ponytail: docs/errors.md has no code for a model reference that
-            // names no model or several; `no_model` stands in, its message
-            // listing the matches, until the owner names one.
             Self::Lua { .. }
             | Self::Timeout { .. }
             | Self::Abandoned { .. }
@@ -343,6 +340,9 @@ impl Error {
             | Self::BadReturn { .. }
             | Self::Stopped { .. } => ErrorCode::ExtensionFailed,
             Self::UnknownCommand { .. } => ErrorCode::UnknownCommand,
+            // debt: weakens docs/errors.md, "Before a session exists"; fixed by
+            // #363. Ambiguous reports no_model, its message listing the matches,
+            // not model_ambiguous.
             Self::UnknownModel { .. } | Self::Ambiguous { .. } | Self::NoModel => {
                 ErrorCode::NoModel
             }

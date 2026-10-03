@@ -130,7 +130,8 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let tools: Vec<Value> = tools
         .into_iter()
         .map(|tool| {
-            // ponytail: deferred tools are sent in full until tool search is built (docs/tools.md "Tool search"); see #326
+            // debt: deferred tools are sent in full until tool search is built
+            // (#368); nothing defers a tool yet.
             json!({
                 "type": "function",
                 "name": tool.name,

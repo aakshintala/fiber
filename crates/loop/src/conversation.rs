@@ -25,7 +25,7 @@ pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
 
 /// Adds what `event`, about `action`, puts in the conversation. `model` is
 /// the model reference in force, which produced any reasoning.
-// ponytail: the model reference is the session's one model until `/model`
+// debt: the model reference is the session's one model until `/model`
 // switches it; then it comes from the log's `model_changed`.
 pub(crate) fn render(
     conversation: &mut Vec<Input>,
@@ -38,8 +38,8 @@ pub(crate) fn render(
             for item in &started.input {
                 match item {
                     InputItem::Message { content, .. } => conversation.push(user(content)),
-                    // ponytail: these start a turn only once shell commands,
-                    // jobs and handoff exist; each renders then.
+                    // debt: these start a turn only once shell commands, jobs
+                    // and handoff exist (#296, #299, #305); each renders then.
                     InputItem::ShellCommand { .. }
                     | InputItem::Jobs { .. }
                     | InputItem::Handoff { .. }

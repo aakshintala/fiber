@@ -51,8 +51,9 @@ fn main() {
     let matched = if got.trim_end() == expected.trim_end() { "yes" } else { "no" };
     println!("RESULT score file={name} loaded={loaded} ran={ran} match={matched} \
               emit_len={} expected_len={} err={err}", got.len(), expected.trim_end().len());
-    // ponytail: skip QuickJS Runtime teardown (asserts on a live host-stub ref);
+    // debt: skip QuickJS Runtime teardown (asserts on a live host-stub ref);
     // the verdict is printed and this one-shot process is exiting anyway.
+    // Tear the runtime down if this probe ever outlives one run.
     use std::io::Write;
     std::io::stdout().flush().ok();
     std::process::exit(0);

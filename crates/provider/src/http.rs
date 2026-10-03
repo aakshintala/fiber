@@ -78,7 +78,7 @@ pub(crate) fn post(
 }
 
 /// [`post`], with the headers `signer` adds for this request.
-// ponytail: no `Endpoint` carries a signer yet, so only tests pass one; the
+// debt: no `Endpoint` carries a signer yet, so only tests pass one; the
 // protocols call `post` until `Endpoint` gains the field.
 pub(crate) fn post_signed(
     url: &str,
@@ -99,9 +99,10 @@ pub(crate) fn post_signed(
                 headers,
                 body,
             })
-            // ponytail: #322 has not named the code a failed `sign()` reports,
-            // so `Error::Sign` maps to `connection_failed` until it does. A
-            // sign failure is not retried (`Error::should_retry`).
+            // debt: weakens docs/model-routing.md, "Signing a request"; fixed
+            // by #363. Error::Sign maps to connection_failed, not
+            // credential_failed. A sign failure is not retried
+            // (Error::should_retry).
             .map_err(Error::Sign)?,
         None => Vec::new(),
     };
@@ -114,7 +115,7 @@ pub(crate) fn post_signed(
         .max_redirects(0)
         .build();
     // One agent per call, so its connector keeps this call's socket.
-    // ponytail: builds the TLS config per call; share one agent with a
+    // debt: builds the TLS config per call; share one agent with a
     // per-call socket slot if the handshake setup shows in a profile.
     let connector = KeepSocket(Arc::clone(cancel)).chain(RustlsConnector::default());
     let agent = Agent::with_parts(config, connector, DefaultResolver::default());
@@ -159,8 +160,10 @@ impl Connector<()> for KeepSocket {
         details: &ConnectionDetails,
         _chained: Option<()>,
     ) -> Result<Option<Socket>, ureq::Error> {
-        // ponytail: a connect blocked on an unreachable address is not
-        // cancellable; the cancel lands as soon as it returns.
+        // debt: a connect blocked on an unreachable address is not
+        // cancellable; the cancel lands as soon as it returns. Connect with a
+        // timeout or from a cancellable thread if a cancel stuck on connect is
+        // reported.
         let addrs: Vec<_> = details.addrs.iter().copied().collect();
         let stream = TcpStream::connect(addrs.as_slice())?;
         if details.config.no_delay() {
