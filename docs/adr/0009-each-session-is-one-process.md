@@ -82,7 +82,7 @@ assumes the heavy end.
   where it is authenticated. Locally, being the account that owns Fiber home
   is the authentication; remotely, a token.
 - A hub crash or restart drops client connections and ends no session.
-  `fiber upgrade` restarts it without stopping any session. A running session
+  `fiber update` restarts it without stopping any session. A running session
   keeps its binary until it exits.
 - A TUI crash, or a TUI extension's error, cannot interrupt a session's work.
 - The TUI can use only what the hub relays from a session's socket, so

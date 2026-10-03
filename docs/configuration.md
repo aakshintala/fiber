@@ -200,7 +200,7 @@ holds"). The layers merge exactly as Fiber's own keys do.
   `repo_settings`. Fiber cannot judge a key it does not know, but the author
   can, so the author applies the rule in "What a repository may set". Any
   other key in the repository's file gets a `notice` and is ignored.
-- `fiber remove` deletes the extension's file in the global and every
+- `fiber extension remove` deletes the extension's file in the global and every
   per-project layer, asking first in a terminal, as it does for its data
   directories.
 
@@ -240,6 +240,11 @@ its own name). `fiber login <provider>` stores the key in the stored
 credential that provider reads, so `fiber login opencode-go` and
 `fiber login opencode-zen` both store `credentials/opencode`.
 
+`fiber logout <provider>` deletes that stored credential. When the provider's
+key comes from an environment variable, a file outside Fiber home or a
+command, `fiber logout` cannot remove it: it names the source and exits
+non-zero.
+
 ## When Fiber reads configuration
 
 Only the `config` crate reads these files (`docs/architecture.md`). It reads
@@ -264,11 +269,15 @@ A problem in a file is reported by file and key:
 
 ## When Fiber writes
 
-Fiber writes configuration in three places:
+Fiber writes configuration in four places:
 
 - the model picker saves the global `model`
 - `host.config.set` writes an extension's settings file
-- `fiber config set <key> <value>` writes the global file
+- `fiber config set <key> <value>` writes the global file, the per-project
+  file with `--project`, or the repository's `.fiber/config.json` with
+  `--repo`
+- `fiber mcp add` and `fiber mcp remove` write an entry under `mcp.servers`,
+  in the same three files (`docs/mcp.md`, "Configuration")
 
 Each write takes the lock, reads the file, changes one key and writes the whole
 file back by renaming a temporary file over it (`docs/state.md`, "Concurrent
@@ -277,8 +286,13 @@ order is lost on the first write.
 
 `fiber config get <key>` prints the effective value and the layer or flag it
 came from. `fiber config set` never touches the network, for any key; it checks
-the value's type only. A model picker that validates against the provider's
-list is the terminal's job.
+the value's type. `fiber config set --repo` refuses a key a repository may not
+set ("What a repository may set"), before it writes anything.
+
+`fiber config set model <ref>` also checks the reference against the cached
+model list, by the rules in `docs/model-routing.md`, "Naming a model". A
+reference that matches nothing fails with `no_model` and names the closest
+matches. With no cached list, the value is accepted.
 
 ## Standing rules
 

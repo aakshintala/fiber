@@ -61,7 +61,7 @@ Fiber release.
 Every provider is an extension, the first-party ones included. Extensions are
 fetched and installed, not built into the binary. Installing Fiber installs no
 provider: a person installs one by choosing it in the model picker, or with
-`fiber install <name>`. How extensions arrive and stay current is
+`fiber extension install <name>`. How extensions arrive and stay current is
 `docs/extensions.md`.
 
 A first-party provider is one Fiber can probe and re-record. There are eleven:
