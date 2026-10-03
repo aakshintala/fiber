@@ -311,8 +311,8 @@ How pi, codex, Claude Code and fiber-zig search is
 [research/search/reference-agents.md](../research/search/reference-agents.md);
 the owner's usage is [research/search/usage.md](../research/search/usage.md).
 
-There is no search tool. The model searches with `grep` and `find` in the
-shell, and inside the shell tool those two names run a search built into
+There is no tool for searching code. The model searches with `grep` and
+`find` in the shell, and inside the shell tool those two names run a search built into
 Fiber.
 
 - In the owner's pi sessions, 83% of searches went through the shell although
@@ -963,6 +963,41 @@ Both tools are declared in every session, so they never differ between
 sessions. Their definitions count toward the built-in budget ("Size
 budget in CI").
 
+## Searching past sessions
+
+`session_search` finds text in the logs of this project's sessions, past and
+running, so the model can find earlier work: what was decided, which command
+ran, which file changed, or where an error appeared. `fiber sessions search`
+runs the same search for a person (`docs/invocation.md`, "Commands and
+flags").
+
+- Arguments: `text` (required), matched as a literal, case-insensitive
+  string; `all_projects` (optional, default false) searches every project in
+  Fiber home instead of the session's own; `limit` (optional, default 20) is
+  the most hits returned.
+- It scans `events.jsonl` directly with the same ripgrep crates as the
+  shell's `grep` ("Search"). There is no index: the answer is always
+  current, and nothing is written. A line that matches is decoded, and the
+  text is matched against the decoded strings, so escaped newlines and quotes
+  in the JSON never hide a match.
+- It searches everything a log holds: messages from the person and the model,
+  the inputs of tool calls, and their outputs, including the full outputs in
+  `artifacts/`.
+- Each hit is labelled `message`, `tool_input` or `tool_output`. Messages and
+  tool inputs rank ahead of tool outputs, then newer before older, so a
+  decision is not buried under every file read that mentioned the same name.
+- Each hit carries the session id, its name, the event's `seq` and time, the
+  label, and a snippet of about 200 characters around the match. It never
+  carries a whole event: the model reads around a hit with `read` on the log,
+  whose path the result gives.
+- The result is bounded like any other ("Bounded results").
+- The tool declares `reads` on Fiber home and is never reviewed. Its
+  definition never changes, so it is declared in every session, in full, and
+  counts toward the built-in budget ("Size budget in CI").
+- Scanning the owner's 1.3 GB of pi and Claude Code logs took 0.05 to 0.35 s
+  with a warm cache on macOS arm64 (2026-10-03, `rg -l -F`). Cold-cache and
+  Linux timings are not measured.
+
 ## Provider quota
 
 Settled by
@@ -1050,7 +1085,7 @@ never as an error.
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`) and `name_session` behave the same for everyone and are compiled in, as is
+`handoff` (`docs/handoff.md`), `name_session` and `session_search` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.

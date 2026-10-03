@@ -247,6 +247,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
 | `rate_limited` | model call, turn | the provider rate-limited the request |
 | `refused` | model call, turn | the provider declined on policy grounds |
+| `session_has_dependents` | exit | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
 | `session_held` | exit | another process holds the session |
 | `session_not_found` | exit | a resume names no session |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |

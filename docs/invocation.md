@@ -95,9 +95,13 @@ groups, then the flags and examples.
 | `resume [<id>] [--credential <label>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
 | `continue` | Opens the most recent session in this project, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
 | `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
+| `sessions search [--all] <text>` | Searches the logs of past and running sessions for the text, as the `session_search` tool does (`docs/tools.md`, "Searching past sessions"). `--all` searches every project. It takes `--json`. |
+| `sessions delete [--cascade] [--yes] <id>` | Deletes a session ("Deleting and pruning"). |
+| `sessions export <id> [<path>]` | Writes the session's log and its artifacts to `<path>`, default `./<id>/` ("Deleting and pruning"). |
+| `sessions prune [--older-than <duration>] [--cascade] [--force] [--dry-run] [--yes]` | Deletes exited sessions older than the duration and removes kept worktrees that hold nothing to lose, then prints the space freed ("Deleting and pruning"). |
 | `models [<search>]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. It takes `--json`. |
 
-`sessions` and `continue` use the scope of the terminal's session list. Inside
+`sessions`, `sessions search`, `sessions prune` and `continue` use the scope of the terminal's session list. Inside
 a git repository that is the repository's project, every worktree of it;
 outside one it is every project. `sessions --all` lists every project.
 
@@ -760,6 +764,68 @@ nothing uncommitted and no commits beyond its base, kept otherwise, and
 `invalid_arguments` outside a git repository. Fiber runs the `git` program; no
 git library is linked in. A supervisor that wants its own tree still makes it
 and passes the path.
+
+## Deleting and pruning
+
+Nothing in Fiber deletes a session, its artifacts or a kept worktree on its
+own. A person does, with the commands here. An idle Fiber does no work, so
+there is no sweep to run, and a session log is the only record of its session
+([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)), so deleting
+one cannot be undone.
+
+**Deleting a session.** `fiber sessions delete <id>`, and the delete key on
+the terminal's session list (`docs/tui.md`, "The session list"), delete one
+session:
+
+- **It goes through the hub**, as every other client action on a session does,
+  so a remote client deletes exactly as the terminal does; the command starts
+  a hub when none is running. The hub drops the session's row from its feed.
+- **A running session is refused** with `session_held`, as is any session
+  whose lock another process holds.
+- **A session that other sessions point at is refused** with
+  `session_has_dependents`, and the message lists them. A fork and a rewind
+  each point at the session they continue (`forked_from` on their
+  `session_started`; `docs/delegates.md`, "Forks"; `docs/events.md`,
+  "Rewind"). `--cascade` deletes them too, and whatever points at them; it is
+  refused if any of them is held. Finding them reads the first line of each
+  session log, as listing does.
+- **Delete is permanent.** It removes the session's directory: its log and its
+  artifacts together. There is no trash. The terminal asks first, naming the
+  session and everything `--cascade` adds. On the command line `--yes`
+  confirms; without it the command lists what it would delete and asks, and
+  with no terminal to ask on it is a usage error.
+- **A kept worktree the session made stays.** Pruning removes worktrees.
+- **`recent.jsonl` keeps the session's row.** Nothing rewrites that file, and
+  readers skip a row whose session directory is gone (`docs/state.md`,
+  "What each part holds").
+
+**Exporting a session.** `fiber sessions export <id> [<path>]` copies the
+session's `events.jsonl` and `artifacts/` into a directory, `./<id>/` by
+default. A running session's export holds the lines written so far. The
+export is the log as recorded: text a hook redacted before it was logged is
+redacted, and nothing else is (`docs/extensions.md`, "Hooks"). What the person
+does with it is theirs. Another format, such as Markdown or HTML, or further
+redaction, is an extension command (`docs/extensions.md`, "Commands and
+screens"). An extension reads the log as any program can.
+
+**Pruning.** `fiber sessions prune` deletes old sessions and kept worktrees
+that hold nothing to lose:
+
+- **Sessions.** With `--older-than <duration>`, such as `30d`, it deletes
+  every exited session whose last line is older than that, each by the rules
+  for deleting one. A session that a session it is not deleting points at is
+  skipped and listed, unless `--cascade` is given. Without `--older-than` it
+  deletes no session.
+- **Worktrees.** It lists each kept worktree under the project's `worktrees/`
+  with its branch, whether it has uncommitted changes, and its age. It
+  removes a worktree and its branch only when nothing is uncommitted and every
+  commit on the branch is also on another branch or a remote. Any other
+  worktree is skipped, and its line names what removing it would lose:
+  uncommitted files, commits found nowhere else, or both. `--force` removes
+  it anyway. A worktree a running session works in is never removed.
+- **What it frees.** `--dry-run` prints what prune would delete and the space
+  it would free, and deletes nothing. Otherwise prune prints the same list,
+  asks as delete does (`--yes` confirms), deletes, and prints the space freed.
 
 ## The delegation supervisor is external
 

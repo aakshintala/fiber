@@ -126,9 +126,10 @@ builds on.
 
 ## Looking back
 
-The model reads or searches the session log, `events.jsonl`, with its ordinary
-tools. There is no tool for it. The note instruction and the nudge both name the
-log's path.
+The model reads the session log, `events.jsonl`, with its ordinary tools, and
+finds text in it, or in any earlier session's log, with `session_search`
+(`docs/tools.md`, "Searching past sessions"). The note instruction and the
+nudge both name the log's path.
 
 ## Overflow
 

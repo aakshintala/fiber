@@ -128,7 +128,10 @@ show only that repository's project, every worktree of it, with a line saying
 repository they show everything.
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
-the hub. A ✕ on a live row stops that session ("Quit"). A row whose
+the hub. A ✕ on a live row stops that session ("Quit"). Delete on a
+selected exited row deletes that session through the hub, after asking, and
+the question names any session `--cascade` would add (`docs/invocation.md`,
+"Deleting and pruning"). A row whose
 `schema_version` this terminal cannot read says "cannot attach".
 
 ### On exit
@@ -594,6 +597,7 @@ marked with OSC 8 or handled on click.
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
 | Switch to rail row N | `rail_row_n` | ⌥1 to ⌥9 | click the row |
+| Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
 | Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |

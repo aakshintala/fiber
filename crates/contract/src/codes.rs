@@ -141,6 +141,8 @@ codes! {
     RateLimited,
     /// The provider declined on policy grounds.
     Refused,
+    /// A delete names a session that forks or rewinds point at.
+    SessionHasDependents,
     /// Another process holds the session.
     SessionHeld,
     /// A resume names no session.

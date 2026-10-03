@@ -210,7 +210,7 @@ already.
 
 | Crate | Needed if | Linux x86_64 | Linux arm64 | macOS arm64 | Crates | Binary |
 |---|---|---:|---:|---:|---:|---:|
-| rusqlite, SQLite bundled | Fiber keeps a derived database, such as for cross-session search; today listing sessions reads the logs (`docs/state.md`) | 2,236 | 1,984 | ~0 | 14 | 2,268 |
+| rusqlite, SQLite bundled | Fiber keeps a derived database, such as an index for session search; today listing and searching sessions read the logs (`docs/state.md`, `docs/tools.md` "Searching past sessions") | 2,236 | 1,984 | ~0 | 14 | 2,268 |
 | pulldown-cmark | the terminal UI renders markdown ([Epic: TUI](https://github.com/aakshintala/fiber/issues/82)) | 428 | 384 | ~0 | 4 | 724 |
 
 rusqlite carries SQLite's C source.
