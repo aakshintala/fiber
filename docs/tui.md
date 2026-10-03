@@ -48,8 +48,8 @@ An extension may change everything the terminal draws, through the slots in
 no rail. It is centred. From the top:
 
 1. the logo
-3. a large input box, whose bottom row carries the workspace, model and
-   effort chips and "enter starts a session"
+3. a large input box, whose bottom row carries the workspace chip, the new worktree
+   switch, and the model and thinking chips and "enter starts a session"
 4. under the box, at its width, the session list ("The session list")
 
 A key hint sits at the foot. Until the first prompt, the input box's
@@ -64,6 +64,11 @@ line says so: "Connecting 2 MCP servers…".
 Clicking it opens a picker of recent workspaces, from `recent.jsonl`
 (`docs/state.md`). A remote client has no launch directory, so it always
 shows the picker.
+
+**The new worktree switch** sits beside the workspace chip. When it is on,
+the session starts in a new worktree of the workspace, by the same rules a
+delegate's worktree follows (`docs/invocation.md`, "Isolation"). Outside a git
+repository the switch is not shown.
 
 The first frame draws at once. The session list fills in when the hub's feed
 arrives (`docs/performance.md`).
@@ -155,7 +160,7 @@ screen.
 
 The default cards, in order:
 
-- **Session:** the working directory; the git branch; model, effort and thinking; a context bar that
+- **Session:** the working directory; the git branch; model and thinking level; a context bar that
   fills toward the automatic handoff point, with a marker there; tokens, cache
   hit rate, cost billed and cost on subscription, delegates included, against
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
@@ -203,8 +208,13 @@ the conversation. The views are:
 - **A job running under a pseudo-terminal** has a live view of its screen. The
   input box types into it as raw keys, as `jobs write` does for the model, so
   the person can finish an interactive step the model started.
-- **The model picker:** models by provider with roles marked, effort and
-  thinking chips, and the size of the prompt-cache rebuild a switch costs.
+- **The model picker:** models by provider with roles marked, a chip for each
+  thinking level the model supports, and the size of the prompt-cache rebuild
+  a switch costs. Choosing a model saves the global `model`, and choosing a
+  level saves `models."<provider/model>".thinking` to the global file. One key
+  marks the choice as this session only, and then nothing is saved. When
+  `scoped_models` is set, the picker shows only those models, with a "show
+  all" toggle. Ctrl+L opens it, as `/model` does.
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.
@@ -575,34 +585,49 @@ marked with OSC 8 or handled on click.
 
 ### Bindings
 
-| Action | Key | Other paths |
-|---|---|---|
-| Send a prompt, or a steering message during a turn | Enter | |
-| Insert a line break | Shift+Enter | Ctrl+J |
-| Close what is on top; interrupt the turn when nothing is open | Esc | |
-| Clear the draft, then quit | Ctrl+C, twice within about a second on an empty box | `/quit` |
-| Go home | ⌥0 | `/home` |
-| Start a new session | Ctrl+N | `/new` |
-| Switch to rail row N | ⌥1 to ⌥9 | click the row |
-| Recall an earlier prompt from the project of the session on screen | ↑ in an empty box | |
-| Search those prompts | Ctrl+R | |
-| Move by word | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
-| Delete a word | ⌥Backspace | |
-| Start or end of the line | ⌘← ⌘→, where the terminal passes them | |
-| Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | Ctrl+G | click the token |
-| Paste an image | Ctrl+V | |
-| Open or close the ledgers | Ctrl+O | click a group's line |
-| Search | Ctrl+F; Cmd+F where forwarded | |
-| Jump to the end | End | click "↓ New messages below" |
-| Select a queued steering message | ⌥↑ ⌥↓ | its mouse target |
-| Amend it | Enter | |
-| Drop it | ⌥X | its mouse target |
-| Reopen a request put aside, or move to the next | | `/approvals`; click the badge |
-| Open the key map | | `/?` or `/help` |
+| Action | Id | Key | Other paths |
+|---|---|---|---|
+| Send a prompt, or a steering message during a turn | `send` | Enter | |
+| Insert a line break | `line_break` | Shift+Enter | Ctrl+J |
+| Close what is on top; interrupt the turn when nothing is open | `close_or_interrupt` | Esc | |
+| Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
+| Go home | `go_home` | ⌥0 | `/home` |
+| Start a new session | `new_session` | Ctrl+N | `/new` |
+| Switch to rail row N | `rail_row_n` | ⌥1 to ⌥9 | click the row |
+| Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
+| Search those prompts | `search_prompts` | Ctrl+R | |
+| Move by word | `move_word` | ⌥← ⌥→, Ctrl+← Ctrl+→ | |
+| Delete a word | `delete_word` | ⌥Backspace | |
+| Start or end of the line | `line_start_end` | ⌘← ⌘→, where the terminal passes them | |
+| Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
+| Paste an image | `paste_image` | Ctrl+V | |
+| Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
+| Search | `search` | Ctrl+F; Cmd+F where forwarded | |
+| Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
+| Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
+| Amend it | `amend_steering` | Enter | |
+| Drop it | `drop_steering` | ⌥X | its mouse target |
+| Reopen a request put aside, or move to the next | `next_request` | | `/approvals`; click the badge |
+| Open the model picker | `model_picker` | Ctrl+L | `/model` |
+| Open the key map | `key_map` | | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
-binding by area with its legacy path, as codex's shortcut overlay does. Esc
-closes it.
+binding by area with its legacy path, as codex's shortcut overlay does,
+including actions with no key. Esc closes it. Ctrl+L opens the model picker,
+so it does not redraw the screen as it does in some terminal programs.
+
+Every action has a stable id, and `keys."<id>"` in the global configuration
+binds it to a key or a list of keys; `[]` leaves it unbound
+(`docs/configuration.md`). A hand-edited binding that clashes with another
+gives a `notice` at startup naming both, and the default stays.
+
+`/keys` opens the rebinding screen: every action with its id, description and
+current keys, the unbound ones included. Selecting an action and pressing a
+key binds it, so only a key the terminal actually delivers can be bound. A key
+already bound to another action shows inline, with a choice to swap or
+cancel. One key resets an action to its default. The screen saves only the
+bindings that differ from the defaults, so a default changed in a later
+release still applies.
 
 ### Slash commands
 
@@ -612,11 +637,14 @@ closes it.
 | `/new` | Goes home with the cursor in the input box. |
 | `/resume` | Opens home at the session list. |
 | `/model` | Opens the model picker. |
+| `/thinking <level>` | Sets the thinking level, as choosing a chip in the model picker does: saved for the model unless marked as this session only (`docs/model-routing.md`, "Thinking"). |
+| `/scoped-models` | Chooses which models the model picker shows, saved as `scoped_models`. |
 | `/context` | Opens the context breakdown. |
 | `/usage` | Opens the usage view. |
 | `/tools` | Opens the tools view. |
 | `/rules` | Opens the standing rules. |
 | `/settings` | Opens the configuration keys. |
+| `/keys` | Opens the rebinding screen ("Bindings"). |
 | `/skills` | Opens the skills. |
 | `/rewind` | Opens the rewind view. |
 | `/handoff [instructions]` | Starts a handoff (`docs/handoff.md`, "A person"). |
@@ -1001,6 +1029,8 @@ one tool, the input box, the layout, or one key.
   wins (`docs/configuration.md`). Two extensions binding the same key follow
   the same rule, as `tui.slots."key:<key>"`. This is the rule for commands
   (`docs/extensions.md`, "Commands and screens").
+- **A key the person bound in `keys`** is the person's. An extension that
+  binds the same key does not get it, and a notice names the extension.
 - **A per-tool ledger row beats the catch-all** `ledger_row`, with no notice.
 - **An extension replacing a built-in** is not a conflict. The extension wins,
   as it does for a tool it registers by name.

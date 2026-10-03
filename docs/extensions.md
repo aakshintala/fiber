@@ -421,7 +421,7 @@ the event stream (`docs/events.md`) and has no hook point. How an extension watc
 | `turn_start` | A turn has started, before its first model request | the turn's input and what started it | context to add |
 | `before_tool` | A call has passed its schema check and its effects function, before permission is decided | the tool's name, the arguments, the declared effects, paths and reversibility | replacement arguments, a refusal with a reason |
 | `before_model_call` | A step's model request is built and the budget allows it, before it is sent (`docs/loop.md`, "Spending budget") | the model reference, and the session's `usage` so far, its delegates included (`docs/events.md`) | a refusal with a reason |
-| `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged | the tool's name, the arguments, `status`, the full output, `details`, `process` | replacement `content`, replacement `details`, text for the artifact |
+| `after_tool` | A call that ran has returned, before its output is cut, its artifact is written or it is logged; and each job delivery, before it joins the conversation or is logged | the tool's name, the arguments, `status`, the full output, `details`, `process`, and `delivery` for a job delivery | replacement `content`, replacement `details`, text for the artifact |
 | `turn_end` | The model has replied without calling a tool, so the turn would complete, before `turn_completed` is written | the model's final reply | a message to continue the turn with |
 | `before_handoff` | A handoff has started, before the note request | the trigger, the person's instructions, and the conversation as the model would be sent it | a handoff note |
 
@@ -469,7 +469,18 @@ returns is what the rest of the pipeline sees: the size cap applies to the
 returned `content` (`docs/tools.md`, "Bounded results"), and the artifact holds
 the hook's artifact text when it returns one, or the returned output when it
 does not. So a redaction hook removes a secret from the model's view and from
-disk in one pass, and the original output is never stored. An extension that
+disk in one pass, and the original output is never stored.
+
+`after_tool` also runs on every job delivery: a job's completion notice, each
+batch of a monitor's lines, and a delegate's final message (`docs/tools.md`,
+"Background jobs"). It gets the tool name of the call that started the job, and
+`delivery` says what arrived: `completion`, `monitor` or `delegate`. When a
+job ends, it runs once more on the job's whole output file, with `delivery`
+`output_file`, and the artifact text it returns replaces the file. `delivery`
+is absent for an ordinary call. A redaction hook can ignore it and treat every
+input alike, so job output takes the same path as every other tool output.
+One window remains: while a job runs, its output file is written directly by
+the program, so it holds raw output until the job ends. An extension that
 compacts build and test output returns a short summary as `content` and the
 full log as the artifact text. The hook cannot change `status`: whether a call
 succeeded is the tool's answer.
@@ -523,7 +534,7 @@ What a `blocking` failure stops, at each point:
 | `turn_start` | The turn completes `failed` with code `hook_failed`, before any model request. |
 | `before_tool` | The call completes `failed` with code `hook_failed` and never starts. |
 | `before_model_call` | The request is not sent, and the turn completes `failed` with code `hook_failed`. |
-| `after_tool` | The call keeps the status the tool reported, since it ran. Its only content is a line saying its output was withheld because the extension's hook failed, and no artifact is written. |
+| `after_tool` | The call keeps the status the tool reported, since it ran. Its only content is a line saying its output was withheld because the extension's hook failed, and no artifact is written. A job delivery is withheld the same way. |
 | `turn_end` | The turn completes `failed` with code `hook_failed`. |
 | `before_handoff` | The handoff completes `failed` with code `hook_failed`, as a failed note request does. |
 

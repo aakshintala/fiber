@@ -596,6 +596,9 @@ The kinds are `docs/events.md`.
   because typed input can make the program do anything. `jobs` only sees
   and acts on jobs the calling session started, so a delegate cannot stop its
   parent's work.
+- Every delivery to the model, a completion or a monitor's batch, passes
+  through the `after_tool` hooks first, and so does the job's output file when
+  the job ends (`docs/extensions.md`, "Hooks").
 - Completion reaches the model by waking it. If the loop is idle, a finished
   job starts a new turn whose input names the job or jobs. If a turn is
   running, the news joins it at the next step boundary, the way a steering

@@ -94,6 +94,8 @@ set the key.
 | Key | Default | Repo | Meaning |
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
+| `thinking` | the model's own default | yes | The thinking level for a new session (`docs/model-routing.md`, "Thinking"). |
+| `scoped_models` | none | no | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
@@ -104,6 +106,9 @@ set the key.
 | `handoff.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |
 | `handoff.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
+| `cache.warm_idle` | false | no | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
+| `cache.warm_cap` | set by the replay in [#436](https://github.com/aakshintala/fiber/issues/436) | no | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes. |
+| `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
 | `retry.max_delay_ms` | 60000 | yes | The cap on one backoff, and on a wait a server asks for. |
@@ -154,7 +159,7 @@ and win over the same key at the top level of the same layer:
 }
 ```
 
-The keys that may be set per model are `handoff.*` and `cache.lifetime`. A
+The keys that may be set per model are `handoff.*`, `cache.lifetime` and `thinking`. A
 per-model key may be set by a repository when the top-level key may be.
 
 ### MCP servers
@@ -270,9 +275,13 @@ A problem in a file is reported by file and key:
 
 ## When Fiber writes
 
-Fiber writes configuration in four places:
+Fiber writes configuration in these places:
 
-- the model picker saves the global `model`
+- the model picker saves the global `model`, and a thinking level as
+  `models."<provider/model>".thinking`, unless the choice is marked as this
+  session only (`docs/tui.md`, "Swapped views")
+- `/scoped-models` saves the global `scoped_models`, and the `/keys` screen
+  saves the global `keys`, only the bindings that differ from the defaults
 - `host.config.set` writes an extension's settings file
 - `fiber config set <key> <value>` writes the global file, the per-project
   file with `--project`, or the repository's `.fiber/config.json` with
@@ -294,6 +303,10 @@ set ("What a repository may set"), before it writes anything.
 model list, by the rules in `docs/model-routing.md`, "Naming a model". A
 reference that matches nothing fails with `no_model` and names the closest
 matches. With no cached list, the value is accepted.
+
+`cache.warm_cap` is refused with `config_invalid` when it is 19 cache
+lifetimes or more (`docs/prompt-cache.md`, "Warming while idle"), whether
+it is set with `fiber config set` or by hand.
 
 ## Standing rules
 
@@ -391,7 +404,7 @@ provider extension declares") lists:
   |---|---|---|---|
   | `store` | boolean | `openai-responses`, `openai-completions` | sent as the request's `store`; absent, the request has no `store` key |
   | `max_tokens` | boolean | `openai-completions` | the output limit goes in `max_tokens`; absent, it goes in `max_completion_tokens` |
-  | `reasoning_object` | boolean | `openai-completions` | the effort goes in `reasoning: {effort}`, as OpenRouter takes it; absent, it goes in `reasoning_effort` |
+  | `reasoning_object` | boolean | `openai-completions` | the thinking level goes in `reasoning: {effort}`, as OpenRouter takes it; absent, it goes in `reasoning_effort` |
   | `anthropic` | boolean | `openai-completions` | the model is Anthropic's, behind a gateway such as OpenRouter: requests carry Anthropic's `cache_control` markers on content parts, and Anthropic's strict-tool limits apply |
   | `cache_key_field` | string | `openai-completions` | a body field that also carries the cache key, such as OpenRouter's `session_id` |
   | `cache_key_header` | string | `openai-responses`, `google-generative-ai` | a header that carries the cache key, such as OpenCode's `x-opencode-session` |

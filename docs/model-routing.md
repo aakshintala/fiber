@@ -213,6 +213,7 @@ For each model:
 - compatibility flags the native protocol reads, such as whether the vendor
   accepts `store`, which field carries the token limit, and which thinking
   dialect it speaks
+- the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees")
 - whether its provider hosts a web search for it, and which variant
@@ -413,9 +414,23 @@ When a person types a model:
 The exact match comes first because OpenRouter model ids contain colons.
 
 A delegate's model is named with its harness first:
-`harness:provider/model:effort`, such as `fiber:openai/gpt-5.6:xhigh`,
+`harness:provider/model:level`, such as `fiber:openai/gpt-5.6:xhigh`,
 `claude:opus:high` or `cursor-agent:composer-2.5`. The rules for it are
 `docs/delegates.md` ("Choosing a model").
+
+## Thinking
+
+A session has one reasoning setting, its thinking level: `off`, `minimal`,
+`low`, `medium`, `high`, `xhigh` or `max`. Fiber has no separate effort
+setting. Each protocol module maps the level to whatever its vendor takes,
+whether a token budget, an effort parameter or both, as pi does. A model
+declares the levels it supports, and the model picker offers only those. A
+level the model does not support is `invalid_arguments`.
+
+The level comes from, in order: a `:level` suffix typed with the model, which
+applies to that session only; the session's own choice, from the picker or
+`/thinking`; `models."provider/model".thinking`; the top-level `thinking` key;
+and otherwise the model's own default (`docs/configuration.md`).
 
 ## Choosing the model
 

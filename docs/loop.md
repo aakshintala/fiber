@@ -29,7 +29,8 @@ A step is one round-trip to the model. Each step does this, in order:
 
 1. Write `step_started` (`docs/events.md`, "Session and turn"). Drain the
    inbox. Every steering message and every job notice waiting joins
-   the conversation, in arrival order; each steering message is logged as its
+   the conversation, in arrival order, each job notice after the
+   `after_tool` hooks have run on it (`docs/extensions.md`, "Hooks"); each steering message is logged as its
    own `steering_applied`. Nothing is held back for a later step.
 2. Check how full the context is, and hand off if it is past the threshold
    (`docs/handoff.md`, "Triggers").
@@ -223,7 +224,7 @@ reference, `provider/model` (`docs/model-routing.md`). After `/model` or the
 `model` command switches to another model reference, a request leaves out
 every reasoning item another one produced: both the opaque part and its
 readable text.
-A change of effort or thinking alone keeps the model, so its items are still
+A change of thinking level alone keeps the model, so its items are still
 sent. A fork keeps its parent's model and sends them unchanged. Probed on
 Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.
 
