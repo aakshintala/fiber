@@ -816,6 +816,26 @@ A fetch that fails, because git or the network failed, stops the install with
 Installed extensions live in [Fiber home](state.md), one directory each, at
 `extensions/<name>/`.
 
+**A damaged extension does not block the others.** Each extension's directory
+holds an install record, `.fiber.json`, which says what was installed and from
+where. A directory whose record is missing or cannot be read is damaged. It can
+be left by an install that was killed, a disk error, or a directory copied in by
+hand. Fiber treats it the same way in every command:
+
+- `fiber extension list` lists it as damaged, then lists the rest.
+- `install` and `update` skip it and go on. Each prints one line on stderr
+  naming it, and saying that its dependency minimums are unknown, so the
+  versions chosen did not count them.
+- `fiber extension remove <name>` deletes the directory by its name without
+  reading the record, so it always works.
+- A session skips it when loading extensions, with the notice
+  `extension_failed`.
+
+Every message names the extension and the fix:
+`` `opencode` is damaged; run `fiber extension remove opencode`, then install it again. ``
+No operating-system error is shown for a damaged extension, and skipping one
+does not change a command's exit code.
+
 Installing an extension runs none of its code, except an install step its
 manifest declares, such as `npm ci`. Fiber runs that step in the extension's
 directory at install and at every update, as pi runs `npm install` for its
