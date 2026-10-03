@@ -181,7 +181,11 @@ mod tests {
         let (mut typed, stdin) = std::os::unix::net::UnixStream::pair().unwrap();
         let printed = Out::new();
         let mut stdout = printed.clone();
-        let jig = thread::spawn(move || connect(&socket, stdin, &mut stdout));
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            let result = connect(&socket, stdin, &mut stdout);
+            if let Ok(()) = done_tx.send(result) {}
+        });
 
         session
             .run(Vec::new(), |_inbox| {
@@ -200,9 +204,15 @@ mod tests {
         assert!(text.contains("\"kind\":\"command_accepted\""));
         assert!(text.contains("\"name\":\"read\""));
         // `typed` is still open: stdin has not ended.
-        session.close(log);
-        jig.join()
-            .expect("the jig thread finished")
+        let (closed_tx, closed_rx) = std::sync::mpsc::channel();
+        thread::spawn(move || {
+            session.close(log);
+            if let Ok(()) = closed_tx.send(()) {}
+        });
+        closed_rx.recv_timeout(DEADLINE).expect("close returned");
+        done_rx
+            .recv_timeout(DEADLINE)
+            .expect("the jig returns when the socket closes")
             .expect("the jig returns when the socket closes");
         drop(typed);
         drop(temp);

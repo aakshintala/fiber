@@ -347,6 +347,8 @@ impl Gate {
         if self.stopped() {
             return;
         }
+        #[cfg(test)]
+        tests::note_accept_wait();
         drop(
             self.writers
                 .wait(conns)
@@ -439,7 +441,7 @@ fn open_in(
     let cache = match spawn("session-status", move || cache(cache_watcher, &cache_gate)) {
         Ok(cache) => cache,
         Err(error) => {
-            printer_stop.push(control_line(&gate.session_id, client::STOP, 0));
+            client::stop_writer(&printer_stop, &gate.session_id);
             join(printer);
             remove_socket(&socket);
             return Err(error);
@@ -503,12 +505,25 @@ fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
                 if gate.stopped() {
                     return;
                 }
-                if error.kind() != io::ErrorKind::Interrupted {
+                if accept_error_waits(error.kind()) {
                     gate.wait_for_room();
                 }
             }
         }
     }
+}
+
+/// `Interrupted` is a stale wake and is retried. Any other accept error waits
+/// so the loop does not spin.
+fn accept_error_waits(kind: io::ErrorKind) -> bool {
+    kind != io::ErrorKind::Interrupted
+}
+
+/// A flush token counts only when it is strictly newer. An equal token is the
+/// same mark again: storing it would not move `flushed`, and a waiter that
+/// woke would recheck and keep waiting.
+fn flush_token_is_newer(token: u64, flushed: u64) -> bool {
+    token > flushed
 }
 
 /// Shuts the connection's socket and joins the threads still running on it.
@@ -544,6 +559,16 @@ pub(crate) fn park_reader_for_test() {
     tests::park_reader();
 }
 
+#[cfg(test)]
+pub(crate) fn wait_if_writer_paused() {
+    tests::wait_if_writer_paused();
+}
+
+#[cfg(test)]
+pub(crate) fn note_writer_blocked<T>(body: impl FnOnce() -> T) -> T {
+    tests::note_writer_blocked(body)
+}
+
 /// Keeps the latest `session_status` and `extensions_loaded`. A flush line
 /// marks that every line queued before it has been recorded.
 fn cache(mut watcher: Watcher, gate: &Gate) {
@@ -556,7 +581,7 @@ fn cache(mut watcher: Watcher, gate: &Gate) {
                 .and_then(Value::as_u64)
                 .unwrap_or(0);
             let mut snap = lock(&gate.snap);
-            if token > snap.flushed {
+            if flush_token_is_newer(token, snap.flushed) {
                 snap.flushed = token;
             }
             drop(snap);

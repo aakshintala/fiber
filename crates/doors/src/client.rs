@@ -91,8 +91,14 @@ pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>, id: u64) {
         conn.gate.detach();
     }
     if let Some(injector) = conn.injector.take() {
-        injector.push(control_line(&conn.gate.session_id, STOP, 0));
+        stop_writer(&injector, &conn.gate.session_id);
     }
+}
+
+/// Tells `injector`'s writer to exit. The line is kept when the queue is
+/// full, so a disconnect still reaches a writer that has fallen behind.
+pub(crate) fn stop_writer(injector: &Injector, session: &SessionId) {
+    injector.push_kept(control_line(session, STOP, 0));
 }
 
 struct Finish {
@@ -486,8 +492,14 @@ impl Drop for WriterEnd {
     }
 }
 
-fn write_loop(mut watcher: log::Watcher, mut stream: UnixStream, summary: bool) {
-    while let Ok(Some(line)) = watcher.recv() {
+pub(crate) fn write_loop(mut watcher: log::Watcher, mut stream: UnixStream, summary: bool) {
+    loop {
+        #[cfg(test)]
+        crate::session::wait_if_writer_paused();
+        let line = match watcher.recv() {
+            Ok(Some(line)) => line,
+            Ok(None) | Err(_) => return,
+        };
         if line.kind == STOP {
             return;
         }
@@ -514,8 +526,18 @@ fn write_line(stream: &mut UnixStream, line: &Envelope) -> std::io::Result<()> {
     let mut bytes = serde_json::to_vec(line)
         .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     bytes.push(b'\n');
-    stream.write_all(&bytes)?;
-    stream.flush()
+    #[cfg(test)]
+    {
+        crate::session::note_writer_blocked(|| -> std::io::Result<()> {
+            stream.write_all(&bytes)?;
+            stream.flush()
+        })
+    }
+    #[cfg(not(test))]
+    {
+        stream.write_all(&bytes)?;
+        stream.flush()
+    }
 }
 
 /// A control line for `session`. `token` tells one flush from the next.

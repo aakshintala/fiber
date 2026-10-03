@@ -79,7 +79,7 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
         "the request is recorded while the response is held"
     );
     assert!(
-        rx.try_recv().is_err(),
+        rx.recv_timeout(Duration::from_secs(2)).is_err(),
         "the client has no body while the response is held"
     );
 
