@@ -158,14 +158,23 @@ pub(crate) struct Answer {
     pub remember: Option<Remembered>,
 }
 
-/// What an allow remembers. Only step 7 (#294) offers a rule; a standing
-/// ask passes no offer, so nothing builds one outside tests yet.
-#[allow(dead_code, reason = "read when #294 offers a rule to remember")]
+/// What an allow remembers.
 pub(crate) struct Remembered {
     /// A session grant, or a standing rule in the project's rules file.
     pub scope: RememberScope,
     /// The request's `rule.subject` or `rule.prefix`.
     pub prefix: String,
+}
+
+impl Remembered {
+    /// The grant an allow of `tool`'s call remembers: the session grant its
+    /// line carries, and the standing rule its line names.
+    pub(crate) fn grant(&self, tool: &str) -> Grant {
+        Grant {
+            tool: tool.into(),
+            prefix: self.prefix.clone(),
+        }
+    }
 }
 
 /// Checks `reply` against `offer`, the request's rule offer (`None` on a

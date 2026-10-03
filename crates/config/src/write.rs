@@ -87,16 +87,7 @@ pub(crate) fn append_line(file: &Path, line: &str) -> Result<(), ConfigError> {
         file: file.to_path_buf(),
         source,
     };
-    let mut lock_name = file.as_os_str().to_owned();
-    lock_name.push(".lock");
-    make_parent(file)?;
-    let lock = OpenOptions::new()
-        .create(true)
-        .truncate(false)
-        .write(true)
-        .open(&lock_name)
-        .map_err(io)?;
-    lock.lock().map_err(io)?;
+    let _lock = locked(file)?;
     let mut current = match fs::read(file) {
         Ok(bytes) => bytes,
         Err(e) if e.kind() == ErrorKind::NotFound => Vec::new(),
@@ -117,6 +108,22 @@ pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<(), Co
         file: file.to_path_buf(),
         source,
     };
+    let _lock = locked(file)?;
+    let mut root = read(file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    path::set(&mut root, key, value);
+    let mut text = serde_json::to_string_pretty(&root).map_err(|e| io(e.into()))?;
+    text.push('\n');
+    write_atomic(file, text.as_bytes(), 0o666)
+}
+
+/// Takes the lock for a whole-file write to `file`: creates the parent
+/// directory, then holds `file.lock` until the caller renames over `file`
+/// (`docs/state.md`, "Concurrent access").
+pub(crate) fn locked(file: &Path) -> Result<File, ConfigError> {
+    let io = |source| ConfigError::Io {
+        file: file.to_path_buf(),
+        source,
+    };
     let mut lock_name = file.as_os_str().to_owned();
     lock_name.push(".lock");
     make_parent(file)?;
@@ -127,11 +134,7 @@ pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<(), Co
         .open(&lock_name)
         .map_err(io)?;
     lock.lock().map_err(io)?;
-    let mut root = read(file)?.unwrap_or_else(|| Value::Object(Map::new()));
-    path::set(&mut root, key, value);
-    let mut text = serde_json::to_string_pretty(&root).map_err(|e| io(e.into()))?;
-    text.push('\n');
-    write_atomic(file, text.as_bytes(), 0o666)
+    Ok(lock)
 }
 
 fn make_parent(file: &Path) -> Result<(), ConfigError> {

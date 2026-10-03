@@ -8,15 +8,17 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
+use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
-    AskStep, CallStatus, DecidedBy, Decision, Event, PermissionRequested, PermissionResolved,
-    ToolCallCompleted, ToolCallRequested, ToolCallStarted, ToolReplaced,
+    AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
+    PermissionResolved, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
+    ToolReplaced,
 };
 use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Bound, Output, Tool};
-use contract::{ActionId, ErrorCode, RequestId, TurnId};
+use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
 use crate::{Error, Loop, schema};
@@ -24,6 +26,40 @@ use crate::{Error, Loop, schema};
 /// A call that runs: its tool, the arguments it runs with, and the effects
 /// it declared.
 type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
+
+/// What a person's answer carries onto its `permission_resolved` line.
+struct Answered {
+    /// Allow or deny.
+    decision: Decision,
+    /// With a denial, what the person typed.
+    feedback: Option<String>,
+    /// On an allow that added a session grant.
+    grant: Option<Grant>,
+    /// On an allow that added a standing rule to the project's rules file.
+    rule: Option<Grant>,
+    /// Why a remembered rule is missing: saving it failed.
+    reason: Option<String>,
+}
+
+impl Answered {
+    /// The `permission_resolved` line for a person's allow of the call
+    /// `request_id` answered: a remembered session grant rides `grant`, a
+    /// remembered project rule rides `rule`, and a rule that could not be
+    /// saved rides `reason`.
+    fn allow(self, request_id: RequestId) -> PermissionResolved {
+        PermissionResolved {
+            grant: self.grant,
+            rule: self.rule,
+            ..resolved(
+                Some(request_id),
+                Decision::Allow,
+                DecidedBy::Person,
+                self.reason,
+                None,
+            )
+        }
+    }
+}
 
 /// A registered tool: who registered it (`builtin`, or the extension or MCP
 /// server), the tool, and its definition.
@@ -157,29 +193,10 @@ impl Loop {
             }
         };
         let tool = Arc::clone(tool);
-        // Step 1 first, before the rules are read: a call the credential
-        // deny refuses never touches them.
-        if let Some(why) =
-            super::permission::credential_why(&effects.declared, &self.workspace, &self.credentials)
-        {
-            self.decided(
-                id,
-                turn,
-                PermissionResolved {
-                    request_id: None,
-                    decision: Decision::Deny,
-                    decided_by: DecidedBy::CredentialDeny,
-                    reason: Some(why.clone()),
-                    feedback: None,
-                    grant: None,
-                    rule: None,
-                    reviewer: None,
-                },
-            )?;
-            return Ok(Err(denied("credentials", format!("{why} It did not run."))));
-        }
         // The rules are read for every call that reaches step 2, including
         // ones that later fast-path (`docs/permissions.md`, "Scope").
+        // `judge` runs the credential deny first, so a call it refuses never
+        // touches the rules, even when the rules file is unreadable.
         let rules = self.rules.read();
         match super::permission::judge(
             &call.name,
@@ -190,43 +207,22 @@ impl Loop {
             &self.credentials,
         ) {
             super::permission::Verdict::Deny { by, reason, why } => {
+                let text = format!("{why} It did not run.");
                 self.decided(
                     id,
                     turn,
-                    PermissionResolved {
-                        request_id: None,
-                        decision: Decision::Deny,
-                        decided_by: by,
-                        reason: Some(why.clone()),
-                        feedback: None,
-                        grant: None,
-                        rule: None,
-                        reviewer: None,
-                    },
+                    resolved(None, Decision::Deny, by, Some(why), None),
                 )?;
-                Ok(Err(denied(reason, format!("{why} It did not run."))))
+                Ok(Err(denied(reason, text)))
             }
-            super::permission::Verdict::Ask(rule) => {
-                self.ask(id, turn, &effects.declared, rule).map(|answered| {
+            super::permission::Verdict::Ask(rule) => self
+                .ask(id, turn, &call.name, &effects.declared, rule)
+                .map(|answered| {
                     answered.map(|()| (Arc::clone(&tool), arguments, effects.declared))
-                })
-            }
+                }),
             super::permission::Verdict::Allow(decided) => {
                 if let Some(by) = decided {
-                    self.decided(
-                        id,
-                        turn,
-                        PermissionResolved {
-                            request_id: None,
-                            decision: Decision::Allow,
-                            decided_by: by,
-                            reason: None,
-                            feedback: None,
-                            grant: None,
-                            rule: None,
-                            reviewer: None,
-                        },
-                    )?;
+                    self.decided(id, turn, resolved(None, Decision::Allow, by, None, None))?;
                 }
                 Ok(Ok((tool, arguments, effects.declared)))
             }
@@ -264,6 +260,7 @@ impl Loop {
         &mut self,
         id: &ActionId,
         turn: &TurnId,
+        tool: &str,
         declared: &DeclaredEffects,
         rule: contract::events::StandingRule,
     ) -> Result<Result<(), Box<ToolCallCompleted>>, Error> {
@@ -272,16 +269,13 @@ impl Loop {
             self.decided(
                 id,
                 turn,
-                PermissionResolved {
-                    request_id: None,
-                    decision: Decision::Deny,
-                    decided_by: DecidedBy::StandingRule,
-                    reason: Some(reason.to_owned()),
-                    feedback: None,
-                    grant: None,
-                    rule: None,
-                    reviewer: None,
-                },
+                resolved(
+                    None,
+                    Decision::Deny,
+                    DecidedBy::StandingRule,
+                    Some(reason.to_owned()),
+                    None,
+                ),
             )?;
             return Ok(Err(denied(
                 "no_person",
@@ -308,16 +302,13 @@ impl Loop {
                     self.decided(
                         id,
                         turn,
-                        PermissionResolved {
-                            request_id: Some(request_id),
-                            decision: Decision::Deny,
-                            decided_by: DecidedBy::StandingRule,
-                            reason: Some(reason.to_owned()),
-                            feedback: None,
-                            grant: None,
-                            rule: None,
-                            reviewer: None,
-                        },
+                        resolved(
+                            Some(request_id),
+                            Decision::Deny,
+                            DecidedBy::StandingRule,
+                            Some(reason.to_owned()),
+                            None,
+                        ),
                     )?;
                     return Ok(Err(denied(
                         "no_person",
@@ -329,57 +320,88 @@ impl Loop {
                     if reply.request_id != request_id {
                         continue;
                     }
-                    // A standing ask offers no rule to remember, so a reply
-                    // that remembers never fits.
-                    let Some(answer) = super::permission::answer(None, &reply.answer) else {
+                    let Some(answered) = self.answered(tool, None, &reply.answer) else {
                         continue;
                     };
-                    match answer.decision {
+                    match answered.decision {
                         Decision::Deny => {
-                            self.decided(
-                                id,
-                                turn,
-                                PermissionResolved {
-                                    request_id: Some(request_id),
-                                    decision: Decision::Deny,
-                                    decided_by: DecidedBy::Person,
-                                    reason: None,
-                                    feedback: answer.feedback.clone(),
-                                    grant: None,
-                                    rule: None,
-                                    reviewer: None,
-                                },
-                            )?;
-                            let text = match answer.feedback {
+                            let text = match &answered.feedback {
                                 Some(feedback) => format!(
                                     "A person refused this call: {feedback}. It did not run."
                                 ),
                                 None => "A person refused this call. It did not run.".to_owned(),
                             };
-                            return Ok(Err(denied("person", text)));
-                        }
-                        Decision::Allow => {
-                            debug_assert!(answer.remember.is_none());
                             self.decided(
                                 id,
                                 turn,
-                                PermissionResolved {
-                                    request_id: Some(request_id),
-                                    decision: Decision::Allow,
-                                    decided_by: DecidedBy::Person,
-                                    reason: None,
-                                    feedback: None,
-                                    grant: None,
-                                    rule: None,
-                                    reviewer: None,
-                                },
+                                resolved(
+                                    Some(request_id),
+                                    Decision::Deny,
+                                    DecidedBy::Person,
+                                    None,
+                                    answered.feedback,
+                                ),
                             )?;
+                            return Ok(Err(denied("person", text)));
+                        }
+                        Decision::Allow => {
+                            self.decided(id, turn, answered.allow(request_id))?;
                             return Ok(Ok(()));
                         }
                     }
                 }
             }
         }
+    }
+
+    /// Checks `reply` against `offer`, the request's rule offer (`None` on a
+    /// standing ask, which offers nothing to remember), and applies what an
+    /// allow remembers (`docs/permissions.md`, "Remembering a decision"): a
+    /// session grant goes onto `grants` before the next call is judged, and a
+    /// project rule is appended to the project's rules file. A project rule
+    /// that cannot be saved still allows the call, with a reason saying so.
+    /// `None`: the reply does not fit and is dropped, and the loop keeps
+    /// waiting.
+    fn answered(
+        &mut self,
+        tool: &str,
+        offer: Option<&RuleOffer>,
+        reply: &ReplyAnswer,
+    ) -> Option<Answered> {
+        let super::permission::Answer {
+            decision,
+            feedback,
+            remember,
+        } = super::permission::answer(offer, reply)?;
+        let mut answered = Answered {
+            decision,
+            feedback,
+            grant: None,
+            rule: None,
+            reason: None,
+        };
+        let Some(remembered) = remember else {
+            return Some(answered);
+        };
+        match remembered.scope {
+            RememberScope::Session => {
+                let grant = remembered.grant(tool);
+                self.grants.push(grant.clone());
+                answered.grant = Some(grant);
+            }
+            RememberScope::Project => {
+                let session = SessionId(self.cache_key.clone());
+                match self.rules.remember(tool, &remembered.prefix, &session) {
+                    Ok(()) => {
+                        answered.rule = Some(remembered.grant(tool));
+                    }
+                    Err(error) => {
+                        answered.reason = Some(format!("The rule could not be saved: {error}."));
+                    }
+                }
+            }
+        }
+        Some(answered)
     }
 
     /// The completion of a call that ran and returned `output`, its text cut
@@ -465,6 +487,28 @@ pub(crate) fn truncated() -> ToolCallCompleted {
          calls if it was large."
             .to_owned(),
     )
+}
+
+/// A `permission_resolved` line carrying `request_id`, `decision`,
+/// `decided_by`, `reason` and `feedback`: every other key is absent. A call
+/// whose answer remembered something sets `grant` or `rule` on it.
+fn resolved(
+    request_id: Option<RequestId>,
+    decision: Decision,
+    decided_by: DecidedBy,
+    reason: Option<String>,
+    feedback: Option<String>,
+) -> PermissionResolved {
+    PermissionResolved {
+        request_id,
+        decision,
+        decided_by,
+        reason,
+        feedback,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    }
 }
 
 /// A call that was denied with `reason`, the model told `text`.

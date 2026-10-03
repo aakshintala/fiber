@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use contract::commands::{RememberScope, ReplyAnswer};
+use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::events::{DecidedBy, Decision, Grant, RuleOffer, RuleScope};
 use contract::rules::{Rule, RuleDecision, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Effect};
@@ -210,10 +210,18 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &credentials,
     );
     assert!(matches!(before, Verdict::Review));
-    let grants = [Grant {
-        tool: "shell".into(),
-        prefix: "npm test".into(),
-    }];
+    // The grant is what applying the person's allow remembered, not a
+    // literal: the answer check fixes the remembered prefix.
+    let reply = ReplyAnswer::Approval {
+        decision: Decision::Allow,
+        feedback: None,
+        remember: Some(Remember {
+            scope: RememberScope::Session,
+            prefix: "npm test".into(),
+        }),
+    };
+    let remembered = answer(Some(&offer()), &reply).unwrap().remember.unwrap();
+    let grants = [remembered.grant("shell")];
     let after = judge(
         "shell",
         &effects,
@@ -426,6 +434,25 @@ fn an_unreadable_rules_file_denies_at_step_two() {
         Verdict::Deny {
             by: DecidedBy::StandingRule,
             reason: "rules_unreadable",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_credential_path_is_denied_even_when_the_rules_are_unreadable() {
+    let (_root, workspace, credentials) = dirs();
+    let secret = credentials.join("token");
+    std::fs::write(&secret, "s3cret").unwrap();
+    let spelled = secret.display().to_string();
+    let effects = call(vec![Effect::Reads], Some(vec![spelled.as_str()]), Some(""));
+    let error: Result<StandingRules, RulesError> = Err(RulesError("/home/rules:2: bad".into()));
+    let verdict = judge("read", &effects, &error, &[], &workspace, &credentials);
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            reason: "credentials",
             ..
         }
     ));

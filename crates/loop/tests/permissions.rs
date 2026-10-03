@@ -12,6 +12,7 @@
 mod support;
 
 use std::sync::Arc;
+use std::sync::mpsc;
 use std::thread;
 
 use contract::commands::{Reply, ReplyAnswer};
@@ -73,14 +74,31 @@ fn reply(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
 }
 
 /// Watches the log for the turn's `permission_requested`, then runs `send`
-/// with its request id: the signal the loop is waiting for a reply.
+/// with its request id: the signal the loop is waiting for a reply. The wait
+/// is bounded by [`support::DEADLINE`]: a turn that never asks fails naming
+/// the missing `permission_requested`, and the thread's end drops its inbox
+/// sender, releasing a loop still waiting for a reply.
 fn on_request(
     session: &Session,
     send: impl FnOnce(RequestId) + Send + 'static,
 ) -> thread::JoinHandle<()> {
     let mut watcher = session.log.watch();
     thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
+        // The watcher blocks without a deadline, so its lines cross an mpsc
+        // channel, as in `Session::open`, and the wait below carries the
+        // deadline instead.
+        let (forward, waiting) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(Some(line)) = watcher.recv() {
+                if forward.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        loop {
+            let line = waiting
+                .recv_timeout(support::DEADLINE)
+                .expect("a permission_requested line");
             if line.kind == "permission_requested" {
                 send(RequestId(
                     line.payload["request_id"].as_str().unwrap().into(),
