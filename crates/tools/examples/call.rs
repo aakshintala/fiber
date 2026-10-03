@@ -22,18 +22,13 @@ use tools::Shell;
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
-    let Some(name) = args.next() else {
+    let name = args.next();
+    let raw = args.next();
+    let extra = args.next();
+    let Some(raw) = raw.filter(|_| name.as_deref() == Some("shell") && extra.is_none()) else {
         eprintln!("usage: call shell '{{...}}'");
         return ExitCode::from(2);
     };
-    let Some(raw) = args.next() else {
-        eprintln!("usage: call shell '{{...}}'");
-        return ExitCode::from(2);
-    };
-    if args.next().is_some() || name != "shell" {
-        eprintln!("usage: call shell '{{...}}'");
-        return ExitCode::from(2);
-    }
     let arguments = match serde_json::from_str::<Value>(&raw) {
         Ok(Value::Object(arguments)) => arguments,
         Ok(_) => {

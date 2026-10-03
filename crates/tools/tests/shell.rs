@@ -71,6 +71,19 @@ fn pid_alive(pid: u32) -> bool {
         .success()
 }
 
+/// `kill -0` succeeds on a zombie until its new parent reaps it.
+fn wait_until_pid_gone(pid: u32) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        while pid_alive(pid) {}
+        done.send(()).unwrap();
+    });
+    assert!(
+        finished.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for pid {pid} to be gone"
+    );
+}
+
 struct Running {
     clock: Arc<FakeClock>,
     start: Instant,
@@ -512,7 +525,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         .args(["-KILL", "--", &holder.to_string()])
         .status()
         .unwrap();
-    assert!(!pid_alive(holder));
+    wait_until_pid_gone(holder);
     watchdog.stand_down(DEADLINE);
 }
 
@@ -552,10 +565,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
         .args(["-KILL", "--", &escapee.to_string()])
         .status()
         .unwrap();
-    assert!(
-        !pid_alive(escapee),
-        "escapee {escapee} survived the test's kill"
-    );
+    wait_until_pid_gone(escapee);
     watchdog.stand_down(DEADLINE);
 }
 

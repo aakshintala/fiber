@@ -18,6 +18,9 @@ use std::sync::mpsc::{self, Sender};
 use std::thread;
 use std::time::Duration;
 
+/// How long [`Ready::new`] waits for its reader to open the FIFO.
+const OPEN_DEADLINE: Duration = Duration::from_secs(5);
+
 enum Line {
     Text(String),
     End,
@@ -47,9 +50,13 @@ impl Ready {
         let (tx, rx) = mpsc::channel();
         let (opened_tx, opened_rx) = mpsc::channel();
         thread::spawn(move || read_fifo(&fifo, &tx, &opened_tx));
-        match opened_rx.recv() {
+        match opened_rx.recv_timeout(OPEN_DEADLINE) {
             Ok(()) => {}
-            Err(_) => panic!(
+            Err(mpsc::RecvTimeoutError::Timeout) => panic!(
+                "waited {OPEN_DEADLINE:?} for ready fifo {} to open",
+                path.display()
+            ),
+            Err(mpsc::RecvTimeoutError::Disconnected) => panic!(
                 "ready fifo {} reader stopped before it opened",
                 path.display()
             ),
@@ -95,29 +102,18 @@ fn read_fifo(path: &Path, tx: &Sender<Line>, opened: &Sender<()>) {
     // Read-write returns at once. Holding that end makes the read below wait
     // for the command's bytes. A read-only open would block until a writer,
     // and the caller's fork races that blocked open.
-    let hold = match OpenOptions::new().read(true).write(true).open(path) {
-        Ok(file) => file,
-        Err(_) => {
-            drop(tx.send(Line::End));
-            match opened.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            return;
-        }
-    };
-    let file = match File::open(path) {
-        Ok(file) => file,
-        Err(_) => {
-            drop(tx.send(Line::End));
-            match opened.send(()) {
-                Ok(()) | Err(_) => {}
-            }
-            return;
-        }
-    };
+    let files = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .open(path)
+        .and_then(|hold| File::open(path).map(|file| (hold, file)));
     match opened.send(()) {
         Ok(()) | Err(_) => {}
     }
+    let Ok((hold, file)) = files else {
+        drop(tx.send(Line::End));
+        return;
+    };
     let mut reader = BufReader::new(file);
     loop {
         let mut line = String::new();
@@ -158,12 +154,14 @@ fn pids(line: &str, path: &Path) -> Vec<u32> {
     out
 }
 
-/// Ignores SIGTERM and blocks. The second line is its own pid.
+/// Ignores SIGTERM and blocks on its block FIFO. The second line is its own
+/// pid. A line written to that FIFO is answered with its pid, then it blocks
+/// again.
 pub fn ignores_sigterm(ready: &Path) -> String {
     let block = quote(&block_of(ready));
     let ready = quote(ready);
     format!(
-        "trap '' TERM\necho $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\n"
+        "trap '' TERM\necho $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\necho $$ >> {ready}\nread -r _ < {block}\n"
     )
 }
 

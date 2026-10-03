@@ -111,6 +111,7 @@ fn detach(cmd: &mut Command) {
     }
 }
 
+#[derive(Default)]
 struct Inner {
     reaped: bool,
     status: Option<ExitStatus>,
@@ -121,32 +122,19 @@ struct Inner {
     seq: u64,
 }
 
+#[derive(Default)]
 struct Shared {
     inner: Mutex<Inner>,
     cv: Condvar,
 }
 
-impl Default for Shared {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::new(Inner {
-                reaped: false,
-                status: None,
-                eof: false,
-                output: Vec::new(),
-                discard: false,
-                seq: 0,
-            }),
-            cv: Condvar::new(),
-        }
-    }
-}
-
 impl Wake for Shared {
     fn wake(&self) {
-        // Hold the waiter's lock across the notify so a cancel cannot land
-        // between the check of `is_cancelled` and the wait.
-        let _guard = lock(&self.inner);
+        // The sequence moves under the same lock as the wait, so a cancel
+        // or a clock advance that lands before `cv.wait` is still visible
+        // when the waiter checks.
+        let mut guard = lock(&self.inner);
+        bump(&mut guard);
         self.cv.notify_all();
     }
 }
@@ -356,30 +344,36 @@ fn park(
     wake_on_cancel: bool,
     seen: u64,
 ) {
+    // Taken before `wait_until`, and held until the condvar wait, so a wake
+    // blocks on this lock instead of notifying nobody. `FnMut` cannot move
+    // the guard out and back; the slot holds it across the one call.
+    let mut slot = Some(lock(&shared.inner));
     clock.wait_until(until, &mut |bound| {
+        let Some(guard) = slot.take() else {
+            return;
+        };
         let timeout = match (bound, poll) {
             (Some(bound), true) => Some(bound.min(GROUP_POLL)),
             (None, true) => Some(GROUP_POLL),
             (bound, false) => bound,
         };
-        let guard = lock(&shared.inner);
         if already_woken(guard.seq, seen, wake_on_cancel, cancel.is_cancelled()) {
+            slot = Some(guard);
             return;
         }
-        match timeout {
+        slot = Some(match timeout {
             Some(timeout) => {
-                let (_guard, _) = shared
+                shared
                     .cv
                     .wait_timeout(guard, timeout)
-                    .unwrap_or_else(PoisonError::into_inner);
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .0
             }
-            None => {
-                let _guard = shared
-                    .cv
-                    .wait(guard)
-                    .unwrap_or_else(PoisonError::into_inner);
-            }
-        }
+            None => shared
+                .cv
+                .wait(guard)
+                .unwrap_or_else(PoisonError::into_inner),
+        });
     });
 }
 

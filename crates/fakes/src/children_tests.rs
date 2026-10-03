@@ -38,15 +38,6 @@ fn wait_child(mut child: Child) {
     );
 }
 
-fn pause(within: Duration) {
-    let (_tx, rx) = mpsc::channel::<()>();
-    match rx.recv_timeout(within) {
-        Ok(())
-        | Err(mpsc::RecvTimeoutError::Timeout)
-        | Err(mpsc::RecvTimeoutError::Disconnected) => {}
-    }
-}
-
 #[test]
 fn a_written_line_is_its_pids() {
     let dir = TempDir::new("fiber-ready");
@@ -107,8 +98,20 @@ fn ignores_sigterm_survives_sigterm() {
         .args(["-TERM", "--", &format!("-{pgid}")])
         .status()
         .unwrap();
-    // Long enough that a process which did not ignore SIGTERM would have exited.
-    pause(Duration::from_millis(300));
+    let block = super::block_of(ready.path());
+    let fifo = block.clone();
+    let (wrote, wrote_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut release = std::fs::OpenOptions::new().write(true).open(&fifo).unwrap();
+        writeln!(release, "go").unwrap();
+        wrote.send(()).unwrap();
+    });
+    assert!(
+        wrote_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for {} to be read after SIGTERM",
+        block.display()
+    );
+    assert_eq!(ready.wait(DEADLINE), vec![pgid]);
     assert!(
         child.try_wait().unwrap().is_none(),
         "SIGTERM killed a command that ignores it"

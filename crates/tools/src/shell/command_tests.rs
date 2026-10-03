@@ -1,9 +1,15 @@
 use std::io::{self, ErrorKind, Read};
-use std::sync::Arc;
+use std::sync::{Arc, Weak, mpsc};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime};
+
+use contract::clock::{Clock, Wake};
+use fakes::CancelToken;
+use fakes::clock::FakeClock;
 
 use super::{
-    Inner, Shared, StopKind, already_woken, bump, finish, lock, note_eof, poll_while_occupied,
-    read_output, suppress_term,
+    Inner, Shared, StopKind, already_woken, bump, finish, lock, note_eof, park,
+    poll_while_occupied, read_output, suppress_term,
 };
 
 #[test]
@@ -151,6 +157,92 @@ impl Read for Scripted {
             Err(err) => Err(err),
         }
     }
+}
+
+/// Passes `None` to the closure, the bound a fake clock gives when `until`
+/// was still ahead at registration. With `wake` set, that wake is delivered
+/// before the closure runs. It runs on another thread because the caller
+/// may already hold the waiter lock across `wait_until`.
+struct BoundlessClock {
+    origin: Instant,
+    wake: Option<Arc<Shared>>,
+}
+
+impl Clock for BoundlessClock {
+    fn now(&self) -> Instant {
+        self.origin
+    }
+
+    fn wall(&self) -> SystemTime {
+        SystemTime::UNIX_EPOCH
+    }
+
+    fn sleep(&self, _duration: Duration) {}
+
+    fn wait_until(&self, _until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
+        if let Some(shared) = &self.wake {
+            let shared = Arc::clone(shared);
+            let (started, started_rx) = mpsc::channel();
+            thread::spawn(move || {
+                started.send(()).unwrap();
+                shared.wake();
+            });
+            started_rx.recv().expect("the clock waker did not start");
+        }
+        wait(None);
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+}
+
+fn assert_park_returns(clock: BoundlessClock, shared: Arc<Shared>, seen: u64) {
+    const DEADLINE: Duration = Duration::from_secs(5);
+    let cancel = CancelToken::new();
+    let (done, finished) = mpsc::channel();
+    let origin = clock.origin;
+    thread::spawn(move || {
+        park(
+            &clock,
+            &shared,
+            &cancel,
+            origin.checked_add(Duration::from_secs(2)),
+            false,
+            false,
+            seen,
+        );
+        done.send(()).unwrap();
+    });
+    assert!(
+        finished.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for park to return"
+    );
+}
+
+#[test]
+fn a_wake_that_landed_before_park_is_not_lost() {
+    let shared = Arc::new(Shared::default());
+    let origin = FakeClock::new().origin();
+    shared.wake();
+    assert_park_returns(
+        BoundlessClock { origin, wake: None },
+        Arc::clone(&shared),
+        0,
+    );
+    assert_ne!(lock(&shared.inner).seq, 0);
+}
+
+#[test]
+fn a_wake_inside_wait_until_is_not_lost() {
+    let shared = Arc::new(Shared::default());
+    let origin = FakeClock::new().origin();
+    assert_park_returns(
+        BoundlessClock {
+            origin,
+            wake: Some(Arc::clone(&shared)),
+        },
+        Arc::clone(&shared),
+        0,
+    );
 }
 
 #[test]
