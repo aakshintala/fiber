@@ -119,6 +119,22 @@
       }
     },
     {
+      "id": "gemini-3.1-flash-lite-preview",
+      "protocol": "google-generative-ai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.25,
+        "output": 1.5,
+        "cache_read": 0.025
+      }
+    },
+    {
       "id": "gemini-3.5-flash",
       "protocol": "google-generative-ai",
       "base_url": "https://generativelanguage.googleapis.com/v1beta",
