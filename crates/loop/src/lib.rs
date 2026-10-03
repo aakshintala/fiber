@@ -413,7 +413,7 @@ impl Loop {
             .model
             .cost
             .as_ref()
-            .map(|prices| prices.price(&reply.tokens));
+            .map(|prices| usage::price(prices, &reply.tokens));
         let recorded = UsageRecorded {
             generation_id: reply.generation_id,
             model: self.model.reference.clone(),

@@ -218,8 +218,7 @@ pub struct Cost {
 /// prices (`docs/model-routing.md`, "Cost").
 #[derive(Debug, Clone, PartialEq)]
 pub struct Tier {
-    /// The whole prompt must exceed this many input tokens for the tier to
-    /// apply. Equal to the threshold stays on the tier below.
+    /// Input tokens above which this tier's prices apply to the whole call.
     pub input_tokens_above: u64,
     /// Input tokens.
     pub input: f64,
@@ -229,51 +228,6 @@ pub struct Tier {
     pub cache_read: f64,
     /// Tokens written to the prompt cache.
     pub cache_write: f64,
-}
-
-impl Cost {
-    /// The call's cost in US dollars: each token kind at the price the
-    /// prompt's size selects, per million (`docs/model-routing.md`, "Cost").
-    ///
-    /// The prompt is `input` plus `cache_read` plus every `cache_write`.
-    /// The tier with the highest `input_tokens_above` strictly below that
-    /// count supplies every price; a count equal to a threshold stays on the
-    /// tier below it. Two tiers with the same threshold: the first listed
-    /// wins. Below every threshold, the base prices apply, and a missing
-    /// cache price is 0.
-    pub fn price(&self, tokens: &Tokens) -> f64 {
-        let written = tokens.cache_write.values().copied().sum::<u64>();
-        let prompt = tokens.input + tokens.cache_read + written;
-        let (input, output, cache_read, cache_write) = match self.tier(prompt) {
-            Some(tier) => (tier.input, tier.output, tier.cache_read, tier.cache_write),
-            None => (
-                self.input,
-                self.output,
-                self.cache_read.unwrap_or(0.0),
-                self.cache_write.unwrap_or(0.0),
-            ),
-        };
-        (input * tokens.input as f64
-            + cache_read * tokens.cache_read as f64
-            + cache_write * written as f64
-            + output * tokens.output as f64)
-            / 1_000_000.0
-    }
-
-    /// The tier whose threshold is the highest one the prompt exceeds.
-    fn tier(&self, prompt: u64) -> Option<&Tier> {
-        let mut chosen: Option<&Tier> = None;
-        for tier in &self.tiers {
-            if tier.input_tokens_above < prompt {
-                let higher = chosen
-                    .is_none_or(|current| tier.input_tokens_above > current.input_tokens_above);
-                if higher {
-                    chosen = Some(tier);
-                }
-            }
-        }
-        chosen
-    }
 }
 
 /// A call that produced no reply.
