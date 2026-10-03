@@ -1134,6 +1134,14 @@ fn extension_update_all_skips_unrequested_dependencies() {
         "{:?}",
         listed.raw
     );
+    // muse is still a dependency only: removing what needed it removes it.
+    let removed = setup.fiber(&["extension", "remove", NEEDS_MUSE], None);
+    assert_eq!(removed.code, Some(0), "{}", removed.stderr);
+    assert_eq!(
+        removed.stderr,
+        format!("fiber: removed {NEEDS_MUSE}\nfiber: removed {MUSE}\n")
+    );
+    assert!(setup.fiber(&["extension", "list"], None).raw.is_empty());
 }
 
 #[test]
