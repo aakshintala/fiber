@@ -13,7 +13,7 @@
 
 use std::ffi::OsStr;
 use std::fs;
-use std::io::Write;
+use std::io::{BufRead, Write};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
@@ -32,6 +32,10 @@ mod probes;
 
 /// How long one `fiber` run may take.
 const DEADLINE: Duration = Duration::from_secs(20);
+
+/// Set on the re-exec of [`sleep_stands_in_for_fiber`]. Unset, that test
+/// returns without spawning anything.
+const WATCHDOG_STAND_IN_ENV: &str = "FIBER_WATCHDOG_STAND_IN";
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -379,6 +383,97 @@ fn dropping_the_group_guard_kills_the_group() {
     };
     assert_eq!(status.signal(), Some(9));
     assert!(!group_alive(group));
+}
+
+/// Run by [`a_killed_test_kills_the_stand_in_group`]: `sleep` through
+/// [`spawn_watched`], stdout inherited so the stand-in holds the pipe the
+/// parent reads. Prints its group and waits. On its own it does nothing.
+#[test]
+#[allow(clippy::print_stdout, reason = "the parent test reads this line")]
+fn sleep_stands_in_for_fiber() {
+    let Ok(_) = std::env::var(WATCHDOG_STAND_IN_ENV) else {
+        return;
+    };
+    let mut command = Command::new("sleep");
+    command.arg("60").stdout(Stdio::inherit());
+    let (child, _watchdog) = spawn_watched(&mut command);
+    println!("group {}", child.id());
+    std::io::stdout().flush().unwrap();
+    let mut rest = String::new();
+    std::io::stdin().read_line(&mut rest).unwrap();
+}
+
+/// SIGKILL of the test process is EOF to the watchdog, which kills the
+/// stand-in's group. EOF on the inherited stdout arrives only once that
+/// group is gone (`docs/testing.md`, "Running tests").
+#[test]
+fn a_killed_test_kills_the_stand_in_group() {
+    let mut helper = Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", "sleep_stands_in_for_fiber", "--nocapture"])
+        .env(WATCHDOG_STAND_IN_ENV, "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = helper.stdout.take().unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut lines = std::io::BufReader::new(stdout);
+        let mut line = String::new();
+        let mut saw_group = false;
+        loop {
+            line.clear();
+            match lines.read_line(&mut line) {
+                Ok(0) => {
+                    send_group(&tx, None);
+                    break;
+                }
+                Ok(_) if !saw_group => {
+                    if let Some(id) = line.trim().strip_prefix("group ") {
+                        saw_group = true;
+                        send_group(&tx, id.parse().ok());
+                    }
+                }
+                Ok(_) => {}
+                Err(_) => {
+                    send_group(&tx, None);
+                    break;
+                }
+            }
+        }
+    });
+    let group = match rx.recv_timeout(DEADLINE) {
+        Ok(Some(group)) => group,
+        Ok(None) => panic!("the stand-in exited before printing its group"),
+        Err(_) => panic!("waited {DEADLINE:?} for the stand-in to print its group"),
+    };
+    // Dropping this kills the group if the test fails before the watchdog does.
+    let _guard = KillGroup(group);
+    match helper.kill() {
+        Ok(()) | Err(_) => {}
+    }
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || match done.send(helper.wait()) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    });
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the killed test process to exit"),
+    };
+    assert_eq!(status.signal(), Some(9));
+    match rx.recv_timeout(DEADLINE) {
+        Ok(None) => {}
+        Ok(Some(_)) | Err(_) => {
+            panic!("waited {DEADLINE:?} for stand-in group {group} to die")
+        }
+    }
+}
+
+fn send_group(tx: &mpsc::Sender<Option<u32>>, message: Option<u32>) {
+    match tx.send(message) {
+        Ok(()) | Err(mpsc::SendError(_)) => {}
+    }
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and
