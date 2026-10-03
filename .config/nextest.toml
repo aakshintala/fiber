@@ -1,3 +1,9 @@
 # docs/testing.md, "Running tests": each test is killed past its timeout.
 [profile.default]
 slow-timeout = { period = "30s", terminate-after = 4 }
+
+# cargo-mutants' profile (.cargo/mutants.toml): the first failure stops every
+# running test, so a test that would hang until its deadline does not turn a
+# caught mutant into a timeout.
+[profile.mutants]
+fail-fast = { max-fail = 1, terminate = "immediate" }
