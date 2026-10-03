@@ -60,8 +60,9 @@ each session it asks the hub to start.
 The key is a dotted path and the value is JSON, or a bare string when it does
 not parse as JSON: `-c handoff.tokens=200000`, `-c model=openai/gpt-5.6`. It
 may be given more than once. A named flag such as `--model` is shorthand for
-the same thing. `FIBER_HOME` is the only environment variable Fiber reads for
-itself; no environment variable overrides a key.
+the same thing. `FIBER_HOME` is the only environment variable of Fiber's own; no
+environment variable overrides a key. Fiber also honours the platform's proxy
+variables (`docs/dependencies.md`, "Proxies").
 
 ## What a repository may set
 
