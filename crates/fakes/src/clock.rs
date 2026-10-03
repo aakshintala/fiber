@@ -91,12 +91,7 @@ impl FakeClock {
     /// the deadline. The bound is the condvar's timeout, so this reads no
     /// process clock.
     pub fn await_parked(&self, until: Instant, within: Duration) -> bool {
-        let state = lock(&self.state);
-        let (guard, _) = self
-            .parked_cv
-            .wait_timeout_while(state, within, |state| !parked_at(state, until))
-            .unwrap_or_else(PoisonError::into_inner);
-        parked_at(&guard, until)
+        self.await_parked_count(until, 1, within)
     }
 
     /// Waits, at most `within` of real time, until at least `count` threads
@@ -178,13 +173,6 @@ impl Drop for Leave<'_> {
             .parked
             .retain(|parked| parked.id != self.id);
     }
-}
-
-fn parked_at(state: &State, until: Instant) -> bool {
-    state
-        .parked
-        .iter()
-        .any(|parked| parked.until == Some(until))
 }
 
 fn parked_count(state: &State, until: Instant) -> usize {
