@@ -2,6 +2,7 @@
 //! the menu, the version, and the one-sentence form of a parse error.
 
 use std::ffi::OsString;
+use std::sync::LazyLock;
 
 use clap::error::{ContextKind, ContextValue};
 use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
@@ -59,7 +60,6 @@ pub(crate) enum Invocation {
 #[derive(Parser)]
 #[command(
     name = "fiber",
-    version = env!("CARGO_PKG_VERSION"),
     about = "Fiber, a coding agent.",
     disable_version_flag = true,
     disable_help_subcommand = true
@@ -119,9 +119,28 @@ pub(crate) fn parse() -> Invocation {
     parse_from(std::env::args_os())
 }
 
-/// `fiber <version>`, with the trailing newline clap prints.
+/// `fiber <version>` or `fiber <version> (<commit>)`, with the trailing
+/// newline clap prints.
 pub(crate) fn version_line() -> String {
     command().render_version()
+}
+
+/// The text after `fiber `: the package version, and the commit when one
+/// was recorded. An empty commit is left out, so the line never contains
+/// an empty `()`.
+fn version_text(version: &str, commit: Option<&str>) -> String {
+    match commit.filter(|commit| !commit.is_empty()) {
+        Some(commit) => format!("{version} ({commit})"),
+        None => version.to_owned(),
+    }
+}
+
+/// Clap stores a `&'static str`. The commit is known only after the build
+/// script runs, so the text is built once rather than written as a literal.
+fn compiled_version() -> &'static str {
+    static TEXT: LazyLock<String> =
+        LazyLock::new(|| version_text(env!("CARGO_PKG_VERSION"), option_env!("FIBER_COMMIT")));
+    TEXT.as_str()
 }
 
 fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation {
@@ -148,13 +167,16 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
 fn command() -> clap::Command {
     // The derive marks a `bool` required before `ArgAction::Version` is
     // applied, so the flag is added here rather than as a field.
-    Cli::command().help_template(MENU).arg(
-        clap::Arg::new("version-flag")
-            .short('v')
-            .long("version")
-            .action(ArgAction::Version)
-            .help("Print the version"),
-    )
+    Cli::command()
+        .version(compiled_version())
+        .help_template(MENU)
+        .arg(
+            clap::Arg::new("version-flag")
+                .short('v')
+                .long("version")
+                .action(ArgAction::Version)
+                .help("Print the version"),
+        )
 }
 
 /// The menu, or one command's help. An unknown name is the same sentence

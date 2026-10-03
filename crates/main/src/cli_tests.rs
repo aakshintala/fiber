@@ -61,8 +61,25 @@ fn the_menu_is_hand_grouped_and_names_every_subcommand() {
 }
 
 #[test]
+fn version_text_names_the_commit_when_one_was_recorded() {
+    assert_eq!(
+        super::version_text("0.0.0", Some("4f2a9c1")),
+        "0.0.0 (4f2a9c1)"
+    );
+}
+
+#[test]
+fn version_text_is_the_version_alone_when_no_commit_was_recorded() {
+    assert_eq!(super::version_text("0.0.0", None), "0.0.0");
+    assert_eq!(super::version_text("0.0.0", Some("")), "0.0.0");
+}
+
+#[test]
 fn version_is_the_package_version_and_there_is_no_capital_v() {
-    let line = "fiber 0.0.0\n";
+    let line = format!(
+        "fiber {}\n",
+        super::version_text(env!("CARGO_PKG_VERSION"), option_env!("FIBER_COMMIT"))
+    );
     assert_eq!(version_line(), line);
     for args in [&["fiber", "-v"][..], &["fiber", "--version"]] {
         let parsed = parse_from(args.iter().copied());

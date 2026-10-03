@@ -21,7 +21,8 @@ From 1.0, a breaking change bumps the major number.
 
 `fiber --version` prints the version and the commit, such as
 `fiber 0.3.0 (4f2a9c1)`. A build from source between releases reports the last
-released version and its own commit.
+released version and its own commit. A build with no git history, such as a
+source tarball or a mutation-testing copy, prints `fiber <version>`.
 
 A release is cut when there is something worth installing, never on a
 schedule.

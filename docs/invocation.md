@@ -99,8 +99,10 @@ print that command's help on stdout and exit 0. `fiber ask --help` starts
 no session and prints no `fiber_exited` line. It is the one exception to
 "ask's stdout is the event stream".
 
-`fiber --version`, `fiber -v` and `fiber version` print `fiber <version>`
-on stdout and exit 0. The version is this binary's package version.
+`fiber --version`, `fiber -v` and `fiber version` print
+`fiber <version> (<commit>)` on stdout and exit 0, or `fiber <version>`
+from a build with no git history (`docs/releasing.md`, "Versions"). The
+version is this binary's package version.
 
 Help and version are printed before Fiber reads `FIBER_HOME`, configuration,
 credentials or stdin, so they succeed when home is empty or no provider is

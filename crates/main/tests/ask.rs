@@ -708,11 +708,24 @@ fn each_command_prints_its_own_help() {
 #[test]
 fn version_prints_the_package_version() {
     let setup = Setup::new();
+    let line = match option_env!("FIBER_COMMIT") {
+        Some(commit) => {
+            assert!(
+                commit.len() >= 4
+                    && commit
+                        .bytes()
+                        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f')),
+                "{commit}"
+            );
+            format!("fiber 0.0.0 ({commit})\n")
+        }
+        None => "fiber 0.0.0\n".to_owned(),
+    };
     for args in [&["-v"][..], &["--version"], &["version"]] {
         let run = setup.fiber(args, None);
         assert_eq!(run.code, Some(0), "{args:?} stderr: {}", run.stderr);
         assert_eq!(run.stderr, "");
-        assert_eq!(printed(&run), "fiber 0.0.0\n", "{args:?}");
+        assert_eq!(printed(&run), line, "{args:?}");
     }
 }
 
