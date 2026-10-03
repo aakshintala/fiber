@@ -7,4 +7,6 @@ disallowed-methods = [
     { path = "std::thread::sleep", reason = "wait on an injected contract::clock::Clock" },
     { path = "std::time::Instant::now", reason = "read time from an injected contract::clock::Clock" },
     { path = "std::time::SystemTime::now", reason = "read time from an injected contract::clock::Clock" },
+    { path = "std::time::Instant::elapsed", reason = "read time from an injected contract::clock::Clock" },
+    { path = "std::time::SystemTime::elapsed", reason = "read time from an injected contract::clock::Clock" },
 ]

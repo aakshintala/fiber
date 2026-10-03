@@ -254,6 +254,10 @@ Every wait has a deadline. On expiry the test fails with an assertion naming
 what it waited for. nextest's per-test timeout is at least twice the sum of the
 test's own deadlines, so a hang reports which wait expired, not a harness kill.
 
+A test advances a fake clock only after a signal that the code under test is
+waiting on that clock (past its own clock check); a parked caller alone is not
+that signal.
+
 ### Flaky tests
 
 A failed binary-level test retries once. A pass on retry does not block the

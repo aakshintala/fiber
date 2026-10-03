@@ -361,6 +361,11 @@ fn dropping_the_extension_stops_it() {
 /// An extension directory in a fresh temporary directory, with `init`.
 fn extension(tag: &str, init: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fiber-lua-{tag}-{}", std::process::id()));
+    // A process id comes round again; a killed run leaves its directory,
+    // fifos included, behind. Start from an empty one.
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) | Err(_) => {}
+    }
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("init.lua"), init).unwrap();
     dir
