@@ -20,6 +20,7 @@ use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
 use contract::events::{CacheLifetime, Decision, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::{Input, ModelRequest};
+use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
 use contract::{Envelope, ErrorCode, RequestId, SessionId};
@@ -1525,4 +1526,112 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
     }
     assert_eq!(reviewer.requests().len(), 4);
     assert!(tool.ran().is_empty());
+}
+
+/// `close` taken while a review escalation waits leaves a later standing
+/// ask in the same reply unanswerable: it denies as the standing rule, with
+/// no request raised.
+#[test]
+fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
+    let reviewed = shell(None, None);
+    let mut asked = TestTool::declaring("publish", "Ran it.", vec![Effect::Executes], None);
+    asked.subject = Some("npm publish".to_owned());
+    let asked = Arc::new(asked);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris()), ("publish", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![
+            reviewed.clone() as Arc<dyn Tool>,
+            asked.clone() as Arc<dyn Tool>,
+        ],
+    );
+    session.rules.set(StandingRules {
+        global: vec![Rule {
+            decision: RuleDecision::Ask,
+            tool: "publish".into(),
+            prefix: "npm publish".into(),
+            added: None,
+            session_id: None,
+        }],
+        project: Vec::new(),
+    });
+    let reviewer = session.reviewer_limits(
+        vec![
+            Scripted::text("check"),
+            Scripted::text("block first reason"),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 1,
+            session: 1000,
+        },
+    );
+    let closer = on_close(&session, {
+        let inbox = session.inbox.clone();
+        move || {
+            inbox.send(Delivery::Close(ignore())).unwrap();
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    closer.join().unwrap();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let requested: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_requested")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(requested[0].payload["step"], "review");
+    let resolved: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved[0].payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved[0].payload["request_id"],
+        requested[0].payload["request_id"]
+    );
+    assert_eq!(resolved[1].payload["decision"], "deny");
+    assert_eq!(resolved[1].payload["decided_by"], "standing_rule");
+    assert_eq!(resolved[1].payload.get("request_id"), None);
+    let done = completed(&lines);
+    assert_eq!(done[0].payload["reason"], "reviewer");
+    assert_eq!(done[1].payload["status"], "denied");
+    assert_eq!(done[1].payload["reason"], "no_person");
+    assert_eq!(reviewer.requests().len(), 2);
+    assert!(reviewed.ran().is_empty());
+    assert!(asked.ran().is_empty());
 }
