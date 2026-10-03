@@ -63,3 +63,7 @@ pub enum Delivery {
     /// exits.
     Close(Ack),
 }
+
+#[cfg(test)]
+#[path = "inbox_tests.rs"]
+mod tests;

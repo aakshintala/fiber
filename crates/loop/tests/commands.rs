@@ -570,6 +570,26 @@ fn a_steer_dropped_while_idle_is_not_the_turns_input() {
 }
 
 #[test]
+fn a_drop_while_idle_removes_only_its_steer_after_the_prompt() {
+    let mut session = Session::new(vec![Scripted::text("Hi.")], None);
+    let (prompt, _prompt_answers) = watched_prompt("go", &session.dir);
+    let (one_ack, _one_answers) = capture();
+    let (two_ack, _two_answers) = capture();
+    let (drop_ack, drop_answers) = capture();
+    session.inbox.send(prompt).unwrap();
+    session.inbox.send(steer_with("one", one_ack)).unwrap();
+    session.inbox.send(steer_with("two", two_ack)).unwrap();
+    session.inbox.send(drop_of("two", drop_ack)).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(take(&drop_answers), accepted());
+    let lines = session.lines();
+    let input = &lines[1].payload["input"];
+    assert_eq!(input.as_array().unwrap().len(), 2);
+    assert_eq!(input[0]["content"][0]["text"], "go");
+    assert_eq!(input[1]["content"][0]["text"], "one");
+}
+
+#[test]
 fn a_steer_then_its_drop_in_one_drain_apply_nothing_and_both_are_accepted() {
     let (tool, mut session) = once_session(vec![
         calls_reply("", &[("once", json!({}))]),
