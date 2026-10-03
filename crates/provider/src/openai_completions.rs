@@ -192,7 +192,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
     } else {
         "max_completion_tokens"
     };
-    if let Some(limit) = endpoint.max_output_tokens {
+    if let Some(limit) = endpoint.output_limit(request.max_output_tokens) {
         let max = body
             .get(field)
             .and_then(Value::as_u64)

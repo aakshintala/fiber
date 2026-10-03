@@ -83,6 +83,7 @@ fn request() -> ModelRequest {
         cache_lifetime: CacheLifetime::FiveMinutes,
         cache_key: "session_1".into(),
         previous_end: None,
+        max_output_tokens: None,
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
@@ -626,6 +627,31 @@ fn max_tokens_is_the_models_limit_and_never_exceeds_it() {
 }
 
 #[test]
+fn the_requests_own_output_limit_is_capped_by_the_models() {
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let limited = Endpoint {
+        max_output_tokens: Some(4096),
+        ..endpoint(&server)
+    };
+    let low = ModelRequest {
+        max_output_tokens: Some(1),
+        ..request()
+    };
+    let high = ModelRequest {
+        max_output_tokens: Some(9000),
+        ..request()
+    };
+    run(Box::new(Messages::new(limited.clone()).request(&low)))
+        .0
+        .unwrap();
+    run(Box::new(Messages::new(limited).request(&high)))
+        .0
+        .unwrap();
+    assert_eq!(sent_body(&server, 0)["max_tokens"], 1);
+    assert_eq!(sent_body(&server, 1)["max_tokens"], 4096);
+}
+
+#[test]
 fn an_enum_with_an_object_or_array_value_is_sent_not_strict() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let with_enum = |name: &str, values: Value| ToolDefinition {
@@ -714,6 +740,7 @@ fn the_previous_end_marker_lands_on_the_boundary_it_names() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
+        max_output_tokens: None,
         cache_lifetime: CacheLifetime::OneHour,
         ..request()
     };
@@ -763,6 +790,7 @@ fn no_request_carries_more_than_four_cache_markers() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
+        max_output_tokens: None,
         ..request()
     };
     // Model data that marks five tools of its own.
@@ -807,6 +835,7 @@ fn past_four_markers_the_new_end_goes_before_the_previous_end() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
+        max_output_tokens: None,
         ..request()
     };
     run(Box::new(Messages::new(declared).request(&request)))

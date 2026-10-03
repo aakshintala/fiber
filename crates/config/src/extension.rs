@@ -83,6 +83,11 @@ pub struct ProviderData {
     pub headers: BTreeMap<String, String>,
     /// Its models.
     pub models: Vec<ModelData>,
+    /// A small, fast model of this provider for the reviewer when
+    /// `reviewer.model` is unset (`docs/model-routing.md`, "What a provider
+    /// extension declares").
+    #[serde(default)]
+    pub reviewer_model: Option<String>,
 }
 
 /// One model in a provider's data (`docs/model-routing.md`, "What a provider

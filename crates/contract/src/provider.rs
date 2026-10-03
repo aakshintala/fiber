@@ -62,6 +62,10 @@ pub struct ModelRequest {
     /// cache marker there (`docs/prompt-cache.md`, "Cache markers and keys").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub previous_end: Option<usize>,
+    /// The request's own output limit; never above the model's
+    /// (`docs/errors.md`, "Output tokens").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_output_tokens: Option<u64>,
 }
 
 /// One tool as the model sees it.

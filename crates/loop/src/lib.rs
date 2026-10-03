@@ -280,6 +280,7 @@ impl Loop {
             cache_key: self.cache_key.clone(),
             conversation: self.conversation.clone(),
             previous_end: self.sent,
+            max_output_tokens: None,
         };
         if let Some(completed) = self.over_budget() {
             return Ok(Step::Ended(completed));

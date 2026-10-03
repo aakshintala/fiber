@@ -236,14 +236,17 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     }
     // The output limit is the model's, or the model data's own when lower
     // (`docs/errors.md`, "Output tokens").
-    if let (Some(limit), Some(Value::Object(generation))) =
-        (endpoint.max_output_tokens, body.get_mut("generationConfig"))
-    {
-        let max = generation
-            .get("maxOutputTokens")
-            .and_then(Value::as_u64)
-            .map_or(limit, |n| n.min(limit));
-        generation.insert("maxOutputTokens".into(), json!(max));
+    if let Some(limit) = endpoint.output_limit(request.max_output_tokens) {
+        let generation = body
+            .entry("generationConfig")
+            .or_insert_with(|| Value::Object(Map::new()));
+        if let Value::Object(generation) = generation {
+            let max = generation
+                .get("maxOutputTokens")
+                .and_then(Value::as_u64)
+                .map_or(limit, |n| n.min(limit));
+            generation.insert("maxOutputTokens".into(), json!(max));
+        }
     }
     Value::Object(body).to_string().into_bytes()
 }
