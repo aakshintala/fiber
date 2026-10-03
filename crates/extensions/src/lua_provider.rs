@@ -10,7 +10,6 @@ use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use config::{ModelData, Secret};
-use contract::clock::Clock;
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 

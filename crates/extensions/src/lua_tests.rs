@@ -11,10 +11,11 @@ use super::*;
 /// Wall-clock bound on a wait for the VM, a server, or a thread.
 const WAIT: Duration = Duration::from_secs(5);
 
-/// Hub-state polling bound from origin/main's `until` helper.
+/// Bound on a wait for the hub's state, a held request to reach its server,
+/// or the extension thread to quit.
 const WAIT_UNTIL: Duration = Duration::from_secs(2);
 
-/// How long to wait for a hold-server accept signal.
+/// Bound on a wait for a test server to accept, or a caller to park.
 const WAIT_SERVER: Duration = Duration::from_secs(3);
 
 /// A panic in a host function is never a Lua error the extension's `pcall`
