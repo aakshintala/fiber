@@ -209,7 +209,7 @@ fn the_documented_manifest_reads() {
         &dir.join("extension.json"),
         r#"{"name": "github.com/acme/fiber-acme", "version": "v1.4.0", "fiber": "0.3.0",
             "api": 1, "depends": {"github.com/acme/oauth-helper": "v1.2.0"},
-            "repo_settings": ["workspace_url"], "prompt": "prompt.md"}"#,
+            "repo_settings": ["workspace_url"], "prompt": "prompt.md", "memory_mib": 8}"#,
     );
     let manifest = read_manifest(&dir).unwrap();
     assert_eq!(manifest.name, "github.com/acme/fiber-acme");
@@ -217,6 +217,45 @@ fn the_documented_manifest_reads() {
     assert_eq!(manifest.fiber, "0.3.0");
     assert_eq!(manifest.api, 1);
     assert_eq!(manifest.depends["github.com/acme/oauth-helper"], "v1.2.0");
+    assert_eq!(manifest.memory_mib, Some(8));
+}
+
+#[test]
+fn memory_mib_absent_or_null_is_none_and_a_positive_value_reads() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let base = r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}"#;
+    setup.write(&dir.join("extension.json"), base);
+    assert_eq!(read_manifest(&dir).unwrap().memory_mib, None);
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1, "memory_mib": null}"#,
+    );
+    assert_eq!(read_manifest(&dir).unwrap().memory_mib, None);
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1, "memory_mib": 8}"#,
+    );
+    assert_eq!(read_manifest(&dir).unwrap().memory_mib, Some(8));
+}
+
+#[test]
+fn memory_mib_zero_or_overflowing_bytes_is_invalid() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    for memory_mib in [0_u64, 17_592_186_044_416] {
+        setup.write(
+            &dir.join("extension.json"),
+            &format!(
+                r#"{{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1, "memory_mib": {memory_mib}}}"#
+            ),
+        );
+        let err = read_manifest(&dir).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+        let msg = err.to_string();
+        assert!(msg.contains("memory_mib"), "{msg}");
+        assert!(msg.contains("extension.json"), "{msg}");
+    }
 }
 
 #[test]

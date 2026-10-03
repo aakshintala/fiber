@@ -13,6 +13,7 @@
 //! and abandons the VM. What every caller waits on, and when, is `lua/hub.rs`.
 
 use std::collections::BTreeMap;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -24,12 +25,10 @@ use serde_json::Value;
 
 use crate::{Error, host};
 
-/// Each Lua extension's memory cap. Past it, an allocation is a Lua error in
+/// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
+/// and cost when nothing is loaded"). Past it, an allocation is a Lua error in
 /// that extension's VM, and a file larger than it is not read.
-// debt: weakens docs/extensions.md, "Loading, and cost when nothing is
-// loaded"; fixed by #369. One 64 MiB cap for every extension, not 1 MiB with
-// a manifest memory_mib.
-pub const MEMORY_CAP: usize = 64 << 20;
+pub const MEMORY_CAP: usize = 1 << 20;
 
 /// The script Fiber runs when it creates the VM.
 // docs/configuration.md, "An extension's manifest".
@@ -124,6 +123,7 @@ pub struct LuaExtension {
     name: String,
     dir: PathBuf,
     home: PathBuf,
+    memory_cap: usize,
     /// The state every caller and the extension's thread observe.
     hub: Arc<Hub>,
 }
@@ -142,8 +142,15 @@ impl LuaExtension {
             name: name.into(),
             dir: dir.into(),
             home: home.into(),
+            memory_cap: MEMORY_CAP,
             hub: Hub::new(clock),
         }
+    }
+
+    /// Sets this extension's memory cap in bytes.
+    pub fn with_memory_cap(mut self, bytes: NonZeroUsize) -> Self {
+        self.memory_cap = bytes.get();
+        self
     }
 
     /// The clock this extension's deadlines read.
@@ -259,11 +266,16 @@ impl LuaExtension {
             return Ok(());
         }
         let load_by = self.hub.clock().now().checked_add(LOAD_TIMEOUT);
-        let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
+        let (name, dir, home, memory_cap) = (
+            self.name.clone(),
+            self.dir.clone(),
+            self.home.clone(),
+            self.memory_cap,
+        );
         let hub = Arc::clone(&self.hub);
         thread::Builder::new()
             .name(format!("lua {}", self.name))
-            .spawn(move || schedule::serve(&name, &dir, &home, &hub, load_by))
+            .spawn(move || schedule::serve(&name, &dir, &home, &hub, load_by, memory_cap))
             .map_err(|source| Error::Io {
                 path: self.dir.clone(),
                 source,
@@ -363,6 +375,7 @@ impl Vm {
         home: &Path,
         clock: Arc<dyn Clock>,
         load_by: Option<Instant>,
+        memory_cap: usize,
     ) -> Result<Self, Error> {
         let deadline = Deadline::new(Arc::clone(&clock));
         deadline.restore(load_by);
@@ -384,9 +397,9 @@ impl Vm {
             LuaOptions::new().catch_rust_panics(false),
         )
         .map_err(lua_error)?;
-        lua.set_memory_limit(MEMORY_CAP).map_err(lua_error)?;
+        lua.set_memory_limit(memory_cap).map_err(lua_error)?;
         let (commands, providers) =
-            setup::install(&lua, &deadline, dir.clone()).map_err(lua_error)?;
+            setup::install(&lua, &deadline, dir.clone(), memory_cap).map_err(lua_error)?;
         let http_tag = host::install(&lua, home.to_owned()).map_err(lua_error)?;
         let vm = Self {
             lua,
@@ -397,7 +410,7 @@ impl Vm {
             providers,
         };
 
-        let entry = match setup::load_file(&vm.lua, &dir, ENTRY) {
+        let entry = match setup::load_file(&vm.lua, &dir, ENTRY, memory_cap) {
             Ok(Ok(entry)) => entry,
             Ok(Err(message)) => return Err(fail(message)),
             Err(e) => return Err(lua_error(e)),

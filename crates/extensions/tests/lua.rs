@@ -6,6 +6,7 @@
 mod common;
 
 use std::io::{Read, Write};
+use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::sync::mpsc;
 use std::time::Duration;
@@ -419,6 +420,55 @@ fn a_lua_error_releases_the_extensions_lock() {
             .expect("waited for the lock to be taken")
     );
     assert_eq!(call(&ext, "echo", "free").unwrap(), "free");
+}
+
+#[test]
+fn the_default_memory_cap_is_one_mib() {
+    assert_eq!(extensions::MEMORY_CAP, 1 << 20);
+}
+
+#[test]
+fn allocation_past_the_default_cap_fails_and_a_raised_cap_allows_it() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        r#"fiber.command("alloc", { timeout = 5000, run = function()
+  return #string.rep("x", 1536 * 1024)
+end })"#,
+    );
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir.clone(), setup.home(), clock.clone());
+    let err = call(&ext, "alloc", "").unwrap_err();
+    let Error::Lua { message, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert!(message.contains("not enough memory"), "{message}");
+    let raised = Arc::new(
+        LuaExtension::new("ext", dir, setup.home(), clock)
+            .with_memory_cap(NonZeroUsize::new(4 << 20).unwrap()),
+    );
+    assert_eq!(call(&raised, "alloc", "").unwrap(), "1572864");
+}
+
+#[test]
+fn a_raised_cap_still_bounds_file_reads() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(&dir.join("init.lua"), "local m = require(\"big\")\n");
+    let big = std::fs::File::create(dir.join("big.lua")).unwrap();
+    big.set_len(u64::try_from(extensions::MEMORY_CAP).unwrap() + 1)
+        .unwrap();
+    let ext = Arc::new(
+        LuaExtension::new("ext", dir, setup.home(), FakeClock::new())
+            .with_memory_cap(NonZeroUsize::new(2 << 20).unwrap()),
+    );
+    let err = call(&ext, "x", "").unwrap_err();
+    let Error::Lua { message, .. } = &err else {
+        panic!("{err:?}")
+    };
+    assert!(message.starts_with("init.lua:1: big.lua:"), "{message}");
+    assert!(!message.contains("is larger than"), "{message}");
 }
 
 #[test]

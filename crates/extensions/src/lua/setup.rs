@@ -12,7 +12,7 @@ use std::time::Instant;
 use contract::clock::Clock;
 use mlua::{Function, HookTriggers, Lua, Table, Thread, VmState};
 
-use super::{CHECK_EVERY, MEMORY_CAP, PRELUDE};
+use super::{CHECK_EVERY, PRELUDE};
 
 use crate::host;
 
@@ -29,6 +29,7 @@ pub(super) fn install(
     lua: &Lua,
     deadline: &Deadline,
     dir: PathBuf,
+    memory_cap: usize,
 ) -> mlua::Result<(Table, Table)> {
     let globals = lua.globals();
     for name in ["print", "warn", "dofile", "loadfile"] {
@@ -42,7 +43,7 @@ pub(super) fn install(
     })?;
     let load_module = lua.create_function(move |lua, name: String| {
         let file = format!("{}.lua", name.replace('.', "/"));
-        Ok(match load_file(lua, &dir, &file)? {
+        Ok(match load_file(lua, &dir, &file, memory_cap)? {
             Ok(chunk) => (Some(chunk), None),
             Err(message) => (None, Some(message)),
         })
@@ -60,6 +61,7 @@ pub(super) fn load_file(
     lua: &Lua,
     dir: &Path,
     file: &str,
+    memory_cap: usize,
 ) -> mlua::Result<Result<Function, String>> {
     let path = match dir.join(file).canonicalize() {
         Ok(path) if path.starts_with(dir) => path,
@@ -73,15 +75,15 @@ pub(super) fn load_file(
     let mut source = Vec::new();
     // One byte past the cap tells a file at the cap from one over it. The
     // bound is on the read itself, so a file that grows cannot pass it.
-    let limit = u64::try_from(MEMORY_CAP)
+    let limit = u64::try_from(memory_cap)
         .unwrap_or(u64::MAX)
         .saturating_add(1);
     if let Err(e) = File::open(&path).and_then(|f| f.take(limit).read_to_end(&mut source)) {
         return Ok(Err(format!("`{file}`: {e}")));
     }
-    if source.len() > MEMORY_CAP {
+    if source.len() > memory_cap {
         return Ok(Err(format!(
-            "`{file}` is larger than the extension's memory cap of {MEMORY_CAP} bytes"
+            "`{file}` is larger than the extension's memory cap of {memory_cap} bytes"
         )));
     }
     let name = path
