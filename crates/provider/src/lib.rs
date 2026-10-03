@@ -53,49 +53,7 @@ impl Endpoint {
     /// The output limit to send: the smaller of the request's limit and the
     /// model's when both are set (`docs/errors.md`, "Output tokens").
     pub fn output_limit(&self, request: Option<u64>) -> Option<u64> {
-        match (request, self.max_output_tokens) {
-            (None, None) => None,
-            (Some(limit), None) => Some(limit),
-            (None, Some(limit)) => Some(limit),
-            (Some(request), Some(model)) => Some(request.min(model)),
-        }
-    }
-}
-
-#[cfg(test)]
-mod endpoint_tests {
-    use super::Endpoint;
-
-    fn endpoint(max_output_tokens: Option<u64>) -> Endpoint {
-        Endpoint {
-            max_output_tokens,
-            ..Endpoint::default()
-        }
-    }
-
-    #[test]
-    fn output_limit_is_none_when_neither_side_sets_one() {
-        assert_eq!(endpoint(None).output_limit(None), None);
-    }
-
-    #[test]
-    fn output_limit_is_the_request_when_the_model_sets_none() {
-        assert_eq!(endpoint(None).output_limit(Some(1)), Some(1));
-    }
-
-    #[test]
-    fn output_limit_is_the_model_when_the_request_sets_none() {
-        assert_eq!(endpoint(Some(4096)).output_limit(None), Some(4096));
-    }
-
-    #[test]
-    fn output_limit_is_the_request_when_it_is_below_the_model() {
-        assert_eq!(endpoint(Some(4096)).output_limit(Some(1)), Some(1));
-    }
-
-    #[test]
-    fn output_limit_is_the_model_when_the_request_is_above_it() {
-        assert_eq!(endpoint(Some(4096)).output_limit(Some(9000)), Some(4096));
+        request.into_iter().chain(self.max_output_tokens).min()
     }
 }
 
@@ -142,3 +100,7 @@ impl Compat {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "endpoint_tests.rs"]
+mod endpoint_tests;

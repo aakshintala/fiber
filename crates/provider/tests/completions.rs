@@ -576,7 +576,6 @@ fn declared_cache_markers_go_on_the_system_prompt_the_previous_end_and_the_new_e
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(3),
-        max_output_tokens: None,
         cache_lifetime: CacheLifetime::OneHour,
         ..request()
     };
@@ -612,7 +611,6 @@ fn no_request_carries_more_than_four_cache_markers() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(3),
-        max_output_tokens: None,
         ..request()
     };
     // Model data that marks two tools of its own.
@@ -1128,7 +1126,6 @@ fn a_schema_property_named_cache_control_is_not_a_marker() {
         }],
         conversation: four_turn_conversation(),
         previous_end: Some(3),
-        max_output_tokens: None,
         ..request()
     };
     // Model data that marks a tool of its own: with Fiber's three, four.
@@ -1296,7 +1293,6 @@ fn a_model_data_marker_mixed_with_fibers_markers_sends_one_lifetime() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(3),
-        max_output_tokens: None,
         cache_lifetime: CacheLifetime::OneHour,
         ..request()
     };

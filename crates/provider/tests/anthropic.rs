@@ -740,7 +740,6 @@ fn the_previous_end_marker_lands_on_the_boundary_it_names() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
-        max_output_tokens: None,
         cache_lifetime: CacheLifetime::OneHour,
         ..request()
     };
@@ -790,7 +789,6 @@ fn no_request_carries_more_than_four_cache_markers() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
-        max_output_tokens: None,
         ..request()
     };
     // Model data that marks five tools of its own.
@@ -835,7 +833,6 @@ fn past_four_markers_the_new_end_goes_before_the_previous_end() {
     let request = ModelRequest {
         conversation: four_turn_conversation(),
         previous_end: Some(2),
-        max_output_tokens: None,
         ..request()
     };
     run(Box::new(Messages::new(declared).request(&request)))
