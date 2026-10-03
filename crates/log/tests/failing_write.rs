@@ -32,7 +32,12 @@ fn child_writing_past_a_file_size_limit() {
     let Ok(sessions) = std::env::var("LOG_TEST_SESSIONS") else {
         return;
     };
-    let log = Log::open(Path::new(&sessions), id("s_1")).unwrap();
+    let log = Log::open(
+        Path::new(&sessions),
+        id("s_1"),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
     let mut watcher = log.watch();
     // The watcher falls far behind before the failure.
     let written: Vec<_> = (0..STEPS)
@@ -110,7 +115,7 @@ const DEADLINE: Duration = Duration::from_secs(10);
 #[test]
 fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {
     let tmp = TestDir::new("fail-write");
-    let log = Log::create(tmp.path(), id("s_1")).unwrap();
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     let first = log.append(&session_started(), None, None).unwrap();
     drop(log);
     let path = tmp.session(&id("s_1")).join("events.jsonl");
@@ -141,7 +146,7 @@ fn a_failed_write_poisons_the_log_and_reopening_repairs_it() {
     let complete = read(&dir).unwrap();
     assert_eq!(complete.len(), 1 + STEPS);
     assert_eq!(complete[0], first);
-    let log = Log::open(tmp.path(), id("s_1")).unwrap();
+    let log = Log::open(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
     let next = log.append(&empty("step_started"), None, None).unwrap();
     assert_eq!(next.seq.map(|s| s.0), Some(1 + STEPS as u64));
     assert_eq!(read(&dir).unwrap().len(), 2 + STEPS);

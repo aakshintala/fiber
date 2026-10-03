@@ -326,7 +326,7 @@ fn approved_calls_run_concurrently_one_thread_each() {
 
 #[test]
 fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
-    let session_root = std::env::temp_dir();
+    let session_root = support::TempDir::new();
     let write = |name: &'static str, path: &str| -> Arc<dyn Tool> {
         Arc::new(TestTool::declaring(
             name,
@@ -341,7 +341,7 @@ fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
         write("fiber", ".fiber/config.json"),
         write(
             "outside",
-            &session_root.join("elsewhere").display().to_string(),
+            &session_root.0.join("elsewhere").display().to_string(),
         ),
         Arc::new(TestTool::declaring(
             "shell",

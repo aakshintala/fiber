@@ -12,7 +12,7 @@
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, SocketAddr, TcpStream};
 use std::path::Path;
-use std::sync::mpsc;
+use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
@@ -20,8 +20,9 @@ use fakes::{ProviderServer, Request, Response};
 
 /// The deadline on each wait: connecting, writing the whole request, and
 /// reading the whole reply. A stall fails naming the wait. A test makes at
-/// most 3 exchanges of 3 waits, 18 s in all, and twice that is under
-/// nextest's 120 s (docs/testing.md, "Waits and timeouts").
+/// most 3 exchanges of 3 waits (18 s). An `await_requests` test adds one 5 s
+/// wait. Twice 23 s is under nextest's 120 s (`docs/testing.md`, "Waits and
+/// timeouts").
 const DEADLINE: Duration = Duration::from_secs(2);
 
 fn addr(server: &ProviderServer) -> SocketAddr {
@@ -281,4 +282,43 @@ fn a_malformed_chunked_body_gets_a_400_naming_why_and_is_recorded() {
     assert_eq!(requests.len(), 3);
     assert_eq!(requests[0].body, b"abc");
     assert_eq!(requests[1].body, b"ab");
+}
+
+/// `await_requests` on a helper, so a mutant that waits out its 30 s `within`
+/// fails this 5 s wait instead of hanging the test.
+fn await_requests_within(server: &Arc<ProviderServer>, count: usize) -> bool {
+    let (tx, rx) = mpsc::channel();
+    let server = Arc::clone(server);
+    thread::spawn(
+        move || match tx.send(server.await_requests(count, Duration::from_secs(30))) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        },
+    );
+    rx.recv_timeout(Duration::from_secs(5))
+        .expect("waited for await_requests")
+}
+
+#[test]
+fn await_requests_is_false_before_any_request() {
+    let server = ProviderServer::start([Response::status(200, "ok")]).unwrap();
+    assert!(!server.await_requests(1, Duration::ZERO));
+}
+
+#[test]
+fn await_requests_is_true_when_the_recorded_count_equals_the_wait() {
+    let server = Arc::new(ProviderServer::start([Response::status(200, "ok")]).unwrap());
+    post(&server, "/one", &[], b"");
+    assert_eq!(server.requests().len(), 1);
+    assert!(await_requests_within(&server, 1));
+}
+
+#[test]
+fn await_requests_is_true_when_more_than_the_count_are_recorded() {
+    let server = Arc::new(
+        ProviderServer::start([Response::status(200, "ok"), Response::status(200, "ok")]).unwrap(),
+    );
+    post(&server, "/one", &[], b"");
+    post(&server, "/two", &[], b"");
+    assert!(server.requests().len() > 1);
+    assert!(await_requests_within(&server, 1));
 }

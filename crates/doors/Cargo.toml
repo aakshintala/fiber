@@ -10,5 +10,8 @@ contract = { path = "../contract" }
 log = { path = "../log" }
 serde_json.workspace = true
 
+[dev-dependencies]
+fakes = { path = "../fakes" }
+
 [lints]
 workspace = true

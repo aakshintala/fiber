@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use contract::events::{
     ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
@@ -117,18 +117,17 @@ impl Trace {
 
     /// Blocks until `line` has been pushed, and fails the test at [`DEADLINE`].
     fn wait_for(&self, line: &str) {
-        let mut notes = self.notes.lock().unwrap();
-        let deadline = Instant::now() + DEADLINE;
-        while !notes.iter().any(|note| note == line) {
-            let remaining = deadline.saturating_duration_since(Instant::now());
-            assert!(!remaining.is_zero(), "timed out waiting for {line}");
-            let (guard, result) = self.changed.wait_timeout(notes, remaining).unwrap();
-            notes = guard;
-            assert!(
-                !(result.timed_out() && !notes.iter().any(|note| note == line)),
-                "timed out waiting for {line}"
-            );
-        }
+        let notes = self.notes.lock().unwrap();
+        let (notes, _) = self
+            .changed
+            .wait_timeout_while(notes, DEADLINE, |notes| {
+                !notes.iter().any(|note| note == line)
+            })
+            .unwrap();
+        assert!(
+            notes.iter().any(|note| note == line),
+            "timed out waiting for {line}"
+        );
     }
 }
 
@@ -314,7 +313,8 @@ impl Session {
         let workspace = home.0.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let id = SessionId("s_test".into());
-        let log = Arc::new(Log::create(&home.0, id.clone()).unwrap());
+        let log =
+            Arc::new(Log::create(&home.0, id.clone(), fakes::clock::FakeClock::new()).unwrap());
         let mut watcher = log.watch();
         let (forward, lines) = mpsc::channel();
         thread::spawn(move || {

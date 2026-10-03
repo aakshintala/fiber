@@ -5,6 +5,7 @@
 //! (`docs/errors.md`), and the provider and tool seams (`docs/architecture.md`). It
 //! contains no behaviour beyond serialisation.
 
+pub mod clock;
 mod codes;
 pub mod commands;
 mod envelope;

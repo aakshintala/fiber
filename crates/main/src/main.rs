@@ -9,6 +9,7 @@
 )]
 
 mod cli;
+mod clock;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
@@ -48,6 +49,7 @@ fn main() -> ExitCode {
 fn run() -> i32 {
     // Help and version print before anything reads the home, configuration,
     // credentials, or stdin.
+    let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
     match cli::parse() {
         cli::Invocation::Print(error) => {
             // A closed stdout leaves nobody to tell, as `fiber list` does.
@@ -82,7 +84,7 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
             match cli::ask_parts(&args.prompt) {
-                Ok((prompt, dash)) => ask(args.model, prompt, dash),
+                Ok((prompt, dash)) => ask(args.model, prompt, dash, clock),
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
@@ -92,13 +94,13 @@ fn run() -> i32 {
             } else {
                 Request::Install(name_or_path)
             };
-            install(request)
+            install(request, clock.as_ref())
         }
         cli::Invocation::Run(Some(cli::Commands::Update { name })) => {
-            install(Request::Update(name))
+            install(Request::Update(name), clock.as_ref())
         }
-        cli::Invocation::Run(Some(cli::Commands::Remove { name })) => remove(&name),
-        cli::Invocation::Run(Some(cli::Commands::List)) => list(),
+        cli::Invocation::Run(Some(cli::Commands::Remove { name })) => remove(&name, clock.as_ref()),
+        cli::Invocation::Run(Some(cli::Commands::List)) => list(clock.as_ref()),
     }
 }
 
@@ -106,8 +108,8 @@ fn run() -> i32 {
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
-fn install(request: Request) -> i32 {
-    match install_request(request) {
+fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
+    match install_request(request, clock) {
         Ok(Some(names)) => {
             for name in names {
                 eprintln!("fiber: installed {name}");
@@ -127,13 +129,17 @@ fn install(request: Request) -> i32 {
 
 /// Installs what `request` needs once approved; `None` when the person
 /// declined.
-fn install_request(request: Request) -> Result<Option<Vec<String>>, Failure> {
+fn install_request(
+    request: Request,
+    clock: &dyn contract::clock::Clock,
+) -> Result<Option<Vec<String>>, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let plan = extensions::plan(
         &home,
         &request,
         env!("CARGO_PKG_VERSION"),
         &Origin::github(),
+        clock,
     )
     .map_err(|e| failed(e.code(), e))?;
     let summaries: Vec<doors::InstallSummary> = plan
@@ -175,11 +181,12 @@ fn install_request(request: Request) -> Result<Option<Vec<String>>, Failure> {
 
 /// `fiber remove <name>`: removes an extension, the dependencies nothing
 /// else uses, and their data and settings, asking first in a terminal.
-fn remove(typed: &str) -> i32 {
+fn remove(typed: &str, clock: &dyn contract::clock::Clock) -> i32 {
     let removed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {
-            let removal = extensions::removal(&home, typed).map_err(|e| failed(e.code(), e))?;
+            let removal =
+                extensions::removal(&home, typed, clock).map_err(|e| failed(e.code(), e))?;
             let stdin = io::stdin();
             let terminal = stdin.is_terminal();
             let approved = doors::remove_approved(
@@ -212,10 +219,10 @@ fn remove(typed: &str) -> i32 {
 }
 
 /// `fiber list`: one line per installed extension: name, version and commit.
-fn list() -> i32 {
+fn list(clock: &dyn contract::clock::Clock) -> i32 {
     let listed = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
-        .and_then(|home| extensions::list(&home).map_err(|e| failed(e.code(), e)));
+        .and_then(|home| extensions::list(&home, clock).map_err(|e| failed(e.code(), e)));
     match listed {
         Ok(installed) => {
             let mut out = io::stdout().lock();
@@ -254,7 +261,12 @@ fn fail(e: Failure) -> i32 {
 }
 
 /// `fiber ask`: one session, one turn, its events on stdout.
-fn ask(model: Option<String>, arg: Option<String>, dash: bool) -> i32 {
+fn ask(
+    model: Option<String>,
+    arg: Option<String>,
+    dash: bool,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> i32 {
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let prompt = match doors::prompt(arg, dash, &mut stdin.lock(), terminal) {
@@ -267,7 +279,7 @@ fn ask(model: Option<String>, arg: Option<String>, dash: bool) -> i32 {
     };
     let id = SessionId(doors::mint("s_"));
     let dir = parts.sessions.join(&id.0);
-    let log = match Log::create(&parts.sessions, id) {
+    let log = match Log::create(&parts.sessions, id, clock) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };

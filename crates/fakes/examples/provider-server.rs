@@ -44,9 +44,10 @@ fn main() -> ExitCode {
     println!("listening on {}", server.url());
     let mut printed = 0;
     loop {
-        // A jig, not a test: polling is the simplest way to print as requests
-        // arrive.
-        std::thread::sleep(Duration::from_millis(50));
+        // Blocks until the next request, or a day passes and it looks again.
+        if !server.await_requests(printed + 1, Duration::from_secs(24 * 60 * 60)) {
+            continue;
+        }
         for request in server.requests().iter().skip(printed) {
             print!("{}", show(request));
             printed += 1;

@@ -14,3 +14,8 @@ The skills speak in terms of canonical triage roles: three categories and five s
 | `wontfix`         | `wontfix`         | Will not be actioned                               |
 
 When a skill names a role, apply the label in the second column.
+
+Two more labels sit outside the roles:
+
+- `blocked`: the ticket is specified but waits on another ticket, or on a wave not yet ticketed. Its body names what it waits for. When that lands, swap `blocked` for `ready-for-agent`.
+- `future-candidate`: closed as not planned for now, to revisit if the need comes up. The closing comment says what would bring it back.

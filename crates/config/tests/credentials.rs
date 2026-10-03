@@ -88,11 +88,14 @@ fn a_failing_stored_credential_does_not_fall_back() {
 fn a_declared_environment_variable_file_or_command_is_read() {
     let setup = Setup::new();
     let config = setup.load(&[]).unwrap();
-    let home = std::env::var("HOME").unwrap();
+    let manifest = std::env::var("CARGO_MANIFEST_DIR").unwrap();
+    assert_eq!(manifest, env!("CARGO_MANIFEST_DIR"));
     let key = config
-        .credential(&acme(Some(CredentialSource::Env("HOME".into()))))
+        .credential(&acme(Some(CredentialSource::Env(
+            "CARGO_MANIFEST_DIR".into(),
+        ))))
         .unwrap();
-    assert_eq!(key.expose(), home.trim());
+    assert_eq!(key.expose(), manifest);
 
     let file = setup.root().join("key");
     setup.write(&file, "from-file\n");

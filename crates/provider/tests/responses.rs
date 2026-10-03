@@ -19,7 +19,7 @@ use std::net::TcpListener;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, mpsc};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
 use contract::provider::{
@@ -810,7 +810,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let runner = Arc::clone(&call);
     thread::spawn(move || {
         let result = runner.run(&mut |delta| first.send(delta).unwrap());
-        done.send((result, Instant::now())).unwrap();
+        done.send(result).unwrap();
     });
     let delta = first_seen
         .recv_timeout(DEADLINE)
@@ -818,18 +818,10 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     assert_eq!(delta, Delta::Text(TextDelta { text: "Hel".into() }));
 
     // The reader is now blocked waiting for the next bytes.
-    let cancelled_at = Instant::now();
     call.cancel();
-    let (result, returned_at) = finished
+    let result = finished
         .recv_timeout(DEADLINE)
         .expect("waited for run to return after the cancel");
-    let elapsed = returned_at.duration_since(cancelled_at);
-    println!(
-        "cancel to blocked read returning: {} µs ({} {})",
-        elapsed.as_micros(),
-        std::env::consts::OS,
-        std::env::consts::ARCH
-    );
     assert_eq!(result, Err(CallError::Cancelled));
 }
 

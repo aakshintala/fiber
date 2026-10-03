@@ -6,8 +6,10 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Instant;
 
+use contract::clock::Clock;
 use mlua::{Function, HookTriggers, Lua, Table, Thread, VmState};
 
 use super::{CHECK_EVERY, MEMORY_CAP, PRELUDE};
@@ -115,23 +117,33 @@ pub(super) fn message(e: &mlua::Error) -> String {
 /// deadline passes it raises a timeout and re-arms its coroutine to raise one
 /// on every instruction, so a `pcall` that catches the first cannot run on
 /// (`research/extension-runtime/pass1/`, `interrupt_escalate`).
-#[derive(Clone, Default)]
-pub(crate) struct Deadline(Rc<Cell<Option<Instant>>>);
+#[derive(Clone)]
+pub(crate) struct Deadline {
+    at: Rc<Cell<Option<Instant>>>,
+    clock: Arc<dyn Clock>,
+}
 
 impl Deadline {
+    pub(super) fn new(clock: Arc<dyn Clock>) -> Self {
+        Self {
+            at: Rc::default(),
+            clock,
+        }
+    }
+
     /// The deadline the hook stops at, if one is set.
     pub(super) fn at(&self) -> Option<Instant> {
-        self.0.get()
+        self.at.get()
     }
 
     /// Points the hook at `at`, the deadline of the callback about to run.
     pub(super) fn restore(&self, at: Option<Instant>) {
-        self.0.set(at);
+        self.at.set(at);
     }
 
     /// Whether the deadline has passed.
     pub(super) fn passed(&self) -> bool {
-        self.0.get().is_some_and(|at| Instant::now() >= at)
+        self.at.get().is_some_and(|at| self.clock.now() >= at)
     }
 
     /// Arms `thread` so the hook stops it at this deadline.

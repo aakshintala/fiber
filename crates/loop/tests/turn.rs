@@ -524,7 +524,11 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
         "completed"
     );
     drop(session.inbox);
-    assert!(finished.recv_timeout(support::DEADLINE).unwrap());
+    assert!(
+        finished
+            .recv_timeout(support::DEADLINE)
+            .expect("waited for the loop to finish")
+    );
     ran.join().unwrap();
     assert_eq!(session.provider.requests().len(), 2);
 }

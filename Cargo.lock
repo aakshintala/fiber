@@ -213,6 +213,7 @@ name = "doors"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "fakes",
  "log 0.0.0",
  "serde_json",
 ]
@@ -427,6 +428,7 @@ name = "log"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "fakes",
  "proptest",
  "serde_json",
  "thiserror",

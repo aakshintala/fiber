@@ -1,10 +1,22 @@
-use std::io::Write;
+use std::io::Read;
 use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
 
+use fakes::clock::FakeClock;
+
 use super::hub::Progress;
 use super::*;
+
+/// Wall-clock bound on a wait for the VM, a server, or a thread.
+const WAIT: Duration = Duration::from_secs(5);
+
+/// Bound on a wait for the hub's state, a held request to reach its server,
+/// or the extension thread to quit.
+const WAIT_UNTIL: Duration = Duration::from_secs(2);
+
+/// Bound on a wait for a test server to accept, or a caller to park.
+const WAIT_SERVER: Duration = Duration::from_secs(3);
 
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
@@ -12,11 +24,13 @@ use super::*;
 /// the panic.
 #[test]
 fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
+    let clock = FakeClock::new();
     let vm = Vm::load(
         "fixture",
         &fakes::lua_fixture(),
         Path::new("/nonexistent-fiber-home"),
-        Instant::now().checked_add(LOAD_TIMEOUT),
+        clock.clone(),
+        Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()),
     )
     .unwrap();
     let boom = vm
@@ -30,7 +44,7 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         .into_function()
         .unwrap();
     vm.deadline
-        .restore(Instant::now().checked_add(LOAD_TIMEOUT));
+        .restore(Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()));
     let outcome = catch_unwind(AssertUnwindSafe(|| {
         vm.resume(f, "boom", LOAD_TIMEOUT, mlua::Value::Nil)
     }));
@@ -64,20 +78,24 @@ fn returned(next: Next) -> Result<Value, Error> {
     }
 }
 
-fn ago(ms: u64) -> Instant {
-    Instant::now()
-        .checked_sub(Duration::from_millis(ms))
-        .unwrap()
+/// An instant `ms` before `now`, on one fake clock's origin.
+fn ago(now: Instant, ms: u64) -> Instant {
+    now.checked_sub(Duration::from_millis(ms)).unwrap()
+}
+
+fn now() -> Instant {
+    FakeClock::new().origin()
 }
 
 /// A call waiting on registration sleeps until the entry script's grace
 /// ends, and no later.
 #[test]
 fn a_call_waiting_on_registration_sleeps_until_the_entry_scripts_grace_ends() {
-    let abandon_at = Instant::now().checked_add(Duration::from_secs(5));
+    let asked = now();
+    let abandon_at = asked.checked_add(Duration::from_secs(5));
     let mut shared = in_phase(Phase::Registering { abandon_at });
-    let id = shared.push(command("x"), Value::Null, Instant::now());
-    let Next::Sleep(until) = shared.judge("ext", id, &command("x"), Instant::now()) else {
+    let id = shared.push(command("x"), Value::Null, asked);
+    let Next::Sleep(until) = shared.judge("ext", id, &command("x"), asked, asked) else {
         panic!("a waiter returned during registration")
     };
     assert_eq!(until, abandon_at);
@@ -89,13 +107,14 @@ fn a_call_waiting_on_registration_sleeps_until_the_entry_scripts_grace_ends() {
 /// error instead of waiting on its own reply.
 #[test]
 fn every_call_waiting_on_an_abandoned_registration_gets_abandoned() {
+    let at = now();
     let mut shared = in_phase(Phase::Registering {
-        abandon_at: Some(ago(1)),
+        abandon_at: Some(ago(at, 1)),
     });
-    let first = shared.push(command("a"), Value::Null, ago(5));
-    let second = shared.push(command("b"), Value::Null, ago(5));
+    let first = shared.push(command("a"), Value::Null, ago(at, 5));
+    let second = shared.push(command("b"), Value::Null, ago(at, 5));
     for (id, name) in [(first, "a"), (second, "b")] {
-        let err = returned(shared.judge("ext", id, &command(name), ago(5))).unwrap_err();
+        let err = returned(shared.judge("ext", id, &command(name), ago(at, 5), at)).unwrap_err();
         let Error::Abandoned { callback, .. } = &err else {
             panic!("{err:?}")
         };
@@ -109,10 +128,12 @@ fn every_call_waiting_on_an_abandoned_registration_gets_abandoned() {
 /// the queue, and leaves the VM up.
 #[test]
 fn a_queued_call_past_its_own_timeout_times_out_and_the_vm_stays() {
+    let at = now();
     let mut shared = ready(&[("quick", 100), ("slow", 10_000)]);
-    let quick = shared.push(command("quick"), Value::Null, ago(150));
-    let slow = shared.push(command("slow"), Value::Null, ago(150));
-    let err = returned(shared.judge("ext", quick, &command("quick"), ago(150))).unwrap_err();
+    let asked = ago(at, 150);
+    let quick = shared.push(command("quick"), Value::Null, asked);
+    let slow = shared.push(command("slow"), Value::Null, asked);
+    let err = returned(shared.judge("ext", quick, &command("quick"), asked, at)).unwrap_err();
     assert!(
         matches!(&err, Error::Timeout { callback, timeout_ms: 100, .. } if callback == "quick"),
         "{err:?}"
@@ -122,19 +143,20 @@ fn a_queued_call_past_its_own_timeout_times_out_and_the_vm_stays() {
         shared.queue.iter().map(|job| job.id).collect::<Vec<_>>(),
         [slow]
     );
-    let Next::Sleep(until) = shared.judge("ext", slow, &command("slow"), ago(150)) else {
+    let Next::Sleep(until) = shared.judge("ext", slow, &command("slow"), asked, at) else {
         panic!("slow returned")
     };
-    assert!(until.is_some_and(|at| at > Instant::now() + Duration::from_secs(9)));
+    assert_eq!(until, Some(asked + Duration::from_secs(10)));
 }
 
 /// Once registration has published, a callback it did not register fails
 /// at once.
 #[test]
 fn a_call_the_entry_script_did_not_register_is_unknown() {
+    let at = now();
     let mut shared = ready(&[]);
-    let id = shared.push(command("nope"), Value::Null, Instant::now());
-    let err = returned(shared.judge("ext", id, &command("nope"), Instant::now())).unwrap_err();
+    let id = shared.push(command("nope"), Value::Null, at);
+    let err = returned(shared.judge("ext", id, &command("nope"), at, at)).unwrap_err();
     assert!(matches!(err, Error::UnknownCommand { .. }), "{err:?}");
     assert!(shared.queue.is_empty());
 }
@@ -143,17 +165,19 @@ fn a_call_the_entry_script_did_not_register_is_unknown() {
 /// thread is busy with another callback, times out alone: the VM stays.
 #[test]
 fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
+    let at = now();
     let mut shared = ready(&[("park", 100)]);
-    let id = shared.push(command("park"), Value::Null, ago(2000));
+    let asked = ago(at, 2000);
+    let id = shared.push(command("park"), Value::Null, asked);
     shared.queue.clear();
     shared.calls.insert(
         id,
         Progress::Started {
-            deadline: Some(ago(1100)),
+            deadline: Some(ago(at, 1100)),
             parked: true,
         },
     );
-    let err = returned(shared.judge("ext", id, &command("park"), ago(2000))).unwrap_err();
+    let err = returned(shared.judge("ext", id, &command("park"), asked, at)).unwrap_err();
     assert!(
         matches!(
             err,
@@ -170,28 +194,31 @@ fn a_parked_call_past_its_grace_times_out_and_the_vm_stays() {
 /// A running call waits its grace, then abandons the VM.
 #[test]
 fn a_running_call_past_its_grace_abandons_the_vm() {
+    let at = now();
     let mut shared = ready(&[("spin", 100)]);
-    let id = shared.push(command("spin"), Value::Null, ago(600));
+    let asked = ago(at, 600);
+    let id = shared.push(command("spin"), Value::Null, asked);
     shared.queue.clear();
+    let inside = ago(at, 500);
     shared.calls.insert(
         id,
         Progress::Started {
-            deadline: Some(ago(500)),
+            deadline: Some(inside),
             parked: false,
         },
     );
-    let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), ago(600)) else {
+    let Next::Sleep(until) = shared.judge("ext", id, &command("spin"), asked, at) else {
         panic!("returned inside its grace")
     };
-    assert!(until.is_some_and(|at| at > Instant::now()));
+    assert_eq!(until, Some(inside + GRACE));
     shared.calls.insert(
         id,
         Progress::Started {
-            deadline: Some(ago(1100)),
+            deadline: Some(ago(at, 1100)),
             parked: false,
         },
     );
-    let err = returned(shared.judge("ext", id, &command("spin"), ago(1200))).unwrap_err();
+    let err = returned(shared.judge("ext", id, &command("spin"), ago(at, 1200), at)).unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     assert!(matches!(
         shared.phase,
@@ -224,9 +251,10 @@ fn every_waiter_on_a_stopped_extension_gets_the_stored_error() {
     for error in stored {
         let text = error.to_string();
         let mut shared = in_phase(Phase::Stopped(error));
+        let at = now();
         for _ in 0..2 {
-            let id = shared.push(command("x"), Value::Null, Instant::now());
-            let err = returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap_err();
+            let id = shared.push(command("x"), Value::Null, at);
+            let err = returned(shared.judge("ext", id, &command("x"), at, at)).unwrap_err();
             assert_eq!(err.to_string(), text);
         }
     }
@@ -235,11 +263,12 @@ fn every_waiter_on_a_stopped_extension_gets_the_stored_error() {
 /// A finished call returns its result while the extension is up.
 #[test]
 fn a_finished_call_returns_its_result() {
+    let at = now();
     let mut shared = ready(&[("x", 1000)]);
-    let id = shared.push(command("x"), Value::Null, Instant::now());
+    let id = shared.push(command("x"), Value::Null, at);
     shared.finish(id, Ok(Value::String("done".to_owned())));
     assert_eq!(
-        returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap(),
+        returned(shared.judge("ext", id, &command("x"), at, at)).unwrap(),
         "done"
     );
     assert!(shared.calls.is_empty());
@@ -249,10 +278,11 @@ fn a_finished_call_returns_its_result() {
 /// the stopped error: Stopped is final for every waiter.
 #[test]
 fn a_finished_call_on_a_stopped_extension_gets_the_stopped_error() {
+    let at = now();
     let mut shared = in_phase(Phase::Stopped(hub::stopped("ext")));
-    let id = shared.push(command("x"), Value::Null, Instant::now());
+    let id = shared.push(command("x"), Value::Null, at);
     shared.finish(id, Ok(Value::String("done".to_owned())));
-    let err = returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap_err();
+    let err = returned(shared.judge("ext", id, &command("x"), at, at)).unwrap_err();
     assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
     assert!(shared.calls.is_empty());
 }
@@ -262,13 +292,15 @@ fn a_finished_call_on_a_stopped_extension_gets_the_stopped_error() {
 /// ends its wait.
 #[test]
 fn provider_functions_abandoning_registration_wakes_every_waiter() {
+    let clock = FakeClock::new();
     let ext = Arc::new(LuaExtension::new(
         "ext",
         fakes::lua_fixture(),
         "/nonexistent-fiber-home",
+        clock.clone(),
     ));
     ext.hub.lock().phase = Phase::Registering {
-        abandon_at: Some(ago(1)),
+        abandon_at: Some(clock.origin()),
     };
     let hub = Arc::clone(&ext.hub);
     let (waiting_tx, waiting_rx) = mpsc::channel();
@@ -282,27 +314,49 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
         }
         woke_tx.send(()).unwrap();
     });
-    waiting_rx.recv().unwrap();
+    waiting_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the other waiter to take the lock");
     // Its own thread, so a call that never returns fails the test.
     let (done_tx, done_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);
     thread::spawn(move || done_tx.send(caller.provider_functions("p")));
     let err = done_rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(WAIT)
         .expect("provider_functions never returned")
         .unwrap_err();
     assert!(matches!(err, Error::Abandoned { .. }), "{err:?}");
     // A hang guard only: without the wake the waiter never returns.
     woke_rx
-        .recv_timeout(Duration::from_secs(10))
+        .recv_timeout(WAIT)
         .expect("the other waiter was never woken");
 }
 
 /// An extension dropped while running is stopped, so its thread quits.
 #[test]
 fn dropping_the_extension_stops_it() {
-    let ext = LuaExtension::new("fixture", fakes::lua_fixture(), "/nonexistent-fiber-home");
-    assert_eq!(ext.command("echo", "hi").unwrap(), "hi");
+    let ext = Arc::new(LuaExtension::new(
+        "fixture",
+        fakes::lua_fixture(),
+        "/nonexistent-fiber-home",
+        FakeClock::new(),
+    ));
+    let caller = Arc::clone(&ext);
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let result = caller.command("echo", "hi");
+        drop(caller);
+        match done_tx.send(result) {
+            Ok(()) | Err(mpsc::SendError(_)) => {}
+        }
+    });
+    assert_eq!(
+        done_rx
+            .recv_timeout(WAIT)
+            .expect("waited for echo")
+            .unwrap(),
+        "hi"
+    );
     let hub = Arc::clone(&ext.hub);
     drop(ext);
     assert!(matches!(
@@ -314,43 +368,52 @@ fn dropping_the_extension_stops_it() {
 /// An extension directory in a fresh temporary directory, with `init`.
 fn extension(tag: &str, init: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("fiber-lua-{tag}-{}", std::process::id()));
+    // A process id comes round again; a killed run leaves its directory,
+    // fifos included, behind. Start from an empty one.
+    match std::fs::remove_dir_all(&dir) {
+        Ok(()) | Err(_) => {}
+    }
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("init.lua"), init).unwrap();
     dir
 }
 
-/// Runs the thread on `dir`, once a call to `first` is queued.
-fn serve_after(dir: &Path, first: &str) -> (Arc<Hub>, u64, thread::JoinHandle<()>) {
-    let hub = Arc::<Hub>::default();
+/// Runs the thread on `dir`, once a call to `first` is queued. The receiver
+/// gets one message when the thread returns.
+fn serve_after(
+    dir: &Path,
+    first: &str,
+    clock: &Arc<FakeClock>,
+) -> (Arc<Hub>, u64, mpsc::Receiver<()>) {
+    let hub = Hub::new(clock.clone());
+    let asked = clock.now();
     let id = {
         let mut shared = hub.lock();
         shared.phase = Phase::Registering { abandon_at: None };
-        shared.push(command(first), Value::String(String::new()), Instant::now())
+        shared.push(command(first), Value::String(String::new()), asked)
     };
     let (thread_hub, dir) = (Arc::clone(&hub), dir.to_owned());
-    let handle = thread::spawn(move || {
+    let (done_tx, done_rx) = mpsc::channel();
+    let load_by = asked.checked_add(LOAD_TIMEOUT);
+    thread::spawn(move || {
         schedule::serve(
             "ext",
             &dir,
             Path::new("/nonexistent-fiber-home"),
             &thread_hub,
-            Instant::now().checked_add(LOAD_TIMEOUT),
+            load_by,
         );
+        match done_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
     });
-    (hub, id, handle)
+    (hub, id, done_rx)
 }
 
 /// Waits until `check` holds for the hub's state, or two seconds pass.
 fn until(hub: &Hub, check: impl Fn(&Shared) -> bool) -> bool {
-    let end = Instant::now() + Duration::from_secs(2);
-    let mut shared = hub.lock();
-    while !check(&shared) {
-        if Instant::now() >= end {
-            return false;
-        }
-        shared = hub.wait(shared, Some(end));
-    }
-    true
+    let shared = hub.lock();
+    hub.wait_for(shared, WAIT_UNTIL, check)
 }
 
 fn stop(hub: &Hub) {
@@ -362,15 +425,7 @@ fn stop(hub: &Hub) {
 /// call queued behind it never starts.
 #[test]
 fn the_thread_quits_once_stopped_with_a_callback_parked() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", listener.local_addr().unwrap());
-    let (accepted_tx, accepted_rx) = mpsc::channel();
-    thread::spawn(move || {
-        let mut sock = listener.accept().unwrap().0;
-        accepted_tx.send(()).unwrap();
-        thread::sleep(Duration::from_secs(3));
-        drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
-    });
+    let (url, accepted_rx) = hold_server();
     let dir = extension(
         "parked",
         &format!(
@@ -378,23 +433,19 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
              fiber.command(\"later\", {{ timeout = 5000, run = function() return \"later\" end }})\n"
         ),
     );
-    let (hub, hold, handle) = serve_after(&dir, "hold");
+    let clock = FakeClock::new();
+    let (hub, hold, done) = serve_after(&dir, "hold", &clock);
     accepted_rx
-        .recv_timeout(Duration::from_secs(2))
-        .expect("hold never reached the server");
+        .recv_timeout(WAIT_UNTIL)
+        .expect("waited for hold to reach the server");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&hold),
         Some(Progress::Started { parked: true, .. })
     )));
-    let later = hub
-        .lock()
-        .push(command("later"), Value::Null, Instant::now());
+    let later = hub.lock().push(command("later"), Value::Null, clock.now());
     stop(&hub);
-    let end = Instant::now() + Duration::from_secs(2);
-    while !handle.is_finished() && Instant::now() < end {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(handle.is_finished(), "the thread kept running once stopped");
+    done.recv_timeout(WAIT_UNTIL)
+        .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
@@ -408,27 +459,27 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
 fn the_thread_quits_after_the_running_callback_once_stopped() {
     let dir = extension(
         "running",
-        "fiber.command(\"spin\", { timeout = 1000, run = function() while true do end end })\n\
+        "fiber.command(\"spin\", { timeout = 1000, run = function() require(\"go_spin\") while true do end end })\n\
          fiber.command(\"later\", { timeout = 5000, run = function() return \"later\" end })\n",
     );
-    let (hub, spin, handle) = serve_after(&dir, "spin");
-    let later = hub
-        .lock()
-        .push(command("later"), Value::Null, Instant::now());
+    let went = go_module(&dir, "spin");
+    let clock = FakeClock::new();
+    let (hub, spin, done) = serve_after(&dir, "spin", &clock);
+    let later = hub.lock().push(command("later"), Value::Null, clock.now());
+    went.recv_timeout(WAIT)
+        .expect("waited for spin to pass its clock check");
     assert!(until(&hub, |s| matches!(
         s.calls.get(&spin),
         Some(Progress::Started { parked: false, .. })
     )));
     stop(&hub);
+    clock.advance(Duration::from_millis(1000));
     assert!(until(&hub, |s| matches!(
         s.calls.get(&spin),
         Some(Progress::Done(_))
     )));
-    let end = Instant::now() + Duration::from_secs(2);
-    while !handle.is_finished() && Instant::now() < end {
-        thread::sleep(Duration::from_millis(10));
-    }
-    assert!(handle.is_finished(), "the thread kept running once stopped");
+    done.recv_timeout(WAIT_UNTIL)
+        .expect("waited for the extension thread to quit");
     assert!(matches!(
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
@@ -436,16 +487,60 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
-/// Accepts one connection, signals, and answers after five seconds.
+/// Reads an HTTP head, through the blank line that ends it.
+fn read_head(sock: &mut impl Read) {
+    let mut buf = [0; 1];
+    let mut seen = Vec::new();
+    loop {
+        match sock.read(&mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => seen.push(buf[0]),
+        }
+        if seen.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+}
+
+/// `require("go_<name>")` is a signal, not a barrier. Opening the fifo for
+/// write returns only once the loader has opened it for read; the writer
+/// reports that and closes the fifo at once, so `require` reads an empty
+/// module and the code runs on. Nothing stays blocked in it. Each name is
+/// used once per VM, because `require` caches.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+fn go_module(dir: &Path, name: &str) -> mpsc::Receiver<()> {
+    let path = dir.join(format!("go_{name}.lua"));
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        drop(held);
+    });
+    rx
+}
+
+/// Accepts one connection, reads its head, signals, and then holds the
+/// socket so the call stays parked.
 fn hold_server() -> (String, mpsc::Receiver<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
     let (accepted_tx, accepted_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut sock = listener.accept().unwrap().0;
-        accepted_tx.send(()).unwrap();
-        thread::sleep(Duration::from_secs(5));
-        drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok"));
+        read_head(&mut sock);
+        match accepted_tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+        let (_block_tx, block_rx) = mpsc::channel::<()>();
+        match block_rx.recv_timeout(Duration::from_secs(5)) {
+            Ok(())
+            | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+        drop(sock);
     });
     (url, accepted_rx)
 }
@@ -464,35 +559,51 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
              fiber.command(\"queued\", {{ timeout = 8000, run = function() return \"ran\" end }})\n\
              fiber.provider(\"p\", {{\n\
                models = {{ timeout = 8000, run = function() return host.http({{ url = \"{models_url}\" }}).body end }},\n\
-               sign = {{ timeout = 50, run = function() setmetatable({{}}, {{ __gc = function() while true do end end }}); collectgarbage() end }},\n\
+               sign = {{ timeout = 50, run = function() require(\"go_sign\") setmetatable({{}}, {{ __gc = function() while true do end end }}); collectgarbage() end }},\n\
              }})\n"
         ),
     );
-    let ext = Arc::new(LuaExtension::new("ext", &dir, "/nonexistent-fiber-home"));
+    // The go module is sign's first statement, before the finalizer's loop.
+    // The finalizer runs with the hook off, so only the caller's grace stops it.
+    let went = go_module(&dir, "sign");
+    let clock = FakeClock::new();
+    let ext = Arc::new(LuaExtension::new(
+        "ext",
+        &dir,
+        "/nonexistent-fiber-home",
+        clock.clone(),
+    ));
     let (tx, rx) = mpsc::channel();
     let run = |what: &'static str, f: fn(&LuaExtension) -> Result<Value, Error>| {
         let (ext, tx) = (Arc::clone(&ext), tx.clone());
         thread::spawn(move || tx.send((what, f(&ext))));
     };
-    let started = Instant::now();
+    let asked = clock.now();
     run("park", |e| e.command("park", "").map(Value::String));
-    park_accepted.recv_timeout(Duration::from_secs(3)).unwrap();
+    park_accepted
+        .recv_timeout(WAIT_SERVER)
+        .expect("waited for park to reach the server");
     run("models", |e| e.provider_call("p", "models", Value::Null));
     models_accepted
-        .recv_timeout(Duration::from_secs(3))
-        .unwrap();
+        .recv_timeout(WAIT_SERVER)
+        .expect("waited for models to reach the server");
     run("queued", |e| e.command("queued", "").map(Value::String));
     run("sign", |e| e.provider_call("p", "sign", Value::Null));
+    went.recv_timeout(WAIT)
+        .expect("waited for sign to pass its clock check");
+    let abandon = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(abandon, WAIT_SERVER),
+        "waited for sign to park at its grace"
+    );
+    clock.advance(Duration::from_millis(50) + GRACE);
     let mut seen = BTreeMap::new();
     for _ in 0..4 {
-        let (what, result) = rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let (what, result) = rx
+            .recv_timeout(WAIT)
+            .expect("waited for a waiter to return");
         seen.insert(what, result.unwrap_err());
     }
-    assert!(
-        started.elapsed() < Duration::from_secs(4),
-        "the waiters took {:?}, not the abandonment",
-        started.elapsed()
-    );
     assert!(
         matches!(seen["sign"], Error::Abandoned { .. }),
         "{:?}",
@@ -512,8 +623,9 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
 /// A call that finds no thread started fails rather than wait forever.
 #[test]
 fn a_call_on_an_extension_with_no_thread_is_stopped() {
+    let at = now();
     let mut shared = Shared::default();
-    let id = shared.push(command("x"), Value::Null, Instant::now());
-    let err = returned(shared.judge("ext", id, &command("x"), Instant::now())).unwrap_err();
+    let id = shared.push(command("x"), Value::Null, at);
+    let err = returned(shared.judge("ext", id, &command("x"), at, at)).unwrap_err();
     assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
 }
