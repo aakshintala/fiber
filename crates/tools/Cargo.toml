@@ -11,6 +11,7 @@ publish.workspace = true
 contract = { path = "../contract" }
 rustix.workspace = true
 serde_json.workspace = true
+similar.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }

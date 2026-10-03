@@ -2,6 +2,9 @@
 //! its result as JSON.
 //!
 //! `cargo run -p tools --example call -- shell '{"command":"echo hi"}'`
+//!
+//! `read` and `write` use a fresh session, so a replacing `write` is refused
+//! with `stale_file`.
 
 #![allow(
     clippy::print_stdout,
@@ -18,17 +21,25 @@ use contract::clock::{Clock, Wake};
 use contract::tool::{Output, Tool};
 use fakes::CancelToken;
 use serde_json::{Map, Value};
-use tools::Shell;
+use tools::{Files, Shell};
 
 fn main() -> ExitCode {
     let mut args = std::env::args().skip(1);
     let name = args.next();
     let raw = args.next();
     let extra = args.next();
-    let Some(raw) = raw.filter(|_| name.as_deref() == Some("shell") && extra.is_none()) else {
-        eprintln!("usage: call shell '{{...}}'");
+    let Some(name) = name.filter(|_| extra.is_none()) else {
+        usage();
         return ExitCode::from(2);
     };
+    let Some(raw) = raw else {
+        usage();
+        return ExitCode::from(2);
+    };
+    if !matches!(name.as_str(), "read" | "write" | "shell") {
+        usage();
+        return ExitCode::from(2);
+    }
     let arguments = match serde_json::from_str::<Value>(&raw) {
         Ok(Value::Object(arguments)) => arguments,
         Ok(_) => {
@@ -47,7 +58,16 @@ fn main() -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let output = Shell::new(workspace, Arc::new(ProcessClock)).run(&arguments, &CancelToken::new());
+    let cancel = CancelToken::new();
+    let output = match name.as_str() {
+        "shell" => Shell::new(workspace, Arc::new(ProcessClock)).run(&arguments, &cancel),
+        "read" => Files::new(workspace).read().run(&arguments, &cancel),
+        "write" => Files::new(workspace).write().run(&arguments, &cancel),
+        _ => {
+            usage();
+            return ExitCode::from(2);
+        }
+    };
     match serde_json::to_string(&output_json(&output)) {
         Ok(line) => {
             println!("{line}");
@@ -58,6 +78,11 @@ fn main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+fn usage() {
+    eprintln!("usage: call <read|write|shell> '{{...}}'");
+    eprintln!("A replacing write is refused with stale_file: each run is a fresh session.");
 }
 
 fn output_json(output: &Output) -> Map<String, Value> {
