@@ -798,6 +798,14 @@ ahead. The summary is the one in
 diff since the installed version. Without a terminal they go
 ahead without asking, so scripts can set up a machine.
 
+Each prints `installed <name>` on stderr for every extension it put in place.
+
+Installing an extension that is already installed installs it again: a name
+at its newest version, a path from that path's current files. An extension
+installed from a path keeps its path, so `fiber extension update` on it
+installs again from that path, not from a tag. `fiber extension list` shows
+`local` in place of the commit for an extension installed from a path.
+
 Install refuses an extension whose manifest needs a newer Fiber than the one
 running, or a different extension API version, with `extension_incompatible`.
 Update `fiber`, or install a version of the extension that fits.

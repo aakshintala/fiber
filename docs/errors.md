@@ -54,6 +54,12 @@ caller gets back").
 - **A signal** exits 129, 130 or 143 with no `error`; the exit code says what
   happened (`docs/invocation.md`, "Shutdown").
 
+Every exit of `fiber ask` with an `error` also prints the error's message as
+one sentence on stderr, `fiber: ` and the message, whether the failure came
+before the session existed or inside it. Stdout is unchanged. A CI log, or a
+person who ran it by hand, sees why it failed without parsing the event
+stream.
+
 ### Before a session exists
 
 A failure before `fiber_started` has no session and no log. `fiber ask`
@@ -70,13 +76,13 @@ asked for the session.
 | `config_invalid` | invalid JSON or a value of the wrong type in a configuration file (`docs/configuration.md`) | 1 |
 | `io_failed` | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path | 1 |
 | `log_corrupt` | a log line that cannot be encoded, or one read back that does not parse | 1 |
-| `no_model` | nothing chose a model, or an installed provider lacks the named model (`docs/model-routing.md`, "Choosing the model") | 1 |
+| `no_model` | nothing chose a model, an installed provider lacks the named model, or no installed provider has a bare model id (`docs/model-routing.md`, "Naming a model") | 1 |
 | `model_ambiguous` | a bare model id matches models of two or more installed providers; the message lists every match (`docs/model-routing.md`, "Naming a model") | 1 |
 | `credential_missing` | the session model's credential cannot be found | 1 |
 | `credential_failed` | a stored credential is found but cannot be used, the provider's `credential()` call errors, or its `sign()` fails or returns unusable headers (`docs/model-routing.md`, "Credentials") | 1 |
 | `session_not_found` | a resume names no session | 1 |
 | `session_held` | another process holds the session's lock | 1 |
-| `extension_missing` | the session model's provider is not installed | 1 |
+| `extension_missing` | the provider of a `provider/model` is not installed | 1 |
 | `protocol_unsupported` | the session model's protocol is one this Fiber does not speak yet | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
@@ -94,8 +100,9 @@ key and rejected it.
 Each code names one fix. `no_model` means nothing chose a model: choose one.
 `model_ambiguous` means the id matches several providers: prefix the provider,
 as `provider/model`. `no_model` also covers an installed provider that lacks the
-named model: name another model. `extension_missing` means the provider is not
-installed: install it. `protocol_unsupported` means the provider is installed
+named model, and a bare id no installed provider has: run `fiber models` and
+name one it lists. `extension_missing` means the provider is not installed:
+install it. `protocol_unsupported` means the provider is installed
 but Fiber cannot speak its protocol: pick another model. None of these is
 retried.
 
@@ -204,7 +211,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `credential_missing` | exit | no credential was found for the session's model |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
-| `extension_missing` | exit | the session model's provider is not installed |
+| `extension_missing` | exit | the provider of a `provider/model` is not installed |
 | `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
 | `extension_required_failed` | exit | a required extension failed to start |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
