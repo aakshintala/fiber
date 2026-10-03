@@ -78,6 +78,7 @@ const COMPILED_IN: &[(&str, &str)] = &[
     ("docs/errors.md", "contract"),
     ("docs/events.md", "contract"),
     ("docs/invocation.md", "contract"),
+    ("crates/loop/prompt/reviewer.md", "loop"),
 ];
 /// `docs/ci.md`: mutation testing runs as 6 shards.
 const MUTANT_SHARDS: u64 = 6;

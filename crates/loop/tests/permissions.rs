@@ -293,17 +293,25 @@ fn a_call_no_rule_can_match_is_not_matched_by_a_deny() {
         ],
         None,
         vec![tool.clone() as Arc<dyn Tool>],
-    );
+    )
+    // No reviewer is configured, so the call escalates `no_model`, and no
+    // person can answer it: the call ends a reviewer deny.
+    .answerable(false);
     session.rules.set(standing(
         vec![rule(RuleDecision::Deny, "shell", "npm test")],
         Vec::new(),
     ));
     let lines = go(&mut session);
-    assert_eq!(kinds(&lines), kinds_with(&["tool_call_completed"]));
-    assert!(!kinds(&lines).contains(&"permission_resolved"));
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["notice", "permission_resolved", "tool_call_completed"])
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
     let done = completed(&lines)[0];
     assert_eq!(done.payload["status"], "denied");
-    assert_eq!(done.payload["reason"], "not_reviewed");
+    assert_eq!(done.payload["reason"], "reviewer");
     assert!(tool.ran().is_empty());
 }
 

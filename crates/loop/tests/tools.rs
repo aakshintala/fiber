@@ -353,7 +353,17 @@ fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
     ];
     let names = ["inside", "git", "fiber", "outside", "shell", "pure"];
     let calls: Vec<(&str, Value)> = names.iter().map(|n| (*n, paris())).collect();
-    let (_, lines) = turn(tools, &calls);
+    // No reviewer is configured, so the reviewed calls escalate `no_model`,
+    // and no person can answer them: each ends a reviewer deny.
+    let mut session = Session::with_tools(
+        vec![calls_reply("", &calls), Scripted::text("Done.")],
+        None,
+        tools,
+    )
+    .answerable(false);
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
     let statuses: Vec<&str> = completed(&lines)
         .iter()
         .map(|l| l.payload["status"].as_str().unwrap())
@@ -370,7 +380,7 @@ fn a_write_inside_the_workspace_runs_and_one_under_git_or_outside_does_not() {
         ]
     );
     let denied = completed(&lines)[1];
-    assert_eq!(denied.payload["reason"], "not_reviewed");
+    assert_eq!(denied.payload["reason"], "reviewer");
     assert_eq!(
         kinds(&lines)
             .iter()

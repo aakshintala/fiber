@@ -11,6 +11,13 @@
 mod cli;
 mod clock;
 
+#[cfg(test)]
+#[path = "live_tests.rs"]
+mod live_tests;
+#[cfg(test)]
+#[path = "reviewer_tests.rs"]
+mod reviewer_tests;
+
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -40,6 +47,11 @@ struct Parts {
     project: config::ProjectKey,
     provider: Arc<dyn Provider>,
     model: Model,
+    /// Who judges step 7's calls; `Err` leaves every reviewed call to a
+    /// person (`docs/permissions.md`, "How it runs").
+    reviewer: Result<r#loop::Reviewer, Failure>,
+    /// When a reviewer block hands the call to a person.
+    limits: r#loop::BlockLimits,
     /// `budget.usd`, or none when the key is absent or not a number.
     budget: Option<f64>,
 }
@@ -337,7 +349,12 @@ fn ask(
                 rules: Arc::new(rules),
             },
         )
-        .map(|looped| looped.budget(parts.budget).answerable(false))
+        .map(|looped| {
+            looped
+                .budget(parts.budget)
+                .answerable(false)
+                .reviewer(parts.reviewer, parts.limits)
+        })
         .and_then(Loop::run)
         .map_err(|e| failed(e.code(), e))
     });
@@ -383,11 +400,35 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
     let key = config
         .credential(model.provider)
         .map_err(|e| failed(e.code(), e))?;
+    let provider = connect(model, key.expose().to_owned())?;
+    let reviewer = choose_reviewer(&providers, &config, &model);
+    let limits = block_limits(&config);
+    Ok(Parts {
+        sessions,
+        home,
+        workspace,
+        project,
+        provider,
+        model: Model {
+            reference: model.reference(),
+            cost: model.model.cost.clone().map(declared_cost),
+            subscription: model.model.subscription,
+        },
+        reviewer,
+        limits,
+        budget,
+    })
+}
+
+/// The provider a model reaches: the endpoint and protocol construction the
+/// session's model and the reviewer's share. A reviewer failure never falls
+/// back to the session's model (`docs/permissions.md`, "How it runs").
+fn connect(model: extensions::Model<'_>, key: String) -> Result<Arc<dyn Provider>, Failure> {
     let endpoint = Endpoint {
         provider: model.provider.name.clone(),
         model: model.model.id.clone(),
         base_url: model.model.base_url.clone(),
-        key: Some(key.expose().to_owned()),
+        key: Some(key),
         headers: model
             .provider
             .headers
@@ -398,7 +439,7 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
         max_output_tokens: model.model.max_output_tokens,
         extra_body: model.model.extra_body.clone(),
     };
-    let provider: Arc<dyn Provider> = match model.model.protocol {
+    Ok(match model.model.protocol {
         Protocol::OpenaiResponses => {
             let responses = Responses::new(endpoint);
             Arc::new(
@@ -438,20 +479,60 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
                 ),
             ));
         }
+    })
+}
+
+/// Who judges step 7's calls: `reviewer.model` when set, else the session
+/// model's provider's reviewer model, else no reviewer at all. A failure to
+/// resolve the model or to read its credential is not a startup error: the
+/// loop gets it, and every reviewed call escalates it
+/// (`docs/permissions.md`, "How it runs"). Fiber never reviews with the
+/// session's own model.
+fn choose_reviewer(
+    providers: &Providers,
+    config: &Config,
+    session: &extensions::Model<'_>,
+) -> Result<r#loop::Reviewer, Failure> {
+    let configured = config
+        .get("reviewer.model", None)
+        .and_then(|(value, _)| value.as_str().map(str::to_owned));
+    let typed = match configured {
+        Some(typed) => typed,
+        None => match &session.provider.reviewer_model {
+            Some(id) => format!("{}/{}", session.provider.name, id),
+            None => {
+                return Err(failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE));
+            }
+        },
     };
-    Ok(Parts {
-        sessions,
-        home,
-        workspace,
-        project,
+    let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
+    let key = config
+        .credential(model.provider)
+        .map_err(|e| failed(e.code(), e))?;
+    let provider = connect(model, key.expose().to_owned())?;
+    Ok(r#loop::Reviewer {
         provider,
         model: Model {
             reference: model.reference(),
             cost: model.model.cost.clone().map(declared_cost),
             subscription: model.model.subscription,
         },
-        budget,
     })
+}
+
+/// When a reviewer block hands the call to a person, from configuration
+/// with the documented defaults (`docs/configuration.md`).
+fn block_limits(config: &Config) -> r#loop::BlockLimits {
+    let limit = |key: &str, default: u64| {
+        config
+            .get(key, None)
+            .and_then(|(value, _)| value.as_u64())
+            .unwrap_or(default)
+    };
+    r#loop::BlockLimits {
+        consecutive: limit("reviewer.block_limits.consecutive", 3),
+        session: limit("reviewer.block_limits.session", 20),
+    }
 }
 
 /// Field-by-field copy of a model's declared prices. `loop` cannot depend on

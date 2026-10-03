@@ -25,10 +25,10 @@ use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, 
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
-use contract::{CommandId, Envelope, SessionId};
+use contract::{CommandId, Envelope, RequestId, SessionId};
 use fakes::{Scripted, ScriptedProvider, reply};
 use log::Log;
-use r#loop::{Loop, Model};
+use r#loop::{BlockLimits, Loop, Model, Reviewer};
 use serde_json::{Map, Value, json};
 
 /// How long a turn may take before a test fails instead of hanging.
@@ -36,6 +36,45 @@ pub(crate) const DEADLINE: Duration = Duration::from_secs(10);
 
 /// The model reference the scripted provider answers as.
 pub(crate) const MODEL: &str = "fake/model-1";
+
+/// The model reference a scripted reviewer answers as.
+pub(crate) const REVIEWER_MODEL: &str = "fake/reviewer-1";
+
+/// Watches the log for the turn's `permission_requested`, then runs `send`
+/// with its request id: the signal the loop is waiting for a reply. The wait
+/// is bounded by [`DEADLINE`]: a turn that never asks fails naming the
+/// missing `permission_requested`, and the thread's end drops its inbox
+/// sender, releasing a loop still waiting for a reply.
+pub(crate) fn on_request(
+    session: &Session,
+    send: impl FnOnce(RequestId) + Send + 'static,
+) -> thread::JoinHandle<()> {
+    let mut watcher = session.log.watch();
+    thread::spawn(move || {
+        // The watcher blocks without a deadline, so its lines cross an mpsc
+        // channel, as in `Session::open`, and the wait below carries the
+        // deadline instead.
+        let (forward, waiting) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(Some(line)) = watcher.recv() {
+                if forward.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        loop {
+            let line = waiting
+                .recv_timeout(DEADLINE)
+                .expect("a permission_requested line");
+            if line.kind == "permission_requested" {
+                send(RequestId(
+                    line.payload["request_id"].as_str().unwrap().into(),
+                ));
+                return;
+            }
+        }
+    })
+}
 
 /// A reply with readable reasoning, then `text`.
 pub(crate) fn reasoning_reply(thought: &str, text: &str) -> Scripted {
@@ -464,6 +503,45 @@ impl Session {
     pub(crate) fn answerable(mut self, yes: bool) -> Self {
         self.looped = self.looped.take().map(|looped| looped.answerable(yes));
         self
+    }
+
+    /// Judges step 7's calls with a scripted reviewer answering `script`,
+    /// with the default block limits. Returns the reviewer, so a test can
+    /// read the requests it was given.
+    pub(crate) fn reviewer(&mut self, script: Vec<Scripted>) -> Arc<ScriptedProvider> {
+        self.reviewer_limits(script, BlockLimits::default())
+    }
+
+    /// As [`Session::reviewer`], with `limits`.
+    pub(crate) fn reviewer_limits(
+        &mut self,
+        script: Vec<Scripted>,
+        limits: BlockLimits,
+    ) -> Arc<ScriptedProvider> {
+        self.reviewer_priced(script, limits, None)
+    }
+
+    /// As [`Session::reviewer`], with `limits` and the reviewer's prices.
+    pub(crate) fn reviewer_priced(
+        &mut self,
+        script: Vec<Scripted>,
+        limits: BlockLimits,
+        cost: Option<contract::provider::Cost>,
+    ) -> Arc<ScriptedProvider> {
+        let provider = Arc::new(ScriptedProvider::new(script));
+        let looped = self.looped.take().unwrap().reviewer(
+            Ok(Reviewer {
+                provider: provider.clone(),
+                model: Model {
+                    reference: REVIEWER_MODEL.into(),
+                    cost,
+                    subscription: false,
+                },
+            }),
+            limits,
+        );
+        self.looped = Some(looped);
+        provider
     }
 
     /// Sends a person's answer to a pending approval.

@@ -258,6 +258,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `too_large` | tool call | a `web_fetch` download larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
 | `unreachable` | tool call | `session_message` named an id no running session has |
+| `unreadable_reply` | permission request | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
