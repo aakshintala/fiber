@@ -8,6 +8,8 @@
     reason = "main prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 
+mod cli;
+
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};

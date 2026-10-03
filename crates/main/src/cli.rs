@@ -1,0 +1,302 @@
+//! The `fiber` command line (`docs/invocation.md`, "Commands and flags"):
+//! the menu, the version, and the one-sentence form of a parse error.
+
+use std::ffi::OsString;
+
+use clap::error::{ContextKind, ContextValue};
+use clap::{ArgAction, CommandFactory, FromArgMatches, Parser, Subcommand};
+
+/// The hand-grouped menu (`docs/invocation.md`, "Commands and flags").
+/// Clap appends the trailing newline when it prints.
+const MENU: &str = r#"Fiber, a coding agent.
+
+Usage: fiber <command> [arguments]
+
+Sessions:
+  ask [--model <model>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+
+Extensions:
+  install <name or path>  Install an extension and its dependencies
+  update <name>           Update an installed extension to its newest tag
+  remove <name>           Remove an extension, the dependencies nothing else uses, and their data
+  list                    List installed extensions: name, version and commit
+
+Other:
+  help [<command>]  Print this menu, or a command's help
+  version           Print the version
+
+Flags:
+  -h, --help     Print this menu
+  -v, --version  Print the version
+
+Examples:
+  fiber ask "review the diff on this branch"
+  fiber ask < brief.md
+  git diff | fiber ask "review this diff" -
+  fiber install openrouter
+  fiber help ask"#;
+
+const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
+
+const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
+
+/// What `fiber` was asked to do, or the parse error.
+#[derive(Debug)]
+pub(crate) enum Invocation {
+    /// Help, printed with clap's printer.
+    Help(clap::Error),
+    /// `-v` or `--version`, printed with clap's printer.
+    Version(clap::Error),
+    /// A command, or `fiber` with no arguments.
+    Run(Run),
+    /// A usage error. `ask` is whether argv's first argument is `ask`.
+    Usage {
+        /// Whether the invocation's first argument is `ask`.
+        ask: bool,
+        /// The one sentence, without the `fiber: ` prefix.
+        sentence: String,
+    },
+}
+
+/// A parsed command. `ask`'s prompt is decided here and read later.
+#[derive(Debug)]
+pub(crate) enum Run {
+    /// One session. `dash` is the trailing `-`.
+    Ask {
+        /// `--model`, when it was given.
+        model: Option<String>,
+        /// The prompt argument, when it was given.
+        prompt: Option<String>,
+        /// Whether `-` asked for stdin.
+        dash: bool,
+    },
+    /// `fiber install`.
+    Install(String),
+    /// `fiber update`.
+    Update(String),
+    /// `fiber remove`.
+    Remove(String),
+    /// `fiber list`.
+    List,
+    /// `fiber version`.
+    Version,
+    /// No arguments: the terminal door, which is not built.
+    Bare,
+}
+
+#[derive(Parser)]
+#[command(
+    name = "fiber",
+    version = env!("CARGO_PKG_VERSION"),
+    about = "Fiber, a coding agent.",
+    disable_version_flag = true
+)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Commands>,
+}
+
+#[derive(Subcommand)]
+enum Commands {
+    /// Run one session of one turn; its events go to stdout
+    Ask(AskArgs),
+    /// Install an extension and its dependencies
+    Install {
+        /// The extension's name, or a path to its package.
+        #[arg(value_name = "name or path")]
+        name_or_path: String,
+    },
+    /// Update an installed extension to its newest tag
+    Update {
+        /// The installed extension's name.
+        #[arg(value_name = "name")]
+        name: String,
+    },
+    /// Remove an extension, the dependencies nothing else uses, and their data
+    Remove {
+        /// The installed extension's name.
+        #[arg(value_name = "name")]
+        name: String,
+    },
+    /// List installed extensions: name, version and commit
+    List,
+    /// Print the version
+    Version,
+}
+
+#[derive(clap::Args)]
+struct AskArgs {
+    /// The model for this run, as a person types it.
+    #[arg(long, value_name = "model")]
+    model: Option<String>,
+
+    /// The prompt. A final `-` reads stdin.
+    #[arg(value_name = "prompt", num_args = 0..)]
+    prompt: Vec<String>,
+}
+
+/// Parses the process arguments.
+pub(crate) fn parse() -> Invocation {
+    parse_from(std::env::args_os())
+}
+
+/// `fiber <version>`, with the trailing newline clap prints.
+pub(crate) fn version_line() -> String {
+    command().render_version()
+}
+
+fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation {
+    let args: Vec<OsString> = args.into_iter().map(Into::into).collect();
+    let ask = args.get(1).is_some_and(|arg| arg == "ask");
+    match command().try_get_matches_from(&args) {
+        Ok(matches) => match Cli::from_arg_matches(&matches) {
+            Ok(cli) => match run(cli) {
+                Ok(run) => Invocation::Run(run),
+                Err(sentence) => Invocation::Usage {
+                    ask: true,
+                    sentence,
+                },
+            },
+            Err(error) => usage(error, ask),
+        },
+        Err(error) => {
+            let kind = error.kind();
+            if kind == clap::error::ErrorKind::DisplayHelp {
+                Invocation::Help(error)
+            } else if kind == clap::error::ErrorKind::DisplayVersion {
+                Invocation::Version(error)
+            } else {
+                usage(error, ask)
+            }
+        }
+    }
+}
+
+fn command() -> clap::Command {
+    // The derive marks a `bool` required before `ArgAction::Version` is
+    // applied, so the flag is added here rather than as a field.
+    Cli::command().help_template(MENU).arg(
+        clap::Arg::new("version-flag")
+            .short('v')
+            .long("version")
+            .action(ArgAction::Version)
+            .help("Print the version"),
+    )
+}
+
+fn run(cli: Cli) -> Result<Run, String> {
+    Ok(match cli.command {
+        None => Run::Bare,
+        Some(Commands::Ask(args)) => {
+            let (prompt, dash) = ask_parts(&args.prompt)?;
+            Run::Ask {
+                model: args.model,
+                prompt,
+                dash,
+            }
+        }
+        Some(Commands::Install { name_or_path }) => Run::Install(name_or_path),
+        Some(Commands::Update { name }) => Run::Update(name),
+        Some(Commands::Remove { name }) => Run::Remove(name),
+        Some(Commands::List) => Run::List,
+        Some(Commands::Version) => Run::Version,
+    })
+}
+
+/// `-` is only the last positional. Anything else is one prompt too many.
+fn ask_parts(positionals: &[String]) -> Result<(Option<String>, bool), String> {
+    match positionals {
+        [] => Ok((None, false)),
+        [only] if only == "-" => Ok((None, true)),
+        [prompt] => Ok((Some(prompt.clone()), false)),
+        [prompt, dash] if dash == "-" && prompt != "-" => Ok((Some(prompt.clone()), true)),
+        _ => Err(ASK_SHAPE.to_owned()),
+    }
+}
+
+fn usage(error: clap::Error, ask: bool) -> Invocation {
+    Invocation::Usage {
+        ask,
+        sentence: usage_sentence(&error),
+    }
+}
+
+/// Clap's first paragraph, then its suggestion when it has one, then the
+/// usage suffix. Tips such as "use '--'" are dropped.
+fn usage_sentence(error: &clap::Error) -> String {
+    let rendered = error.to_string();
+    let paragraph = rendered
+        .lines()
+        .map(str::trim)
+        .take_while(|line| !line.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    let paragraph = paragraph.strip_prefix("error: ").unwrap_or(&paragraph);
+    let mut sentence = capitalize(paragraph);
+    if sentence.ends_with('.') {
+        sentence.pop();
+    }
+    match suggestion(error) {
+        Some(name) => sentence.push_str(&format!("; did you mean '{name}'?")),
+        None => sentence.push('.'),
+    }
+    sentence.push_str(HELP_SUFFIX);
+    sentence
+}
+
+fn suggestion(error: &clap::Error) -> Option<String> {
+    if let Some(value) = error.get(ContextKind::SuggestedArg) {
+        return one_suggestion(value);
+    }
+    // Clap stores subcommand candidates worst-first. The nearest is last.
+    // A typed prefix of a candidate (`instal` → `install`) wins over that
+    // order when several pass the cutoff (`list` does too).
+    let names = error
+        .get(ContextKind::SuggestedSubcommand)
+        .map(all_suggestions)
+        .filter(|names| !names.is_empty())?;
+    let invalid = error
+        .get(ContextKind::InvalidSubcommand)
+        .and_then(one_suggestion)
+        .unwrap_or_default();
+    names
+        .iter()
+        .rev()
+        .find(|name| name.starts_with(&invalid))
+        .or_else(|| names.last())
+        .cloned()
+}
+
+#[allow(
+    clippy::wildcard_enum_match_arm,
+    reason = "clap::error::ContextValue is non_exhaustive"
+)]
+fn all_suggestions(value: &ContextValue) -> Vec<String> {
+    let texts = match value {
+        ContextValue::String(text) => vec![text.clone()],
+        ContextValue::Strings(texts) => texts.clone(),
+        ContextValue::StyledStr(text) => vec![text.to_string()],
+        ContextValue::StyledStrs(texts) => texts.iter().map(ToString::to_string).collect(),
+        ContextValue::None | ContextValue::Bool(_) | ContextValue::Number(_) => Vec::new(),
+        _ => Vec::new(),
+    };
+    texts.into_iter().filter(|text| !text.is_empty()).collect()
+}
+
+fn one_suggestion(value: &ContextValue) -> Option<String> {
+    all_suggestions(value).into_iter().next()
+}
+
+fn capitalize(text: &str) -> String {
+    let mut chars = text.chars();
+    let Some(first) = chars.next() else {
+        return String::new();
+    };
+    let mut sentence = first.to_uppercase().collect::<String>();
+    sentence.push_str(chars.as_str());
+    sentence
+}
+
+#[cfg(test)]
+#[path = "cli_tests.rs"]
+mod tests;
