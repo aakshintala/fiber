@@ -155,13 +155,15 @@ fn pids(line: &str, path: &Path) -> Vec<u32> {
 }
 
 /// Ignores SIGTERM and blocks on its block FIFO. The second line is its own
-/// pid. A line written to that FIFO is answered with its pid, then it blocks
-/// again.
+/// pid. Each line written to that FIFO is answered with its pid, then it
+/// blocks again. A read that ends at end-of-file, because the writer closed
+/// before the next open, writes nothing and blocks again, so the command
+/// never exits on its own while the FIFO exists.
 pub fn ignores_sigterm(ready: &Path) -> String {
     let block = quote(&block_of(ready));
     let ready = quote(ready);
     format!(
-        "trap '' TERM\necho $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\necho $$ >> {ready}\nread -r _ < {block}\n"
+        "trap '' TERM\necho $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nwhile :; do if read -r _ < {block}; then echo $$ >> {ready}; fi; [ -p {block} ] || exit 1; done\n"
     )
 }
 
