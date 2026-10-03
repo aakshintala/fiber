@@ -15,7 +15,7 @@ use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{DeclaredEffects, Effect};
-use contract::tool::{Effects, EffectsError, Output, Tool};
+use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
 use super::{fast_path, register};
@@ -40,7 +40,7 @@ impl Tool for Named {
         unreachable!("registration never asks for effects")
     }
 
-    fn run(&self, _: &Map<String, Value>) -> Output {
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel) -> Output {
         unreachable!("registration never runs a tool")
     }
 }

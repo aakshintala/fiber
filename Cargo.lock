@@ -1067,6 +1067,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "tools"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "rustix",
+ "serde_json",
+]
+
+[[package]]
 name = "typeid"
 version = "1.0.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

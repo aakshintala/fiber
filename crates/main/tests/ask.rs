@@ -23,7 +23,7 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use fakes::{ProviderServer, Request, Response, fingerprint};
+use fakes::{ProviderServer, Request, Response, Watchdog, fingerprint};
 use rustix::pty;
 use serde_json::{Value, json};
 
@@ -199,7 +199,7 @@ impl Setup {
         // The group is empty. Skip the drop, which would kill it again,
         // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
-        watchdog.stand_down();
+        watchdog.stand_down(DEADLINE);
         Run::from(output)
     }
 
@@ -272,62 +272,9 @@ fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
     let group = child.id();
     // A failed watchdog spawn still kills the child on unwind.
     let guard = KillGroup(group);
-    let group_arg = group.to_string();
-    let mut shell = Command::new("sh");
-    shell
-        .args(["-c", fakes::WATCHDOG_SCRIPT, "watchdog", group_arg.as_str()])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .process_group(0);
-    let mut spawned = shell.spawn().unwrap();
+    let watchdog = Watchdog::group(group);
     std::mem::forget(guard);
-    let stdin = spawned.stdin.take().unwrap();
-    (
-        child,
-        Watchdog {
-            stdin: Some(stdin),
-            child: Some(spawned),
-        },
-    )
-}
-
-/// Kills the spawned group when this process dies. Dropping it closes
-/// stdin, which is that signal. [`Watchdog::stand_down`] writes a newline
-/// and reaps the watchdog, so a finished run sends no signal.
-struct Watchdog {
-    stdin: Option<std::process::ChildStdin>,
-    child: Option<Child>,
-}
-
-impl Watchdog {
-    /// The child is reaped. Tell the watchdog to exit without signalling,
-    /// and wait for it under [`DEADLINE`].
-    fn stand_down(mut self) {
-        if let Some(mut stdin) = self.stdin.take() {
-            match writeln!(stdin) {
-                Ok(()) | Err(_) => {}
-            }
-        }
-        let mut child = match self.child.take() {
-            Some(child) => child,
-            None => return,
-        };
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait()).unwrap());
-        assert!(
-            finished.recv_timeout(DEADLINE).is_ok(),
-            "waited {DEADLINE:?} for the watchdog to exit"
-        );
-    }
-}
-
-impl Drop for Watchdog {
-    fn drop(&mut self) {
-        // EOF on stdin: the watchdog kills the group and exits. A panicking
-        // test has already failed, so the watchdog is not waited on.
-        drop(self.stdin.take());
-    }
+    (child, watchdog)
 }
 
 /// Kills process group `group` on drop. After the child is reaped and the

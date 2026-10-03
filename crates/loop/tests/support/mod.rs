@@ -24,7 +24,7 @@ use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
-use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
+use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, SessionId};
 use fakes::{Scripted, ScriptedProvider, reply};
 use log::Log;
@@ -156,6 +156,8 @@ pub(crate) struct TestTool {
     pub(crate) trace: Arc<Trace>,
     /// The arguments each call ran with.
     pub(crate) ran: Mutex<Vec<Map<String, Value>>>,
+    /// What [`Cancel::is_cancelled`] returned at each call.
+    pub(crate) cancelled: Mutex<Vec<bool>>,
 }
 
 impl TestTool {
@@ -189,6 +191,7 @@ impl TestTool {
             after: None,
             trace: Arc::default(),
             ran: Mutex::default(),
+            cancelled: Mutex::default(),
         }
     }
 
@@ -240,8 +243,9 @@ impl Tool for TestTool {
         })
     }
 
-    fn run(&self, arguments: &Map<String, Value>) -> Output {
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
         self.note("run");
+        self.cancelled.lock().unwrap().push(cancel.is_cancelled());
         self.ran.lock().unwrap().push(arguments.clone());
         if let Some(other) = self.after {
             self.trace.wait_for(&format!("done {other}"));

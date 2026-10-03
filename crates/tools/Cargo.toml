@@ -1,0 +1,23 @@
+[package]
+name = "tools"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# Of Fiber's crates, `tools` depends only on `contract`
+# (docs/architecture.md, "The call rules").
+[dependencies]
+contract = { path = "../contract" }
+rustix.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+fakes = { path = "../fakes" }
+
+# The jig (docs/testing.md, "Jigs").
+[[example]]
+name = "call"
+
+[lints]
+workspace = true

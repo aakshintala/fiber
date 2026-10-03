@@ -22,7 +22,7 @@ use contract::inbox::{Ack, Answer, Delivery, Rejection};
 use contract::provider::ToolDefinition;
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
-use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
+use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, RequestId};
 use fakes::Scripted;
 use serde_json::{Map, Value, json};
@@ -201,7 +201,7 @@ impl Tool for SendTool {
         })
     }
 
-    fn run(&self, _: &Map<String, Value>) -> Output {
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel) -> Output {
         let inbox = self
             .inbox
             .lock()
