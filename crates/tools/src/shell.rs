@@ -18,6 +18,13 @@ use serde_json::{Map, Value, json};
 #[path = "shell/command.rs"]
 mod command;
 
+#[path = "shell/read_only.rs"]
+mod read_only;
+
+#[path = "shell/classify.rs"]
+mod classify;
+
+use classify::classify;
 use command::{Finished, StopKind};
 
 /// The default when the model gives no `timeout_ms`: 10 minutes.
@@ -78,17 +85,22 @@ impl Tool for Shell {
 
     fn effects(
         &self,
-        _arguments: &Map<String, Value>,
+        arguments: &Map<String, Value>,
     ) -> Result<Effects, contract::tool::EffectsError> {
-        Ok(Effects {
-            declared: DeclaredEffects {
-                effects: vec![Effect::Executes],
-                reversible: false,
-                paths: None,
-            },
-            subject: None,
-            prefix: None,
-        })
+        // A call `parse` rejects never runs. The closed default keeps a bad
+        // `timeout_ms` or `workdir` off the read-only fast path.
+        match parse(arguments, &self.workspace) {
+            Ok(parsed) => Ok(classify(&parsed.command, &parsed.workdir)),
+            Err(_) => Ok(Effects {
+                declared: DeclaredEffects {
+                    effects: vec![Effect::Executes],
+                    reversible: false,
+                    paths: None,
+                },
+                subject: None,
+                prefix: None,
+            }),
+        }
     }
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
