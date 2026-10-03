@@ -11,7 +11,7 @@ use std::thread;
 use contract::clock::Wake;
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
-    AskStep, CallStatus, DecidedBy, Decision, Escalation, Event, Grant, PermissionRequested,
+    AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
     PermissionResolved, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
     ToolReplaced,
 };
@@ -225,7 +225,9 @@ impl Loop {
                 turn,
                 &call.name,
                 &effects.declared,
-                AskAbout::Standing(rule),
+                AskStep::StandingAsk {
+                    standing_rule: rule,
+                },
             )? {
                 Asked::Allow => Ok(Ok((tool, arguments, effects.declared))),
                 Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
@@ -269,7 +271,7 @@ impl Loop {
         turn: &TurnId,
         tool: &str,
         declared: &DeclaredEffects,
-        about: AskAbout,
+        step: AskStep,
     ) -> Result<Asked, Error> {
         if !self.answerable {
             // Step 7 checks `answerable` before asking; only a standing
@@ -277,22 +279,15 @@ impl Loop {
             return Ok(Asked::Gone(self.unanswerable(id, turn, None)?));
         }
         let request_id = RequestId(super::mint("r_"));
-        let (step, offer) = match &about {
-            AskAbout::Standing(rule) => (
-                AskStep::StandingAsk {
-                    standing_rule: rule.clone(),
-                },
-                None,
-            ),
-            AskAbout::Review {
-                escalation, offer, ..
-            } => (
-                AskStep::Review {
-                    escalation: Some(escalation.clone()),
-                    rule: offer.clone(),
-                },
-                offer.clone(),
-            ),
+        let offer = match &step {
+            AskStep::StandingAsk { .. } => None,
+            AskStep::Review { rule, .. } => rule.clone(),
+        };
+        // Who denies when the inbox closes with no answer follows from
+        // the step, as the request carries it.
+        let closed_by = match &step {
+            AskStep::StandingAsk { .. } => DecidedBy::StandingRule,
+            AskStep::Review { .. } => DecidedBy::Reviewer,
         };
         self.append(
             &Event::PermissionRequested(PermissionRequested {
@@ -309,17 +304,13 @@ impl Loop {
                 // Every sender is gone, so no answer can come.
                 Err(_) => {
                     let reason = "The session ended while waiting for an answer.";
-                    let by = match &about {
-                        AskAbout::Standing(_) => DecidedBy::StandingRule,
-                        AskAbout::Review { .. } => DecidedBy::Reviewer,
-                    };
                     self.decided(
                         id,
                         turn,
                         resolved(
                             Some(request_id),
                             Decision::Deny,
-                            by,
+                            closed_by,
                             Some(reason.to_owned()),
                             None,
                         ),
@@ -562,21 +553,6 @@ fn resolved(
         rule: None,
         reviewer: None,
     }
-}
-
-/// What an approval wait asks about: a standing ask, or step 7's review.
-pub(crate) enum AskAbout {
-    /// A standing ask matched: the request names the rule that asked.
-    Standing(contract::events::StandingRule),
-    /// Step 7 review: the request carries the escalation and the rule an
-    /// allow can remember. A close taken while waiting denies as its step
-    /// does: the caller holds the reason.
-    Review {
-        /// Why the reviewer handed the call to a person.
-        escalation: Escalation,
-        /// The rule an allow can remember; absent when no rule can match.
-        offer: Option<RuleOffer>,
-    },
 }
 
 /// What waiting for a person's answer came back with. The decision lines

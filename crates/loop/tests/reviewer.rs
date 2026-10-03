@@ -137,52 +137,6 @@ fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
     kinds.into_iter().map(str::to_owned).collect()
 }
 
-/// A turn whose reviewed call reaches a person: two reviewer usages, the
-/// request and its answer, then "Done.". `ran` tells whether the person's
-/// allow ran the call, `first` whether the turn opens the session.
-fn kinds_escalated(ran: bool, first: bool) -> Vec<String> {
-    let mut kinds = Vec::new();
-    if first {
-        kinds.push("session_started");
-    }
-    kinds.extend(
-        [
-            "turn_started",
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "tool_call_arguments_delta",
-            "tool_call_requested",
-            "usage_recorded",
-            "assistant_message_completed",
-            "usage_recorded",
-            "usage_recorded",
-            "permission_requested",
-            "permission_resolved",
-        ]
-        .iter()
-        .copied(),
-    );
-    if ran {
-        kinds.push("tool_call_started");
-    }
-    kinds.push("tool_call_completed");
-    kinds.extend(
-        [
-            "step_started",
-            "assistant_message_started",
-            "assistant_message_delta",
-            "assistant_message_delta",
-            "text_completed",
-            "usage_recorded",
-            "assistant_message_completed",
-            "turn_completed",
-        ]
-        .iter()
-        .copied(),
-    );
-    kinds.into_iter().map(str::to_owned).collect()
-}
 /// Watches the log for the turn's first `permission_requested`, then runs
 /// `send`: the signal the loop is waiting for an answer. Bounded by
 /// [`DEADLINE`] like [`on_request`].
@@ -208,6 +162,113 @@ fn on_close(session: &Session, send: impl FnOnce() + Send + 'static) -> thread::
         }
     })
 }
+
+/// A loop the test drives directly, with the inbox sender it drops before
+/// the turn: `Session` owns its only sender, and a struct field cannot be
+/// dropped without a replacement sender keeping the inbox alive, so a test
+/// that needs every sender gone builds its own loop.
+struct BareLoop {
+    looped: Loop,
+    reviewer: Arc<ScriptedProvider>,
+    lines: mpsc::Receiver<Envelope>,
+    _home: TempDir,
+}
+
+/// A session on a fresh log with `review_script` judging step 7: the inbox
+/// sender the test drops before the turn, and the loop, its reviewer, its
+/// lines and its directories.
+fn bare_loop(
+    session_script: Vec<Scripted>,
+    review_script: Vec<Scripted>,
+    tools: Vec<Arc<dyn Tool>>,
+    limits: BlockLimits,
+) -> (mpsc::Sender<Delivery>, BareLoop) {
+    let home = TempDir::new();
+    let workspace = home.0.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let credentials = home.0.join("credentials");
+    std::fs::create_dir_all(&credentials).unwrap();
+    let log = Arc::new(
+        Log::create(
+            &home.0,
+            SessionId("s_test".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let mut watcher = log.watch();
+    let (forward, lines) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok(Some(line)) = watcher.recv() {
+            if forward.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let (inbox, rx) = mpsc::channel();
+    let session: Arc<dyn contract::provider::Provider> =
+        Arc::new(ScriptedProvider::new(session_script));
+    let reviewer = Arc::new(ScriptedProvider::new(review_script));
+    let rules = Arc::new(FakeRules::empty());
+    let looped = Loop::start(
+        Arc::clone(&log),
+        session,
+        Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+        "You are terse.".into(),
+        rx,
+        tools
+            .into_iter()
+            .map(|tool| ("builtin".to_owned(), tool))
+            .collect(),
+        r#loop::Permissions {
+            workspace: workspace.display().to_string(),
+            credentials: credentials.clone(),
+            rules,
+        },
+    )
+    .unwrap()
+    .reviewer(
+        Ok(Reviewer {
+            provider: reviewer.clone(),
+            model: Model {
+                reference: REVIEWER_MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+        }),
+        limits,
+    );
+    (
+        inbox,
+        BareLoop {
+            looped,
+            reviewer,
+            lines,
+            _home: home,
+        },
+    )
+}
+
+/// Lines through the next `turn_completed`.
+fn bare_lines(bare: &BareLoop) -> Vec<Envelope> {
+    let mut lines = Vec::new();
+    loop {
+        let line = bare
+            .lines
+            .recv_timeout(DEADLINE)
+            .expect("a turn_completed line");
+        let last = line.kind == "turn_completed";
+        lines.push(line);
+        if last {
+            return lines;
+        }
+    }
+}
+
 /// One turn whose reply calls `shell` once, reviewed with `review`: the
 /// session, the tool, the reviewer and the turn's lines.
 fn reviewed_turn(
@@ -528,7 +589,18 @@ fn a_verdict_still_unreadable_escalates() {
     });
     let lines = go(&mut session);
     answered.join().unwrap();
-    assert_eq!(kinds(&lines), kinds_escalated(true, true));
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            2,
+        )
+    );
     assert_eq!(tool.ran().len(), 1);
 
     let requested = line(&lines, "permission_requested");
@@ -722,7 +794,17 @@ fn the_third_consecutive_block_asks_a_person() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
-    assert_eq!(kinds(&lines), kinds_escalated(false, false));
+    assert_eq!(
+        kinds(&lines),
+        kinds_next(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_completed"
+            ],
+            2,
+        )
+    );
 
     // The block that reaches the count is not returned to the model.
     let requested = line(&lines, "permission_requested");
@@ -799,7 +881,17 @@ fn an_allow_between_blocks_resets_the_consecutive_count() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
-    assert_eq!(kinds(&lines), kinds_escalated(false, false));
+    assert_eq!(
+        kinds(&lines),
+        kinds_next(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_completed"
+            ],
+            2,
+        )
+    );
     let requested = line(&lines, "permission_requested");
     assert_eq!(
         requested.payload["escalation"],
@@ -938,7 +1030,18 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
-    assert_eq!(kinds(&lines), kinds_escalated(true, false));
+    assert_eq!(
+        kinds(&lines),
+        kinds_next(
+            &[
+                "permission_requested",
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            2,
+        )
+    );
     let requested = line(&lines, "permission_requested");
     assert_eq!(
         requested.payload["rule"],
@@ -1259,98 +1362,38 @@ fn a_review_at_the_spending_budget_denies_without_sending() {
 #[test]
 fn failures_without_an_answer_count_toward_the_consecutive_limit() {
     let tool = shell(None, None);
-    let home = TempDir::new();
-    let workspace = home.0.join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let credentials = home.0.join("credentials");
-    std::fs::create_dir_all(&credentials).unwrap();
-    let log = Arc::new(
-        Log::create(
-            &home.0,
-            SessionId("s_test".into()),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap(),
-    );
-    let mut watcher = log.watch();
-    let (forward, waiting) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
-            if forward.send(line).is_err() {
-                return;
-            }
-        }
-    });
-    let (inbox, rx) = mpsc::channel();
-    let session: Arc<dyn contract::provider::Provider> = Arc::new(ScriptedProvider::new(vec![
-        calls_reply(
-            "",
-            &[("shell", paris()), ("shell", paris()), ("shell", paris())],
-        ),
-        Scripted::text("Done."),
-    ]));
-    let reviewer = Arc::new(ScriptedProvider::new(vec![
+    let failed = || {
         Scripted::failed(Failure {
             code: ErrorCode::Timeout,
             message: "the reviewer timed out".into(),
             retry_after: None,
             provider: None,
-        }),
-        Scripted::failed(Failure {
-            code: ErrorCode::Timeout,
-            message: "the reviewer timed out".into(),
-            retry_after: None,
-            provider: None,
-        }),
-        Scripted::text("check"),
-        Scripted::text("block third reason"),
-    ]));
-    let rules = Arc::new(FakeRules::empty());
-    let mut looped = Loop::start(
-        Arc::clone(&log),
-        session,
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        "You are terse.".into(),
-        rx,
-        vec![("builtin".to_owned(), tool.clone() as Arc<dyn Tool>)],
-        r#loop::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials: credentials.clone(),
-            rules,
-        },
-    )
-    .unwrap()
-    .reviewer(
-        Ok(Reviewer {
-            provider: reviewer.clone(),
-            model: Model {
-                reference: REVIEWER_MODEL.into(),
-                cost: None,
-                subscription: false,
-            },
-        }),
+        })
+    };
+    let (inbox, mut bare) = bare_loop(
+        vec![
+            calls_reply(
+                "",
+                &[("shell", paris()), ("shell", paris()), ("shell", paris())],
+            ),
+            Scripted::text("Done."),
+        ],
+        vec![
+            failed(),
+            failed(),
+            Scripted::text("check"),
+            Scripted::text("block third reason"),
+        ],
+        vec![tool.clone() as Arc<dyn Tool>],
         BlockLimits::default(),
     );
     inbox.send(delivery("go")).unwrap();
     // Every inbox sender is gone: each escalation raises its request and
     // ends with no answer, so nothing resets the consecutive count.
     drop(inbox);
-    assert_eq!(looped.turn().unwrap(), Some(TurnOutcome::Completed));
-    let mut lines = Vec::new();
-    loop {
-        let line = waiting
-            .recv_timeout(DEADLINE)
-            .expect("a turn_completed line");
-        let last = line.kind == "turn_completed";
-        lines.push(line);
-        if last {
-            break;
-        }
-    }
+    assert_eq!(bare.looped.turn().unwrap(), Some(TurnOutcome::Completed));
+    let lines = bare_lines(&bare);
+    let reviewer = bare.reviewer;
     assert_eq!(
         kinds(&lines),
         [
@@ -1634,4 +1677,73 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
     assert_eq!(reviewer.requests().len(), 2);
     assert!(reviewed.ran().is_empty());
     assert!(asked.ran().is_empty());
+}
+
+#[test]
+fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
+    let tool = shell(None, None);
+    let (inbox, mut bare) = bare_loop(
+        vec![calls_reply("", &[("shell", paris())])],
+        vec![Scripted::text("check"), Scripted::text("block only reason")],
+        vec![tool.clone() as Arc<dyn Tool>],
+        r#loop::BlockLimits {
+            consecutive: 1000,
+            session: 1,
+        },
+    );
+    inbox.send(delivery("go")).unwrap();
+    // Every inbox sender is gone: the session-limit escalation ends with
+    // no answer, and the exhausted budget still ends the turn.
+    drop(inbox);
+    assert_eq!(bare.looped.turn().unwrap(), Some(TurnOutcome::Failed));
+    let lines = bare_lines(&bare);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    let requested = line(&lines, "permission_requested");
+    assert_eq!(requested.payload["step"], "review");
+    assert_eq!(
+        requested.payload["escalation"],
+        json!({"cause": "session_blocks", "reason": "only reason"})
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved.payload["reason"],
+        "The session ended while waiting for an answer."
+    );
+    assert_eq!(
+        resolved.payload["request_id"],
+        requested.payload["request_id"]
+    );
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "no_person");
+    let end = line(&lines, "turn_completed");
+    assert_eq!(end.payload["outcome"], "failed");
+    assert_eq!(end.payload["error"]["code"], "blocked");
+    assert_eq!(
+        end.payload["error"]["message"],
+        "The reviewer blocked 1 calls and no person can answer."
+    );
+    assert_eq!(bare.reviewer.requests().len(), 2);
+    assert!(tool.ran().is_empty());
 }

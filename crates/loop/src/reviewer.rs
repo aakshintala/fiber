@@ -4,8 +4,9 @@
 use std::sync::Arc;
 
 use contract::events::{
-    CacheLifetime, DecidedBy, Decision, Escalation, Event, InputItem, Notice, PermissionResolved,
-    ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested, UsageRecorded,
+    AskStep, CacheLifetime, DecidedBy, Decision, Escalation, Event, InputItem, Notice,
+    PermissionResolved, ReviewerRef, RuleOffer, ToolCallCompleted, ToolCallRequested,
+    UsageRecorded,
 };
 use contract::provider::{CallError, Cost, Input, ModelRequest, Provider, Reply};
 use contract::shapes::{ContentPart, Failure, Origin};
@@ -13,7 +14,7 @@ use contract::tool::{Effects, Tool};
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
 use serde_json::{Map, Value};
 
-use crate::calls::{Approved, AskAbout, Asked, denied};
+use crate::calls::{Approved, Asked, denied};
 use crate::{Error, Loop, Model};
 
 /// What step 7 says about one call: it runs, or how its denial reads.
@@ -506,9 +507,9 @@ impl Loop {
             under.turn,
             &under.call.name,
             &under.effects.declared,
-            AskAbout::Review {
-                escalation,
-                offer: rule_offer(under.effects),
+            AskStep::Review {
+                escalation: Some(escalation),
+                rule: rule_offer(under.effects),
             },
         )? {
             Asked::Allow => {
@@ -523,7 +524,11 @@ impl Loop {
                 self.consecutive = 0;
                 Ok(Err(completed))
             }
-            Asked::Gone(completed) => Ok(Err(completed)),
+            Asked::Gone(completed) => {
+                // No answer is possible: the block budget still applies.
+                self.check_block_end();
+                Ok(Err(completed))
+            }
             Asked::Closed(request_id) => {
                 let completed =
                     self.reviewer_deny(under.id, under.turn, Some(request_id), reason, reviewer)?;
@@ -647,6 +652,20 @@ impl Loop {
             turn,
             Some(id),
         )?;
+        self.check_block_end();
+        Ok(denied(
+            "reviewer",
+            format!(
+                "The reviewer blocked this call: {reason} Respect this boundary and find \
+                 another way to do the task. It did not run."
+            ),
+        ))
+    }
+
+    /// When the session limit is reached with no person to answer, the
+    /// turn ends `failed` with code `blocked` once the step's calls
+    /// complete.
+    fn check_block_end(&mut self) {
         if self.session_blocks >= self.limits.session {
             self.turn_blocked = Some(Failure {
                 code: ErrorCode::Blocked,
@@ -658,13 +677,6 @@ impl Loop {
                 provider: None,
             });
         }
-        Ok(denied(
-            "reviewer",
-            format!(
-                "The reviewer blocked this call: {reason} Respect this boundary and find \
-                 another way to do the task. It did not run."
-            ),
-        ))
     }
 
     /// Denies the call without counting or escalating: the budget and the
