@@ -203,8 +203,13 @@ Most of a provider is data. For the provider:
   `credential()` function that returns a token
 - headers sent on every request
 - a `sign()` function, if every request must carry a signature
-- `reviewer_model`, optional: one of its models, small and fast, that reviews
-  calls when `reviewer.model` is unset (`docs/permissions.md`, "How it runs")
+- `reviewer_model`, optional: one of its models that reviews calls when
+  `reviewer.model` is unset (`docs/permissions.md`, "How it runs"). A
+  first-party package names the model its vendor's own agent reviews with,
+  at the current generation: `claude-sonnet-5-5` (Claude Code reviews with
+  Sonnet and never Haiku), `gpt-6-luna` (codex reviews with its luna
+  model); Google ships no reviewer, so `gemini` names its middle tier,
+  `gemini-3.8-flash`.
 
 For each model:
 

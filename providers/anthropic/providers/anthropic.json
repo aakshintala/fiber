@@ -3,6 +3,7 @@
   "credential": {
     "env": "ANTHROPIC_API_KEY"
   },
+  "reviewer_model": "claude-sonnet-5-5",
   "models": [
     {
       "id": "claude-fable-5-1",
