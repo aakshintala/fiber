@@ -83,6 +83,9 @@ fn failure_of(result: Result<String, Failure>) -> Failure {
     result.unwrap_err()
 }
 
+/// How long a test waits for a delivery before it fails.
+const DEADLINE: Duration = Duration::from_secs(10);
+
 const NO_PROMPT: &str = "No prompt. Run `fiber ask \"<prompt>\"` or `fiber ask < <file>`.";
 
 /// A reader whose `read` fails with an error that is not invalid UTF-8.
@@ -285,9 +288,8 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
     let ran = session.ask("hi".into(), |inbox| {
-        let Delivery::Prompt(message, _) = inbox
-            .recv_timeout(Duration::from_secs(10))
-            .expect("the prompt arrives")
+        let Delivery::Prompt(message, _) =
+            inbox.recv_timeout(DEADLINE).expect("the prompt arrives")
         else {
             panic!("the prompt arrives as a prompt");
         };
@@ -297,7 +299,7 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
         assert!(
             matches!(
                 inbox
-                    .recv_timeout(Duration::from_secs(10))
+                    .recv_timeout(DEADLINE)
                     .expect("close follows the prompt"),
                 Delivery::Close(_)
             ),

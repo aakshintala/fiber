@@ -268,6 +268,15 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     }
 }
 
+/// Queues a full subscriber's latest `session_status` after its fold. It is
+/// ephemeral, so the fold does not have it and a catch-up cannot recover
+/// it: it is pushed kept, like every line doors itself queues.
+pub(crate) fn queue_latest(injector: &Injector, status: Option<Envelope>) {
+    if let Some(status) = status {
+        injector.push_kept(status);
+    }
+}
+
 fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
     let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
     // The watcher is registered before `latest` is read. A line written in
@@ -313,10 +322,8 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
                 return;
             }
         }
-    } else if let Some(status) = status {
-        // Ephemeral, so the fold does not have it. This subscriber just
-        // registered, and a later one reads the log's latest the same way.
-        injector.push(status);
+    } else {
+        queue_latest(&injector, status);
     }
     conn.subscribed = true;
     conn.full = !summary;

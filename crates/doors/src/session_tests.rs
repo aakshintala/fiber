@@ -33,6 +33,11 @@ use super::{Gate, Session};
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// How long a test waits for `close` to return once the grace has passed:
+/// shorter than [`DEADLINE`], the blocked test writer's own wait, so that
+/// wait ending cannot make `close` return.
+const CLOSE_AFTER_GRACE: Duration = Duration::from_secs(2);
+
 struct Control {
     hold_reader: AtomicBool,
     hold_mu: Mutex<()>,
@@ -618,7 +623,7 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
     let held = Held::new(Hold::Wait);
     attach_held(&gate, &held, watcher);
     held.wait_blocked();
-    let until = clock.now() + Duration::from_secs(2);
+    let until = clock.now() + super::GRACE;
     let (done_tx, done_rx) = mpsc::channel();
     let session = opened.session;
     let log = opened.log;
@@ -634,16 +639,14 @@ fn a_blocked_writer_holds_close_until_the_grace_passes() {
         done_rx.try_recv().is_err(),
         "close has not returned before the grace passes"
     );
-    clock.advance(Duration::from_secs(2).saturating_sub(Duration::from_millis(1)));
+    clock.advance(super::GRACE.saturating_sub(Duration::from_millis(1)));
     assert!(
         done_rx.try_recv().is_err(),
         "close has not returned one millisecond before the grace"
     );
     clock.advance(Duration::from_millis(1));
-    // Shorter than the blocked writer's own wait, so that wait ending cannot
-    // make close return.
     done_rx
-        .recv_timeout(Duration::from_secs(2))
+        .recv_timeout(CLOSE_AFTER_GRACE)
         .expect("close returns once the grace has passed");
 }
 
@@ -822,4 +825,49 @@ fn status(name: &str) -> Event {
         delegates: 0,
         jobs: 0,
     })
+}
+
+#[test]
+fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registration() {
+    reset();
+    let temp = fakes::TempDir::new("fd");
+    let sessions = temp.path().join("h/projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id, timed).unwrap());
+    log.append(&status("latest"), None, None).unwrap();
+    // Registration, as `subscribe` does it, then the queue saturates and lags
+    // before the latest status is delivered.
+    let watcher = log.watch_all().unwrap();
+    let injector = watcher.injector();
+    let latest = log.latest("session_status");
+    for _ in 0..1_200 {
+        log.append(&notice(), None, None).unwrap();
+    }
+    log.append(&step(), None, None).unwrap();
+    crate::client::queue_latest(&injector, latest);
+    let held = Held::new(Hold::Go);
+    let write = HeldWrite {
+        held: Arc::clone(&held),
+    };
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        crate::client::write_loop(watcher, Box::new(write), false);
+        if let Ok(()) = tx.send(()) {}
+    });
+    let text = held.wait_text(
+        |text| text.contains("step_started"),
+        "catch-up returns the durable line the saturated queue dropped",
+    );
+    let lines = lines_of(&text);
+    let status = lines
+        .iter()
+        .find(|line| line["kind"] == "session_status")
+        .expect("the latest status reaches a subscriber whose queue saturated");
+    assert_eq!(status["payload"]["name"], "latest");
+    drop(log);
+    rx.recv_timeout(DEADLINE)
+        .expect("the writer ends once the log is dropped");
 }
