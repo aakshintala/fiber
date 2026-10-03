@@ -52,6 +52,30 @@ impl contract::signing::Signer for Recorder {
     }
 }
 
+/// Returns a header value HTTP rejects.
+struct BadHeaderValue;
+
+impl contract::signing::Signer for BadHeaderValue {
+    fn sign(
+        &self,
+        _: &contract::signing::SignRequest<'_>,
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![("x-signature".to_owned(), "sig\n".to_owned())])
+    }
+}
+
+/// Returns a header name HTTP rejects.
+struct BadHeaderName;
+
+impl contract::signing::Signer for BadHeaderName {
+    fn sign(
+        &self,
+        _: &contract::signing::SignRequest<'_>,
+    ) -> Result<Vec<(String, String)>, contract::signing::Error> {
+        Ok(vec![("x-sig\nature".to_owned(), "sig".to_owned())])
+    }
+}
+
 /// Refuses to sign.
 struct Refuses;
 
@@ -118,4 +142,43 @@ fn a_request_that_cannot_be_signed_is_never_sent() {
         "a sign failure is not retried"
     );
     assert!(server.requests().is_empty());
+}
+
+#[test]
+fn unusable_signed_headers_are_never_sent() {
+    for signer in [
+        &BadHeaderValue as &dyn contract::signing::Signer,
+        &BadHeaderName,
+    ] {
+        let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+        let sent = super::post_signed(
+            &format!("{}/v1", server.url()),
+            &[],
+            b"",
+            Some(signer),
+            &std::sync::Arc::default(),
+        );
+        let Err(err) = sent.map(|_| ()) else {
+            panic!("sent unusable signed headers");
+        };
+        let crate::Error::Sign(why) = &err else {
+            panic!("not a sign failure: {err:?}");
+        };
+        let message = why.to_string();
+        assert!(
+            matches!(why, contract::signing::Error::NotHeaders(_)),
+            "{message}"
+        );
+        assert!(
+            !message.contains('\n'),
+            "must not echo header values: {message}"
+        );
+        assert_eq!(err.code(), contract::ErrorCode::CredentialFailed);
+        assert_eq!(
+            err.should_retry(),
+            Some(false),
+            "unusable signed headers are not retried"
+        );
+        assert!(server.requests().is_empty());
+    }
 }

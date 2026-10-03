@@ -20,6 +20,20 @@ use ureq::unversioned::transport::{
 
 use crate::Error;
 
+fn validate_signed_header(name: &str, value: &str) -> Result<(), contract::signing::Error> {
+    if ureq::http::HeaderName::from_bytes(name.as_bytes()).is_err() {
+        return Err(contract::signing::Error::NotHeaders(
+            "a signed header name is not valid HTTP".into(),
+        ));
+    }
+    if ureq::http::HeaderValue::from_str(value).is_err() {
+        return Err(contract::signing::Error::NotHeaders(format!(
+            "header `{name}` has an invalid value"
+        )));
+    }
+    Ok(())
+}
+
 /// One call's cancellation: whether it was cancelled, and its open socket.
 #[derive(Debug, Default)]
 pub(crate) struct Cancel {
@@ -102,6 +116,11 @@ pub(crate) fn post_signed(
             .map_err(Error::Sign)?,
         None => Vec::new(),
     };
+    for (name, value) in &signed {
+        if let Err(why) = validate_signed_header(name, value) {
+            return Err(Error::Sign(why));
+        }
+    }
     let tls = TlsConfig::builder()
         .root_certs(RootCerts::PlatformVerifier)
         .build();
