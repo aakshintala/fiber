@@ -38,7 +38,7 @@ fn name_is(path: &Path, prefix: &str) -> bool {
 
 #[test]
 fn two_directories_differ_and_leave_nothing() {
-    let parent = super::system_temp();
+    let parent = std::env::temp_dir();
     let a = TempDir::new("t");
     let b = TempDir::new("t");
     assert_ne!(a.path(), b.path());
@@ -92,6 +92,21 @@ fn every_taken_candidate_panics_naming_the_prefix() {
     });
     let message = panic_message(caught.unwrap_err());
     assert!(message.contains("pref"), "{message}");
+}
+
+#[test]
+fn an_error_other_than_a_taken_name_panics_at_once_naming_the_path() {
+    let parent = TempDir::new("gone");
+    let missing = parent.path().join("missing");
+    let caught = std::panic::catch_unwind(|| {
+        super::create(&missing, "pref", ["aaaa".to_owned()].into_iter())
+    });
+    let message = panic_message(caught.unwrap_err());
+    assert!(message.contains("creating"), "{message}");
+    assert!(
+        message.contains(&missing.display().to_string()),
+        "{message}"
+    );
 }
 
 #[test]

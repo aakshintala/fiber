@@ -31,7 +31,7 @@ impl TempDir {
     /// taken, and another suffix is drawn. Panics if creating the directory
     /// fails for any other reason, or after [`ATTEMPTS`] names were taken.
     pub fn new(prefix: &str) -> Self {
-        let path = create(&system_temp(), prefix, std::iter::from_fn(suffix));
+        let path = create(&std::env::temp_dir(), prefix, std::iter::from_fn(suffix));
         Self { path }
     }
 
@@ -43,26 +43,16 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        // `NotFound` is not success: "already gone" is distinct from
-        // "could not remove".
         if fs::remove_dir_all(&self.path).is_ok() {
             return;
         }
-        // A test may have removed the directory itself. Any other error
-        // is "not missing".
-        match fs::symlink_metadata(&self.path) {
-            Err(err) if err.kind() == io::ErrorKind::NotFound => return,
-            Ok(_) | Err(_) => {}
-        }
+        // A directory the test already removed makes both calls below
+        // no-ops.
         restore_modes(&self.path);
         match fs::remove_dir_all(&self.path) {
             Ok(()) | Err(_) => {}
         }
     }
-}
-
-fn system_temp() -> PathBuf {
-    std::env::temp_dir()
 }
 
 /// Makes every directory under `path` writable, then readable, so a later
@@ -72,7 +62,8 @@ fn restore_modes(path: &Path) {
     let Ok(meta) = fs::symlink_metadata(path) else {
         return;
     };
-    if meta.file_type().is_symlink() || !meta.is_dir() {
+    // `symlink_metadata` reports a symlink as not a directory.
+    if !meta.is_dir() {
         return;
     }
     let mut perms = meta.permissions();
