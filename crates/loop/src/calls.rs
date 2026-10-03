@@ -14,13 +14,13 @@ use contract::events::{
     PermissionResolved, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
     ToolReplaced,
 };
-use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Bound, Output, Tool};
 use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
+use crate::inbox::{self, Waited};
 use crate::{Error, Loop, schema};
 
 /// A call that runs: its tool, the arguments it runs with, and the effects
@@ -253,10 +253,10 @@ impl Loop {
     }
 
     /// Asks a person about a call a standing ask matched, waiting for their
-    /// reply (`docs/permissions.md`, "What the log records"). Messages
-    /// that arrive meanwhile are held for the next step boundary; a reply
-    /// that names another request, or does not fit, is dropped and the loop
-    /// keeps waiting.
+    /// reply (`docs/permissions.md`, "What the log records"). Other
+    /// deliveries are admitted as at any drain. A reply that does not fit
+    /// is rejected and the wait goes on; one that names another request is
+    /// rejected `stale_request`.
     fn ask(
         &mut self,
         id: &ActionId,
@@ -266,22 +266,7 @@ impl Loop {
         rule: contract::events::StandingRule,
     ) -> Result<Result<(), Box<ToolCallCompleted>>, Error> {
         if !self.answerable {
-            let reason = "No person can answer an approval in this session.";
-            self.decided(
-                id,
-                turn,
-                resolved(
-                    None,
-                    Decision::Deny,
-                    DecidedBy::StandingRule,
-                    Some(reason.to_owned()),
-                    None,
-                ),
-            )?;
-            return Ok(Err(denied(
-                "no_person",
-                format!("{reason} It did not run."),
-            )));
+            return self.unanswerable(id, turn, None);
         }
         let request_id = RequestId(super::mint("r_"));
         self.append(
@@ -296,7 +281,8 @@ impl Loop {
             Some(id),
         )?;
         loop {
-            match self.inbox.recv() {
+            let delivery = match self.inbox.recv() {
+                Ok(delivery) => delivery,
                 // Every sender is gone, so no answer can come.
                 Err(_) => {
                     let reason = "The session ended while waiting for an answer.";
@@ -316,14 +302,16 @@ impl Loop {
                         format!("{reason} It did not run."),
                     )));
                 }
-                Ok(Delivery::Message(message)) => self.held.push_back(message),
-                Ok(Delivery::Reply(reply)) => {
-                    if reply.request_id != request_id {
-                        continue;
-                    }
+            };
+            match self.take_while_waiting(&request_id, delivery) {
+                Waited::Again => {}
+                Waited::Closed => return self.unanswerable(id, turn, Some(request_id)),
+                Waited::Reply(reply, ack) => {
                     let Some(answered) = self.answered(tool, None, &reply.answer) else {
+                        inbox::reject(ack, ErrorCode::InvalidArguments, inbox::UNFIT_REPLY);
                         continue;
                     };
+                    inbox::accept(ack);
                     match answered.decision {
                         Decision::Deny => {
                             let text = match &answered.feedback {
@@ -355,14 +343,41 @@ impl Loop {
         }
     }
 
+    /// Denies a call no person can answer (`docs/permissions.md`,
+    /// "Headless"): a session started by `fiber ask`, or one `close` has
+    /// been taken. `request_id` is set when the request was already raised.
+    fn unanswerable(
+        &mut self,
+        id: &ActionId,
+        turn: &TurnId,
+        request_id: Option<RequestId>,
+    ) -> Result<Result<(), Box<ToolCallCompleted>>, Error> {
+        let reason = "No person can answer an approval in this session.";
+        self.decided(
+            id,
+            turn,
+            resolved(
+                request_id,
+                Decision::Deny,
+                DecidedBy::StandingRule,
+                Some(reason.to_owned()),
+                None,
+            ),
+        )?;
+        Ok(Err(denied(
+            "no_person",
+            format!("{reason} It did not run."),
+        )))
+    }
+
     /// Checks `reply` against `offer`, the request's rule offer (`None` on a
     /// standing ask, which offers nothing to remember), and applies what an
     /// allow remembers (`docs/permissions.md`, "Remembering a decision"): a
     /// session grant goes onto `grants` before the next call is judged, and a
     /// project rule is appended to the project's rules file. A project rule
     /// that cannot be saved still allows the call, with a reason saying so.
-    /// `None`: the reply does not fit and is dropped, and the loop keeps
-    /// waiting.
+    /// `None`: the reply does not fit, so the caller rejects it and the loop
+    /// keeps waiting.
     fn answered(
         &mut self,
         tool: &str,

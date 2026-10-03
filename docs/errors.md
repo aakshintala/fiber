@@ -203,7 +203,8 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `blocked` | turn | the block budget ran out with no human to answer |
 | `blocked_host` | tool call | `web_fetch` named a link-local address or a cloud metadata host (`docs/tools.md`, "Web fetch and web search") |
 | `budget_exceeded` | turn | the spending budget was reached, or an extension refused a model request (`docs/loop.md`, "Spending budget") |
-| `closing` | tool call, extension call | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends") |
+| `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
+| `closing` | tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands") |
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
@@ -220,7 +221,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
 | `http_error` | tool call | `web_fetch` got a status other than 2xx |
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
-| `invalid_arguments` | tool call | the arguments failed the tool's schema or checks |
+| `invalid_arguments` | tool call, driver command | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
 | `invalid_request` | model call, turn | the provider rejected the request for any other reason |
 | `io_failed` | exit | a filesystem failure: a log write or fsync, or a configuration or credential file that exists but cannot be read or written; the message names the path |
 | `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
@@ -250,6 +251,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `session_not_found` | exit | a resume names no session |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `stale_file` | tool call | a write would replace a file the session has not seen in its current state |
+| `stale_request` | driver command | the command names a request, steering message, job or turn that is no longer pending, queued or running (`docs/invocation.md`) |
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `timeout` | tool call, job | a deadline passed |

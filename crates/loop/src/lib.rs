@@ -16,8 +16,8 @@ use std::sync::mpsc::Receiver;
 
 use contract::events::{
     AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, Grant, InputItem,
-    MessageOutcome, SessionStarted, SteeringApplied, ToolReplaced, TurnCompleted, TurnOutcome,
-    TurnStarted, UsageRecorded,
+    MessageOutcome, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
+    UsageRecorded,
 };
 use contract::inbox::{Delivery, Message};
 use contract::provider::{
@@ -30,6 +30,7 @@ use log::Log;
 
 mod calls;
 mod conversation;
+mod inbox;
 mod permission;
 mod process;
 mod schema;
@@ -94,9 +95,13 @@ pub struct Loop {
     inbox: Receiver<Delivery>,
     /// The root session's id, for providers that route by key.
     cache_key: String,
-    /// Taken from the inbox by the check before a turn completes, and
-    /// applied by the next step.
-    waiting: Option<Message>,
+    /// Steering messages taken and not yet applied, in arrival order: held
+    /// while the loop waited on an approval, taken by the end-of-turn
+    /// check, or taken in the drain that is about to apply them.
+    queued: VecDeque<Message>,
+    /// `close` has been taken. No further turn starts
+    /// (`docs/invocation.md`, "Lifecycle").
+    closing: bool,
     /// The conversation, built from the durable events as they are written
     /// and never by re-reading the log (`docs/loop.md`, "What the model is
     /// sent").
@@ -120,10 +125,6 @@ pub struct Loop {
     grants: Vec<Grant>,
     /// Whether a person can answer an approval; `false` for `fiber ask`.
     answerable: bool,
-    /// Messages that arrived while the loop waited for a reply to an
-    /// approval, in arrival order, applied as steering at the next step
-    /// boundary.
-    held: VecDeque<Message>,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
@@ -171,7 +172,8 @@ impl Loop {
             // A new session is its own root (`docs/prompt-cache.md`, "Cache
             // markers and keys").
             cache_key: started.session_id.0,
-            waiting: None,
+            queued: VecDeque::new(),
+            closing: false,
             conversation: Vec::new(),
             sent: None,
             tools,
@@ -181,7 +183,6 @@ impl Loop {
             rules: permissions.rules,
             grants: Vec::new(),
             answerable: true,
-            held: VecDeque::new(),
             cut_off: false,
             ledger: usage::Ledger::default(),
             budget: None,
@@ -202,38 +203,32 @@ impl Loop {
         self
     }
 
-    /// Runs turns until every sender of the inbox is gone.
+    /// Runs turns until `close` is taken or every sender of the inbox is
+    /// gone (`docs/invocation.md`, "Lifecycle").
     pub fn run(mut self) -> Result<(), Error> {
         while self.turn()?.is_some() {}
         Ok(())
     }
 
-    /// Blocks until a message arrives, then runs one turn from everything
-    /// waiting in the inbox, in arrival order (`docs/loop.md`, "Starting a
-    /// turn"). Returns how the turn ended, or `None` once every sender of the
-    /// inbox is gone.
+    /// Blocks until a prompt or a steer arrives, then runs one turn from
+    /// everything waiting in the inbox, in arrival order (`docs/loop.md`,
+    /// "Starting a turn"). A later prompt in that drain is rejected `busy`.
+    /// Returns how the turn ended, or `None` once `close` was taken while
+    /// idle or every sender of the inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
-        // A reply names a pending approval, and nothing is pending while
-        // the loop is idle: it is dropped, and the loop keeps waiting.
-        let first = loop {
-            let Ok(delivery) = self.inbox.recv() else {
-                return Ok(None);
-            };
-            match delivery {
-                Delivery::Message(message) => break message,
-                Delivery::Reply(_) => {}
-            }
+        let Some(started) = self.wait_for_turn() else {
+            return Ok(None);
         };
-        let input: Vec<Message> = std::iter::once(first).chain(self.messages()).collect();
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         self.append(
             &Event::TurnStarted(TurnStarted {
-                input: input
-                    .iter()
-                    .map(|m| InputItem::Message {
-                        content: m.content.clone(),
-                        sender: m.sender.clone(),
+                input: started
+                    .messages
+                    .into_iter()
+                    .map(|message| InputItem::Message {
+                        content: message.content,
+                        sender: message.sender,
                         changed_by: None,
                     })
                     .collect(),
@@ -241,17 +236,21 @@ impl Loop {
             &turn,
             None,
         )?;
+        // A prompt is accepted once its `turn_started` is written. A log
+        // error above drops it uncalled.
+        if let Some(ack) = started.prompt {
+            inbox::accept(ack);
+        }
         let completed = loop {
             match self.step(&turn)? {
                 Step::Next => {}
-                // Anything that arrived while the model wrote its final reply
-                // continues the turn (`docs/loop.md`, "Ending a turn"). A
-                // reply is dropped: nothing is pending at a step boundary.
+                // Anything waiting continues the turn (`docs/loop.md`,
+                // "Ending a turn"). A steer taken here waits for the next
+                // step; a prompt is rejected.
                 Step::Replied => {
-                    let next = self.messages().next();
-                    match next {
-                        Some(message) => self.waiting = Some(message),
-                        None => break ended(TurnOutcome::Completed, None),
+                    self.drain();
+                    if self.queued.is_empty() {
+                        break ended(TurnOutcome::Completed, None);
                     }
                 }
                 Step::Ended(completed) => break completed,
@@ -262,35 +261,13 @@ impl Loop {
         Ok(Some(outcome))
     }
 
-    /// Messages waiting in the inbox, in arrival order. Replies are
-    /// dropped: nothing is pending outside a wait for one.
-    fn messages(&self) -> impl Iterator<Item = Message> + use<'_> {
-        self.inbox.try_iter().filter_map(|delivery| match delivery {
-            Delivery::Message(message) => Some(message),
-            Delivery::Reply(_) => None,
-        })
-    }
-
     /// One step (`docs/loop.md`, "One step").
     fn step(&mut self, turn: &TurnId) -> Result<Step, Error> {
         self.append(&Event::StepStarted(Empty {}), turn, None)?;
-        let waiting = self.waiting.take();
-        // Held first: they arrived while the loop waited for a reply,
-        // before anything else drained now.
-        let mut steering: Vec<Message> = waiting.into_iter().collect();
-        steering.extend(self.held.drain(..));
-        steering.extend(self.messages());
-        for message in steering {
-            self.append(
-                &Event::SteeringApplied(SteeringApplied {
-                    content: message.content.clone(),
-                    sender: message.sender.clone(),
-                    changed_by: None,
-                }),
-                turn,
-                None,
-            )?;
-        }
+        // Queued first: a steer held during an approval, or taken by the
+        // end-of-turn check, arrived before this drain.
+        self.drain();
+        self.apply_steering(turn)?;
         let request = ModelRequest {
             system_prompt: self.system_prompt.clone(),
             tools: self.tools.values().map(|(_, _, d)| d.clone()).collect(),

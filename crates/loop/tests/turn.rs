@@ -23,7 +23,7 @@ use r#loop::rebuild;
 use serde_json::{Value, json};
 
 use support::{
-    MODEL, Session, TestTool, delivery, kinds, message, reasoning_item, reasoning_reply,
+    MODEL, Session, TestTool, delivery, kinds, message, reasoning_item, reasoning_reply, steer,
     tool_call_reply,
 };
 
@@ -50,9 +50,12 @@ fn durable(lines: &[contract::Envelope]) -> Vec<&str> {
 #[test]
 fn messages_waiting_together_start_one_turn_in_arrival_order() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
-    for text in ["one", "two", "three"] {
-        session.inbox.send(delivery(text)).unwrap();
-    }
+    // The first is the prompt. The others are steers taken while the loop is
+    // still idle, so they join this turn's input (`docs/loop.md`, "Starting
+    // a turn").
+    session.inbox.send(delivery("one")).unwrap();
+    session.inbox.send(steer("two")).unwrap();
+    session.inbox.send(steer("three")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     assert_eq!(
@@ -622,7 +625,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
 fn the_loop_runs_turns_until_every_sender_is_gone() {
     let mut session = Session::new(vec![Scripted::text("Hi."), Scripted::text("Bye.")], None);
     session.inbox.send(delivery("hi")).unwrap();
-    session.inbox.send(delivery("and")).unwrap();
+    session.inbox.send(steer("and")).unwrap();
     let looped = session.looped.take().unwrap();
     let (done, finished) = std::sync::mpsc::channel();
     let ran = std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
@@ -684,7 +687,12 @@ fn tier_cost() -> f64 {
 
 #[test]
 fn a_priced_model_logs_the_cost_its_prices_give() {
-    let mut session = Session::open(vec![counted("Hello.")], None, Vec::new(), tiered(false));
+    let mut session = Session::open(
+        vec![counted("Hello.")],
+        Vec::new(),
+        Vec::new(),
+        tiered(false),
+    );
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let usage = session
@@ -698,7 +706,12 @@ fn a_priced_model_logs_the_cost_its_prices_give() {
 
 #[test]
 fn a_subscription_model_logs_an_estimate_apart_from_billed_spend() {
-    let mut session = Session::open(vec![counted("Hello.")], None, Vec::new(), tiered(true));
+    let mut session = Session::open(
+        vec![counted("Hello.")],
+        Vec::new(),
+        Vec::new(),
+        tiered(true),
+    );
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let usage = session
@@ -760,6 +773,10 @@ fn budgeted(
     model: r#loop::Model,
     usd: Option<f64>,
 ) -> Session {
+    let during = during
+        .into_iter()
+        .map(|message| contract::inbox::Delivery::Steer(message, support::ignore()))
+        .collect();
     let mut session = Session::open(script, during, vec![weather()], model);
     if let Some(usd) = usd {
         session = session.budget(Some(usd));
@@ -901,7 +918,7 @@ fn an_unset_budget_never_refuses() {
 fn a_zero_budget_refuses_the_first_request() {
     let mut session = Session::open(
         vec![Scripted::text("Hello.")],
-        None,
+        Vec::new(),
         Vec::new(),
         per_token(false),
     )
@@ -929,7 +946,7 @@ fn a_zero_budget_refuses_the_first_request() {
 fn a_negative_budget_refuses_the_first_request() {
     let mut session = Session::open(
         vec![Scripted::text("Hello.")],
-        None,
+        Vec::new(),
         Vec::new(),
         per_token(false),
     )

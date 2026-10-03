@@ -26,7 +26,7 @@ use contract::{Envelope, RequestId};
 use fakes::Scripted;
 use serde_json::{Value, json};
 
-use support::{Session, TestTool, calls_reply, delivery, kinds, message};
+use support::{Session, TestTool, calls_reply, delivery, ignore, kinds, message};
 
 fn paris() -> Value {
     json!({"city": "Paris"})
@@ -70,7 +70,7 @@ fn deny(feedback: Option<&str>) -> ReplyAnswer {
 }
 
 fn reply(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
-    Delivery::Reply(Reply { request_id, answer })
+    Delivery::Reply(Reply { request_id, answer }, ignore())
 }
 
 /// Watches the log for the turn's `permission_requested`, then runs `send`
@@ -485,7 +485,7 @@ fn a_message_sent_while_waiting_steers_the_next_step() {
         let inbox = session.inbox.clone();
         move |id| {
             inbox
-                .send(Delivery::Message(message("wait, actually")))
+                .send(Delivery::Steer(message("wait, actually"), ignore()))
                 .unwrap();
             inbox.send(reply(id, allow())).unwrap();
         }
