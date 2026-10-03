@@ -20,7 +20,7 @@ use std::time::Duration;
 use contract::events::{
     ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
-use contract::inbox::{Delivery, Message};
+use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
@@ -274,9 +274,20 @@ pub(crate) fn message(text: &str) -> Message {
     }
 }
 
-/// A driver's message on the loop's inbox.
+/// An acknowledgement that ignores its answer. `fiber ask` uses one, and so
+/// does a test that does not check the answer.
+pub(crate) fn ignore() -> Ack {
+    Ack(Box::new(|_| {}))
+}
+
+/// A driver's prompt on the loop's inbox.
 pub(crate) fn delivery(text: &str) -> Delivery {
-    Delivery::Message(message(text))
+    Delivery::Prompt(message(text), ignore())
+}
+
+/// A driver's steering message on the loop's inbox.
+pub(crate) fn steer(text: &str) -> Delivery {
+    Delivery::Steer(message(text), ignore())
 }
 
 /// Standing rules in memory: `read` returns what the test set.
@@ -322,13 +333,15 @@ struct Seam {
     inner: Arc<ScriptedProvider>,
     /// Taken by the first call, so the loop sees the inbox close once the
     /// test drops its own sender.
-    during: Mutex<Option<(Message, Sender<Delivery>)>>,
+    during: Mutex<Option<(Vec<Delivery>, Sender<Delivery>)>>,
 }
 
 impl Provider for Seam {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
-        if let Some((message, inbox)) = self.during.lock().unwrap().take() {
-            inbox.send(Delivery::Message(message)).unwrap();
+        if let Some((deliveries, inbox)) = self.during.lock().unwrap().take() {
+            for delivery in deliveries {
+                inbox.send(delivery).unwrap();
+            }
         }
         self.inner.call(request)
     }
@@ -364,13 +377,27 @@ impl Session {
         during: Option<Message>,
         tools: Vec<Arc<dyn Tool>>,
     ) -> Self {
-        Self::open(script, during, tools, unpriced())
+        Self::open(
+            script,
+            during
+                .into_iter()
+                .map(|message| Delivery::Steer(message, ignore()))
+                .collect(),
+            tools,
+            unpriced(),
+        )
     }
 
-    /// As [`Session::with_tools`], reaching `model`.
+    /// As [`Session::new`], and the first model call sends `during`.
+    pub(crate) fn injecting(script: Vec<Scripted>, during: Vec<Delivery>) -> Self {
+        Self::open(script, during, Vec::new(), unpriced())
+    }
+
+    /// As [`Session::with_tools`], reaching `model`. `during` is sent, in
+    /// order, when the first model call is made.
     pub(crate) fn open(
         script: Vec<Scripted>,
-        during: Option<Message>,
+        during: Vec<Delivery>,
         tools: Vec<Arc<dyn Tool>>,
         model: Model,
     ) -> Self {
@@ -395,7 +422,7 @@ impl Session {
         let provider = Arc::new(ScriptedProvider::new(script));
         let seam = Seam {
             inner: Arc::clone(&provider),
-            during: Mutex::new(during.map(|m| (m, inbox.clone()))),
+            during: Mutex::new((!during.is_empty()).then(|| (during, inbox.clone()))),
         };
         let rules = Arc::new(FakeRules::empty());
         let looped = Loop::start(
@@ -437,7 +464,7 @@ impl Session {
 
     /// Sends a person's answer to a pending approval.
     pub(crate) fn reply(&self, reply: contract::commands::Reply) {
-        self.inbox.send(Delivery::Reply(reply)).unwrap();
+        self.inbox.send(Delivery::Reply(reply, ignore())).unwrap();
     }
 
     /// Caps the session's billed spend at `usd` US dollars.

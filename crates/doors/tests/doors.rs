@@ -276,13 +276,17 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
     let ran = session.ask("hi".into(), |inbox| {
-        let Delivery::Message(message) = inbox.recv().unwrap() else {
-            panic!("the prompt arrives as a message");
+        let Delivery::Prompt(message, _) = inbox.recv().unwrap() else {
+            panic!("the prompt arrives as a prompt");
         };
         assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
         assert!(matches!(message.sender.origin, Origin::Driver));
         assert!(message.sender.command_id.0.starts_with("c_"));
-        assert!(inbox.recv().is_err(), "no more prompts come");
+        assert!(
+            matches!(inbox.recv().unwrap(), Delivery::Close(_)),
+            "close follows the prompt"
+        );
+        assert!(inbox.recv().is_err(), "nothing follows close");
         log.append(
             &Event::TurnStarted(TurnStarted {
                 input: vec![InputItem::Message {

@@ -13,7 +13,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
 use contract::events::Event;
-use contract::inbox::{Delivery, Message};
+use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode};
 use log::{Log, Watcher};
@@ -70,9 +70,9 @@ impl Session {
         opened
     }
 
-    /// Runs `fiber ask`'s one turn: hands `run` an inbox holding `prompt`
-    /// from a driver and nothing more to come, so the loop `run` starts
-    /// stops when the turn ends (`docs/invocation.md`, "Lifecycle").
+    /// Runs `fiber ask`'s one turn: sends `prompt` then `close`, so the
+    /// loop finishes that turn and exits without depending on its senders
+    /// dropping (`docs/invocation.md`, "Lifecycle").
     pub fn ask(
         &self,
         prompt: String,
@@ -86,8 +86,12 @@ impl Session {
                 command_id: CommandId(mint("c_")),
             },
         };
-        // The receiver is still here, so the send cannot fail.
-        inbox.send(Delivery::Message(message)).unwrap_or(());
+        // The receiver is still here, so the send cannot fail. The answer is
+        // ignored: `fiber ask` has no client waiting on an acknowledgement.
+        inbox
+            .send(Delivery::Prompt(message, ignore()))
+            .unwrap_or(());
+        inbox.send(Delivery::Close(ignore())).unwrap_or(());
         drop(inbox);
         run(waiting)
     }
@@ -156,6 +160,11 @@ fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
 fn remove_socket(socket: &Path) {
     // Nothing there is the usual case.
     fs::remove_file(socket).unwrap_or(());
+}
+
+/// An acknowledgement that discards its answer.
+fn ignore() -> Ack {
+    Ack(Box::new(|_| {}))
 }
 
 fn io_failed(path: &Path, e: &std::io::Error) -> Failure {

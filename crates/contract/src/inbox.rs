@@ -3,11 +3,12 @@
 //! end; everyone else holds a sender, so this type lives here and no sender
 //! depends on `loop`.
 
+use std::fmt;
+
 use crate::shapes::{ContentPart, Sender};
 
-/// A message for the loop. While the loop is idle it starts a turn; while a
-/// turn runs it steers that turn (`docs/loop.md`, "Starting a turn" and "One
-/// step").
+/// A message for the loop, carried by [`Delivery::Prompt`] or
+/// [`Delivery::Steer`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Message {
     /// The message.
@@ -16,12 +17,83 @@ pub struct Message {
     pub sender: Sender,
 }
 
-/// What the loop's inbox carries: a message, or a person's answer to an
-/// approval (`docs/permissions.md`, "What the log records").
+/// What an acknowledgement carries. `Ok(None)` accepts a command that
+/// answers nothing; `Ok(Some)` accepts one that answers with a result;
+/// `Err` rejects it. The loop never writes an answer to the log
+/// (`docs/invocation.md`, "Driver commands").
+pub type Answer = Result<Option<crate::events::CommandResult>, Rejection>;
+
+/// Why a command was rejected.
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Rejection {
+    /// The rejection code (`docs/invocation.md`, "Driver commands").
+    pub code: crate::ErrorCode,
+    /// Fiber's own sentence.
+    pub message: String,
+}
+
+/// Called once with the command's answer. The loop calls it when it takes
+/// the delivery, except a prompt that starts a turn, which it calls once
+/// that turn's `turn_started` is written. Dropping an [`Ack`] uncalled is
+/// the sender's concern: the loop stops on a log error without calling the
+/// ones it has not taken.
+pub struct Ack(pub Box<dyn FnOnce(Answer) + Send>);
+
+impl fmt::Debug for Ack {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Ack(..)")
+    }
+}
+
+/// What the loop's inbox carries (`docs/invocation.md`, "Driver commands").
 pub enum Delivery {
-    /// A message for the loop.
-    Message(Message),
+    /// Starts a turn. Rejected `busy` while one is running, and `closing`
+    /// after `close`.
+    Prompt(Message, Ack),
+    /// A steering message. While a turn runs it joins that turn at the next
+    /// step boundary; while the loop is idle it starts a turn.
+    Steer(Message, Ack),
+    /// Removes the steering message sent by the `steer` command `CommandId`
+    /// names, when that message is still unapplied.
+    SteerDrop(crate::CommandId, Ack),
     /// A person's answer to a pending approval.
-    Reply(crate::commands::Reply),
+    Reply(crate::commands::Reply, Ack),
+    /// Accept no more prompts. The turn in flight finishes, then the loop
+    /// exits.
+    Close(Ack),
+}
+
+impl fmt::Debug for Delivery {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Prompt(message, ack) => {
+                f.debug_tuple("Prompt").field(message).field(ack).finish()
+            }
+            Self::Steer(message, ack) => f.debug_tuple("Steer").field(message).field(ack).finish(),
+            Self::SteerDrop(id, ack) => f.debug_tuple("SteerDrop").field(id).field(ack).finish(),
+            Self::Reply(reply, ack) => f.debug_tuple("Reply").field(reply).field(ack).finish(),
+            Self::Close(ack) => f.debug_tuple("Close").field(ack).finish(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Ack, Delivery, Message};
+    use crate::CommandId;
+    use crate::shapes::{ContentPart, Origin, Sender};
+
+    #[test]
+    fn a_delivery_names_its_command_and_its_ack_in_debug() {
+        let message = Message {
+            content: vec![ContentPart::Text { text: "hi".into() }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: CommandId("c_1".into()),
+            },
+        };
+        let text = format!("{:?}", Delivery::Prompt(message, Ack(Box::new(|_| {}))));
+        assert!(text.starts_with("Prompt("), "{text}");
+        assert!(text.contains("Ack(..)"), "{text}");
+    }
 }
