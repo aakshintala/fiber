@@ -46,19 +46,11 @@ pub fn is_path(typed: &str) -> bool {
 /// non-empty, marks where the repository ends, so a repository inside
 /// subgroups can be named. The marker stays on the repository string.
 pub(crate) fn split(name: &str) -> Result<(&str, &str), Error> {
-    let (repo, dir) = if let Some(end) = git_marker_end(name) {
-        let repo = &name[..end];
-        let dir = name[end..].strip_prefix('/').unwrap_or("");
-        (repo, dir)
-    } else {
-        match name.match_indices('/').nth(2) {
-            Some((i, _)) => {
-                let (repo, rest) = name.split_at(i);
-                (repo, rest.strip_prefix('/').unwrap_or(rest))
-            }
-            None => (name, ""),
-        }
-    };
+    let end = git_marker_end(name)
+        .or_else(|| name.match_indices('/').nth(2).map(|(i, _)| i))
+        .unwrap_or(name.len());
+    let (repo, rest) = name.split_at(end);
+    let dir = rest.strip_prefix('/').unwrap_or(rest);
     // A marked repository needs at least three segments; an unmarked one
     // is exactly the first three, so fewer than three is the same refusal.
     if repo.split('/').count() < 3 || repo.split('/').any(str::is_empty) {
@@ -69,16 +61,13 @@ pub(crate) fn split(name: &str) -> Result<(&str, &str), Error> {
 
 /// The byte index just past the first `<x>.git` segment, when the name has one.
 fn git_marker_end(name: &str) -> Option<usize> {
-    let mut start = 0;
-    for (index, segment) in name.split('/').enumerate() {
-        if index > 0 {
-            start += 1;
-        }
-        let end = start + segment.len();
+    let mut end = 0;
+    for segment in name.split('/') {
+        end += segment.len();
         if segment.len() > ".git".len() && segment.ends_with(".git") {
             return Some(end);
         }
-        start = end;
+        end += 1;
     }
     None
 }
