@@ -169,6 +169,22 @@ compiled in through ureq. Empty means the platform's certificate loader
 returned no certificates. A test runs Fiber against an empty store and checks
 it connects through the fallback.
 
+### Proxies
+
+Every HTTP request Fiber makes goes through a proxy when the environment names
+one, as curl does: model calls, `host.http`, an extension's prepare step and
+`web_fetch`. Fiber reads the variables ureq reads, in this order, and uses the
+first one set: `ALL_PROXY`, `HTTPS_PROXY`, `HTTP_PROXY`, each in upper or
+lower case. `NO_PROXY` (or `no_proxy`) lists the hosts that bypass it, as exact
+names, `*.` or `.` suffixes, or `*` for every host. There is no configuration
+key: these variables are the platform's, not Fiber's.
+
+The proxy is an HTTP proxy, reached with `CONNECT`, so TLS runs end to end
+through it and the certificate rules above still apply. A `socks5://` proxy is
+not supported, because ureq's SOCKS support is not compiled in. An
+extension's git fetch runs the system `git`, which reads the same variables
+itself.
+
 ## Programs Fiber runs
 
 Fiber needs no program installed beyond the operating system's own, with three
