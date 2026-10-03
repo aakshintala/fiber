@@ -18,7 +18,7 @@ Every session is headless. A person or a program reaches one through a door.
 | | What it is |
 |---|---|
 | `fiber` | The terminal. Requires a tty; without one it is a usage error naming `fiber ask`. It is a client of the hub, starting the hub if none is running ("The hub"). |
-| `fiber ask` | A one-shot session for a caller outside Fiber. Its stdin is the prompt, its stdout is the event stream, and it accepts no further prompts. |
+| `fiber ask` | A one-shot session for a caller outside Fiber. Its prompt is its argument or stdin, its stdout is the event stream, and it accepts no further prompts. |
 
 The hub is not a door. It is the one process every client talks to, the
 terminal included ("The hub"). A GUI, a phone or a web page is a client of the
@@ -37,25 +37,107 @@ none has a path to state another does not.
 
 ## Getting a prompt in
 
-`ask` takes its prompt as an argument or on stdin, and supplying both is an
-error rather than a precedence rule, because ambiguous input is a caller bug
-worth surfacing:
+Fiber decides the prompt's source from `fiber ask`'s arguments alone and
+never probes stdin, like a Unix command. It does not notice when stdin is
+piped but unused.
 
 ```sh
 fiber ask "review the diff on this branch"
 fiber ask < brief.md
+git diff | fiber ask "review this diff" -
 ```
+
+`fiber ask "<prompt>"`: the argument is the prompt, and stdin is never read.
+
+`fiber ask` with no prompt argument: the prompt is stdin, read to its end.
+
+`-` as an argument means "read stdin". `fiber ask -` reads stdin as the
+whole prompt. `fiber ask "<prompt>" -` appends stdin to the argument as one
+prompt: the argument, a newline, then stdin. `-` is read to its end even
+when stdin is a terminal, as `cat -` reads it.
+
+`-` is accepted only as the last positional argument. `fiber ask - "<prompt>"`,
+two `-` arguments, or more than one prompt is a usage error. The sentence is
+`` `fiber ask` takes one prompt, then an optional `-`; quote the prompt. ``
+and it ends with `` Run `fiber --help` for usage. ``
+
+A whitespace-only part is dropped. When nothing is left, the usage error is
+`` No prompt. Run `fiber ask "<prompt>"` or `fiber ask < <file>`. ``
+
+`fiber ask` with no prompt argument and no `-`, when stdin is a terminal, is
+a usage error, not a silent drop into the TUI. Checking whether stdin is a
+terminal is not reading it.
 
 A large prompt goes on stdin. Linux caps a single argument at
 `MAX_ARG_STRLEN`, 131072 bytes, so a long brief passed as an argument can
 fail with `E2BIG` on Linux after working on macOS; stdin has no cap.
 
-`fiber ask` with no prompt and stdin on a terminal is a usage error, not a
-silent drop into the TUI.
+## Commands and flags
+
+`fiber` takes a command. The menu lists only the commands that work, one
+line each, in three groups, then the flags and examples.
+
+**Sessions.** `ask [--model <model>] [<prompt>] [-]` runs one session of one
+turn; its events go to stdout.
+
+**Extensions.** `install <name or path>` installs an extension and its
+dependencies. `update <name>` updates an installed extension to its newest
+tag. `remove <name>` removes an extension, the dependencies nothing else
+uses, and their data. `list` lists installed extensions: name, version and
+commit.
+
+**Other.** `help [<command>]` prints the menu, or a command's help.
+`version` prints the version.
+
+The flags are `-h`, `--help`, `-v` and `--version`. There is no `-V`.
+`-v` and `--version` are top-level only: `fiber ask -v` is an unknown
+argument.
+
+`-h`, `--help` and `fiber help` print the menu on stdout and exit 0.
+`fiber <command> --help`, `fiber <command> -h` and `fiber help <command>`
+print that command's help on stdout and exit 0. `fiber ask --help` starts
+no session and prints no `fiber_exited` line. It is the one exception to
+"ask's stdout is the event stream".
+
+`fiber --version`, `fiber -v` and `fiber version` print `fiber <version>`
+on stdout and exit 0. The version is this binary's package version.
+
+Help and version are printed before Fiber reads `FIBER_HOME`, configuration,
+credentials or stdin, so they succeed when home is empty or no provider is
+installed. A failed write to stdout is ignored and the exit is still 0, as
+with `fiber list`.
+
+```sh
+fiber ask "review the diff on this branch"
+fiber ask < brief.md
+git diff | fiber ask "review this diff" -
+fiber install openrouter
+fiber help ask
+```
+
+A wrong invocation prints one sentence on stderr and exits 2. The sentence
+is the parser's first paragraph, and where the parser has a suggestion it
+includes `did you mean '<suggestion>'?`. It ends with
+`` Run `fiber --help` for usage. `` A usage error from parsing an invocation
+whose first argument is `ask`, including `ask`'s own argument-shape errors,
+also prints one `fiber_exited` line on stdout, carrying the exit code and
+`error` (`docs/errors.md`, "Before a session exists"). Any other parse
+error prints the sentence on stderr only, and stdout is empty.
+
+`fiber` with no arguments is a usage error naming `fiber ask`. Nothing is
+written to stdout. The sentence is `` The terminal door is not built; run `fiber ask "<prompt>"`. Run `fiber --help` for usage. ``
+
+`-V` is an unknown argument: `Unexpected argument '-V' found.` An unknown
+command names the suggestion when there is one, as
+`Unrecognized subcommand 'instal'; did you mean 'install'?`. An unknown
+flag does the same, as
+`Unexpected argument '--modle' found; did you mean '--model'?`. A missing
+required argument names the value, as `<name or path>` for `fiber install`.
 
 ## Why stdin is the prompt
 
-On `ask`, stdin is the prompt. No session takes driver commands on stdin:
+On `ask`, stdin is the prompt when the arguments say to read it
+("Getting a prompt in"). No session takes driver commands on stdin:
 every driver is a client over a socket ("Processes").
 
 What `ask` gives up by spending its stdin on the prompt is the ability to
@@ -312,8 +394,8 @@ describes; the admission-ordered steering queue is the only queue.
 concurrency section of `docs/architecture.md` and adds nothing here.
 
 **Exit codes: 0 success, 1 failure, 2 usage, 129 SIGHUP, 130 SIGINT, 143
-SIGTERM.** Usage is Fiber called wrongly: a bad flag, two prompt sources, no
-prompt, no tty. `fiber ask` exits 1 when its turn failed; a session the hub
+SIGTERM.** Usage is Fiber called wrongly: a bad flag, no prompt, no tty.
+`fiber ask` exits 1 when its turn failed; a session the hub
 started exits 1 only when the process itself failed (`docs/errors.md`, "What a caller gets").
 What a signal guarantees before the process goes is "Shutdown".
 
