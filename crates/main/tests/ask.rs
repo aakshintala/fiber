@@ -738,16 +738,11 @@ fn help_for_every_command_matches_the_flag() {
         assert_eq!(via_help.stderr, "");
         assert_eq!(via_flag.stderr, "");
         assert_eq!(via_help.stdout, via_flag.stdout, "{name}");
-        let usage_prefix = if name == "extension" {
-            "Usage: fiber extension".to_owned()
-        } else {
-            format!("Usage: fiber {name}")
-        };
         assert!(
             via_flag
                 .stdout
                 .lines()
-                .any(|line| line.starts_with(&usage_prefix)),
+                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
             "{name}: {}",
             via_flag.stdout
         );
@@ -975,23 +970,6 @@ fn package(name: &str) -> PathBuf {
         .join(name)
 }
 
-fn copy_dir_all(from: &Path, to: &Path) {
-    fs::create_dir_all(to).unwrap();
-    for entry in fs::read_dir(from).unwrap() {
-        let entry = entry.unwrap();
-        let dest = to.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            copy_dir_all(&entry.path(), &dest);
-        } else {
-            fs::copy(entry.path(), dest).unwrap();
-        }
-    }
-}
-
-fn copy_package(name: &str, to: &Path) {
-    copy_dir_all(&package(name), to);
-}
-
 /// The OpenCode Go tool exchange with `muse-spark-1.3-contributor`: the
 /// recorded tool call, then the probe's answer after the tool result.
 fn go_exchange() -> [Response; 2] {
@@ -1118,14 +1096,52 @@ fn extension_update_all_on_an_empty_home_exits_zero() {
 }
 
 #[test]
+fn extension_update_all_skips_unrequested_dependencies() {
+    let setup = Setup::new();
+    let gh = Github::new(&setup);
+    gh.release("v0.1.0");
+    gh.release_needs_muse("v1.0.0", "v0.1.0");
+    let muse_v1 = git(&gh.repo, &["rev-parse", "v0.1.0^{commit}"]);
+    let run = setup.fiber_with_env(&["extension", "install", NEEDS_MUSE], &gh.env());
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
+    assert!(
+        listed
+            .raw
+            .iter()
+            .any(|line| line.contains(&format!("{MUSE} v0.1.0 {muse_v1}"))),
+        "{:?}",
+        listed.raw
+    );
+    gh.release("v0.2.0");
+    gh.release_needs_muse("v1.0.1", "v0.1.0");
+    let run = setup.fiber_with_env(&["extension", "update"], &gh.env());
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    let listed = setup.fiber_with_env(&["extension", "list"], &[]);
+    assert!(
+        listed
+            .raw
+            .iter()
+            .any(|line| line.contains(&format!("{MUSE} v0.1.0 {muse_v1}"))),
+        "muse must stay on v0.1.0 when update-all skips unrequested extensions: {:?}",
+        listed.raw
+    );
+    assert!(
+        listed
+            .raw
+            .iter()
+            .any(|line| line.contains("needs-muse") && line.contains("v1.0.1")),
+        "{:?}",
+        listed.raw
+    );
+}
+
+#[test]
 fn extension_update_all_stops_at_the_first_failure() {
     let setup = Setup::new();
-    let muse = setup.root.path().join("muse-copy");
-    let opencode = setup.root.path().join("opencode-copy");
-    copy_package("muse", &muse);
-    copy_package("opencode", &opencode);
+    let muse = setup.package("muse", "", "");
+    install(&setup, &package("opencode"));
     install(&setup, &muse);
-    install(&setup, &opencode);
     fs::remove_dir_all(&muse).unwrap();
     let run = setup.fiber(&["extension", "update"], None);
     assert_ne!(run.code, Some(0), "{}", run.stderr);
@@ -1216,9 +1232,25 @@ impl Github {
         git(&self.repo, &["commit", "--quiet", "-m", tag]);
         git(&self.repo, &["tag", tag]);
     }
+
+    /// Commits `providers/needs-muse`, which depends on [`MUSE`] at `muse_min`.
+    fn release_needs_muse(&self, tag: &str, muse_min: &str) {
+        let dir = self.repo.join("providers/needs-muse");
+        fs::create_dir_all(dir.join("providers")).unwrap();
+        let manifest = format!(
+            r#"{{"name":"{NEEDS_MUSE}","version":"0.0.0","fiber":"0.0.0","api":1,"depends":{{"{MUSE}":"{muse_min}"}}}}"#
+        );
+        fs::write(dir.join("extension.json"), manifest).unwrap();
+        fs::write(dir.join("providers/.gitkeep"), "").unwrap();
+        fs::write(dir.join("NOTES.md"), format!("needs-muse {tag}\n")).unwrap();
+        git(&self.repo, &["add", "."]);
+        git(&self.repo, &["commit", "--quiet", "-m", tag]);
+        git(&self.repo, &["tag", tag]);
+    }
 }
 
 const MUSE: &str = "github.com/aakshintala/fiber/providers/muse";
+const NEEDS_MUSE: &str = "github.com/aakshintala/fiber/providers/needs-muse";
 
 #[test]
 fn install_by_short_name_fetches_from_git_headless_and_list_shows_the_commit() {

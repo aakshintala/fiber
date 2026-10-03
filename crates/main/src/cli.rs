@@ -74,12 +74,7 @@ pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
     /// Manage extensions
-    #[command(
-        subcommand,
-        about = "Manage extensions",
-        disable_help_subcommand = true,
-        arg_required_else_help = false
-    )]
+    #[command(subcommand, arg_required_else_help = false)]
     Extension(ExtensionCommands),
     /// Print the version
     Version,
@@ -92,7 +87,7 @@ pub(crate) enum Commands {
 }
 
 #[derive(Debug, Subcommand)]
-#[command(disable_help_subcommand = true, arg_required_else_help = false)]
+#[command(disable_help_subcommand = true)]
 pub(crate) enum ExtensionCommands {
     /// Install an extension and its dependencies
     Install {

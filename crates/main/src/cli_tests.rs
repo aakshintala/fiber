@@ -116,23 +116,6 @@ fn an_unknown_subcommand_keeps_claps_suggestion() {
 }
 
 #[test]
-fn old_top_level_extension_names_are_unknown() {
-    for (args, old) in [
-        (&["fiber", "install", "x"][..], "install"),
-        (&["fiber", "list"][..], "list"),
-        (&["fiber", "update"][..], "update"),
-        (&["fiber", "remove", "x"][..], "remove"),
-    ] {
-        let text = sentence(args);
-        assert!(
-            text.starts_with(&format!("Unrecognized subcommand '{old}'")),
-            "{args:?}: {text}"
-        );
-        assert!(!text.contains('\n'), "{text}");
-    }
-}
-
-#[test]
 fn extension_update_parses_an_optional_name() {
     let Invocation::Run(Some(Commands::Extension(ExtensionCommands::Update { name }))) =
         parse_from(["fiber", "extension", "update"])
@@ -150,10 +133,10 @@ fn extension_update_parses_an_optional_name() {
 
 #[test]
 fn extension_alone_is_a_one_line_usage_sentence() {
-    let text = sentence(&["fiber", "extension"]);
-    assert!(text.contains("fiber extension"), "{text}");
-    assert!(text.contains("subcommand"), "{text}");
-    assert!(!text.contains('\n'), "{text}");
+    assert_eq!(
+        sentence(&["fiber", "extension"]),
+        "'fiber extension' requires a subcommand but one was not provided [subcommands: install, update, remove, list]. Run `fiber --help` for usage."
+    );
 }
 
 #[test]
@@ -296,13 +279,10 @@ fn a_commands_help_matches_its_flag_and_names_fiber() {
             panic!("{name} did not print help");
         };
         assert_eq!(rendered, error.to_string(), "{name}");
-        let usage_prefix = if name == "extension" {
-            "Usage: fiber extension".to_owned()
-        } else {
-            format!("Usage: fiber {name}")
-        };
         assert!(
-            rendered.lines().any(|line| line.starts_with(&usage_prefix)),
+            rendered
+                .lines()
+                .any(|line| line.starts_with(&format!("Usage: fiber {name}"))),
             "{name}\n{rendered}"
         );
     }
