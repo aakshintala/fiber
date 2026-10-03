@@ -18,7 +18,7 @@ use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -138,6 +138,7 @@ impl Setup {
     /// Runs `fiber` in its own process group, waits for it under
     /// [`DEADLINE`], and asserts that nothing it started is left in the
     /// group, after a timeout too (`docs/testing.md`, "Running tests").
+    /// A watchdog beside it kills that group if this process dies first.
     fn run(
         &self,
         home: &str,
@@ -146,7 +147,8 @@ impl Setup {
         text: Option<&str>,
         env: &[(&str, &str)],
     ) -> Run {
-        let mut child = Command::new(env!("CARGO_BIN_EXE_fiber"))
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
             .args(args)
             .current_dir(self.root.path().join("w"))
             .env_clear()
@@ -157,10 +159,8 @@ impl Setup {
             .envs(env.iter().copied())
             .stdin(stdin)
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .process_group(0)
-            .spawn()
-            .unwrap();
+            .stderr(Stdio::piped());
+        let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
         // Taking the pipe closes it once written.
@@ -192,8 +192,10 @@ impl Setup {
             !group_alive(group),
             "`fiber` left a process in its group behind"
         );
-        // The group is empty. Skip the drop, which would kill it again.
+        // The group is empty. Skip the drop, which would kill it again,
+        // and tell the watchdog to exit without signalling.
         std::mem::forget(guard);
+        watchdog.stand_down();
         Run::from(output)
     }
 
@@ -266,6 +268,79 @@ fn kill_group(group: u32) {
         .args(["-KILL", "--", &format!("-{group}")])
         .status()
         .unwrap();
+}
+
+/// Spawns `command` in a new process group, then a watchdog in its own
+/// group. The watchdog's stdin is a pipe only this process holds: a newline
+/// means the child is reaped, and EOF means this process died, so the
+/// watchdog kills the group. The watchdog is started immediately after the
+/// child; a kill in the gap between the two spawns can still orphan it.
+fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
+    let child = command.process_group(0).spawn().unwrap();
+    let group = child.id();
+    // A failed watchdog spawn still kills the child on unwind.
+    let guard = KillGroup(group);
+    let group_arg = group.to_string();
+    let mut shell = Command::new("sh");
+    shell
+        .args([
+            "-c",
+            r#"read -r line || kill -s KILL -- "-$1""#,
+            "watchdog",
+            group_arg.as_str(),
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0);
+    let mut spawned = shell.spawn().unwrap();
+    std::mem::forget(guard);
+    let stdin = spawned.stdin.take().unwrap();
+    (
+        child,
+        Watchdog {
+            stdin: Some(stdin),
+            child: Some(spawned),
+        },
+    )
+}
+
+/// Kills the spawned group when this process dies. Dropping it closes
+/// stdin, which is that signal. [`Watchdog::stand_down`] writes a newline
+/// and reaps the watchdog, so a finished run sends no signal.
+struct Watchdog {
+    stdin: Option<std::process::ChildStdin>,
+    child: Option<Child>,
+}
+
+impl Watchdog {
+    /// The child is reaped. Tell the watchdog to exit without signalling,
+    /// and wait for it under [`DEADLINE`].
+    fn stand_down(mut self) {
+        if let Some(mut stdin) = self.stdin.take() {
+            match writeln!(stdin) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        let mut child = match self.child.take() {
+            Some(child) => child,
+            None => return,
+        };
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap());
+        assert!(
+            finished.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the watchdog to exit"
+        );
+    }
+}
+
+impl Drop for Watchdog {
+    fn drop(&mut self) {
+        // EOF on stdin: the watchdog kills the group and exits. A panicking
+        // test has already failed, so the watchdog is not waited on.
+        drop(self.stdin.take());
+    }
 }
 
 /// Kills process group `group` on drop. After the child is reaped and the
