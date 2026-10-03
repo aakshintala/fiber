@@ -140,23 +140,6 @@
       }
     },
     {
-      "id": "gpt-3.5-turbo",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 16385,
-      "max_output_tokens": 4096,
-      "input": [
-        "text"
-      ],
-      "cost": {
-        "input": 0.5,
-        "output": 1.5
-      }
-    },
-    {
       "id": "gpt-4o-mini",
       "protocol": "openai-responses",
       "base_url": "https://api.openai.com/v1",
@@ -286,43 +269,6 @@
             "cache_write": 5
           }
         ]
-      }
-    },
-    {
-      "id": "gpt-4.1-nano",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 1047576,
-      "max_output_tokens": 32768,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
-        "input": 0.1,
-        "output": 0.4,
-        "cache_read": 0.025
-      }
-    },
-    {
-      "id": "gpt-4-turbo",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 128000,
-      "max_output_tokens": 4096,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
-        "input": 10.0,
-        "output": 30.0
       }
     },
     {
@@ -495,24 +441,6 @@
       }
     },
     {
-      "id": "o3-mini",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 200000,
-      "max_output_tokens": 100000,
-      "input": [
-        "text"
-      ],
-      "cost": {
-        "input": 1.1,
-        "output": 4.4,
-        "cache_read": 0.55
-      }
-    },
-    {
       "id": "gpt-5.2",
       "protocol": "openai-responses",
       "base_url": "https://api.openai.com/v1",
@@ -529,44 +457,6 @@
         "input": 1.75,
         "output": 14.0,
         "cache_read": 0.175
-      }
-    },
-    {
-      "id": "o4-mini",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 200000,
-      "max_output_tokens": 100000,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
-        "input": 1.1,
-        "output": 4.4,
-        "cache_read": 0.275
-      }
-    },
-    {
-      "id": "o1",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 200000,
-      "max_output_tokens": 100000,
-      "input": [
-        "text",
-        "image"
-      ],
-      "cost": {
-        "input": 15.0,
-        "output": 60.0,
-        "cache_read": 7.5
       }
     },
     {
@@ -726,23 +616,6 @@
             "cache_write": 0.5
           }
         ]
-      }
-    },
-    {
-      "id": "gpt-4",
-      "protocol": "openai-responses",
-      "base_url": "https://api.openai.com/v1",
-      "compat": {
-        "store": false
-      },
-      "context_window": 8192,
-      "max_output_tokens": 8192,
-      "input": [
-        "text"
-      ],
-      "cost": {
-        "input": 30.0,
-        "output": 60.0
       }
     }
   ]
