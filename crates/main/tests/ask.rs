@@ -16,7 +16,7 @@ use std::fs;
 use std::io::Write;
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::OsStrExt;
-use std::os::unix::process::CommandExt;
+use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -162,7 +162,7 @@ impl Setup {
             .spawn()
             .unwrap();
         let group = child.id();
-        let mut guard = KillGroup::arm(group);
+        let guard = KillGroup(group);
         // Taking the pipe closes it once written.
         if let Some(mut pipe) = child.stdin.take()
             && let Some(text) = text
@@ -192,7 +192,8 @@ impl Setup {
             !group_alive(group),
             "`fiber` left a process in its group behind"
         );
-        guard.disarm();
+        // The group is empty. Skip the drop, which would kill it again.
+        std::mem::forget(guard);
         Run::from(output)
     }
 
@@ -257,33 +258,19 @@ fn kill_group(group: u32) {
         .unwrap();
 }
 
-/// Kills process group `group` on drop, unless [`KillGroup::disarm`] ran
-/// after the child was reaped and the group was empty.
-struct KillGroup {
-    group: Option<u32>,
-}
-
-impl KillGroup {
-    fn arm(group: u32) -> Self {
-        Self { group: Some(group) }
-    }
-
-    fn disarm(&mut self) {
-        self.group = None;
-    }
-}
+/// Kills process group `group` on drop. After the child is reaped and the
+/// group is empty, [`std::mem::forget`] skips that kill.
+struct KillGroup(u32);
 
 impl Drop for KillGroup {
     fn drop(&mut self) {
-        if let Some(group) = self.group.take() {
-            // A panic between spawn and reap still kills the group. Failure
-            // here is ignored: the process may already be gone.
-            match Command::new("kill")
-                .args(["-KILL", "--", &format!("-{group}")])
-                .status()
-            {
-                Ok(_) | Err(_) => {}
-            }
+        // A panic between spawn and reap still kills the group. Failure
+        // here is ignored: the process may already be gone.
+        match Command::new("kill")
+            .args(["-KILL", "--", &format!("-{}", self.0)])
+            .status()
+        {
+            Ok(_) | Err(_) => {}
         }
     }
 }
@@ -296,19 +283,17 @@ fn dropping_the_group_guard_kills_the_group() {
         .spawn()
         .unwrap();
     let group = child.id();
-    drop(KillGroup::arm(group));
-    let (tx, rx) = mpsc::channel();
-    thread::spawn(move || {
-        while group_alive(group) {
-            thread::yield_now();
-        }
-        match tx.send(()) {
-            Ok(()) | Err(mpsc::SendError(())) => {}
-        }
-    });
-    rx.recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the process group to die"));
-    child.wait().unwrap();
+    drop(KillGroup(group));
+    // On Linux `kill -0` still succeeds for a killed zombie until it is
+    // reaped, so the group is checked after `wait`.
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the process group to die"),
+    };
+    assert_eq!(status.signal(), Some(9));
+    assert!(!group_alive(group));
 }
 
 /// One finished run: its exit code, stdout's lines, as text and parsed, and

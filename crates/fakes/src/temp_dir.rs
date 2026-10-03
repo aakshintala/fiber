@@ -43,37 +43,26 @@ impl TempDir {
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        if remove(&self.path) {
+        // `NotFound` is not success: "already gone" is distinct from
+        // "could not remove".
+        if fs::remove_dir_all(&self.path).is_ok() {
             return;
         }
-        // A test may have removed the directory itself.
-        if missing(&self.path) {
-            return;
+        // A test may have removed the directory itself. Any other error
+        // is "not missing".
+        match fs::symlink_metadata(&self.path) {
+            Err(err) if err.kind() == io::ErrorKind::NotFound => return,
+            Ok(_) | Err(_) => {}
         }
         restore_modes(&self.path);
-        remove(&self.path);
+        match fs::remove_dir_all(&self.path) {
+            Ok(()) | Err(_) => {}
+        }
     }
 }
 
 fn system_temp() -> PathBuf {
     std::env::temp_dir()
-}
-
-/// `true` when `path` is gone. Any other error is "not missing".
-fn missing(path: &Path) -> bool {
-    match fs::symlink_metadata(path) {
-        Err(err) if err.kind() == io::ErrorKind::NotFound => true,
-        Ok(_) | Err(_) => false,
-    }
-}
-
-/// `true` when `path` was removed. `NotFound` is not success: the caller
-/// distinguishes "already gone" from "could not remove".
-fn remove(path: &Path) -> bool {
-    match fs::remove_dir_all(path) {
-        Ok(()) => true,
-        Err(_) => false,
-    }
 }
 
 /// Makes every directory under `path` writable, then readable, so a later

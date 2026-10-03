@@ -444,7 +444,6 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
     ));
-    std::fs::remove_dir_all(dir.path()).unwrap();
 }
 
 /// A thread stopped while a callback runs quits when that callback ends,
@@ -478,7 +477,6 @@ fn the_thread_quits_after_the_running_callback_once_stopped() {
         hub.lock().calls.get(&later),
         Some(Progress::Queued)
     ));
-    std::fs::remove_dir_all(dir.path()).unwrap();
 }
 
 /// Reads an HTTP head, through the blank line that ends it.
@@ -611,7 +609,6 @@ fn an_abandoned_vm_wakes_every_queued_and_parked_waiter() {
         );
     }
     assert!(!ext.is_running());
-    std::fs::remove_dir_all(dir.path()).unwrap();
 }
 
 /// A call that finds no thread started fails rather than wait forever.

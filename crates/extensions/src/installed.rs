@@ -218,23 +218,17 @@ mod tests {
 
     use super::read;
 
-    fn home(name: &str) -> fakes::TempDir {
-        fakes::TempDir::new(&format!("fiber-read-{name}"))
-    }
-
     #[test]
     fn a_missing_extensions_directory_lists_nothing() {
-        let home = home("missing");
+        let home = fakes::TempDir::new("fiber-read-missing");
         assert!(read(home.path()).unwrap().is_empty());
-        fs::remove_dir_all(home.path()).unwrap();
     }
 
     #[test]
     fn an_extensions_path_that_is_not_a_directory_is_an_error() {
-        let home = home("file");
+        let home = fakes::TempDir::new("fiber-read-file");
         fs::write(home.path().join("extensions"), "nope").unwrap();
         let err = read(home.path()).unwrap_err();
         assert!(err.to_string().contains("extensions"), "{err}");
-        fs::remove_dir_all(home.path()).unwrap();
     }
 }
