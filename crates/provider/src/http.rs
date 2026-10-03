@@ -22,9 +22,9 @@ use crate::Error;
 
 fn validate_signed_header(name: &str, value: &str) -> Result<(), contract::signing::Error> {
     if ureq::http::HeaderName::from_bytes(name.as_bytes()).is_err() {
-        return Err(contract::signing::Error::NotHeaders(
-            "a signed header name is not valid HTTP".into(),
-        ));
+        return Err(contract::signing::Error::NotHeaders(format!(
+            "a header name that is not valid HTTP: {name:?}"
+        )));
     }
     if ureq::http::HeaderValue::from_str(value).is_err() {
         return Err(contract::signing::Error::NotHeaders(format!(

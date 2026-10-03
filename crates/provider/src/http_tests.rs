@@ -173,6 +173,10 @@ fn unusable_signed_headers_are_never_sent() {
             !message.contains('\n'),
             "must not echo header values: {message}"
         );
+        assert!(
+            message.contains("x-signature") || message.contains(r"x-sig\nature"),
+            "names the bad header: {message}"
+        );
         assert_eq!(err.code(), contract::ErrorCode::CredentialFailed);
         assert_eq!(
             err.should_retry(),
