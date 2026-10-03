@@ -306,6 +306,11 @@ response or a generation lookup reports one, as OpenRouter's does
 `cost` prices applied to the call's `tokens`, each kind at its own price. A
 model with neither has `cost` `null`, and the person sees its tokens only.
 
+A model priced by request size declares `tiers` (`docs/configuration.md`, "A
+provider's data"). The tier with the highest `input_tokens_above` that the
+call's input tokens exceed gives every price for the whole call; below every
+threshold, the base prices apply.
+
 A model that a subscription login serves declares `"subscription": true`
 beside its prices, which are the vendor's API prices. Its calls are logged
 with `subscription`, so the person sees what the work would cost on an API

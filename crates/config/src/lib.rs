@@ -28,7 +28,7 @@ use serde_json::{Map, Value};
 pub use cache::{read_model_cache, write_model_cache};
 pub use error::ConfigError;
 pub use extension::{
-    Binary, Cost, Manifest, ModelData, Process, Protocol, ProviderData, read_manifest,
+    Binary, Cost, Manifest, ModelData, Process, Protocol, ProviderData, Tier, read_manifest,
     read_providers,
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};

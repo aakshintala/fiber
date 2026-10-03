@@ -21,7 +21,16 @@
         "input": 2.0,
         "output": 10.0,
         "cache_read": 0.1,
-        "cache_write": 2.5
+        "cache_write": 2.5,
+        "tiers": [
+          {
+            "input_tokens_above": 272000,
+            "input": 4,
+            "output": 15,
+            "cache_read": 0.2,
+            "cache_write": 5
+          }
+        ]
       }
     },
     {
@@ -41,7 +50,16 @@
         "input": 2.0,
         "output": 10.0,
         "cache_read": 0.2,
-        "cache_write": 2.5
+        "cache_write": 2.5,
+        "tiers": [
+          {
+            "input_tokens_above": 272000,
+            "input": 4,
+            "output": 15,
+            "cache_read": 0.4,
+            "cache_write": 5
+          }
+        ]
       }
     },
     {
@@ -61,7 +79,16 @@
         "input": 10.0,
         "output": 50.0,
         "cache_read": 1.0,
-        "cache_write": 12.5
+        "cache_write": 12.5,
+        "tiers": [
+          {
+            "input_tokens_above": 272000,
+            "input": 20,
+            "output": 75,
+            "cache_read": 2,
+            "cache_write": 25
+          }
+        ]
       }
     },
     {
@@ -81,7 +108,16 @@
         "input": 0.1,
         "output": 0.5,
         "cache_read": 0.01,
-        "cache_write": 0.125
+        "cache_write": 0.125,
+        "tiers": [
+          {
+            "input_tokens_above": 272000,
+            "input": 0.2,
+            "output": 0.75,
+            "cache_read": 0.02,
+            "cache_write": 0.25
+          }
+        ]
       }
     }
   ]
