@@ -19,6 +19,12 @@ use crate::{Error, Loop, Model};
 /// What step 7 says about one call: it runs, or how its denial reads.
 type Decided = Result<Approved, Box<ToolCallCompleted>>;
 
+/// What a `no_model` escalation and notice say: nothing chose the
+/// reviewer's model, so every reviewed call goes to a person
+/// (`docs/permissions.md`, "How it runs").
+pub const NO_MODEL_MESSAGE: &str =
+    "No reviewer model is set, so every reviewed call goes to a person. Set reviewer.model.";
+
 /// What judges a reviewed call (`docs/permissions.md`, "How it runs").
 pub struct Reviewer {
     /// The provider the reviewer's requests go to.
@@ -94,20 +100,16 @@ fn sections_of(md: &str) -> Sections {
     }
 }
 
-/// `lines` joined, with blank lines at either end removed.
+/// `lines` joined, with trailing blank lines removed. Every group starts
+/// with its non-blank `## ` line, so there is nothing to remove up front.
 fn joined(lines: &[&str]) -> String {
-    let start = lines
-        .iter()
-        .position(|line| !line.trim().is_empty())
-        .unwrap_or(lines.len());
     let end = lines
         .iter()
         .rposition(|line| !line.trim().is_empty())
         .map_or(0, |at| at + 1);
     lines
         .iter()
-        .skip(start)
-        .take(end.saturating_sub(start))
+        .take(end)
         .copied()
         .collect::<Vec<_>>()
         .join("\n")
@@ -158,8 +160,6 @@ pub(crate) fn render_reviewed(
         }
         // Every other kind adds nothing the reviewer reads. Each is
         // listed, so a new kind does not compile until it is placed.
-        // Every other kind adds nothing the reviewer reads. Each is
-        // listed, so a new kind does not compile until it is placed.
         Event::FiberStarted(_) | Event::FiberExited(_) | Event::SessionStarted(_) => {}
         Event::Rewound(_) | Event::StepStarted(_) | Event::TurnCompleted(_) => {}
         Event::SteeringQueue(_) | Event::ShellCommand(_) | Event::SessionNamed(_) => {}
@@ -199,58 +199,57 @@ fn person(content: &[ContentPart]) -> Reviewed {
     }
 }
 
-/// What the first stage said.
+/// What a first-stage verdict that read says.
 #[derive(Debug)]
 pub(crate) enum First {
     Allow,
     Check,
-    Unreadable(String),
 }
 
-/// What the second stage said.
-#[derive(Debug)]
+/// What a second-stage verdict that read says.
+#[derive(Debug, PartialEq)]
 pub(crate) enum Second {
     Allow { reason: Option<String> },
     Block { reason: String },
-    Unreadable(String),
 }
 
 /// Reads a first-stage verdict: `check` or `allow`, cleaned. A reply cut
 /// off by the output limit still reads.
-pub(crate) fn read_first(text: &str) -> First {
+pub(crate) fn read_first(text: &str) -> Result<First, String> {
     match clean(text).as_str() {
-        "allow" => First::Allow,
-        "check" => First::Check,
-        _ => First::Unreadable(format!(
+        "allow" => Ok(First::Allow),
+        "check" => Ok(First::Check),
+        _ => Err(format!(
             "expected one word, `check` or `allow`, but got {text:?}"
         )),
     }
 }
 
-/// Reads a second-stage verdict: `allow` or `block` plus a reason. A
-/// `block` with an empty reason does not read; an `allow` may have none.
-pub(crate) fn read_second(text: &str) -> Second {
+/// Reads a second-stage verdict: `allow` or `block` plus a reason. The
+/// verdict word may carry its separator, as in `allow: fine`. A `block`
+/// with an empty reason does not read; an `allow` may have none.
+pub(crate) fn read_second(text: &str) -> Result<Second, String> {
     let trimmed = text.trim_start();
     let mut words = trimmed.split_whitespace();
     let Some(first) = words.next() else {
-        return Second::Unreadable(
-            "expected `allow` or `block` with a reason, but got nothing".to_owned(),
-        );
+        return Err("expected `allow` or `block` with a reason, but got nothing".to_owned());
     };
-    let rest = trimmed
-        .strip_prefix(first)
-        .unwrap_or("")
-        .trim_start_matches(|c: char| c == ':' || c == '-' || c.is_whitespace());
-    let reason = rest.trim_end().to_owned();
-    match clean(first).as_str() {
-        "allow" => Second::Allow {
+    let after = trimmed.strip_prefix(first).unwrap_or("");
+    let (word, rest) = match first.split_once(':') {
+        Some((head, tail)) if !head.is_empty() => (head, [tail, after].concat()),
+        _ => (first, after.to_owned()),
+    };
+    let reason = rest
+        .trim_start_matches(|c: char| c == ':' || c == '-' || c.is_whitespace())
+        .trim_end()
+        .to_owned();
+    match clean(word).as_str() {
+        "allow" => Ok(Second::Allow {
             reason: (!reason.is_empty()).then_some(reason),
-        },
-        "block" if !reason.is_empty() => Second::Block { reason },
-        "block" => {
-            Second::Unreadable("a `block` needs a reason in one sentence, but got none".to_owned())
-        }
-        _ => Second::Unreadable(format!(
+        }),
+        "block" if !reason.is_empty() => Ok(Second::Block { reason }),
+        "block" => Err("a `block` needs a reason in one sentence, but got none".to_owned()),
+        _ => Err(format!(
             "expected `allow` or `block` with a reason, but got {text:?}"
         )),
     }
@@ -295,27 +294,11 @@ struct ReviewEndpoint {
 }
 
 /// What one full stage (with its one re-ask) said.
-enum StageReply {
-    Text(String),
+enum StageReply<T> {
+    Read(T),
     Fail(Failure),
     Cancelled,
     Budget,
-}
-
-/// Reads a first-stage verdict, or says what was wrong.
-fn first_readable(text: &str) -> Result<(), String> {
-    match read_first(text) {
-        First::Allow | First::Check => Ok(()),
-        First::Unreadable(why) => Err(why),
-    }
-}
-
-/// Reads a second-stage verdict, or says what was wrong.
-fn second_readable(text: &str) -> Result<(), String> {
-    match read_second(text) {
-        Second::Allow { .. } | Second::Block { .. } => Ok(()),
-        Second::Unreadable(why) => Err(why),
-    }
 }
 
 impl Loop {
@@ -351,7 +334,7 @@ impl Loop {
             Err(failure) => {
                 let failure = failure.clone();
                 self.no_model_notice(turn, &failure)?;
-                return self.review_failure(&under, failure, None);
+                return self.review_failure(&under, failure);
             }
         };
         match self.ask_stage(
@@ -360,47 +343,44 @@ impl Loop {
             &prompt.shared,
             &prompt.first,
             Some(1),
-            first_readable,
+            read_first,
         )? {
-            StageReply::Text(text) => match read_first(&text) {
-                First::Allow => self.second_allow(&under, &endpoint, 1, None),
-                First::Check => match self.ask_stage(
-                    &under,
-                    &endpoint,
-                    &prompt.shared,
-                    &prompt.second,
-                    None,
-                    second_readable,
-                )? {
-                    StageReply::Text(text) => match read_second(&text) {
-                        Second::Allow { reason } => self.second_allow(&under, &endpoint, 2, reason),
-                        Second::Block { reason } => self.second_block(&under, &endpoint, reason),
-                        Second::Unreadable(why) => {
-                            self.review_failure(&under, unreadable(&why), None)
-                        }
-                    },
-                    StageReply::Fail(failure) => self.review_failure(&under, failure, None),
-                    StageReply::Cancelled => self.review_cancelled(under.id, under.turn),
-                    StageReply::Budget => self.budget_deny(under.id, under.turn),
-                },
-                First::Unreadable(why) => self.review_failure(&under, unreadable(&why), None),
+            StageReply::Read(First::Allow) => self.second_allow(&under, &endpoint, 1, None),
+            StageReply::Read(First::Check) => match self.ask_stage(
+                &under,
+                &endpoint,
+                &prompt.shared,
+                &prompt.second,
+                None,
+                read_second,
+            )? {
+                StageReply::Read(Second::Allow { reason }) => {
+                    self.second_allow(&under, &endpoint, 2, reason)
+                }
+                StageReply::Read(Second::Block { reason }) => {
+                    self.second_block(&under, &endpoint, reason)
+                }
+                StageReply::Fail(failure) => self.review_failure(&under, failure),
+                StageReply::Cancelled => self.review_cancelled(under.id, under.turn),
+                StageReply::Budget => self.budget_deny(under.id, under.turn),
             },
-            StageReply::Fail(failure) => self.review_failure(&under, failure, None),
+            StageReply::Fail(failure) => self.review_failure(&under, failure),
             StageReply::Cancelled => self.review_cancelled(id, turn),
             StageReply::Budget => self.budget_deny(id, turn),
         }
     }
 
     /// Asks one stage, and once more when its verdict does not read.
-    fn ask_stage(
+    /// `parse` reads a verdict, or says what was wrong.
+    fn ask_stage<T>(
         &mut self,
         under: &UnderReview<'_>,
         endpoint: &ReviewEndpoint,
         shared: &str,
         stage: &str,
         max_output_tokens: Option<u64>,
-        readable: fn(&str) -> Result<(), String>,
-    ) -> Result<StageReply, Error> {
+        parse: fn(&str) -> Result<T, String>,
+    ) -> Result<StageReply<T>, Error> {
         let mut note = None;
         let mut why = String::new();
         for _ in 0..2 {
@@ -419,8 +399,8 @@ impl Loop {
             )? {
                 Ok(reply) => {
                     let text = reply.text();
-                    match readable(&text) {
-                        Ok(()) => return Ok(StageReply::Text(text)),
+                    match parse(&text) {
+                        Ok(reading) => return Ok(StageReply::Read(reading)),
                         Err(unread) => {
                             why = unread;
                             note = Some(format!(
@@ -501,14 +481,12 @@ impl Loop {
         &mut self,
         under: &UnderReview<'_>,
         failure: Failure,
-        reviewer: Option<ReviewerRef>,
     ) -> Result<Decided, Error> {
         self.consecutive += 1;
         self.session_blocks += 1;
-        let escalation = Escalation::ReviewerFailed {
-            error: failure.clone(),
-        };
-        self.escalate(under, escalation, failure.message.clone(), reviewer)
+        let reason = failure.message.clone();
+        let escalation = Escalation::ReviewerFailed { error: failure };
+        self.escalate(under, escalation, reason, None)
     }
 
     /// Hands the call to a person, or denies it where no answer is possible.
@@ -741,9 +719,7 @@ impl Loop {
             self.append(
                 &Event::Notice(Notice {
                     code: ErrorCode::NoModel,
-                    message: "No reviewer model is set, so every reviewed call goes to a \
-                              person. Set reviewer.model."
-                        .to_owned(),
+                    message: NO_MODEL_MESSAGE.to_owned(),
                     extension: None,
                 }),
                 turn,

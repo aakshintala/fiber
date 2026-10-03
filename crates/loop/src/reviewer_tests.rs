@@ -223,48 +223,52 @@ fn the_first_stage_reads_one_token() {
         "\"check\"",
         "'CHECK'.",
     ] {
-        let verdict = read_first(text);
-        let expected = clean_is_allow(text);
-        match (verdict, expected) {
-            (First::Allow, true) | (First::Check, false) => {}
-            (First::Allow, false) | (First::Check, true) | (First::Unreadable(_), _) => {
-                panic!("{text:?} read wrong")
-            }
+        let allow = !text.to_ascii_lowercase().contains("check");
+        match (read_first(text), allow) {
+            (Ok(First::Allow), true) | (Ok(First::Check), false) => {}
+            (Ok(_), _) | (Err(_), _) => panic!("{text:?} read wrong"),
         }
     }
     for text in ["", "maybe", "check please", "allow, I guess", "che ck"] {
-        assert!(matches!(read_first(text), First::Unreadable(_)), "{text:?}");
+        assert!(read_first(text).is_err(), "{text:?}");
     }
-}
-
-/// Whether `text` in the list above means allow.
-fn clean_is_allow(text: &str) -> bool {
-    !text.to_ascii_lowercase().contains("check")
 }
 
 #[test]
 fn the_second_stage_reads_a_verdict_and_a_reason() {
     match read_second("allow") {
-        Second::Allow { reason: None } => {}
-        Second::Allow { reason: Some(_) } | Second::Block { .. } | Second::Unreadable(_) => {
-            panic!("read wrong")
-        }
+        Ok(Second::Allow { reason: None }) => {}
+        Ok(_) | Err(_) => panic!("read wrong"),
     }
     match read_second("allow looks routine") {
-        Second::Allow {
+        Ok(Second::Allow {
             reason: Some(reason),
-        } => assert_eq!(reason, "looks routine"),
-        Second::Allow { reason: None } | Second::Block { .. } | Second::Unreadable(_) => {
-            panic!("read wrong")
-        }
+        }) => assert_eq!(reason, "looks routine"),
+        Ok(_) | Err(_) => panic!("read wrong"),
     }
     match read_second("`BLOCK` - force-pushes to main") {
-        Second::Block { reason } => assert_eq!(reason, "force-pushes to main"),
-        Second::Allow { .. } | Second::Unreadable(_) => panic!("read wrong"),
+        Ok(Second::Block { reason }) => assert_eq!(reason, "force-pushes to main"),
+        Ok(_) | Err(_) => panic!("read wrong"),
     }
-    for text in ["", "maybe", "block", "block: ", "allowing this"] {
-        assert!(
-            matches!(read_second(text), Second::Unreadable(_)),
+    // The verdict word may carry its separator.
+    match read_second("allow: looks routine") {
+        Ok(Second::Allow {
+            reason: Some(reason),
+        }) => assert_eq!(reason, "looks routine"),
+        Ok(_) | Err(_) => panic!("read wrong"),
+    }
+    match read_second("block: force-pushes to main") {
+        Ok(Second::Block { reason }) => assert_eq!(reason, "force-pushes to main"),
+        Ok(_) | Err(_) => panic!("read wrong"),
+    }
+    for text in ["", "maybe", "allowing this"] {
+        assert!(read_second(text).is_err(), "{text:?}");
+    }
+    // A `block` with no reason is unreadable, with its own message.
+    for text in ["block", "block:", "block: "] {
+        assert_eq!(
+            read_second(text),
+            Err("a `block` needs a reason in one sentence, but got none".to_owned()),
             "{text:?}"
         );
     }

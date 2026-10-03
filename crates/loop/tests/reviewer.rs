@@ -95,8 +95,14 @@ fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
 /// the decision lines and `reviews` reviewer `usage_recorded` lines after
 /// the reply's own.
 fn kinds_with(middle: &[&str], reviews: usize) -> Vec<String> {
+    let mut kinds = vec!["session_started".to_owned()];
+    kinds.extend(kinds_next(middle, reviews));
+    kinds
+}
+
+/// As [`kinds_with`], for a turn after the first: no `session_started`.
+fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
     let mut kinds = vec![
-        "session_started",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -125,6 +131,52 @@ fn kinds_with(middle: &[&str], reviews: usize) -> Vec<String> {
     kinds.into_iter().map(str::to_owned).collect()
 }
 
+/// A turn whose reviewed call reaches a person: two reviewer usages, the
+/// request and its answer, then "Done.". `ran` tells whether the person's
+/// allow ran the call, `first` whether the turn opens the session.
+fn kinds_escalated(ran: bool, first: bool) -> Vec<String> {
+    let mut kinds = Vec::new();
+    if first {
+        kinds.push("session_started");
+    }
+    kinds.extend(
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+        ]
+        .iter()
+        .copied(),
+    );
+    if ran {
+        kinds.push("tool_call_started");
+    }
+    kinds.push("tool_call_completed");
+    kinds.extend(
+        [
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+        .iter()
+        .copied(),
+    );
+    kinds.into_iter().map(str::to_owned).collect()
+}
 /// One turn whose reply calls `shell` once, reviewed with `review`: the
 /// session, the tool, the reviewer and the turn's lines.
 fn reviewed_turn(
@@ -224,7 +276,18 @@ fn the_request_body_holds_only_what_the_reviewer_is_shown() {
     let reviewer = session.reviewer(vec![Scripted::text("allow")]);
     session.inbox.send(delivery("run the tests")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-    let _ = session.lines();
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            1,
+        )
+    );
 
     let requests: Vec<ModelRequest> = reviewer.requests();
     assert_eq!(requests.len(), 1);
@@ -339,6 +402,38 @@ fn a_second_call_is_reviewed_with_the_first_as_history() {
     );
     let reviewer = session.reviewer(vec![Scripted::text("allow"), Scripted::text("allow")]);
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(tool.ran().len(), 2);
     assert_eq!(completed(&lines).len(), 2);
 
@@ -358,6 +453,17 @@ fn a_second_call_is_reviewed_with_the_first_as_history() {
 fn an_unreadable_verdict_is_asked_for_once_more() {
     let (session, tool, reviewer, lines) =
         reviewed_turn(vec![Scripted::text("maybe"), Scripted::text("allow")]);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            2,
+        )
+    );
     assert_eq!(tool.ran().len(), 1);
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "allow");
@@ -391,6 +497,7 @@ fn a_verdict_still_unreadable_escalates() {
     });
     let lines = go(&mut session);
     answered.join().unwrap();
+    assert_eq!(kinds(&lines), kinds_escalated(true, true));
     assert_eq!(tool.ran().len(), 1);
 
     let requested = line(&lines, "permission_requested");
@@ -430,6 +537,33 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
     });
     let lines = go(&mut session);
     answered.join().unwrap();
+    // The failed call writes no usage: only the reply's own line.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     let requested = line(&lines, "permission_requested");
     assert_eq!(requested.payload["step"], "review");
@@ -467,6 +601,35 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
     )
     .answerable(false);
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "notice",
+            "permission_resolved",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     let notices: Vec<&Envelope> = lines.iter().filter(|l| l.kind == "notice").collect();
     assert_eq!(notices.len(), 1);
@@ -508,11 +671,18 @@ fn the_third_consecutive_block_asks_a_person() {
         Scripted::text("check"),
         Scripted::text("block fourth reason"),
     ]);
-    for _ in 0..2 {
-        session.inbox.send(delivery("go")).unwrap();
-        assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-        let _ = session.lines();
-    }
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&session.lines()),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&session.lines()),
+        kinds_next(&["permission_resolved", "tool_call_completed"], 2)
+    );
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
         move |id| inbox.send(reply(id, deny(Some("not on main")))).unwrap()
@@ -521,9 +691,9 @@ fn the_third_consecutive_block_asks_a_person() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
+    assert_eq!(kinds(&lines), kinds_escalated(false, false));
 
     // The block that reaches the count is not returned to the model.
-    assert!(kinds(&lines).contains(&"permission_requested"));
     let requested = line(&lines, "permission_requested");
     assert_eq!(requested.payload["step"], "review");
     assert_eq!(
@@ -538,7 +708,10 @@ fn the_third_consecutive_block_asks_a_person() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
-    assert!(!kinds(&lines).contains(&"permission_requested"));
+    assert_eq!(
+        kinds(&lines),
+        kinds_next(&["permission_resolved", "tool_call_completed"], 2)
+    );
     assert_eq!(reviewer.requests().len(), 8);
     assert!(tool.ran().is_empty());
 }
@@ -559,11 +732,32 @@ fn an_allow_between_blocks_resets_the_consecutive_count() {
         Scripted::text("check"),
         Scripted::text("block four"),
     ]);
-    for _ in 0..4 {
+    // T2's allow runs the call; every other turn denies without asking. The
+    // flag tells whether the turn opens the session.
+    let turns = [
+        (vec!["permission_resolved", "tool_call_completed"], 2, true),
+        (
+            vec![
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            1,
+            false,
+        ),
+        (vec!["permission_resolved", "tool_call_completed"], 2, false),
+        (vec!["permission_resolved", "tool_call_completed"], 2, false),
+    ];
+    for (middle, reviews, first) in turns {
         session.inbox.send(delivery("go")).unwrap();
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
         let lines = session.lines();
-        assert!(!kinds(&lines).contains(&"permission_requested"));
+        let expected = if first {
+            kinds_with(&middle, reviews)
+        } else {
+            kinds_next(&middle, reviews)
+        };
+        assert_eq!(kinds(&lines), expected);
     }
     assert_eq!(tool.ran().len(), 1);
     let answered = on_request(&session, {
@@ -574,6 +768,7 @@ fn an_allow_between_blocks_resets_the_consecutive_count() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
+    assert_eq!(kinds(&lines), kinds_escalated(false, false));
     let requested = line(&lines, "permission_requested");
     assert_eq!(
         requested.payload["escalation"],
@@ -612,6 +807,46 @@ fn the_session_limit_escalates_with_a_raised_consecutive_limit() {
     });
     let lines = go(&mut session);
     answered.join().unwrap();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     let done = completed(&lines);
     assert_eq!(done.len(), 3);
@@ -639,10 +874,16 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
         Scripted::text("check"),
         Scripted::text("block three"),
     ]);
-    for _ in 0..2 {
+    for turn in 0..2 {
         session.inbox.send(delivery("go")).unwrap();
         assert_eq!(session.turn(), Some(TurnOutcome::Completed));
-        let _ = session.lines();
+        let lines = session.lines();
+        let expected = if turn == 0 {
+            kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+        } else {
+            kinds_next(&["permission_resolved", "tool_call_completed"], 2)
+        };
+        assert_eq!(kinds(&lines), expected);
     }
     let answered = on_request(&session, {
         let inbox = session.inbox.clone();
@@ -666,6 +907,7 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     answered.join().unwrap();
+    assert_eq!(kinds(&lines), kinds_escalated(true, false));
     let requested = line(&lines, "permission_requested");
     assert_eq!(
         requested.payload["rule"],
@@ -682,6 +924,31 @@ fn a_persons_allow_with_remember_adds_a_grant_later_calls_match() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    // The grant answers the call with no reviewer request and no usage.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let resolved = line(&lines, "permission_resolved");
     assert_eq!(resolved.payload["decision"], "allow");
     assert_eq!(resolved.payload["decided_by"], "session_grant");
@@ -715,6 +982,31 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
     session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
 
     assert!(!kinds(&lines).contains(&"permission_requested"));
     for done in completed(&lines) {
@@ -730,4 +1022,205 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
     );
     assert_eq!(reviewer.requests().len(), 4);
     assert!(tool.ran().is_empty());
+}
+
+#[test]
+fn a_colon_block_is_handled_as_a_block() {
+    let (session, tool, reviewer, lines) = reviewed_turn(vec![
+        Scripted::text("check"),
+        Scripted::text("block: force-pushes to main"),
+    ]);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(&["permission_resolved", "tool_call_completed"], 2)
+    );
+    assert!(!kinds(&lines).contains(&"permission_requested"));
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "deny");
+    assert_eq!(resolved.payload["decided_by"], "reviewer");
+    assert_eq!(resolved.payload["reason"], "force-pushes to main");
+    assert_eq!(
+        resolved.payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 2})
+    );
+    let done = completed(&lines)[0];
+    assert_eq!(done.payload["status"], "denied");
+    assert_eq!(done.payload["reason"], "reviewer");
+    assert!(tool.ran().is_empty());
+    assert_eq!(reviewer.requests().len(), 2);
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn a_colon_allow_carries_its_reason() {
+    let (session, tool, reviewer, lines) = reviewed_turn(vec![
+        Scripted::text("check"),
+        Scripted::text("allow: looks fine"),
+    ]);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            2,
+        )
+    );
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(
+        resolved.payload["reviewer"],
+        json!({"model": REVIEWER_MODEL, "stage": 2})
+    );
+    assert_eq!(resolved.payload["reason"], "looks fine");
+    assert_eq!(tool.ran().len(), 1);
+    assert_eq!(reviewer.requests().len(), 2);
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn headless_failures_count_toward_the_block_budget() {
+    let tool = shell(None, None);
+    let calls: Vec<(&str, Value)> = vec![("shell", paris()), ("shell", paris())];
+    let mut session = Session::with_tools(
+        vec![calls_reply("", &calls)],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false);
+    let reviewer = session.reviewer_limits(
+        vec![
+            Scripted::failed(Failure {
+                code: ErrorCode::Timeout,
+                message: "the reviewer timed out".into(),
+                retry_after: None,
+                provider: None,
+            }),
+            Scripted::failed(Failure {
+                code: ErrorCode::Timeout,
+                message: "the reviewer timed out".into(),
+                retry_after: None,
+                provider: None,
+            }),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 1000,
+            session: 2,
+        },
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let lines = session.lines();
+    // Failed reviewer calls write no usage and raise no request.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    for line in lines.iter().filter(|l| l.kind == "permission_resolved") {
+        assert_eq!(line.payload["decision"], "deny");
+        assert_eq!(line.payload["decided_by"], "reviewer");
+        assert_eq!(line.payload["reason"], "the reviewer timed out");
+    }
+    let end = line(&lines, "turn_completed");
+    assert_eq!(end.payload["outcome"], "failed");
+    assert_eq!(end.payload["error"]["code"], "blocked");
+    assert_eq!(
+        end.payload["error"]["message"],
+        "The reviewer blocked 2 calls and no person can answer."
+    );
+    assert_eq!(reviewer.requests().len(), 2);
+    assert!(tool.ran().is_empty());
+}
+
+#[test]
+fn a_review_at_the_spending_budget_denies_without_sending() {
+    let tool = shell(None, None);
+    let calls: Vec<(&str, Value)> = vec![("shell", paris()), ("shell", paris())];
+    let mut session = Session::with_tools(
+        vec![calls_reply("", &calls)],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    )
+    .answerable(false)
+    .budget(Some(0.00001));
+    // One priced reviewer call costs (10 + 3) / 1e6: the first sends, the
+    // second is denied at the budget.
+    let reviewer = session.reviewer_priced(
+        vec![Scripted::text("allow")],
+        r#loop::BlockLimits::default(),
+        Some(contract::provider::Cost {
+            input: 1.0,
+            output: 1.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(reviewer.requests().len(), 1);
+    let resolved: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved[0].payload["decision"], "allow");
+    assert_eq!(resolved[1].payload["decision"], "deny");
+    assert_eq!(resolved[1].payload["decided_by"], "reviewer");
+    assert_eq!(
+        resolved[1].payload["reason"],
+        "The session reached its spending budget."
+    );
+    let done = completed(&lines);
+    assert_eq!(done[0].payload["status"], "completed");
+    assert_eq!(done[1].payload["status"], "denied");
+    assert_eq!(done[1].payload["reason"], "budget_exceeded");
+    // The next step's own budget check fails the turn.
+    let end = line(&lines, "turn_completed");
+    assert_eq!(end.payload["outcome"], "failed");
+    assert_eq!(end.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(tool.ran().len(), 1);
 }

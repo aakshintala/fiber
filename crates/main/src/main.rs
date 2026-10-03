@@ -14,6 +14,9 @@ mod clock;
 #[cfg(test)]
 #[path = "live_tests.rs"]
 mod live_tests;
+#[cfg(test)]
+#[path = "reviewer_tests.rs"]
+mod reviewer_tests;
 
 use std::fmt::Display;
 use std::io::{self, IsTerminal, Write};
@@ -498,11 +501,7 @@ fn choose_reviewer(
         None => match &session.provider.reviewer_model {
             Some(id) => format!("{}/{}", session.provider.name, id),
             None => {
-                return Err(failure(
-                    ErrorCode::NoModel,
-                    "No reviewer model is set, so every reviewed call goes to a person. \
-                     Set reviewer.model.",
-                ));
+                return Err(failure(ErrorCode::NoModel, r#loop::NO_MODEL_MESSAGE));
             }
         },
     };

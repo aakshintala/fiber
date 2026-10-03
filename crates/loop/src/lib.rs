@@ -39,7 +39,7 @@ mod usage;
 
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
-pub use reviewer::{BlockLimits, Reviewer};
+pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 
 /// What stops the loop.
 #[derive(Debug, thiserror::Error)]
@@ -214,9 +214,7 @@ impl Loop {
             grants: Vec::new(),
             reviewer: Err(Failure {
                 code: ErrorCode::NoModel,
-                message: "No reviewer model is set, so every reviewed call goes to a \
-                            person. Set reviewer.model."
-                    .to_owned(),
+                message: NO_MODEL_MESSAGE.to_owned(),
                 retry_after: None,
                 provider: None,
             }),

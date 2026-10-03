@@ -518,13 +518,23 @@ impl Session {
         script: Vec<Scripted>,
         limits: BlockLimits,
     ) -> Arc<ScriptedProvider> {
+        self.reviewer_priced(script, limits, None)
+    }
+
+    /// As [`Session::reviewer`], with `limits` and the reviewer's prices.
+    pub(crate) fn reviewer_priced(
+        &mut self,
+        script: Vec<Scripted>,
+        limits: BlockLimits,
+        cost: Option<contract::provider::Cost>,
+    ) -> Arc<ScriptedProvider> {
         let provider = Arc::new(ScriptedProvider::new(script));
         let looped = self.looped.take().unwrap().reviewer(
             Ok(Reviewer {
                 provider: provider.clone(),
                 model: Model {
                     reference: REVIEWER_MODEL.into(),
-                    cost: None,
+                    cost,
                     subscription: false,
                 },
             }),
