@@ -1,0 +1,181 @@
+//! A second client on a session's socket (`docs/testing.md`, "Fakes"),
+//! including one that reads nothing until told.
+
+use std::collections::VecDeque;
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::path::Path;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::thread::JoinHandle;
+use std::time::Duration;
+
+use serde_json::Value;
+
+/// A client connected to a session socket. It sends command lines and reads
+/// the JSON lines that come back. [`Client::slow`] stops it reading, so the
+/// session's writer blocks instead of the test.
+pub struct Client {
+    state: Arc<Mutex<State>>,
+    ready: Arc<Condvar>,
+    write: Mutex<UnixStream>,
+    shutdown: Mutex<Option<UnixStream>>,
+    pending: Mutex<Option<UnixStream>>,
+    reader: Mutex<Option<JoinHandle<()>>>,
+}
+
+struct State {
+    lines: VecDeque<String>,
+    slow: bool,
+    stop: bool,
+    closed: bool,
+}
+
+impl Client {
+    /// Connects to the session socket at `path`. Nothing is read until
+    /// [`Client::recv`] or [`Client::slow`]`(false)`.
+    pub fn connect(path: &Path) -> std::io::Result<Self> {
+        let stream = UnixStream::connect(path)?;
+        let write = stream.try_clone()?;
+        let shutdown = stream.try_clone()?;
+        Ok(Self {
+            state: Arc::new(Mutex::new(State {
+                lines: VecDeque::new(),
+                slow: false,
+                stop: false,
+                closed: false,
+            })),
+            ready: Arc::new(Condvar::new()),
+            write: Mutex::new(write),
+            shutdown: Mutex::new(Some(shutdown)),
+            pending: Mutex::new(Some(stream)),
+            reader: Mutex::new(None),
+        })
+    }
+
+    /// Sends one command line. A missing trailing newline is added, so the
+    /// session sees the line as the client typed it.
+    pub fn send(&self, line: &str) -> std::io::Result<()> {
+        let mut stream = lock(&self.write);
+        stream.write_all(line.as_bytes())?;
+        if !line.ends_with('\n') {
+            stream.write_all(b"\n")?;
+        }
+        stream.flush()
+    }
+
+    /// The next line, parsed as JSON, or `None` when none arrives within
+    /// `within` or the socket is closed. A line that is not JSON is returned
+    /// as a string, so a test can see what arrived.
+    pub fn recv(&self, within: Duration) -> Option<Value> {
+        if !lock(&self.state).slow {
+            self.ensure_reader();
+        }
+        let guard = lock(&self.state);
+        let (mut guard, _) = self
+            .ready
+            .wait_timeout_while(guard, within, |state| {
+                state.lines.is_empty() && !state.closed
+            })
+            .unwrap_or_else(PoisonError::into_inner);
+        let line = guard.lines.pop_front()?;
+        drop(guard);
+        Some(serde_json::from_str(&line).unwrap_or(Value::String(line)))
+    }
+
+    /// When `paused`, reads nothing from the socket until `slow(false)`.
+    /// One read already in progress may finish; a client paused before its
+    /// first [`Client::recv`] has not started one.
+    pub fn slow(&self, paused: bool) {
+        lock(&self.state).slow = paused;
+        self.ready.notify_all();
+        if !paused {
+            self.ensure_reader();
+        }
+    }
+
+    fn ensure_reader(&self) {
+        let mut slot = lock(&self.reader);
+        if slot.is_some() {
+            return;
+        }
+        let Some(stream) = lock(&self.pending).take() else {
+            return;
+        };
+        let state = Arc::clone(&self.state);
+        let ready = Arc::clone(&self.ready);
+        match std::thread::Builder::new()
+            .name("fake-client".to_owned())
+            .spawn(move || read_lines(stream, state, ready))
+        {
+            Ok(handle) => *slot = Some(handle),
+            Err(_) => {
+                lock(&self.state).closed = true;
+                self.ready.notify_all();
+            }
+        }
+    }
+}
+
+impl Drop for Client {
+    fn drop(&mut self) {
+        {
+            let mut state = lock(&self.state);
+            state.stop = true;
+            state.slow = false;
+        }
+        self.ready.notify_all();
+        if let Some(stream) = lock(&self.shutdown).take() {
+            match stream.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+        if let Some(handle) = lock(&self.reader).take() {
+            match handle.join() {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+}
+
+fn read_lines(stream: UnixStream, state: Arc<Mutex<State>>, ready: Arc<Condvar>) {
+    let mut read = BufReader::new(stream);
+    let mut buf = Vec::new();
+    loop {
+        {
+            let mut guard = lock(&state);
+            while guard.slow && !guard.stop {
+                guard = ready.wait(guard).unwrap_or_else(PoisonError::into_inner);
+            }
+            if guard.stop {
+                return;
+            }
+        }
+        buf.clear();
+        match read.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => {
+                lock(&state).closed = true;
+                ready.notify_all();
+                return;
+            }
+            Ok(_) => {
+                while buf
+                    .last()
+                    .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+                {
+                    buf.pop();
+                }
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                lock(&state).lines.push_back(text);
+                ready.notify_all();
+            }
+        }
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+#[path = "client_tests.rs"]
+mod tests;

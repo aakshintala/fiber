@@ -220,8 +220,16 @@ fn open(temp: &Temp, home: &str, out: &Shared) -> (Arc<Log>, PathBuf, Result<Ses
     let sessions = home.join("projects/p/sessions");
     let id = SessionId(mint("s_"));
     let dir = sessions.join(&id.0);
-    let log = Arc::new(Log::create(&sessions, id, fakes::clock::FakeClock::new()).unwrap());
-    let session = Session::open(&home, &dir, log.watch(), Box::new(out.clone()));
+    let clock = fakes::clock::FakeClock::new();
+    let log = Arc::new(
+        Log::create(
+            &sessions,
+            id,
+            Arc::clone(&clock) as Arc<dyn contract::clock::Clock>,
+        )
+        .unwrap(),
+    );
+    let session = Session::open(&home, &dir, &log, clock, Vec::new(), Box::new(out.clone()));
     (log, dir, session)
 }
 
@@ -286,7 +294,8 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
             matches!(inbox.recv().unwrap(), Delivery::Close(_)),
             "close follows the prompt"
         );
-        assert!(inbox.recv().is_err(), "nothing follows close");
+        // The inbox stays open for clients. `ask` itself queued nothing more.
+        assert!(inbox.try_recv().is_err(), "nothing follows close");
         log.append(
             &Event::TurnStarted(TurnStarted {
                 input: vec![InputItem::Message {

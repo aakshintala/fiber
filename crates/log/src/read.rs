@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 
 use contract::Envelope;
 
@@ -122,6 +122,25 @@ impl Queue {
     }
 }
 
+/// Pushes a line into one watcher's queue. Cloning it does not keep the
+/// watcher alive: once the watcher is dropped, [`Injector::push`] does
+/// nothing.
+#[derive(Clone)]
+pub struct Injector {
+    queue: Weak<Queue>,
+}
+
+impl Injector {
+    /// Hands `line` to the watcher, without waiting. A watcher that has
+    /// fallen behind drops it, as it drops any other line, and a push after
+    /// the watcher is dropped is ignored.
+    pub fn push(&self, line: Envelope) {
+        if let Some(queue) = self.queue.upgrade() {
+            queue.push(&line);
+        }
+    }
+}
+
 /// Receives a session's events, durable and ephemeral, as they are written,
 /// from the moment [`crate::Log::watch`] made it. It never slows the writer:
 /// a watcher that falls behind re-reads the durable lines it missed from the
@@ -149,6 +168,26 @@ impl Watcher {
             dir,
             next,
             backlog: VecDeque::new(),
+        }
+    }
+
+    /// A watcher whose first lines are `lines`, then whatever arrives after
+    /// it was registered. `next` starts at 0 so a line already queued is
+    /// skipped once `lines` has returned it.
+    pub(crate) fn starting(queue: Arc<Queue>, dir: PathBuf, lines: Vec<Envelope>) -> Self {
+        Self {
+            queue,
+            dir,
+            next: 0,
+            backlog: VecDeque::from(lines),
+        }
+    }
+
+    /// A handle that pushes lines into this watcher's queue and no other.
+    /// The handle does not keep the watcher alive.
+    pub fn injector(&self) -> Injector {
+        Injector {
+            queue: Arc::downgrade(&self.queue),
         }
     }
 

@@ -1,121 +1,476 @@
 //! One session process's door side (`docs/invocation.md`, "Lifecycle" and
 //! "Processes"): its socket at `run/<session_id>` in Fiber home, its event
-//! stream copied to stdout, its one prompt, and what is left when it exits.
-//! The loop writes the session's lines; this side only watches them.
+//! stream copied to stdout, the clients on that socket, and what is left
+//! when it exits.
 
 use std::fs::{self, DirBuilder, Permissions};
-use std::io::Write;
+use std::io::{self, Write};
 use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::os::unix::net::UnixListener;
+use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::thread::{self, JoinHandle};
+use std::time::{Duration, UNIX_EPOCH};
 
-use contract::events::Event;
+use contract::clock::{Clock, Wake};
+use contract::emit::Emit;
+use contract::events::{Clients, Event, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
-use contract::shapes::{ContentPart, Failure, Origin, Sender};
-use contract::{CommandId, ErrorCode};
-use log::{Log, Watcher};
+use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
+use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId};
+use log::{Injector, Log, Watcher};
+use serde_json::{Map, Value};
 
+use crate::client::{self, control_line};
 use crate::{failure, mint};
 
 /// The longest socket path the platform binds: `sun_path` less its
 /// terminating byte (`docs/state.md`, "Sockets").
 const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
-/// A running session process's door side: its socket and the thread copying
-/// its events to stdout.
+// debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
+/// How long [`Session::close`] waits for a connection's writer to finish
+/// before it shuts the socket.
+const GRACE: Duration = Duration::from_secs(2);
+
+/// A running session process's door side: its socket, the clients on it, and
+/// the thread copying its events to stdout.
 pub struct Session {
     dir: PathBuf,
     socket: PathBuf,
-    listener: UnixListener,
     printer: JoinHandle<()>,
+    cache: JoinHandle<()>,
+    gate: Arc<Gate>,
+    listener: Mutex<Option<UnixListener>>,
+    accept: Mutex<Option<JoinHandle<()>>>,
+}
+
+/// What every connection thread shares. The session holds it strongly; the
+/// log is weak, so [`Session::close`] is what releases the lock.
+pub(crate) struct Gate {
+    pub(crate) log: Weak<Log>,
+    pub(crate) clock: Arc<dyn Clock>,
+    pub(crate) session_id: SessionId,
+    pub(crate) dir: PathBuf,
+    pub(crate) tools: Vec<ToolInfo>,
+    inbox: Mutex<Option<Sender<Delivery>>>,
+    stop: AtomicBool,
+    clients: Mutex<u32>,
+    snap: Mutex<Snap>,
+    flush_seq: AtomicU64,
+    flush_lock: Mutex<()>,
+    cache_injector: Injector,
+    /// Paired with [`Gate::snap`]. A condvar is waited on with one mutex.
+    snap_ready: Condvar,
+    /// Paired with [`Gate::conns`].
+    writers: Condvar,
+    conns: Mutex<Conns>,
+}
+
+struct Snap {
+    status: Option<contract::Envelope>,
+    extensions: Option<contract::Envelope>,
+    flushed: u64,
+}
+
+struct Conns {
+    readers: Vec<JoinHandle<()>>,
+    writers: Vec<JoinHandle<()>>,
+    shutdowns: Vec<UnixStream>,
+    writers_open: u32,
 }
 
 impl Session {
     /// Opens the door side of the session whose directory, just created, is
     /// `dir`: binds its socket in `home`'s `run/` and starts copying every
-    /// event `watcher` receives to `out`, one JSON line each. A failure is
-    /// one before any session exists, so it deletes `dir`.
+    /// event to `out`, one JSON line each. `tools` is what `tools` answers
+    /// with. A failure is one before any session exists, so it deletes `dir`.
     pub fn open(
         home: &Path,
         dir: &Path,
-        watcher: Watcher,
+        log: &Arc<Log>,
+        clock: Arc<dyn Clock>,
+        tools: Vec<ToolInfo>,
         out: Box<dyn Write + Send>,
     ) -> Result<Self, Failure> {
-        let opened = bind(home, dir).and_then(|(socket, listener)| {
-            let printer = thread::Builder::new()
-                .name("stdout".to_owned())
-                .spawn(move || print(watcher, out));
-            match printer {
-                Ok(printer) => Ok(Self {
-                    dir: dir.to_owned(),
-                    socket,
-                    listener,
-                    printer,
-                }),
-                Err(e) => {
-                    remove_socket(&socket);
-                    Err(failure(
-                        ErrorCode::IoFailed,
-                        format!("cannot start a thread: {e}"),
-                    ))
-                }
-            }
-        });
+        let opened = open_in(home, dir, log, clock, tools, out);
         if opened.is_err() {
             fs::remove_dir_all(dir).unwrap_or(());
         }
         opened
     }
 
+    /// Sends `first` on the inbox, then serves clients until `run` returns.
+    /// `first` is queued before any client's command.
+    pub fn run(
+        &self,
+        first: Vec<Delivery>,
+        run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
+    ) -> Result<(), Failure> {
+        let (inbox, waiting) = mpsc::channel();
+        for delivery in first {
+            // The receiver is still here, so the send cannot fail.
+            match inbox.send(delivery) {
+                Ok(()) => {}
+                Err(mpsc::SendError(delivery)) => drop(delivery),
+            }
+        }
+        *lock(&self.gate.inbox) = Some(inbox);
+        self.start_accept()?;
+        run(waiting)
+    }
+
     /// Runs `fiber ask`'s one turn: sends `prompt` then `close`, so the
-    /// loop finishes that turn and exits without depending on its senders
-    /// dropping (`docs/invocation.md`, "Lifecycle").
+    /// loop finishes that turn and exits. A client attached to the socket
+    /// neither keeps the session alive nor starts a second turn.
     pub fn ask(
         &self,
         prompt: String,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
-        let (inbox, waiting) = mpsc::channel();
         let message = Message {
             content: vec![ContentPart::Text { text: prompt }],
-            sender: Sender {
+            sender: CommandSender {
                 origin: Origin::Driver,
                 command_id: CommandId(mint("c_")),
             },
         };
-        // The receiver is still here, so the send cannot fail. The answer is
-        // ignored: `fiber ask` has no client waiting on an acknowledgement.
-        inbox
-            .send(Delivery::Prompt(message, ignore()))
-            .unwrap_or(());
-        inbox.send(Delivery::Close(ignore())).unwrap_or(());
-        drop(inbox);
-        run(waiting)
+        self.run(
+            vec![
+                Delivery::Prompt(message, ignore()),
+                Delivery::Close(ignore()),
+            ],
+            run,
+        )
     }
 
-    /// Ends the door side once the loop has written `fiber_exited`: unlinks
-    /// the socket, deletes the directory of a session that never got a
-    /// prompt (`docs/invocation.md`, "Lifecycle"), drops `log`, the last
-    /// handle on it, which releases the lock, and waits for stdout to have
-    /// every line.
+    /// Ends the door side: stops accepting, unlinks the socket, drops `log`
+    /// (the last handle, which releases the lock), waits up to [`GRACE`] for
+    /// each writer, then shuts down whatever is still open.
     pub fn close(self, log: Arc<Log>) {
-        let Self {
-            dir,
-            socket,
-            listener,
-            printer,
-        } = self;
-        drop(listener);
-        remove_socket(&socket);
-        if !prompted(&dir) {
-            fs::remove_dir_all(&dir).unwrap_or(());
+        self.gate.stop.store(true, Ordering::Relaxed);
+        // Wakes `accept` if it is blocked. A connection during teardown is
+        // dropped, not served.
+        match UnixStream::connect(&self.socket) {
+            Ok(_) | Err(_) => {}
+        }
+        if let Some(accept) = lock(&self.accept).take() {
+            join(accept);
+        }
+        drop(lock(&self.listener).take());
+        remove_socket(&self.socket);
+        if !prompted(&self.dir) {
+            fs::remove_dir_all(&self.dir).unwrap_or(());
         }
         drop(log);
-        printer.join().unwrap_or(());
+        self.gate.wait_writers();
+        self.gate.shutdown_all();
+        self.gate.join_clients();
+        join(self.cache);
+        join(self.printer);
     }
+
+    fn start_accept(&self) -> Result<(), Failure> {
+        let Some(listener) = lock(&self.listener).take() else {
+            return Ok(());
+        };
+        let gate = Arc::clone(&self.gate);
+        let accept = thread::Builder::new()
+            .name("accept".to_owned())
+            .spawn(move || accept_loop(listener, gate))
+            .map_err(|e| failure(ErrorCode::IoFailed, format!("cannot start a thread: {e}")))?;
+        *lock(&self.accept) = Some(accept);
+        Ok(())
+    }
+}
+
+impl Gate {
+    fn wait_writers(&self) {
+        let until = self.clock.now() + GRACE;
+        let mut conns = lock(&self.conns);
+        while conns.writers_open > 0 && self.clock.now() < until {
+            let writers = &self.writers;
+            let mut slot = Some(conns);
+            self.clock.wait_until(Some(until), &mut |bound| {
+                let Some(guard) = slot.take() else {
+                    return;
+                };
+                slot = Some(match bound {
+                    Some(limit) => {
+                        writers
+                            .wait_timeout(guard, limit)
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .0
+                    }
+                    None => writers.wait(guard).unwrap_or_else(PoisonError::into_inner),
+                });
+            });
+            conns = match slot {
+                Some(guard) => guard,
+                None => lock(&self.conns),
+            };
+        }
+    }
+
+    fn shutdown_all(&self) {
+        for stream in &lock(&self.conns).shutdowns {
+            match stream.shutdown(std::net::Shutdown::Both) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+
+    fn join_clients(&self) {
+        let (readers, writers) = {
+            let mut conns = lock(&self.conns);
+            (
+                std::mem::take(&mut conns.readers),
+                std::mem::take(&mut conns.writers),
+            )
+        };
+        for handle in readers.into_iter().chain(writers) {
+            join(handle);
+        }
+    }
+
+    /// The latest `session_status` and `extensions_loaded` the cache thread
+    /// has, after every line already queued for it.
+    pub(crate) fn flush(&self) -> (Option<contract::Envelope>, Option<contract::Envelope>) {
+        let _one = lock(&self.flush_lock);
+        let token = self.flush_seq.fetch_add(1, Ordering::Relaxed) + 1;
+        self.cache_injector
+            .push(control_line(&self.session_id, client::FLUSH, token));
+        let mut snap = lock(&self.snap);
+        while snap.flushed < token && !self.stop.load(Ordering::Relaxed) {
+            snap = self
+                .snap_ready
+                .wait(snap)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+        (snap.status.clone(), snap.extensions.clone())
+    }
+
+    /// One more `full` connection, and the `clients` line for it.
+    pub(crate) fn attach(&self) {
+        let mut count = lock(&self.clients);
+        *count += 1;
+        self.emit_clients(*count);
+    }
+
+    /// One fewer `full` connection, and the `clients` line for it.
+    pub(crate) fn detach(&self) {
+        let mut count = lock(&self.clients);
+        *count = count.saturating_sub(1);
+        self.emit_clients(*count);
+    }
+
+    fn emit_clients(&self, count: u32) {
+        let Some(log) = self.log.upgrade() else {
+            return;
+        };
+        log.emit(&Event::Clients(Clients { count }));
+    }
+
+    pub(crate) fn deliver(&self, delivery: Delivery) {
+        let inbox = lock(&self.inbox);
+        let Some(inbox) = inbox.as_ref() else {
+            drop(delivery);
+            return;
+        };
+        if let Err(mpsc::SendError(delivery)) = inbox.send(delivery) {
+            drop(delivery);
+        }
+    }
+
+    pub(crate) fn push_shutdown(&self, stream: UnixStream) {
+        lock(&self.conns).shutdowns.push(stream);
+    }
+
+    pub(crate) fn push_reader(&self, handle: JoinHandle<()>) {
+        lock(&self.conns).readers.push(handle);
+    }
+
+    pub(crate) fn begin_writer(&self) {
+        lock(&self.conns).writers_open += 1;
+    }
+
+    pub(crate) fn end_writer(&self) {
+        let mut conns = lock(&self.conns);
+        conns.writers_open = conns.writers_open.saturating_sub(1);
+        drop(conns);
+        self.writers.notify_all();
+    }
+
+    pub(crate) fn push_writer(&self, handle: JoinHandle<()>) {
+        lock(&self.conns).writers.push(handle);
+    }
+
+    pub(crate) fn stopped(&self) -> bool {
+        self.stop.load(Ordering::Relaxed)
+    }
+}
+
+impl Wake for Gate {
+    fn wake(&self) {
+        // The lock is taken before the notify, so a waiter that has judged
+        // and not yet parked cannot miss this wake.
+        let _held = lock(&self.conns);
+        self.writers.notify_all();
+    }
+}
+
+fn open_in(
+    home: &Path,
+    dir: &Path,
+    log: &Arc<Log>,
+    clock: Arc<dyn Clock>,
+    tools: Vec<ToolInfo>,
+    out: Box<dyn Write + Send>,
+) -> Result<Session, Failure> {
+    let (socket, listener) = bind(home, dir)?;
+    let session_id = SessionId(
+        dir.file_name()
+            .unwrap_or_default()
+            .to_string_lossy()
+            .into_owned(),
+    );
+    let printer_watcher = log.watch();
+    let printer_stop = printer_watcher.injector();
+    let cache_watcher = log.watch();
+    let cache_injector = cache_watcher.injector();
+    let gate = Arc::new(Gate {
+        log: Arc::downgrade(log),
+        clock: Arc::clone(&clock),
+        session_id,
+        dir: dir.to_owned(),
+        tools,
+        inbox: Mutex::new(None),
+        stop: AtomicBool::new(false),
+        clients: Mutex::new(0),
+        snap: Mutex::new(Snap {
+            status: None,
+            extensions: None,
+            flushed: 0,
+        }),
+        flush_seq: AtomicU64::new(0),
+        flush_lock: Mutex::new(()),
+        cache_injector,
+        snap_ready: Condvar::new(),
+        writers: Condvar::new(),
+        conns: Mutex::new(Conns {
+            readers: Vec::new(),
+            writers: Vec::new(),
+            shutdowns: Vec::new(),
+            writers_open: 0,
+        }),
+    });
+    // The session's `Arc<Gate>` keeps this subscription alive: the weak
+    // handle upgrades for as long as that allocation lives.
+    let wake = Arc::clone(&gate);
+    let wake: Arc<dyn Wake> = wake;
+    clock.subscribe(Arc::downgrade(&wake));
+    let printer = match spawn("stdout", move || print(printer_watcher, out)) {
+        Ok(printer) => printer,
+        Err(error) => {
+            remove_socket(&socket);
+            return Err(error);
+        }
+    };
+    let cache_gate = Arc::clone(&gate);
+    let cache = match spawn("session-status", move || cache(cache_watcher, &cache_gate)) {
+        Ok(cache) => cache,
+        Err(error) => {
+            printer_stop.push(control_line(&gate.session_id, client::STOP, 0));
+            join(printer);
+            remove_socket(&socket);
+            return Err(error);
+        }
+    };
+    Ok(Session {
+        dir: dir.to_owned(),
+        socket,
+        printer,
+        cache,
+        gate,
+        listener: Mutex::new(Some(listener)),
+        accept: Mutex::new(None),
+    })
+}
+
+fn spawn<F>(name: &str, body: F) -> Result<JoinHandle<()>, Failure>
+where
+    F: FnOnce() + Send + 'static,
+{
+    thread::Builder::new()
+        .name(name.to_owned())
+        .spawn(body)
+        .map_err(|e| failure(ErrorCode::IoFailed, format!("cannot start a thread: {e}")))
+}
+
+fn join(handle: JoinHandle<()>) {
+    match handle.join() {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+fn accept_loop(listener: UnixListener, gate: Arc<Gate>) {
+    loop {
+        if gate.stopped() {
+            return;
+        }
+        match listener.accept() {
+            Ok((stream, _)) => {
+                if gate.stopped() {
+                    return;
+                }
+                let gate = Arc::clone(&gate);
+                let spawned = Arc::clone(&gate);
+                if let Ok(handle) = spawn("client", move || client::serve(stream, spawned)) {
+                    gate.push_reader(handle);
+                }
+            }
+            Err(_) => {
+                if gate.stopped() {
+                    return;
+                }
+            }
+        }
+    }
+}
+
+/// Keeps the latest `session_status` and `extensions_loaded`. A flush line
+/// marks that every line queued before it has been recorded.
+fn cache(mut watcher: Watcher, gate: &Gate) {
+    while let Ok(Some(line)) = watcher.recv() {
+        if line.kind == client::FLUSH {
+            let token = line
+                .payload
+                .get("token")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let mut snap = lock(&gate.snap);
+            if token > snap.flushed {
+                snap.flushed = token;
+            }
+            drop(snap);
+            gate.snap_ready.notify_all();
+            continue;
+        }
+        if line.kind == "session_status" || line.kind == "extensions_loaded" {
+            let mut snap = lock(&gate.snap);
+            if line.kind == "session_status" {
+                snap.status = Some(line);
+            } else {
+                snap.extensions = Some(line);
+            }
+            drop(snap);
+            gate.snap_ready.notify_all();
+        }
+    }
+    let _snap = lock(&gate.snap);
+    gate.snap_ready.notify_all();
 }
 
 /// Whether the session's log has a `turn_started`. A log that cannot be read
@@ -162,13 +517,18 @@ fn remove_socket(socket: &Path) {
     fs::remove_file(socket).unwrap_or(());
 }
 
-/// An acknowledgement that discards its answer.
+/// An acknowledgement that discards its answer. `fiber ask` has no client
+/// waiting on one.
 fn ignore() -> Ack {
     Ack(Box::new(|_| {}))
 }
 
-fn io_failed(path: &Path, e: &std::io::Error) -> Failure {
+fn io_failed(path: &Path, e: &io::Error) -> Failure {
     failure(ErrorCode::IoFailed, format!("{}: {e}", path.display()))
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Copies every event to `out`, one JSON line each, until `fiber_exited` or
@@ -177,6 +537,9 @@ fn io_failed(path: &Path, e: &std::io::Error) -> Failure {
 /// (`docs/invocation.md`, "What a caller gets back").
 fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
     while let Ok(Some(line)) = watcher.recv() {
+        if line.kind == client::STOP {
+            return;
+        }
         let Ok(mut bytes) = serde_json::to_vec(&line) else {
             continue;
         };
@@ -188,5 +551,35 @@ fn print(mut watcher: Watcher, mut out: Box<dyn Write + Send>) {
         if line.kind == "fiber_exited" {
             return;
         }
+    }
+}
+
+/// Milliseconds since the epoch, for an acknowledgement's `ts`.
+pub(crate) fn now_ms(clock: &dyn Clock) -> u64 {
+    clock
+        .wall()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
+}
+
+/// An envelope doors builds itself: an acknowledgement, or a control line
+/// that never leaves the process.
+pub(crate) fn envelope(
+    session: &SessionId,
+    clock: &dyn Clock,
+    event: &Event,
+) -> contract::Envelope {
+    contract::Envelope {
+        kind: event.kind().to_owned(),
+        session_id: session.clone(),
+        ts: now_ms(clock),
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: match event.payload() {
+            Ok(payload) => payload,
+            Err(_) => Map::new(),
+        },
     }
 }

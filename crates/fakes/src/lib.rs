@@ -5,6 +5,7 @@
 
 mod cancel;
 pub mod children;
+mod client;
 pub mod clock;
 mod process_group;
 mod provider_server;
@@ -15,6 +16,7 @@ mod watchdog;
 use std::path::PathBuf;
 
 pub use cancel::CancelToken;
+pub use client::Client;
 pub use process_group::{WATCHDOG_SCRIPT, kill_group, kill_pid};
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};

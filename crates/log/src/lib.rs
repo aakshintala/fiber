@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 
 use contract::{ErrorCode, SessionId};
 
-pub use read::{Watcher, read};
+pub use read::{Injector, Watcher, read};
 pub use write::Log;
 
 /// The log's name in a session directory.

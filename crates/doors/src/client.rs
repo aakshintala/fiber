@@ -1,0 +1,508 @@
+//! One client connection (`docs/architecture.md`, "The threads"): a thread
+//! that reads its commands and answers them, and, once it has subscribed, a
+//! thread that writes its events.
+
+use std::io::{BufRead, BufReader, Write};
+use std::os::unix::net::UnixStream;
+use std::sync::Arc;
+use std::thread;
+
+use contract::commands::{Command, CommandLine, SentPart};
+use contract::events::{CommandAccepted, CommandRejected, CommandResult, Event};
+use contract::inbox::{Ack, Answer, Delivery, Message, Rejection};
+use contract::shapes::{ContentPart, Origin, Sender};
+use contract::{CommandId, Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
+use log::Injector;
+use serde_json::{Map, Value};
+
+use crate::session::{self, Gate};
+
+/// Wakes a connection's writer so it leaves `recv`.
+pub(crate) const STOP: &str = "doors.stop";
+/// Marks the cache thread's queue, so a subscriber sees every line already
+/// written. It is never a session event.
+pub(crate) const FLUSH: &str = "doors.flush";
+
+const MALFORMED: &str = "A command is one JSON object per line, with a string `id` and `command`.";
+const NOT_SUBSCRIBED: &str = "Send `subscribe` first.";
+const ALREADY: &str = "This connection is already subscribed.";
+const UNFIT: &str = "The arguments do not fit this command.";
+const PAST: &str = "`from_seq` is past the latest line.";
+const REVERSED: &str = "`to_seq` is before `from_seq`.";
+const ENDED: &str = "The session ended before answering.";
+const HISTORY: usize = 256;
+
+/// A line that is not one of the commands this process answers.
+fn not_built(command: &str) -> String {
+    format!("`{command}` is not built in this Fiber yet.")
+}
+
+struct Conn {
+    gate: Arc<Gate>,
+    direct: Option<UnixStream>,
+    writer: Option<UnixStream>,
+    subscribed: bool,
+    full: bool,
+    injector: Option<Injector>,
+    gone: bool,
+}
+
+/// Reads `stream` until the client hangs up.
+pub(crate) fn serve(stream: UnixStream, gate: Arc<Gate>) {
+    let (direct, writer, shutdown) = match clones(&stream) {
+        Some(clones) => clones,
+        None => return,
+    };
+    gate.push_shutdown(shutdown);
+    let mut conn = Conn {
+        gate,
+        direct: Some(direct),
+        writer: Some(writer),
+        subscribed: false,
+        full: false,
+        injector: None,
+        gone: false,
+    };
+    let mut read = BufReader::new(stream);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match read.read_until(b'\n', &mut buf) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                while buf.last().is_some_and(|b| *b == b'\n' || *b == b'\r') {
+                    buf.pop();
+                }
+                on_line(&buf, &mut conn);
+                if conn.gone {
+                    break;
+                }
+            }
+        }
+    }
+    if conn.full {
+        conn.gate.detach();
+    }
+    if let Some(injector) = conn.injector.take() {
+        injector.push(control_line(&conn.gate.session_id, STOP, 0));
+    }
+}
+
+fn clones(stream: &UnixStream) -> Option<(UnixStream, UnixStream, UnixStream)> {
+    let direct = stream.try_clone().ok()?;
+    let writer = stream.try_clone().ok()?;
+    let shutdown = stream.try_clone().ok()?;
+    Some((direct, writer, shutdown))
+}
+
+fn on_line(bytes: &[u8], conn: &mut Conn) {
+    let line = match classify(bytes) {
+        Ok(line) => line,
+        Err(id) => {
+            reject(conn, id, ErrorCode::Malformed, MALFORMED);
+            return;
+        }
+    };
+    if !conn.subscribed && line.command != "subscribe" {
+        reject(
+            conn,
+            Some(line.id),
+            ErrorCode::NotSubscribed,
+            NOT_SUBSCRIBED,
+        );
+        return;
+    }
+    if conn.subscribed && line.command == "subscribe" {
+        reject(conn, Some(line.id), ErrorCode::InvalidArguments, ALREADY);
+        return;
+    }
+    if !built(&line.command) {
+        reject(
+            conn,
+            Some(line.id),
+            ErrorCode::UnknownCommand,
+            &not_built(&line.command),
+        );
+        return;
+    }
+    let parsed = match serde_json::from_value::<CommandLine>(line.value) {
+        Ok(parsed) => parsed,
+        Err(_) => {
+            reject(conn, Some(line.id), ErrorCode::InvalidArguments, UNFIT);
+            return;
+        }
+    };
+    dispatch(conn, parsed);
+}
+
+struct Classified {
+    id: CommandId,
+    command: String,
+    value: Value,
+}
+
+/// `Err` carries `command_id` when the line had a string `id`.
+fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
+    let text = std::str::from_utf8(bytes).map_err(|_| None)?;
+    let value: Value = serde_json::from_str(text).map_err(|_| None)?;
+    let Some(map) = value.as_object() else {
+        return Err(None);
+    };
+    let id = match map.get("id") {
+        Some(Value::String(id)) => Some(CommandId(id.clone())),
+        _ => None,
+    };
+    if map
+        .keys()
+        .any(|key| key != "id" && key != "command" && key != "args")
+    {
+        return Err(id);
+    }
+    let Some(id) = id else {
+        return Err(None);
+    };
+    let Some(Value::String(command)) = map.get("command") else {
+        return Err(Some(id));
+    };
+    match map.get("args") {
+        None | Some(Value::Object(_)) => {}
+        Some(_) => return Err(Some(id)),
+    }
+    Ok(Classified {
+        id,
+        command: command.clone(),
+        value,
+    })
+}
+
+fn built(command: &str) -> bool {
+    matches!(
+        command,
+        "subscribe" | "prompt" | "steer" | "steer_drop" | "reply" | "tools" | "history" | "close"
+    )
+}
+
+fn dispatch(conn: &mut Conn, line: CommandLine) {
+    let id = line.id;
+    match line.command {
+        Command::Subscribe(args) => subscribe(conn, id, args.level),
+        Command::Tools => {
+            let tools = conn.gate.tools.clone();
+            accept(conn, id, Some(CommandResult::Tools { tools }));
+        }
+        Command::History(args) => match history(&conn.gate.dir, &args) {
+            Ok(lines) => accept(conn, id, Some(CommandResult::History { lines })),
+            Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, message),
+        },
+        Command::Prompt(args) => match content(args.content) {
+            Ok(content) => deliver_message(conn, id, content, true),
+            Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, &message),
+        },
+        Command::Steer(args) => match content(args.content) {
+            Ok(content) => deliver_message(conn, id, content, false),
+            Err(message) => reject(conn, Some(id), ErrorCode::InvalidArguments, &message),
+        },
+        Command::SteerDrop(args) => {
+            let ack = inbox_ack(conn, id.clone());
+            conn.gate.deliver(Delivery::SteerDrop(args.command_id, ack));
+        }
+        Command::Reply(reply) => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::Reply(reply, ack));
+        }
+        Command::Close => {
+            let ack = inbox_ack(conn, id);
+            conn.gate.deliver(Delivery::Close(ack));
+        }
+        Command::Message(_) => unknown(conn, id, "message"),
+        Command::Cancel => unknown(conn, id, "cancel"),
+        Command::JobStop(_) => unknown(conn, id, "job_stop"),
+        Command::Background => unknown(conn, id, "background"),
+        Command::Reload => unknown(conn, id, "reload"),
+        Command::Model(_) => unknown(conn, id, "model"),
+        Command::Name(_) => unknown(conn, id, "name"),
+        Command::Handoff(_) => unknown(conn, id, "handoff"),
+        Command::Rewind(_) => unknown(conn, id, "rewind"),
+        Command::Shell(_) => unknown(conn, id, "shell"),
+        Command::Command(_) => unknown(conn, id, "command"),
+    }
+}
+
+fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::SubscribeLevel) {
+    let Some(log) = conn.gate.log.upgrade() else {
+        reject(conn, Some(id), ErrorCode::Closing, ENDED);
+        return;
+    };
+    let summary = matches!(level, contract::commands::SubscribeLevel::Summary);
+    let watcher = if summary {
+        log.watch()
+    } else {
+        match log.watch_all() {
+            Ok(watcher) => watcher,
+            Err(_) => {
+                reject(conn, Some(id), ErrorCode::InvalidArguments, UNFIT);
+                return;
+            }
+        }
+    };
+    let injector = watcher.injector();
+    // The acknowledgement is written here, before the writer starts, so it
+    // is the first line the client reads.
+    accept(conn, id, None);
+    if conn.gone {
+        return;
+    }
+    let (status, extensions) = conn.gate.flush();
+    if summary {
+        for line in [status, extensions].into_iter().flatten() {
+            if let Some(direct) = conn.direct.as_mut()
+                && write_line(direct, &line).is_err()
+            {
+                conn.gone = true;
+                return;
+            }
+        }
+    } else if let Some(status) = status {
+        injector.push(status);
+    }
+    conn.subscribed = true;
+    conn.full = !summary;
+    conn.injector = Some(injector);
+    if conn.full {
+        // The watcher is registered, so this connection receives the line.
+        conn.gate.attach();
+    }
+    let Some(stream) = conn.writer.take() else {
+        return;
+    };
+    spawn_writer(Arc::clone(&conn.gate), watcher, stream, summary);
+    // The writer is the only writer from here.
+    drop(conn.direct.take());
+}
+
+fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, prompt: bool) {
+    let message = Message {
+        content,
+        sender: Sender {
+            origin: Origin::Driver,
+            command_id: id.clone(),
+        },
+    };
+    let ack = inbox_ack(conn, id);
+    if prompt {
+        conn.gate.deliver(Delivery::Prompt(message, ack));
+    } else {
+        conn.gate.deliver(Delivery::Steer(message, ack));
+    }
+}
+
+fn content(parts: Vec<SentPart>) -> Result<Vec<ContentPart>, String> {
+    let mut out = Vec::new();
+    for (index, part) in parts.into_iter().enumerate() {
+        match part {
+            SentPart::Text { text } => out.push(ContentPart::Text { text }),
+            SentPart::Image { .. } => {
+                let number = index + 1;
+                return Err(format!(
+                    "Image {number} cannot be read: this Fiber processes no images yet."
+                ));
+            }
+        }
+    }
+    Ok(out)
+}
+
+fn history(
+    dir: &std::path::Path,
+    args: &contract::commands::HistoryArgs,
+) -> Result<Vec<Envelope>, &'static str> {
+    let lines = match log::read(dir) {
+        Ok(lines) => lines,
+        Err(_) => return Err(UNFIT),
+    };
+    let latest = lines.iter().rev().find_map(|line| line.seq);
+    let Some(latest) = latest else {
+        return Err(PAST);
+    };
+    if args.from_seq > latest {
+        return Err(PAST);
+    }
+    if args.to_seq.is_some_and(|to| to < args.from_seq) {
+        return Err(REVERSED);
+    }
+    let to = args.to_seq.unwrap_or(latest);
+    Ok(lines
+        .into_iter()
+        .filter(|line| {
+            line.seq
+                .is_some_and(|seq| seq >= args.from_seq && seq <= to)
+        })
+        .take(HISTORY)
+        .collect())
+}
+
+fn accept(conn: &mut Conn, id: CommandId, result: Option<CommandResult>) {
+    send(
+        conn,
+        Event::CommandAccepted(CommandAccepted {
+            command_id: id,
+            result,
+        }),
+    );
+}
+
+fn reject(conn: &mut Conn, id: Option<CommandId>, code: ErrorCode, message: &str) {
+    send(
+        conn,
+        Event::CommandRejected(CommandRejected {
+            command_id: id,
+            code,
+            message: message.to_owned(),
+        }),
+    );
+}
+
+fn send(conn: &mut Conn, event: Event) {
+    let line = session::envelope(&conn.gate.session_id, conn.gate.clock.as_ref(), &event);
+    if let Some(injector) = &conn.injector {
+        injector.push(line);
+        return;
+    }
+    let Some(direct) = conn.direct.as_mut() else {
+        return;
+    };
+    if write_line(direct, &line).is_err() {
+        conn.gone = true;
+    }
+}
+
+fn unknown(conn: &mut Conn, id: CommandId, command: &str) {
+    reject(
+        conn,
+        Some(id),
+        ErrorCode::UnknownCommand,
+        &not_built(command),
+    );
+}
+
+fn inbox_ack(conn: &Conn, id: CommandId) -> Ack {
+    let Some(injector) = conn.injector.clone() else {
+        return guard(|_| {});
+    };
+    let gate = Arc::clone(&conn.gate);
+    guard(move |result| {
+        let event = match result {
+            Ok(result) => Event::CommandAccepted(CommandAccepted {
+                command_id: id,
+                result,
+            }),
+            Err(rejection) => Event::CommandRejected(CommandRejected {
+                command_id: Some(id),
+                code: rejection.code,
+                message: rejection.message,
+            }),
+        };
+        injector.push(session::envelope(
+            &gate.session_id,
+            gate.clock.as_ref(),
+            &event,
+        ));
+    })
+}
+
+/// Answers `closing` when the loop drops the acknowledgement uncalled.
+fn guard(answer: impl FnOnce(Answer) + Send + 'static) -> Ack {
+    let mut once = Once {
+        answer: Some(Box::new(answer)),
+    };
+    Ack(Box::new(move |result| {
+        if let Some(answer) = once.answer.take() {
+            answer(result);
+        }
+    }))
+}
+
+struct Once {
+    answer: Option<Box<dyn FnOnce(Answer) + Send>>,
+}
+
+impl Drop for Once {
+    fn drop(&mut self) {
+        if let Some(answer) = self.answer.take() {
+            answer(Err(Rejection {
+                code: ErrorCode::Closing,
+                message: ENDED.to_owned(),
+            }));
+        }
+    }
+}
+
+fn spawn_writer(gate: Arc<Gate>, watcher: log::Watcher, stream: UnixStream, summary: bool) {
+    gate.begin_writer();
+    let ended = Arc::clone(&gate);
+    match thread::Builder::new()
+        .name("writer".to_owned())
+        .spawn(move || {
+            let _end = WriterEnd(ended);
+            write_loop(watcher, stream, summary);
+        }) {
+        Ok(handle) => gate.push_writer(handle),
+        Err(_) => gate.end_writer(),
+    }
+}
+
+struct WriterEnd(Arc<Gate>);
+
+impl Drop for WriterEnd {
+    fn drop(&mut self) {
+        self.0.end_writer();
+    }
+}
+
+fn write_loop(mut watcher: log::Watcher, mut stream: UnixStream, summary: bool) {
+    while let Ok(Some(line)) = watcher.recv() {
+        if line.kind == STOP {
+            return;
+        }
+        if line.kind == FLUSH {
+            continue;
+        }
+        if summary && !summary_line(&line.kind) {
+            continue;
+        }
+        if write_line(&mut stream, &line).is_err() {
+            return;
+        }
+    }
+}
+
+fn summary_line(kind: &str) -> bool {
+    matches!(
+        kind,
+        "session_status" | "extensions_loaded" | "command_accepted" | "command_rejected"
+    )
+}
+
+fn write_line(stream: &mut UnixStream, line: &Envelope) -> std::io::Result<()> {
+    let mut bytes = serde_json::to_vec(line)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
+    bytes.push(b'\n');
+    stream.write_all(&bytes)?;
+    stream.flush()
+}
+
+/// A control line for `session`. `token` tells one flush from the next.
+pub(crate) fn control_line(session: &SessionId, kind: &str, token: u64) -> Envelope {
+    let mut payload = Map::new();
+    payload.insert("token".to_owned(), Value::from(token));
+    Envelope {
+        kind: kind.to_owned(),
+        session_id: session.clone(),
+        ts: 0,
+        schema_version: SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload,
+    }
+}

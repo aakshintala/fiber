@@ -106,6 +106,10 @@ struct State {
     script: VecDeque<Response>,
     requests: Vec<Request>,
     stopping: bool,
+    /// When set, a recorded request is not answered until [`ProviderServer::release`].
+    hold: bool,
+    /// How many requests are waiting in [`ProviderServer::hold`].
+    holding: usize,
 }
 
 /// A fake provider listening on a local port. Each request gets the next
@@ -166,11 +170,29 @@ impl ProviderServer {
             .unwrap_or_else(PoisonError::into_inner);
         guard.requests.len() >= count
     }
+
+    /// Holds every response until [`ProviderServer::release`]. A request is
+    /// still recorded first, so [`ProviderServer::await_requests`] sees it
+    /// while the client waits for the body.
+    pub fn hold(&self) {
+        lock(&self.state).hold = true;
+    }
+
+    /// Sends the responses [`ProviderServer::hold`] is holding.
+    pub fn release(&self) {
+        lock(&self.state).hold = false;
+        self.arrived.notify_all();
+    }
 }
 
 impl Drop for ProviderServer {
     fn drop(&mut self) {
-        lock(&self.state).stopping = true;
+        {
+            let mut state = lock(&self.state);
+            state.stopping = true;
+            state.hold = false;
+        }
+        self.arrived.notify_all();
         // A connection wakes the accept thread to see `stopping`. If none can
         // be made the thread is left blocked rather than joined forever.
         if TcpStream::connect(self.addr).is_ok()
@@ -226,7 +248,7 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
         arrived.notify_all();
         // A malformed body is the client's bug: it gets a 400 and the script
         // keeps its next response.
-        match malformed {
+        let response = match malformed {
             Some(why) => Response::status(
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
@@ -237,7 +259,16 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                     r#"{"error":"fakes: no scripted response left for this request"}"#,
                 )
             }),
+        };
+        if state.hold {
+            state.holding += 1;
+            arrived.notify_all();
+            while state.hold && !state.stopping {
+                state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);
+            }
+            state.holding -= 1;
         }
+        response
     };
     write_response(reader.get_mut(), &response)
 }

@@ -321,11 +321,18 @@ fn ask(
     let id = SessionId(doors::mint("s_"));
     let dir = parts.sessions.join(&id.0);
     let rules = config::RulesFiles::new(parts.home.clone(), parts.project.clone(), clock.clone());
-    let log = match Log::create(&parts.sessions, id, clock) {
+    let log = match Log::create(&parts.sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
-    let session = match Session::open(&parts.home, &dir, log.watch(), Box::new(io::stdout())) {
+    let session = match Session::open(
+        &parts.home,
+        &dir,
+        &log,
+        clock,
+        Vec::new(),
+        Box::new(io::stdout()),
+    ) {
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
