@@ -30,23 +30,13 @@ fn main() {
 }
 
 fn git_line(args: &[&str]) -> Option<String> {
-    let output = match std::process::Command::new("git").args(args).output() {
-        Ok(output) => output,
-        Err(_) => return None,
-    };
+    let output = std::process::Command::new("git").args(args).output().ok()?;
     if !output.status.success() {
         return None;
     }
-    let text = match String::from_utf8(output.stdout) {
-        Ok(text) => text,
-        Err(_) => return None,
-    };
+    let text = String::from_utf8(output.stdout).ok()?;
     let text = text.trim();
-    if text.is_empty() {
-        None
-    } else {
-        Some(text.to_owned())
-    }
+    (!text.is_empty()).then(|| text.to_owned())
 }
 
 /// Empty or non-hex output is the no-git shape.
