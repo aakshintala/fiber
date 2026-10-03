@@ -581,14 +581,13 @@ impl Vm {
                     .unwrap_or(mlua::Value::Nil),
             ));
         }
-        // Remaining time on this clock, plus the grace, is what `host.http`
-        // may block for. On a fake clock that duration is the fake time left,
-        // which stays within the callback's timeout plus the grace.
-        let grace = deadline.map(|at| {
-            at.saturating_duration_since(self.clock.now())
-                .saturating_add(GRACE)
-        });
-        Ok(setup::Poll::Http(self.http_request(&values, grace)?))
+        // The real-time backstop is the callback's declared timeout plus the
+        // grace, fixed when the request is made. The entry script's is the
+        // load bound plus the grace. It reads no clock, and it is never
+        // shorter than the time the caller can still wait. The parked
+        // callback's deadline stays with the scheduler, on the injected clock.
+        let bound = timeout.saturating_add(GRACE);
+        Ok(setup::Poll::Http(self.http_request(&values, Some(bound))?))
     }
 
     fn http_request(
