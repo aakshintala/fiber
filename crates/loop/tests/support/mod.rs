@@ -27,7 +27,7 @@ use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, SessionId};
 use fakes::{Scripted, ScriptedProvider, reply};
 use log::Log;
-use r#loop::Loop;
+use r#loop::{Loop, Model};
 use serde_json::{Map, Value, json};
 
 /// How long a turn may take before a test fails instead of hanging.
@@ -311,6 +311,16 @@ impl Session {
         during: Option<Message>,
         tools: Vec<Arc<dyn Tool>>,
     ) -> Self {
+        Self::open(script, during, tools, unpriced())
+    }
+
+    /// As [`Session::with_tools`], reaching `model`.
+    pub(crate) fn open(
+        script: Vec<Scripted>,
+        during: Option<Message>,
+        tools: Vec<Arc<dyn Tool>>,
+        model: Model,
+    ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -335,7 +345,7 @@ impl Session {
         let looped = Loop::start(
             Arc::clone(&log),
             Arc::new(seam),
-            MODEL.into(),
+            model,
             "You are terse.".into(),
             rx,
             workspace.display().to_string(),
@@ -355,6 +365,12 @@ impl Session {
             looped: Some(looped),
             _home: home,
         }
+    }
+
+    /// Caps the session's billed spend at `usd` US dollars.
+    pub(crate) fn budget(mut self, usd: Option<f64>) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.budget(usd));
+        self
     }
 
     /// Runs one turn on its own thread, failing the test if it outlives
@@ -393,6 +409,15 @@ impl Session {
                 return lines;
             }
         }
+    }
+}
+
+/// A model with no declared prices.
+fn unpriced() -> Model {
+    Model {
+        reference: MODEL.into(),
+        cost: None,
+        subscription: false,
     }
 }
 

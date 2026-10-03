@@ -24,7 +24,7 @@ use contract::{ErrorCode, SessionId};
 use doors::{Session, failure};
 use extensions::{Origin, Provenance, Providers, Request};
 use log::Log;
-use r#loop::Loop;
+use r#loop::{Loop, Model};
 use provider::anthropic_messages::Messages;
 use provider::google_generative_ai::Gemini;
 use provider::openai_completions::Completions;
@@ -38,7 +38,9 @@ struct Parts {
     sessions: PathBuf,
     workspace: PathBuf,
     provider: Arc<dyn Provider>,
-    model: String,
+    model: Model,
+    /// `budget.usd`, or none when the key is absent or not a number.
+    budget: Option<f64>,
 }
 
 fn main() -> ExitCode {
@@ -329,6 +331,7 @@ fn ask(
             parts.workspace.to_string_lossy().into_owned(),
             Vec::new(),
         )
+        .map(|looped| looped.budget(parts.budget))
         .and_then(Loop::run)
         .map_err(|e| failed(e.code(), e))
     });
@@ -360,6 +363,9 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
         overrides: model.map(|m| format!("model={m}")).into_iter().collect(),
     })
     .map_err(|e| failed(e.code(), e))?;
+    let budget = config
+        .get("budget.usd", None)
+        .and_then(|(value, _)| value.as_f64());
     // debt: weakens docs/configuration.md, "When Fiber reads configuration",
     // and docs/extensions.md, "The extension API version"; fixed by #382.
     // Notices from configuration and loading are dropped.
@@ -431,8 +437,35 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
         home,
         workspace,
         provider,
-        model: model.reference(),
+        model: Model {
+            reference: model.reference(),
+            cost: model.model.cost.clone().map(declared_cost),
+            subscription: model.model.subscription,
+        },
+        budget,
     })
+}
+
+/// Field-by-field copy of a model's declared prices. `loop` cannot depend on
+/// `config`, so the prices it prices with live in `contract`.
+fn declared_cost(cost: config::Cost) -> contract::provider::Cost {
+    contract::provider::Cost {
+        input: cost.input,
+        output: cost.output,
+        cache_read: cost.cache_read,
+        cache_write: cost.cache_write,
+        tiers: cost
+            .tiers
+            .into_iter()
+            .map(|tier| contract::provider::Tier {
+                input_tokens_above: tier.input_tokens_above,
+                input: tier.input,
+                output: tier.output,
+                cache_read: tier.cache_read,
+                cache_write: tier.cache_write,
+            })
+            .collect(),
+    }
 }
 
 fn usage(message: impl Into<String>) -> Failure {

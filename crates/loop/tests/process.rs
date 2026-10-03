@@ -71,9 +71,9 @@ fn failure(code: ErrorCode, message: &str) -> Failure {
     }
 }
 
-fn usage(output: u64, cost: Option<f64>, subscription: Option<bool>) -> Event {
+fn usage(id: &str, output: u64, cost: Option<f64>, subscription: Option<bool>) -> Event {
     Event::UsageRecorded(UsageRecorded {
-        generation_id: GenerationId("g".into()),
+        generation_id: GenerationId(id.into()),
         model: "fake/m".into(),
         tokens: Tokens {
             input: 10,
@@ -143,12 +143,12 @@ fn fiber_exited_carries_the_final_message_and_the_usage() {
     let session = Session::new();
     session.append(&turn_started(), None);
     session.append(&Event::StepStarted(Empty {}), None);
-    session.append(&usage(3, Some(0.5), None), Some("a_1"));
+    session.append(&usage("g1", 3, Some(0.5), None), Some("a_1"));
     session.append(&text_part("Let me check."), Some("a_1"));
     session.append(&message(), Some("a_1"));
-    session.append(&usage(5, Some(0.25), None), Some("a_2"));
-    session.append(&usage(7, None, None), Some("a_2"));
-    session.append(&usage(1, Some(2.0), Some(true)), Some("a_2"));
+    session.append(&usage("g2", 5, Some(0.25), None), Some("a_2"));
+    session.append(&usage("g3", 7, None, None), Some("a_2"));
+    session.append(&usage("g4", 1, Some(2.0), Some(true)), Some("a_2"));
     session.append(&text_part("Hello."), Some("a_2"));
     session.append(&message(), Some("a_2"));
     session.append(&turn_completed(TurnOutcome::Completed, None), None);
@@ -224,10 +224,34 @@ fn a_new_turn_forgets_the_last_ones_error_and_message() {
 fn a_billed_call_with_no_known_cost_makes_the_cost_null() {
     let session = Session::new();
     session.append(&turn_started(), None);
-    session.append(&usage(1, None, None), None);
+    session.append(&usage("g1", 1, None, None), None);
 
     let (code, exited) = session.exit(Ok(()));
 
     assert_eq!(code, 0);
     assert_eq!(exited["usage"]["cost"], Value::Null);
+}
+
+#[test]
+fn a_later_line_with_the_same_generation_replaces_the_earlier() {
+    let session = Session::new();
+    session.append(&usage("g1", 3, Some(0.5), None), Some("a_1"));
+    session.append(&usage("g1", 9, None, None), Some("a_1"));
+    session.append(&usage("g2", 1, Some(2.0), Some(true)), Some("a_2"));
+    session.append(&usage("g2", 4, Some(0.1), Some(true)), Some("a_2"));
+    session.append(&usage("g3", 2, Some(0.4), None), Some("a_3"));
+    session.append(&usage("g3", 6, Some(1.5), None), Some("a_3"));
+
+    let (code, exited) = session.exit(Ok(()));
+
+    assert_eq!(code, 0);
+    let usage = &exited["usage"];
+    // Three calls remain, each the later line of its generation.
+    assert_eq!(usage["tokens"]["output"], 19);
+    assert_eq!(usage["tokens"]["input"], 30);
+    assert_eq!(usage["tokens"]["cache_read"], 12);
+    assert_eq!(usage["tokens"]["cache_write"]["1h"], 6);
+    // g1's 0.5 was replaced by null and does not remain in the sum.
+    assert_eq!(usage["cost"], 1.5);
+    assert_eq!(usage["subscription_cost"], 0.1);
 }
