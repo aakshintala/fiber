@@ -14,7 +14,6 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::thread;
 
 use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
 use contract::events::{CacheLifetime, Decision, TurnOutcome};
@@ -23,15 +22,12 @@ use contract::provider::{Input, ModelRequest};
 use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode, RequestId, SessionId};
+use contract::{Envelope, ErrorCode, RequestId};
 use fakes::{Scripted, ScriptedProvider};
-use log::Log;
-use r#loop::{BlockLimits, Loop, Model, Reviewer};
 use serde_json::{Value, json};
 
 use support::{
-    DEADLINE, FakeRules, MODEL, REVIEWER_MODEL, Session, TempDir, TestTool, calls_reply, delivery,
-    ignore, kinds, on_request,
+    REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, ignore, kinds, on_request,
 };
 
 fn paris() -> Value {
@@ -135,138 +131,6 @@ fn kinds_next(middle: &[&str], reviews: usize) -> Vec<String> {
         .copied(),
     );
     kinds.into_iter().map(str::to_owned).collect()
-}
-
-/// Watches the log for the turn's first `permission_requested`, then runs
-/// `send`: the signal the loop is waiting for an answer. Bounded by
-/// [`DEADLINE`] like [`on_request`].
-fn on_close(session: &Session, send: impl FnOnce() + Send + 'static) -> thread::JoinHandle<()> {
-    let mut watcher = session.log.watch();
-    thread::spawn(move || {
-        let (forward, waiting) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                if forward.send(line).is_err() {
-                    return;
-                }
-            }
-        });
-        loop {
-            let line = waiting
-                .recv_timeout(DEADLINE)
-                .expect("a permission_requested line");
-            if line.kind == "permission_requested" {
-                send();
-                return;
-            }
-        }
-    })
-}
-
-/// A loop the test drives directly, with the inbox sender it drops before
-/// the turn: `Session` owns its only sender, and a struct field cannot be
-/// dropped without a replacement sender keeping the inbox alive, so a test
-/// that needs every sender gone builds its own loop.
-struct BareLoop {
-    looped: Loop,
-    reviewer: Arc<ScriptedProvider>,
-    lines: mpsc::Receiver<Envelope>,
-    _home: TempDir,
-}
-
-/// A session on a fresh log with `review_script` judging step 7: the inbox
-/// sender the test drops before the turn, and the loop, its reviewer, its
-/// lines and its directories.
-fn bare_loop(
-    session_script: Vec<Scripted>,
-    review_script: Vec<Scripted>,
-    tools: Vec<Arc<dyn Tool>>,
-    limits: BlockLimits,
-) -> (mpsc::Sender<Delivery>, BareLoop) {
-    let home = TempDir::new();
-    let workspace = home.0.join("workspace");
-    std::fs::create_dir_all(&workspace).unwrap();
-    let credentials = home.0.join("credentials");
-    std::fs::create_dir_all(&credentials).unwrap();
-    let log = Arc::new(
-        Log::create(
-            &home.0,
-            SessionId("s_test".into()),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap(),
-    );
-    let mut watcher = log.watch();
-    let (forward, lines) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
-            if forward.send(line).is_err() {
-                return;
-            }
-        }
-    });
-    let (inbox, rx) = mpsc::channel();
-    let session: Arc<dyn contract::provider::Provider> =
-        Arc::new(ScriptedProvider::new(session_script));
-    let reviewer = Arc::new(ScriptedProvider::new(review_script));
-    let rules = Arc::new(FakeRules::empty());
-    let looped = Loop::start(
-        Arc::clone(&log),
-        session,
-        Model {
-            reference: MODEL.into(),
-            cost: None,
-            subscription: false,
-        },
-        "You are terse.".into(),
-        rx,
-        tools
-            .into_iter()
-            .map(|tool| ("builtin".to_owned(), tool))
-            .collect(),
-        r#loop::Permissions {
-            workspace: workspace.display().to_string(),
-            credentials: credentials.clone(),
-            rules,
-        },
-    )
-    .unwrap()
-    .reviewer(
-        Ok(Reviewer {
-            provider: reviewer.clone(),
-            model: Model {
-                reference: REVIEWER_MODEL.into(),
-                cost: None,
-                subscription: false,
-            },
-        }),
-        limits,
-    );
-    (
-        inbox,
-        BareLoop {
-            looped,
-            reviewer,
-            lines,
-            _home: home,
-        },
-    )
-}
-
-/// Lines through the next `turn_completed`.
-fn bare_lines(bare: &BareLoop) -> Vec<Envelope> {
-    let mut lines = Vec::new();
-    loop {
-        let line = bare
-            .lines
-            .recv_timeout(DEADLINE)
-            .expect("a turn_completed line");
-        let last = line.kind == "turn_completed";
-        lines.push(line);
-        if last {
-            return lines;
-        }
-    }
 }
 
 /// One turn whose reply calls `shell` once, reviewed with `review`: the
@@ -1370,7 +1234,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
             provider: None,
         })
     };
-    let (inbox, mut bare) = bare_loop(
+    let mut session = Session::with_tools(
         vec![
             calls_reply(
                 "",
@@ -1378,22 +1242,23 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
             ),
             Scripted::text("Done."),
         ],
-        vec![
-            failed(),
-            failed(),
-            Scripted::text("check"),
-            Scripted::text("block third reason"),
-        ],
+        None,
         vec![tool.clone() as Arc<dyn Tool>],
-        BlockLimits::default(),
     );
+    let reviewer = session.reviewer(vec![
+        failed(),
+        failed(),
+        Scripted::text("check"),
+        Scripted::text("block third reason"),
+    ]);
+    // Swapping in an unrelated sender drops the session's only one: every
+    // escalation raises its request and ends with no answer, so nothing
+    // resets the consecutive count.
+    let inbox = std::mem::replace(&mut session.inbox, mpsc::channel().0);
     inbox.send(delivery("go")).unwrap();
-    // Every inbox sender is gone: each escalation raises its request and
-    // ends with no answer, so nothing resets the consecutive count.
     drop(inbox);
-    assert_eq!(bare.looped.turn().unwrap(), Some(TurnOutcome::Completed));
-    let lines = bare_lines(&bare);
-    let reviewer = bare.reviewer;
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
     assert_eq!(
         kinds(&lines),
         [
@@ -1497,9 +1362,9 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
             session: 1000,
         },
     );
-    let closer = on_close(&session, {
+    let closer = on_request(&session, {
         let inbox = session.inbox.clone();
-        move || {
+        move |_| {
             inbox.send(Delivery::Close(ignore())).unwrap();
         }
     });
@@ -1611,9 +1476,9 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
             session: 1000,
         },
     );
-    let closer = on_close(&session, {
+    let closer = on_request(&session, {
         let inbox = session.inbox.clone();
-        move || {
+        move |_| {
             inbox.send(Delivery::Close(ignore())).unwrap();
         }
     });
@@ -1682,21 +1547,26 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
 #[test]
 fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
     let tool = shell(None, None);
-    let (inbox, mut bare) = bare_loop(
+    let mut session = Session::with_tools(
         vec![calls_reply("", &[("shell", paris())])],
-        vec![Scripted::text("check"), Scripted::text("block only reason")],
+        None,
         vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let reviewer = session.reviewer_limits(
+        vec![Scripted::text("check"), Scripted::text("block only reason")],
         r#loop::BlockLimits {
             consecutive: 1000,
             session: 1,
         },
     );
+    // Swapping in an unrelated sender drops the session's only one: the
+    // session-limit escalation ends with no answer, and the exhausted budget
+    // still ends the turn.
+    let inbox = std::mem::replace(&mut session.inbox, mpsc::channel().0);
     inbox.send(delivery("go")).unwrap();
-    // Every inbox sender is gone: the session-limit escalation ends with
-    // no answer, and the exhausted budget still ends the turn.
     drop(inbox);
-    assert_eq!(bare.looped.turn().unwrap(), Some(TurnOutcome::Failed));
-    let lines = bare_lines(&bare);
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let lines = session.lines();
     assert_eq!(
         kinds(&lines),
         [
@@ -1744,6 +1614,6 @@ fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
         end.payload["error"]["message"],
         "The reviewer blocked 1 calls and no person can answer."
     );
-    assert_eq!(bare.reviewer.requests().len(), 2);
+    assert_eq!(reviewer.requests().len(), 2);
     assert!(tool.ran().is_empty());
 }

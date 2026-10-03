@@ -339,7 +339,7 @@ pub(crate) struct FakeRules {
 }
 
 impl FakeRules {
-    pub(crate) fn empty() -> Self {
+    fn empty() -> Self {
         Self {
             rules: Mutex::new(Ok(StandingRules {
                 global: Vec::new(),
