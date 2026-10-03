@@ -111,6 +111,8 @@ fn anything_else_is_not_a_bare_wait() {
         "sleep",
         "sleep 25 30",
         "sleep 25x",
+        "sleep inf",
+        "sleep infinity",
         "sleep -1",
         "SLEEP 25",
         "; sleep 30",

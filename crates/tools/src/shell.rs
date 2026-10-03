@@ -216,9 +216,9 @@ fn duration_seconds(token: &str) -> Option<f64> {
         Some('h') => (strip_last(token)?, 3_600.0),
         Some('d') => (strip_last(token)?, 86_400.0),
         Some(last) => {
-            // Widening the tail still fails to parse, so that mutant does
-            // not change a bare wait. `sleep 25` and `sleep 25.` pin the
-            // tail that is accepted.
+            // A digit or a trailing dot is seconds. `inf` parses as a
+            // number, so a tail that accepts it would treat `sleep inf`
+            // as a bare wait.
             if !bare_tail(last) {
                 return None;
             }

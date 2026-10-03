@@ -2,8 +2,8 @@ use std::io::{self, ErrorKind, Read};
 use std::sync::Arc;
 
 use super::{
-    Inner, Shared, already_woken, bump, finish, lock, note_eof, poll_while_occupied, read_output,
-    suppress_term,
+    Inner, Shared, StopKind, already_woken, bump, finish, lock, note_eof, poll_while_occupied,
+    read_output, suppress_term,
 };
 
 #[test]
@@ -53,6 +53,50 @@ fn an_open_pipe_is_discarded_once_the_run_returns() {
 }
 
 #[test]
+fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
+    let held = finish(&Shared::default(), None, false, true, false);
+    assert!(held.held_open);
+    assert!(!held.indeterminate);
+
+    let closed = finish(&Shared::default(), None, false, true, true);
+    assert!(!closed.held_open);
+    assert!(!closed.indeterminate);
+
+    let still_occupied = finish(&Shared::default(), None, false, false, false);
+    assert!(!still_occupied.held_open);
+
+    let stopped_open = finish(
+        &Shared::default(),
+        Some(StopKind::Cancel),
+        true,
+        true,
+        false,
+    );
+    assert!(stopped_open.indeterminate);
+    assert!(!stopped_open.held_open);
+
+    let stopped_occupied = finish(
+        &Shared::default(),
+        Some(StopKind::Timeout),
+        true,
+        false,
+        true,
+    );
+    assert!(stopped_occupied.indeterminate);
+    assert!(!stopped_occupied.held_open);
+
+    let stopped_clean = finish(
+        &Shared::default(),
+        Some(StopKind::Timeout),
+        true,
+        true,
+        true,
+    );
+    assert!(!stopped_clean.indeterminate);
+    assert!(!stopped_clean.held_open);
+}
+
+#[test]
 fn an_interrupted_read_is_retried() {
     let shared = Arc::new(Shared::default());
     let reader = Arc::clone(&shared);
@@ -75,12 +119,15 @@ fn a_read_error_ends_the_output() {
     let shared = Shared::default();
     read_output(
         Scripted {
-            steps: vec![Err(io::Error::other("broken"))],
+            steps: vec![Err(io::Error::other("broken")), Ok(b"later".to_vec())],
         },
         &shared,
     );
     let inner = lock(&shared.inner);
-    assert!(inner.output.is_empty());
+    assert!(
+        inner.output.is_empty(),
+        "bytes after a read error were kept"
+    );
     assert!(inner.eof);
 }
 
