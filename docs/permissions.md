@@ -292,7 +292,8 @@ a shell command with more than one part, returns no subject, and no rule or
 session grant matches it, a deny or an ask included. A shell rule matches a
 command's text, not what it does: a deny on `rm -rf ~/` misses `rm -fr ~`,
 and a command of more than one part, or one the classifier cannot read
-plainly, always reaches the reviewer, which judges what it does.
+plainly, is matched by no rule: unless every part is read-only, which takes
+the fast path, it reaches the reviewer, which judges what it does.
 
 Approving `npm test -- --watch` can remember the subject, or the prefix
 `npm test`; the terminal offers the prefix, and shows it. The widening is an explicit, separate choice at the moment
