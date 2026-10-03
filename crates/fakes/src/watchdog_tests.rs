@@ -1,20 +1,40 @@
 use std::os::unix::process::{CommandExt, ExitStatusExt};
-use std::process::{Command, Stdio};
+use std::panic::{self, AssertUnwindSafe};
+use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
 use super::Watchdog;
+use crate::kill_group;
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
 fn group_alive(group: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &format!("-{group}")])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    kill_group(group, "0").unwrap()
+}
+
+/// A process in the test's own group that a stray group signal would kill.
+fn sentinel() -> Child {
+    Command::new("sleep").arg("30").spawn().unwrap()
+}
+
+/// Whether the sentinel is still running; ends it either way.
+fn survived(mut sentinel: Child) -> bool {
+    let alive = sentinel.try_wait().unwrap().is_none();
+    sentinel.kill().unwrap();
+    sentinel.wait().unwrap();
+    alive
+}
+
+#[test]
+fn group_refuses_group_zero_and_one() {
+    for group in [0, 1] {
+        let sentinel = sentinel();
+        let refused = panic::catch_unwind(AssertUnwindSafe(|| Watchdog::group(group)));
+        assert!(refused.is_err(), "group {group} was not refused");
+        assert!(survived(sentinel), "group {group} signalled the sentinel");
+    }
 }
 
 #[test]
@@ -56,10 +76,7 @@ fn stand_down_leaves_the_group_alive() {
         finished.recv_timeout(DEADLINE).is_err(),
         "the group died after stand_down"
     );
-    match Command::new("kill")
-        .args(["-KILL", "--", &format!("-{group}")])
-        .status()
-    {
+    match kill_group(group, "KILL") {
         Ok(_) | Err(_) => {}
     }
     assert!(

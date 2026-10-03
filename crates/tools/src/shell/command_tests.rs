@@ -1,4 +1,5 @@
 use std::io::{self, ErrorKind, Read};
+use std::process::{Child, Command};
 use std::sync::{Arc, TryLockError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
@@ -6,10 +7,11 @@ use std::time::{Duration, Instant, SystemTime};
 use contract::clock::{Clock, Wake};
 use fakes::CancelToken;
 use fakes::clock::FakeClock;
+use rustix::process::Signal;
 
 use super::{
-    Inner, Shared, StopKind, already_woken, bump, finish, lock, note_eof, park,
-    poll_while_occupied, read_output, suppress_term,
+    Inner, Shared, StopKind, already_woken, bump, finish, group_alive, lock, note_eof, park,
+    poll_while_occupied, read_output, signal_group, suppress_term,
 };
 
 #[test]
@@ -244,6 +246,29 @@ fn a_wake_inside_wait_until_is_not_lost() {
         Arc::clone(&shared),
         0,
     );
+}
+
+/// A process in the test's own group that a stray group signal would kill.
+fn sentinel() -> Child {
+    Command::new("sleep").arg("30").spawn().unwrap()
+}
+
+/// Whether the sentinel is still running; ends it either way.
+fn survived(mut sentinel: Child) -> bool {
+    let alive = sentinel.try_wait().unwrap().is_none();
+    sentinel.kill().unwrap();
+    sentinel.wait().unwrap();
+    alive
+}
+
+#[test]
+fn group_zero_and_one_are_not_signalled() {
+    for group in [0, 1] {
+        let sentinel = sentinel();
+        assert!(!group_alive(group), "group {group} looked occupied");
+        signal_group(group, Signal::KILL);
+        assert!(survived(sentinel), "group {group} signalled the sentinel");
+    }
 }
 
 #[test]

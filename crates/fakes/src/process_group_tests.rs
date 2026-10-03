@@ -2,7 +2,7 @@ use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, Command, Stdio};
 
-use super::{WATCHDOG_SCRIPT, kill_group};
+use super::{WATCHDOG_SCRIPT, kill_group, kill_pid};
 
 /// A process in the test's own group that a stray group signal would kill.
 fn sentinel() -> Child {
@@ -45,6 +45,33 @@ fn kill_group_signals_a_live_group() {
         .unwrap();
     assert!(kill_group(child.id(), "0").unwrap());
     assert!(kill_group(child.id(), "KILL").unwrap());
+    child.wait().unwrap();
+}
+
+#[test]
+fn kill_pid_refuses_pid_zero_and_one() {
+    for pid in [0, 1] {
+        let sentinel = sentinel();
+        let refused = panic::catch_unwind(AssertUnwindSafe(|| kill_pid(pid, "KILL")));
+        assert!(refused.is_err(), "pid {pid} was not refused");
+        assert!(survived(sentinel), "pid {pid} signalled the sentinel");
+    }
+}
+
+#[test]
+fn kill_pid_names_the_refused_pid() {
+    let message = *panic::catch_unwind(|| kill_pid(0, "KILL"))
+        .unwrap_err()
+        .downcast::<String>()
+        .unwrap();
+    assert!(message.contains("pid 0"), "{message}");
+}
+
+#[test]
+fn kill_pid_signals_a_live_process() {
+    let mut child = Command::new("sleep").arg("30").spawn().unwrap();
+    assert!(kill_pid(child.id(), "0").unwrap());
+    assert!(kill_pid(child.id(), "KILL").unwrap());
     child.wait().unwrap();
 }
 

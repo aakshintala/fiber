@@ -21,7 +21,7 @@ use contract::shapes::{ContentPart, Process};
 use contract::tool::Tool;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Watchdog};
+use fakes::{CancelToken, Watchdog, kill_group, kill_pid};
 use serde_json::{Map, Value, json};
 use tools::Shell;
 
@@ -54,21 +54,11 @@ fn run(dir: &Path, command: &str) -> contract::tool::Output {
 }
 
 fn group_alive(group: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &format!("-{group}")])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    kill_group(group, "0").unwrap()
 }
 
 fn pid_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    kill_pid(pid, "0").unwrap()
 }
 
 /// `kill -0` succeeds on a zombie until its new parent reaps it.
@@ -521,10 +511,7 @@ fn a_pipe_held_open_after_a_normal_end_keeps_the_exit() {
         "{}",
         text(&output)
     );
-    Command::new("kill")
-        .args(["-KILL", "--", &holder.to_string()])
-        .status()
-        .unwrap();
+    kill_pid(holder, "KILL").unwrap();
     wait_until_pid_gone(holder);
     watchdog.stand_down(DEADLINE);
 }
@@ -561,10 +548,7 @@ fn an_escapee_that_holds_the_pipe_is_indeterminate() {
     );
     assert!(!output.process.unwrap().timed_out);
     assert!(!group_alive(pgid));
-    Command::new("kill")
-        .args(["-KILL", "--", &escapee.to_string()])
-        .status()
-        .unwrap();
+    kill_pid(escapee, "KILL").unwrap();
     wait_until_pid_gone(escapee);
     watchdog.stand_down(DEADLINE);
 }
@@ -624,10 +608,7 @@ struct KillPid(u32);
 
 impl Drop for KillPid {
     fn drop(&mut self) {
-        match Command::new("kill")
-            .args(["-KILL", "--", &self.0.to_string()])
-            .status()
-        {
+        match kill_pid(self.0, "KILL") {
             Ok(_) | Err(_) => {}
         }
     }

@@ -413,10 +413,20 @@ fn after(clock: &dyn Clock, delay: Duration) -> Instant {
 }
 
 fn group_alive(pgid: u32) -> bool {
+    // Group 1 or 0 is not a command. Signalling it reaches other processes,
+    // and waiting on it would loop: nothing of this run is there.
+    if pgid <= 1 {
+        return false;
+    }
     pid(pgid).is_some_and(|pid| rustix::process::test_kill_process_group(pid).is_ok())
 }
 
 fn signal_group(pgid: u32, signal: Signal) {
+    // Group 1 or 0 is not a command. `kill(-1)` reaches every process the
+    // user owns, and `kill(0)` this process's own group.
+    if pgid <= 1 {
+        return;
+    }
     let Some(pid) = pid(pgid) else {
         return;
     };

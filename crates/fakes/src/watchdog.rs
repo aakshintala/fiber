@@ -18,20 +18,24 @@ impl Watchdog {
     /// Starts a watchdog for `group`. Dropping it kills the group. The
     /// watchdog's standard input is a pipe only the caller holds: a newline
     /// means stand down, and EOF means the caller died.
+    ///
+    /// # Panics
+    ///
+    /// When `group` is 1 or less, before spawning anything, or when the
+    /// watchdog cannot be started.
     #[allow(
         clippy::panic,
         reason = "a watchdog that cannot start cannot protect the test"
     )]
     pub fn group(group: u32) -> Self {
+        assert!(
+            group > 1,
+            "refusing to signal process group {group}: kill(-1) signals every process the user owns"
+        );
         let group_arg = group.to_string();
         let mut shell = Command::new("sh");
         shell
-            .args([
-                "-c",
-                r#"read -r line || kill -s KILL -- "-$1""#,
-                "watchdog",
-                group_arg.as_str(),
-            ])
+            .args(["-c", crate::WATCHDOG_SCRIPT, "watchdog", group_arg.as_str()])
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())

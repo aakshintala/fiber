@@ -8,25 +8,16 @@ use std::time::Duration;
 use super::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use crate::temp_dir::TempDir;
 use crate::watchdog::Watchdog;
+use crate::{kill_group, kill_pid};
 
 const DEADLINE: Duration = Duration::from_secs(5);
 
 fn group_alive(group: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &format!("-{group}")])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    kill_group(group, "0").unwrap()
 }
 
 fn pid_alive(pid: u32) -> bool {
-    Command::new("kill")
-        .args(["-0", "--", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    kill_pid(pid, "0").unwrap()
 }
 
 fn wait_child(mut child: Child) {
@@ -94,10 +85,7 @@ fn ignores_sigterm_survives_sigterm() {
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
-    Command::new("kill")
-        .args(["-TERM", "--", &format!("-{pgid}")])
-        .status()
-        .unwrap();
+    kill_group(pgid, "TERM").unwrap();
     let block = super::block_of(ready.path());
     let fifo = block.clone();
     let (wrote, wrote_rx) = mpsc::channel();
@@ -136,20 +124,14 @@ fn leaves_descendants_keeps_the_child_after_sigterm() {
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
     let descendant = ready.wait(DEADLINE)[0];
-    Command::new("kill")
-        .args(["-TERM", "--", &format!("-{pgid}")])
-        .status()
-        .unwrap();
+    kill_group(pgid, "TERM").unwrap();
     wait_child(child);
     assert!(
         pid_alive(descendant),
         "SIGTERM killed the descendant {descendant}"
     );
     drop(watchdog);
-    Command::new("kill")
-        .args(["-KILL", "--", &descendant.to_string()])
-        .status()
-        .unwrap();
+    kill_pid(descendant, "KILL").unwrap();
 }
 
 #[test]
@@ -176,10 +158,7 @@ fn escapes_group_leaves_and_is_not_in_the_group() {
     assert!(pid_alive(escapee));
     drop(watchdog);
     wait_child(child);
-    Command::new("kill")
-        .args(["-KILL", "--", &escapee.to_string()])
-        .status()
-        .unwrap();
+    kill_pid(escapee, "KILL").unwrap();
     assert!(!group_alive(pgid));
 }
 
