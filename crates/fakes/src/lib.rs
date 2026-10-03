@@ -3,18 +3,23 @@
 //! dependency of the crates that use it; no release binary contains it
 //! (`docs/architecture.md`, "The call rules").
 
+mod cancel;
+pub mod children;
 pub mod clock;
 mod process_group;
 mod provider_server;
 mod scripted_provider;
 mod temp_dir;
+mod watchdog;
 
 use std::path::PathBuf;
 
+pub use cancel::CancelToken;
 pub use process_group::{WATCHDOG_SCRIPT, kill_group};
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
 pub use temp_dir::TempDir;
+pub use watchdog::Watchdog;
 
 /// The fixture Lua extension's directory: `extension.json`, `init.lua` and
 /// the module it requires, one command per runtime behaviour a test exercises.

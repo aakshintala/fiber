@@ -162,7 +162,7 @@ the code and the list disagree.
 
 | Crate | File | Why |
 |---|---|---|
-| none yet | | |
+| `tools` | `crates/tools/src/shell/command.rs` | `pre_exec` calls `setsid` between fork and exec |
 
 `unsafe` inside dependencies is `docs/dependencies.md`'s.
 

@@ -1,0 +1,193 @@
+use std::io::Write;
+use std::os::unix::process::CommandExt;
+use std::process::{Child, Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use super::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
+use crate::temp_dir::TempDir;
+use crate::watchdog::Watchdog;
+
+const DEADLINE: Duration = Duration::from_secs(5);
+
+fn group_alive(group: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", "--", &format!("-{group}")])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+fn pid_alive(pid: u32) -> bool {
+    Command::new("kill")
+        .args(["-0", "--", &pid.to_string()])
+        .stderr(Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+fn wait_child(mut child: Child) {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    assert!(
+        finished.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the command to exit"
+    );
+}
+
+fn pause(within: Duration) {
+    let (_tx, rx) = mpsc::channel::<()>();
+    match rx.recv_timeout(within) {
+        Ok(())
+        | Err(mpsc::RecvTimeoutError::Timeout)
+        | Err(mpsc::RecvTimeoutError::Disconnected) => {}
+    }
+}
+
+#[test]
+fn a_written_line_is_its_pids() {
+    let dir = TempDir::new("fiber-ready");
+    let ready = Ready::new(dir.path());
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(ready.path())
+        .unwrap();
+    writeln!(writer, "12 34").unwrap();
+    assert_eq!(ready.wait(DEADLINE), vec![12, 34]);
+}
+
+#[test]
+fn a_writer_that_closes_without_a_line_does_not_drop_the_next_line() {
+    let dir = TempDir::new("fiber-ready-eof");
+    let ready = Ready::new(dir.path());
+    drop(
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(ready.path())
+            .unwrap(),
+    );
+    let mut writer = std::fs::OpenOptions::new()
+        .write(true)
+        .open(ready.path())
+        .unwrap();
+    writeln!(writer, "7").unwrap();
+    drop(writer);
+    assert_eq!(ready.wait(DEADLINE), vec![7]);
+}
+
+#[test]
+fn a_line_that_never_comes_fails_at_the_deadline() {
+    let dir = TempDir::new("fiber-ready-deadline");
+    let ready = Ready::new(dir.path());
+    let within = Duration::from_millis(200);
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| ready.wait(within)));
+    assert!(result.is_err(), "waited {within:?} should fail the wait");
+}
+
+#[test]
+fn ignores_sigterm_survives_sigterm() {
+    let dir = TempDir::new("fiber-ignore-term");
+    let ready = Ready::new(dir.path());
+    let mut child = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(ignores_sigterm(ready.path()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    Command::new("kill")
+        .args(["-TERM", "--", &format!("-{pgid}")])
+        .status()
+        .unwrap();
+    // Long enough that a process which did not ignore SIGTERM would have exited.
+    pause(Duration::from_millis(300));
+    assert!(
+        child.try_wait().unwrap().is_none(),
+        "SIGTERM killed a command that ignores it"
+    );
+    drop(watchdog);
+    wait_child(child);
+}
+
+#[test]
+fn leaves_descendants_keeps_the_child_after_sigterm() {
+    let dir = TempDir::new("fiber-descendants");
+    let ready = Ready::new(dir.path());
+    let child = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(leaves_descendants(ready.path()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let descendant = ready.wait(DEADLINE)[0];
+    Command::new("kill")
+        .args(["-TERM", "--", &format!("-{pgid}")])
+        .status()
+        .unwrap();
+    wait_child(child);
+    assert!(
+        pid_alive(descendant),
+        "SIGTERM killed the descendant {descendant}"
+    );
+    drop(watchdog);
+    Command::new("kill")
+        .args(["-KILL", "--", &descendant.to_string()])
+        .status()
+        .unwrap();
+}
+
+#[test]
+fn escapes_group_leaves_and_is_not_in_the_group() {
+    let dir = TempDir::new("fiber-escape");
+    let ready = Ready::new(dir.path());
+    let child = Command::new("/bin/bash")
+        .arg("-c")
+        .arg(escapes_group(ready.path()))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let escapee = ready.wait(DEADLINE)[0];
+    assert_ne!(escapee, pgid);
+    assert!(
+        !in_group(escapee, pgid),
+        "escapee {escapee} stayed in {pgid}"
+    );
+    assert!(pid_alive(escapee));
+    drop(watchdog);
+    wait_child(child);
+    Command::new("kill")
+        .args(["-KILL", "--", &escapee.to_string()])
+        .status()
+        .unwrap();
+    assert!(!group_alive(pgid));
+}
+
+fn in_group(pid: u32, group: u32) -> bool {
+    let output = Command::new("ps")
+        .args(["-o", "pgid=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&output.stdout)
+        .split_whitespace()
+        .next()
+        .and_then(|pgid| pgid.parse().ok())
+        == Some(group)
+}

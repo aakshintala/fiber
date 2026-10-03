@@ -5,9 +5,10 @@
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Weak};
 use std::thread;
 
+use contract::clock::Wake;
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
     AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
@@ -16,7 +17,7 @@ use contract::events::{
 };
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
-use contract::tool::{Bound, Output, Tool};
+use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
@@ -124,7 +125,10 @@ impl Loop {
                             Some(&id),
                         )?;
                         let bound = tool.bound();
-                        Err((bound, scope.spawn(move || tool.run(&arguments))))
+                        Err((
+                            bound,
+                            scope.spawn(move || tool.run(&arguments, &NeverCancel)),
+                        ))
                     }
                 };
                 running.push((id, ran));
@@ -491,6 +495,19 @@ impl Loop {
         }
         (kept, artifact)
     }
+}
+
+/// A cancel signal that never fires.
+///
+/// debt: a call is never cancelled, #301 keeps a token, fires it, and then writes `cancelled`
+struct NeverCancel;
+
+impl Cancel for NeverCancel {
+    fn is_cancelled(&self) -> bool {
+        false
+    }
+
+    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
 }
 
 /// How a call the reply cut off completes (`docs/loop.md`, "A reply cut off

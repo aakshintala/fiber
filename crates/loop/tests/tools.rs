@@ -547,6 +547,16 @@ fn a_result_at_its_bound_is_not_cut() {
 }
 
 #[test]
+fn the_loop_passes_a_cancel_that_is_not_cancelled() {
+    let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
+    let _ = turn(
+        vec![Arc::clone(&tool) as Arc<dyn Tool>],
+        &[("get_weather", paris())],
+    );
+    assert_eq!(tool.cancelled.lock().unwrap().as_slice(), &[false]);
+}
+
+#[test]
 fn two_fsyncs_per_tool_call() {
     let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
     let mut session = Session::with_tools(

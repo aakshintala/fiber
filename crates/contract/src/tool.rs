@@ -3,11 +3,27 @@
 //! alike; the loop looks a call's name up among them and never learns whose
 //! it is.
 
+use std::sync::Weak;
+
 use serde_json::{Map, Value};
 
+use crate::clock::Wake;
 use crate::events::{Control, FileChange};
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
+
+/// What a tool may ask of the signal that cancels its call
+/// (`docs/tools.md`, "Cancellation"). The signal itself lives outside
+/// `contract`, which holds no behaviour.
+pub trait Cancel: Send + Sync {
+    /// Whether the call has been cancelled.
+    fn is_cancelled(&self) -> bool;
+
+    /// Wakes `waker` when the call is cancelled from then on. A cancel
+    /// before the subscription is not replayed: the caller checks
+    /// [`Cancel::is_cancelled`] after subscribing.
+    fn subscribe(&self, waker: Weak<dyn Wake>);
+}
 
 /// One tool (`docs/tools.md`, "What a tool declares"). Calls in a step run
 /// concurrently, one thread each.
@@ -20,8 +36,9 @@ pub trait Tool: Send + Sync {
     /// `tool_error`, and it never runs.
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError>;
 
-    /// Runs the call, blocking until it ends.
-    fn run(&self, arguments: &Map<String, Value>) -> Output;
+    /// Runs the call, blocking until it ends. `cancel` is how the call sees
+    /// that Fiber has stopped it.
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output;
 
     /// How a long result is cut (`docs/tools.md`, "Bounded results").
     fn bound(&self) -> Bound {
