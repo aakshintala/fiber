@@ -13,6 +13,8 @@
 mod support;
 
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
 
 use contract::commands::{Remember, RememberScope, Reply, ReplyAnswer};
 use contract::events::{CacheLifetime, Decision, TurnOutcome};
@@ -20,12 +22,15 @@ use contract::inbox::Delivery;
 use contract::provider::{Input, ModelRequest};
 use contract::shapes::{Effect, Failure};
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode, RequestId};
+use contract::{Envelope, ErrorCode, RequestId, SessionId};
 use fakes::{Scripted, ScriptedProvider};
+use log::Log;
+use r#loop::{BlockLimits, Loop, Model, Reviewer};
 use serde_json::{Value, json};
 
 use support::{
-    REVIEWER_MODEL, Session, TestTool, calls_reply, delivery, ignore, kinds, on_request,
+    DEADLINE, FakeRules, MODEL, REVIEWER_MODEL, Session, TempDir, TestTool, calls_reply, delivery,
+    ignore, kinds, on_request,
 };
 
 fn paris() -> Value {
@@ -176,6 +181,31 @@ fn kinds_escalated(ran: bool, first: bool) -> Vec<String> {
         .copied(),
     );
     kinds.into_iter().map(str::to_owned).collect()
+}
+/// Watches the log for the turn's first `permission_requested`, then runs
+/// `send`: the signal the loop is waiting for an answer. Bounded by
+/// [`DEADLINE`] like [`on_request`].
+fn on_close(session: &Session, send: impl FnOnce() + Send + 'static) -> thread::JoinHandle<()> {
+    let mut watcher = session.log.watch();
+    thread::spawn(move || {
+        let (forward, waiting) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(Some(line)) = watcher.recv() {
+                if forward.send(line).is_err() {
+                    return;
+                }
+            }
+        });
+        loop {
+            let line = waiting
+                .recv_timeout(DEADLINE)
+                .expect("a permission_requested line");
+            if line.kind == "permission_requested" {
+                send();
+                return;
+            }
+        }
+    })
 }
 /// One turn whose reply calls `shell` once, reviewed with `review`: the
 /// session, the tool, the reviewer and the turn's lines.
@@ -1223,4 +1253,276 @@ fn a_review_at_the_spending_budget_denies_without_sending() {
     assert_eq!(end.payload["outcome"], "failed");
     assert_eq!(end.payload["error"]["code"], "budget_exceeded");
     assert_eq!(tool.ran().len(), 1);
+}
+
+#[test]
+fn failures_without_an_answer_count_toward_the_consecutive_limit() {
+    let tool = shell(None, None);
+    let home = TempDir::new();
+    let workspace = home.0.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let credentials = home.0.join("credentials");
+    std::fs::create_dir_all(&credentials).unwrap();
+    let log = Arc::new(
+        Log::create(
+            &home.0,
+            SessionId("s_test".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let mut watcher = log.watch();
+    let (forward, waiting) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok(Some(line)) = watcher.recv() {
+            if forward.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    let (inbox, rx) = mpsc::channel();
+    let session: Arc<dyn contract::provider::Provider> = Arc::new(ScriptedProvider::new(vec![
+        calls_reply(
+            "",
+            &[("shell", paris()), ("shell", paris()), ("shell", paris())],
+        ),
+        Scripted::text("Done."),
+    ]));
+    let reviewer = Arc::new(ScriptedProvider::new(vec![
+        Scripted::failed(Failure {
+            code: ErrorCode::Timeout,
+            message: "the reviewer timed out".into(),
+            retry_after: None,
+            provider: None,
+        }),
+        Scripted::failed(Failure {
+            code: ErrorCode::Timeout,
+            message: "the reviewer timed out".into(),
+            retry_after: None,
+            provider: None,
+        }),
+        Scripted::text("check"),
+        Scripted::text("block third reason"),
+    ]));
+    let rules = Arc::new(FakeRules::empty());
+    let mut looped = Loop::start(
+        Arc::clone(&log),
+        session,
+        Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+        "You are terse.".into(),
+        rx,
+        vec![("builtin".to_owned(), tool.clone() as Arc<dyn Tool>)],
+        r#loop::Permissions {
+            workspace: workspace.display().to_string(),
+            credentials: credentials.clone(),
+            rules,
+        },
+    )
+    .unwrap()
+    .reviewer(
+        Ok(Reviewer {
+            provider: reviewer.clone(),
+            model: Model {
+                reference: REVIEWER_MODEL.into(),
+                cost: None,
+                subscription: false,
+            },
+        }),
+        BlockLimits::default(),
+    );
+    inbox.send(delivery("go")).unwrap();
+    // Every inbox sender is gone: each escalation raises its request and
+    // ends with no answer, so nothing resets the consecutive count.
+    drop(inbox);
+    assert_eq!(looped.turn().unwrap(), Some(TurnOutcome::Completed));
+    let mut lines = Vec::new();
+    loop {
+        let line = waiting
+            .recv_timeout(DEADLINE)
+            .expect("a turn_completed line");
+        let last = line.kind == "turn_completed";
+        lines.push(line);
+        if last {
+            break;
+        }
+    }
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "permission_requested",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let requested: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_requested")
+        .collect();
+    assert_eq!(requested.len(), 3);
+    assert_eq!(
+        requested[0].payload["escalation"],
+        json!({
+            "cause": "reviewer_failed",
+            "error": {"code": "timeout", "message": "the reviewer timed out"},
+        })
+    );
+    // The third call's block reaches the consecutive limit because the two
+    // failures counted and no answer reset them.
+    assert_eq!(
+        requested[2].payload["escalation"],
+        json!({"cause": "consecutive_blocks", "reason": "third reason"})
+    );
+    let resolved: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 3);
+    for line in &resolved[..2] {
+        assert_eq!(line.payload["decision"], "deny");
+        assert_eq!(line.payload["decided_by"], "reviewer");
+        assert_eq!(
+            line.payload["reason"],
+            "The session ended while waiting for an answer."
+        );
+    }
+    for done in completed(&lines) {
+        assert_eq!(done.payload["status"], "denied");
+        assert_eq!(done.payload["reason"], "no_person");
+    }
+    assert_eq!(reviewer.requests().len(), 4);
+    assert!(tool.ran().is_empty());
+}
+
+/// `close` taken while an escalation waits ends the wait as its step's
+/// unanswerable denial, and every later escalation in the turn denies
+/// without raising a request: `close` needs no `answerable` check of its
+/// own, because taking it already denies every later approval.
+#[test]
+fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris()), ("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let reviewer = session.reviewer_limits(
+        vec![
+            Scripted::text("check"),
+            Scripted::text("block first reason"),
+            Scripted::text("check"),
+            Scripted::text("block second reason"),
+        ],
+        r#loop::BlockLimits {
+            consecutive: 1,
+            session: 1000,
+        },
+    );
+    let closer = on_close(&session, {
+        let inbox = session.inbox.clone();
+        move || {
+            inbox.send(Delivery::Close(ignore())).unwrap();
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    closer.join().unwrap();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_requested",
+            "permission_resolved",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    // One request, for the first call: the second escalation denies without
+    // raising one.
+    let requested: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_requested")
+        .collect();
+    assert_eq!(requested.len(), 1);
+    assert_eq!(
+        requested[0].payload["escalation"],
+        json!({"cause": "consecutive_blocks", "reason": "first reason"})
+    );
+    let resolved: Vec<&Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 2);
+    assert_eq!(resolved[0].payload["reason"], "first reason");
+    assert_eq!(
+        resolved[0].payload["request_id"],
+        requested[0].payload["request_id"]
+    );
+    assert_eq!(resolved[1].payload["reason"], "second reason");
+    assert_eq!(resolved[1].payload.get("request_id"), None);
+    for done in completed(&lines) {
+        assert_eq!(done.payload["status"], "denied");
+        assert_eq!(done.payload["reason"], "reviewer");
+    }
+    assert_eq!(reviewer.requests().len(), 4);
+    assert!(tool.ran().is_empty());
 }

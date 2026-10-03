@@ -261,7 +261,7 @@ fn the_second_stage_reads_a_verdict_and_a_reason() {
         Ok(Second::Block { reason }) => assert_eq!(reason, "force-pushes to main"),
         Ok(_) | Err(_) => panic!("read wrong"),
     }
-    for text in ["", "maybe", "allowing this"] {
+    for text in ["", "maybe", "allowing this", ": reason"] {
         assert!(read_second(text).is_err(), "{text:?}");
     }
     // A `block` with no reason is unreadable, with its own message.

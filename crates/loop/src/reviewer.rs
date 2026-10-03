@@ -236,8 +236,8 @@ pub(crate) fn read_second(text: &str) -> Result<Second, String> {
     };
     let after = trimmed.strip_prefix(first).unwrap_or("");
     let (word, rest) = match first.split_once(':') {
-        Some((head, tail)) if !head.is_empty() => (head, [tail, after].concat()),
-        _ => (first, after.to_owned()),
+        Some((head, tail)) => (head, [tail, after].concat()),
+        None => (first, after.to_owned()),
     };
     let reason = rest
         .trim_start_matches(|c: char| c == ':' || c == '-' || c.is_whitespace())
