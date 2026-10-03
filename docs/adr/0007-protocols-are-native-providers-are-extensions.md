@@ -70,7 +70,7 @@ ships when its vendor permits use from other harnesses and Fiber can probe it.
   second, untested implementation of the hardest code.
 - The binary alone has no providers, and installing Fiber installs none. The
   model picker installs a first-party provider when a person chooses it, and
-  `fiber install <name>` installs one on a headless machine. Fixing a vendor
+  `fiber extension install <name>` installs one on a headless machine. Fixing a vendor
   quirk or a cloud's sign-in is an extension update, not a release. See
   [Extension distribution](https://github.com/aakshintala/fiber/issues/45).
 - A session that uses a provider with a Lua function creates a Lua VM, about

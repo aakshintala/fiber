@@ -27,7 +27,8 @@ either.
 
 A remote server that needs OAuth uses MCP's OAuth flow, which the client
 carries ([ADR 0008](adr/0008-the-mcp-client-is-built-in.md)). A person logs in
-to a server with `fiber mcp login <server>`. Token refresh follows the provider
+to a server with `fiber mcp login <server>`, and `fiber mcp logout <server>`
+deletes the stored token. Token refresh follows the provider
 rule in `docs/model-routing.md`, "Credentials": lock the credential file,
 re-read it, refresh once. A headless start with no valid token counts as
 the server failing to start (see [Starting servers](#starting-servers)).
@@ -277,8 +278,13 @@ a repository's MCP servers"). The approval covers the server's exact
 declaration: a changed declaration needs a new approval, and approvals are
 recorded per machine in Fiber home (`docs/state.md`). A headless run fails
 with `mcp_server_unapproved` if a repository declares a server nobody has
-approved. `fiber approve`, run in the repository from a terminal, records the
+approved. `fiber mcp approve`, run in the repository from a terminal, records the
 approvals.
+
+`fiber mcp add --repo` writes the declaration to the repository and records
+the approval of that exact declaration for the person who ran it. Another
+person who gets the declaration with the repository has no approval on their
+machine, and is asked.
 
 A repository's servers load per repository, unlike extensions, which never
 load from one (`docs/extensions.md`, "Extensions in a repository").
@@ -305,6 +311,13 @@ Each server has:
 - which tools are enabled and which are disabled
 
 The keys are `docs/configuration.md` ("MCP servers").
+
+`fiber mcp add` declares a server and `fiber mcp remove` removes one. Each
+writes the global configuration, or the per-project file with `--project`, or
+the repository's `.fiber/config.json` with `--repo` (`docs/invocation.md`,
+"Commands and flags"). `fiber mcp list` lists every declared server, the layer
+that declares it, and for a repository's server whether it is approved. Any
+other field is set with `fiber config set`.
 
 ## Where servers run
 

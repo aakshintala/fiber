@@ -203,7 +203,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
-| `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
+| `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit | the session model's provider is not installed |
 | `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
 | `extension_required_failed` | exit | a required extension failed to start |

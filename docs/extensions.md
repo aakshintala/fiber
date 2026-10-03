@@ -747,7 +747,7 @@ rest is a path inside it. A name can mark where the repository ends with a
 not exist fails with `extension_not_found`.
 
 Each first-party provider extension also has a short name, so
-`fiber install openrouter` means the first-party extension's full name. The
+`fiber extension install openrouter` means the first-party extension's full name. The
 short names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`,
 `opencode`, `databricks`, `muse`, `bedrock`, `vertex` and `azure`.
 
@@ -770,7 +770,7 @@ the same result, so there is no lockfile and no solver. A newer version arrives
 only when something raises its minimum.
 
 A version a person installed or updated by name counts as one more minimum,
-and it stays until they remove that extension. So `fiber update <name>` on a
+and it stays until they remove that extension. So `fiber extension update <name>` on a
 dependency keeps the newer version, and the same installed set always gives
 the same result.
 
@@ -787,10 +787,10 @@ running on.
 
 | Command | What it does |
 |---|---|
-| `fiber install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
-| `fiber update <name>` | Moves one extension to its newest version and re-resolves its dependencies. The new version stays a minimum (see [Versions](#versions)). |
-| `fiber remove <name>` | Removes an extension, and any dependency nothing else uses. |
-| `fiber list` | Lists installed extensions with their versions and commits. |
+| `fiber extension install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
+| `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. The new version stays a minimum (see [Versions](#versions)). |
+| `fiber extension remove <name>` | Removes an extension, and any dependency nothing else uses. |
+| `fiber extension list` | Lists installed extensions with their versions and commits. |
 
 In a terminal, `install` and `update` show a summary and ask before going
 ahead. The summary is the one in
@@ -822,14 +822,15 @@ tool set is fixed before the first request (`docs/prompt-cache.md`, "Tools").
 
 A fresh install has no extensions, providers included. In the terminal, the
 model picker offers the first-party providers, and choosing one installs it.
-On a headless machine, `fiber install <name>` installs one. A headless run
+On a headless machine, `fiber extension install <name>` installs one. A headless run
 whose provider is not installed fails with `extension_missing`.
 
 ### Staying current
 
-`fiber upgrade` updates the Fiber binary and every installed extension
+`fiber update` updates the Fiber binary and every installed extension
 together, so a new Fiber and the extensions written for it arrive at the same
-time. `fiber update <name>` updates one extension.
+time. `fiber extension update <name>` updates one extension, and
+`fiber extension update` with no name updates every extension.
 
 Nothing checks for updates on a timer. Extensions change only when someone runs
 one of these commands, so an idle Fiber does no work.
@@ -843,12 +844,12 @@ prompt templates still load from it: an MCP server after its own approval
 (`docs/mcp.md`, "A repository's servers"), the rest as data.
 
 A repository may ship an extension's package, in any directory. A person who
-wants it installs it from there, `fiber install ./tools/fiber-lint`, which
+wants it installs it from there, `fiber extension install ./tools/fiber-lint`, which
 shows the summary in "What an install shows" like any install. The
 repository's `AGENTS.md` or README can say which to install; Fiber reads no
 list of them.
 
-**An extension can be scoped to projects.** `fiber install --project`
+**An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions
 and no others. The scope is the person's `extensions."<name>".enabled` key:
 `false` in the global configuration and `true` in the project's, both in Fiber
@@ -856,7 +857,7 @@ home (`docs/configuration.md`). A repository cannot set it.
 
 ### What an install shows
 
-In a terminal, `fiber install` and `fiber update` show:
+In a terminal, `fiber extension install` and `fiber extension update` show:
 
 - its name, where it comes from and its version
 - the providers it registers, each with its base URLs

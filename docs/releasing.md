@@ -1,7 +1,7 @@
 # Releasing and upgrading
 
 How a Fiber version is cut and published, how a person installs it, and how
-`fiber upgrade` replaces a running install. This is what is true now, not a
+`fiber update` replaces a running install. This is what is true now, not a
 plan. It is settled by
 [Releasing and upgrading: how a version ships](https://github.com/aakshintala/fiber/issues/68);
 that ticket's resolution holds the rationale and the rejected alternatives.
@@ -100,7 +100,7 @@ the release workflow uploads it to Apple's notary service and waits for the
 automated scan to pass. A bare binary cannot carry the notarisation ticket
 inside it, so when a copy downloaded through a browser first runs, Gatekeeper
 checks the ticket online. A copy fetched by `curl`, `install.sh` or
-`fiber upgrade` is never checked by Gatekeeper.
+`fiber update` is never checked by Gatekeeper.
 
 The certificate, its password, and the App Store Connect API key's ID, issuer
 and private key are five secrets in the repository's `release` environment,
@@ -135,14 +135,14 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
 back is installing an older version this way.
 
 `install.sh` installs no provider. The model picker installs one when a person
-chooses it, and `fiber install <name>` installs one on a headless machine
+chooses it, and `fiber extension install <name>` installs one on a headless machine
 (`docs/extensions.md`, "A fresh install").
 
 There is no Homebrew formula and no `cargo install`.
 
-## Upgrading
+## Updating
 
-`fiber upgrade` updates the binary and every installed extension together
+`fiber update` updates the binary and every installed extension together
 (`docs/extensions.md`, "Staying current"). It changes only the binary and
 `extensions/` in Fiber home, and never touches configuration, credentials,
 sessions, rules, approvals or extension data (`docs/state.md`).
@@ -162,18 +162,18 @@ It:
 4. renames the staged extensions into place, then the binary
 
 Every download and check finishes before the first rename, so a failure up to
-that point changes nothing. In a terminal, `fiber upgrade` shows the version
+that point changes nothing. In a terminal, `fiber update` shows the version
 change and the extension summary `docs/extensions.md` describes, and asks once
 before step 4. Without a terminal it goes ahead.
 
 If the running version is already the newest, only the extensions are
-updated. `fiber upgrade` never installs an older version.
+updated. `fiber update` never installs an older version.
 
 The binary it replaces is the one that is running. If Fiber cannot write to
 that binary's directory, such as `/usr/local/bin` owned by root, it stops with
 an error naming the directory. It never asks for elevated privileges.
 
-After step 4, if the hub is running, `fiber upgrade` restarts it: through
+After step 4, if the hub is running, `fiber update` restarts it: through
 its login service when it is installed (`launchctl kickstart` on macOS,
 `systemctl --user restart` on Linux), and otherwise by signalling it, after
 which the next client starts a new one. Clients reconnect with backoff, and
@@ -181,7 +181,7 @@ no session stops (`docs/invocation.md`, "The hub").
 
 Nothing checks for a new version on its own. An idle Fiber does no work.
 
-### How `fiber upgrade` replaces the binary
+### How `fiber update` replaces the binary
 
 The new binary is renamed over the old one, never written into it. Writing in
 place is refused on Linux with `Text file busy`, and on macOS it gets every

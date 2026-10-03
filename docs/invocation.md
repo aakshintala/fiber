@@ -17,7 +17,7 @@ Every session is headless. A person or a program reaches one through a door.
 
 | | What it is |
 |---|---|
-| `fiber` | The terminal. Requires a tty; without one it is a usage error naming `fiber ask`. It is a client of the hub, starting the hub if none is running ("The hub"). |
+| `fiber` | The terminal, with `fiber resume` and `fiber continue` opening it on a session. Requires a tty; without one it is a usage error naming `fiber ask`. It is a client of the hub, starting the hub if none is running ("The hub"). |
 | `fiber ask` | A one-shot session for a caller outside Fiber. Its prompt is its argument or stdin, its stdout is the event stream, and it accepts no further prompts. |
 
 The hub is not a door. It is the one process every client talks to, the
@@ -74,20 +74,104 @@ fail with `E2BIG` on Linux after working on macOS; stdin has no cap.
 
 ## Commands and flags
 
-`fiber` takes a command. The menu lists only the commands that work, one
-line each, in three groups, then the flags and examples.
+This is the whole command line. Every other doc that names a command uses the
+names here.
 
-**Sessions.** `ask [--model <model>] [<prompt>] [-]` runs one session of one
-turn; its events go to stdout.
+The top level holds the commands that run a session, act on Fiber itself, or
+belong to a first run. Every other command is a noun, then a verb:
+`fiber extension install`, `fiber mcp add`. A command has one name. The one
+exception is a pair of words both in common use for the same job: today only
+`upgrade`, which runs `update`.
 
-**Extensions.** `install <name or path>` installs an extension and its
-dependencies. `update <name>` updates an installed extension to its newest
-tag. `remove <name>` removes an extension, the dependencies nothing else
-uses, and their data. `list` lists installed extensions: name, version and
-commit.
+`fiber help` lists only the commands that are built, one line each, in
+groups, then the flags and examples.
 
-**Other.** `help [<command>]` prints the menu, or a command's help.
-`version` prints the version.
+**Sessions.**
+
+| Command | What it does |
+|---|---|
+| `fiber` | Opens the terminal ("Two doors"). |
+| `ask [--model <model>] [--resume <id>] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). |
+| `resume [<id>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
+| `continue` | Opens the most recent session in this project, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
+| `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
+| `models [<search>]` | Lists the models the installed providers serve: `provider/model`, context window, and price per million tokens in and out, with the configured default marked. `<search>` filters by substring. It takes `--json`. |
+
+`sessions` and `continue` use the scope of the terminal's session list. Inside
+a git repository that is the repository's project, every worktree of it;
+outside one it is every project. `sessions --all` lists every project.
+
+`models` reads each provider's cached model list, and runs a provider's
+`models()` only when it has no cached copy (`docs/model-routing.md`, "Model
+discovery").
+
+`fiber ask` has no `--continue`. Several callers run `fiber ask` at once, so
+"the most recent session" is a race.
+
+**Fiber itself.**
+
+| Command | What it does |
+|---|---|
+| `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. |
+| `login [<provider>]` | Stores a provider's key (`docs/configuration.md`, "Secrets"). With no provider, a terminal offers the installed providers; without a terminal, it is a usage error. |
+| `logout <provider>` | Deletes a provider's stored key. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
+| `doctor` | Says whether a session can start, and how to fix it when it cannot. |
+| `help [<command>]` | Prints the menu, or a command's help. |
+| `version` | Prints the version. |
+
+`doctor` prints the version, the default model and the provider it needs, each
+installed provider and where its key comes from, the permission mode, the
+number of MCP servers, and whether the hub is running. A line that stops a
+session from starting carries its fix, such as
+`` no key for openrouter: run `fiber login openrouter` ``. It exits non-zero
+when a session cannot start. It never touches the network, so it does not
+check that a key is valid.
+
+**Extensions.** `fiber extension` manages extensions (`docs/extensions.md`,
+"Installing").
+
+| Command | What it does |
+|---|---|
+| `extension install [--project] <name or path>` | Installs an extension and its dependencies. `--project` installs it for the current project only. |
+| `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag. |
+| `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. |
+| `extension list` | Lists installed extensions: name, version and commit. |
+
+**MCP servers.** `fiber mcp` manages MCP servers (`docs/mcp.md`).
+
+| Command | What it does |
+|---|---|
+| `mcp add [--project \| --repo] <name> <url>` | Declares a remote server. |
+| `mcp add [--project \| --repo] <name> [-e KEY=value]... -- <command> [args]...` | Declares a stdio server. |
+| `mcp remove [--project \| --repo] <name>` | Removes a server's declaration. |
+| `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
+| `mcp login <server>` | Logs in to a server that needs OAuth. |
+| `mcp logout <server>` | Deletes a server's stored token. |
+| `mcp approve` | Records approval of the current repository's servers. Run it in the repository from a terminal. |
+| `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). |
+
+**Configuration.** `fiber config` reads and writes configuration
+(`docs/configuration.md`, "When Fiber writes").
+
+| Command | What it does |
+|---|---|
+| `config get <key>` | Prints the effective value and the layer or flag it came from. |
+| `config set [--project \| --repo] <key> <value>` | Writes one key. |
+
+The commands that write configuration take the same scope flags. With
+neither, they write the global file in Fiber home. `--project` writes the
+per-project file in Fiber home. `--repo` writes the repository's
+`.fiber/config.json`. `mcp add --repo` also records the approval of that
+exact declaration for the person who ran it (`docs/mcp.md`, "A repository's
+servers").
+
+**The hub.** `fiber hub install` registers the hub as a login service ("The
+hub"). The other `hub` commands are left to
+[Remote access: what the hub speaks](https://github.com/aakshintala/fiber/issues/86).
+
+**Internal commands.** Fiber starts its own processes with two internal
+commands: the session command and the hub. Neither is in the menu, and no
+person or client runs them.
 
 The flags are `-h`, `--help`, `-v` and `--version`. There is no `-V`.
 `-v` and `--version` are top-level only: `fiber ask -v` is an unknown
@@ -107,13 +191,13 @@ version is this binary's package version.
 Help and version are printed before Fiber reads `FIBER_HOME`, configuration,
 credentials or stdin, so they succeed when home is empty or no provider is
 installed. A failed write to stdout is ignored and the exit is still 0, as
-with `fiber list`.
+with `fiber extension list`.
 
 ```sh
 fiber ask "review the diff on this branch"
 fiber ask < brief.md
 git diff | fiber ask "review this diff" -
-fiber install openrouter
+fiber extension install openrouter
 fiber help ask
 ```
 
@@ -134,7 +218,7 @@ command names the suggestion when there is one, as
 `Unrecognized subcommand 'instal'; did you mean 'install'?`. An unknown
 flag does the same, as
 `Unexpected argument '--modle' found; did you mean '--model'?`. A missing
-required argument names the value, as `<name or path>` for `fiber install`.
+required argument names the value, as `<name or path>` for `fiber extension install`.
 
 ## Why stdin is the prompt
 
@@ -329,10 +413,10 @@ editing the global rules file, never from an approval.
 
 **First line is `fiber_started`**, carrying the Fiber version, the
 `schema_version`, the `session_id`, and whether the session is new or resumed.
-`fiber ask` and `fiber` take the same resume selector: `--resume <id>` takes a
+`fiber ask --resume <id>` and `fiber resume <id>` take the same selector: a
 full session id or any prefix of one that is unique among the project's
-sessions. In the terminal, `fiber --resume` with no id opens home. `fiber ask`
-has no list to show, so there it is a usage error.
+sessions. `fiber resume` with no id opens home. `fiber ask --resume` with no
+id is a usage error, because `ask` has no list to show.
 
 **A session exits when it has been idle for `session.idle_exit_ms`**, 30 minutes
 by default (`docs/configuration.md`), whoever is connected. Idle means no turn
@@ -466,7 +550,7 @@ rationale and the rejected layouts are
   has one writer (`docs/events.md`), so a resume never opens a second one. A
   `full` connection folds the log by `seq` first, then streams.
 - **A client attaches across versions only when it can read the stream.** A
-  session keeps the binary it started with through `fiber upgrade`. A client
+  session keeps the binary it started with through `fiber update`. A client
   reads the session's `schema_version` from `fiber_started`; an additive
   difference is fine (`docs/events.md`, "Versioning"), and on a breaking one
   the client says which version the session runs and declines, so the person
@@ -594,7 +678,7 @@ Every client reaches sessions through the hub, the local terminal included.
   remotely, and exits once no client has been connected for a while.
 - **`fiber hub install` registers it as a login service** (launchd on macOS,
   systemd on Linux) that listens on the address the person chose and never
-  exits for being idle. `fiber upgrade` restarts it through the service
+  exits for being idle. `fiber update` restarts it through the service
   manager (`docs/releasing.md`).
 - **The hub runs as the account that owns Fiber home** and is trusted as a
   session is. Locally, being that account is the authentication. Every remote
