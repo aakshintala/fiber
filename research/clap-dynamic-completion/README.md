@@ -69,11 +69,15 @@ Method: a release build of the bench crate in `bench/` (clap 4.6.7, clap_complet
 | same | Tab on `remove` (20 values read from disk) | 3.1 ms | 3.7 ms |
 | same | Tab on the command name (no values read) | 3.0 ms | 3.5 ms |
 | same | shell start: `COMPLETE=bash bin` (prints the script) | 3.1 ms | 3.8 ms |
-| Linux x86_64 (GitHub ubuntu-latest) | all rows | pending | pending |
+| Linux 6.17 x86_64 (GitHub ubuntu-24.04 runner, AMD EPYC 7763, 4 vCPU), rustc 1.98.1, hyperfine 1.18.0 | startup floor: `bin --version` | 0.79 ms | 0.92 ms |
+| same | startup floor through `env` | 1.49 ms | 1.63 ms |
+| same | Tab on `remove` (20 values read from disk) | 1.54 ms | 1.70 ms |
+| same | Tab on the command name (no values read) | 1.51 ms | 1.64 ms |
+| same | shell start: `COMPLETE=bash bin` (prints the script) | 1.50 ms | 1.68 ms |
 
 Medians and p95 are from the first of three runs; the other two runs differed by up to 0.4 ms in the median (2.7 to 3.1 ms), so read these as "about 3 ms". Reading twenty directory entries adds nothing measurable above the program start. A real Tab also pays for the shell's own work, which these figures leave out. Fiber's real startup will be larger than this toy, because it reads configuration and links more code, and that cost lands on every Tab. Fiber's own `--version` floor is the number to check before shipping.
 
-To fill the Linux row: copy `bench/` to `research/clap-dynamic-completion/bench/` on a throwaway branch named `completion-bench`, put `bench/bench.yml` at `.github/workflows/bench.yml`, push, and read the `bench.txt` artefact. I wrote the workflow without running it.
+The Linux rows come from one run of `bench/bench.yml` on a GitHub runner on 2026-10-03 (Actions run 37115356283). On both platforms a Tab costs the program's start through `env` and nothing measurable on top.
 
 ## Recommendation: pin and wrap
 

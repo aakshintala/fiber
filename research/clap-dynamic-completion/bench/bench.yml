@@ -1,7 +1,7 @@
 name: completion-bench
 # Throwaway: measures the cost of one dynamic completion on a Linux runner.
-# Put this file at .github/workflows/bench.yml on a throwaway branch, next to
-# the bench crate in research/clap-dynamic-completion/bench/.
+# Put this file at .github/workflows/bench.yml on a throwaway branch; it runs
+# the bench crate in research/clap-dynamic-completion/bench/ in place.
 on:
   workflow_dispatch:
   push:
