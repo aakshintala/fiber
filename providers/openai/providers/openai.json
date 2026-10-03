@@ -3,6 +3,7 @@
   "credential": {
     "env": "OPENAI_API_KEY"
   },
+  "reviewer_model": "gpt-6-luna",
   "models": [
     {
       "id": "gpt-6.1-sol",

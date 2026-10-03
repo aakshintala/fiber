@@ -2044,6 +2044,13 @@ fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
         assert_eq!(providers.len(), 1, "{name}");
         let provider = &providers[0];
         assert_eq!(provider.name, name);
+        let reviewer = match name {
+            "anthropic" => "claude-sonnet-5-5",
+            "openai" => "gpt-6-luna",
+            _ => "gemini-3.8-flash",
+        };
+        assert_eq!(provider.reviewer_model.as_deref(), Some(reviewer), "{name}");
+        assert!(provider.models.iter().any(|m| m.id == reviewer), "{name}");
         let model_ids: Vec<&str> = provider.models.iter().map(|m| m.id.as_str()).collect();
         assert_eq!(model_ids, Vec::from(ids));
         for model in &provider.models {

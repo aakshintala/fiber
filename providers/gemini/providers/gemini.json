@@ -3,6 +3,7 @@
   "credential": {
     "env": "GEMINI_API_KEY"
   },
+  "reviewer_model": "gemini-3.8-flash",
   "models": [
     {
       "id": "gemini-3.1-pro-preview",
