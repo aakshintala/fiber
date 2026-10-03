@@ -13,7 +13,7 @@ use std::sync::mpsc::{self, Receiver};
 use std::thread::{self, JoinHandle};
 
 use contract::events::Event;
-use contract::inbox::Message;
+use contract::inbox::{Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, ErrorCode};
 use log::{Log, Watcher};
@@ -76,7 +76,7 @@ impl Session {
     pub fn ask(
         &self,
         prompt: String,
-        run: impl FnOnce(Receiver<Message>) -> Result<(), Failure>,
+        run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         let (inbox, waiting) = mpsc::channel();
         let message = Message {
@@ -87,7 +87,7 @@ impl Session {
             },
         };
         // The receiver is still here, so the send cannot fail.
-        inbox.send(message).unwrap_or(());
+        inbox.send(Delivery::Message(message)).unwrap_or(());
         drop(inbox);
         run(waiting)
     }

@@ -24,7 +24,7 @@ use contract::{Envelope, ErrorCode};
 use fakes::Scripted;
 use serde_json::{Value, json};
 
-use support::{Session, TestTool, calls_reply, kinds, message};
+use support::{Session, TestTool, calls_reply, delivery, kinds};
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` registered. Runs one turn and returns its lines.
@@ -34,7 +34,7 @@ fn turn(tools: Vec<Arc<dyn Tool>>, calls: &[(&str, Value)]) -> (Session, Vec<Env
         None,
         tools,
     );
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     (session, lines)
@@ -392,7 +392,7 @@ fn a_cut_off_reply_runs_none_of_its_calls_and_the_turn_continues() {
     }
     let mut session =
         Session::with_tools(vec![cut, Scripted::text("Done.")], None, vec![tool.clone()]);
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     assert!(tool.ran().is_empty());
@@ -414,7 +414,7 @@ fn a_cut_off_reply_with_no_call_completes_the_turn() {
         reply.finish = Finish::OutputLimit;
     }
     let mut session = Session::new(vec![cut], None);
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(session.requests().len(), 1);
 }
@@ -430,7 +430,7 @@ fn a_cut_off_after_a_cut_off_with_calls_fails_the_turn_even_with_no_call() {
     }
     let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
     let mut session = Session::with_tools(vec![first, second], None, vec![tool]);
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
 }
 
@@ -449,7 +449,7 @@ fn a_second_cut_off_in_a_row_fails_the_turn() {
         None,
         vec![tool],
     );
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
     assert_eq!(completed(&lines).len(), 2);
@@ -458,7 +458,7 @@ fn a_second_cut_off_in_a_row_fails_the_turn() {
     assert_eq!(session.requests().len(), 2);
 
     // The next turn starts with no cut-off behind it.
-    session.inbox.send(message("again")).unwrap();
+    session.inbox.send(delivery("again")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 }
 
@@ -482,7 +482,7 @@ fn a_cut_off_between_two_whole_replies_does_not_count_twice() {
         None,
         vec![tool],
     );
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 }
 
@@ -565,7 +565,7 @@ fn two_fsyncs_per_tool_call() {
         vec![tool],
     );
     let before = session.log.fsyncs();
-    session.inbox.send(message("go")).unwrap();
+    session.inbox.send(delivery("go")).unwrap();
     session.turn();
     // Two model requests at two each, and three calls at two each.
     assert_eq!(session.log.fsyncs() - before, 2 * 2 + 3 * 2);

@@ -14,6 +14,7 @@ mod ids;
 pub mod inbox;
 mod pre_session;
 pub mod provider;
+pub mod rules;
 pub mod shapes;
 pub mod signing;
 pub mod tool;
@@ -24,3 +25,4 @@ pub use ids::{
     ActionId, CommandId, GenerationId, JobId, ProviderCallId, RequestId, Seq, SessionId, TurnId,
 };
 pub use pre_session::{PreSessionExit, PreSessionPayload};
+pub use rules::{Rule, RuleDecision, Rules, RulesError, StandingRules};

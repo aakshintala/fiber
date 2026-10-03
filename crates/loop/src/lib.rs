@@ -15,11 +15,11 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, InputItem, MessageOutcome,
-    SessionStarted, SteeringApplied, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
-    UsageRecorded,
+    AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, Grant, InputItem,
+    MessageOutcome, SessionStarted, SteeringApplied, ToolReplaced, TurnCompleted, TurnOutcome,
+    TurnStarted, UsageRecorded,
 };
-use contract::inbox::Message;
+use contract::inbox::{Delivery, Message};
 use contract::provider::{
     CallError, Cost, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
 };
@@ -30,6 +30,7 @@ use log::Log;
 
 mod calls;
 mod conversation;
+mod permission;
 mod process;
 mod schema;
 mod usage;
@@ -71,6 +72,18 @@ pub struct Model {
     pub subscription: bool,
 }
 
+/// What a session's calls are judged against (`docs/permissions.md`, "The
+/// order a call is judged in").
+pub struct Permissions {
+    /// The workspace, as `session_started` records it; fast paths resolve
+    /// against it.
+    pub workspace: String,
+    /// Fiber home's `credentials/` directory.
+    pub credentials: PathBuf,
+    /// The standing rules.
+    pub rules: Arc<dyn contract::rules::Rules>,
+}
+
 /// One session's loop.
 pub struct Loop {
     log: Arc<Log>,
@@ -78,7 +91,7 @@ pub struct Loop {
     /// The model `provider` reaches, and how its calls are priced.
     model: Model,
     system_prompt: String,
-    inbox: Receiver<Message>,
+    inbox: Receiver<Delivery>,
     /// The root session's id, for providers that route by key.
     cache_key: String,
     /// Taken from the inbox by the check before a turn completes, and
@@ -98,6 +111,19 @@ pub struct Loop {
     replaced: Vec<ToolReplaced>,
     /// The workspace, symlinks resolved.
     workspace: PathBuf,
+    /// Fiber home's `credentials/` directory, symlinks resolved.
+    credentials: PathBuf,
+    /// The standing rules, re-read every time a call reaches step 2.
+    rules: Arc<dyn contract::rules::Rules>,
+    /// The session grants this loop's answers added, in order: the fold of
+    /// the `permission_resolved` lines this loop wrote.
+    grants: Vec<Grant>,
+    /// Whether a person can answer an approval; `false` for `fiber ask`.
+    answerable: bool,
+    /// Messages that arrived while the loop waited for a reply to an
+    /// approval, in arrival order, applied as steering at the next step
+    /// boundary.
+    held: VecDeque<Message>,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
@@ -116,16 +142,18 @@ impl Loop {
         provider: Arc<dyn Provider>,
         model: Model,
         system_prompt: String,
-        inbox: Receiver<Message>,
-        workspace: String,
+        inbox: Receiver<Delivery>,
         tools: Vec<(String, Arc<dyn Tool>)>,
+        permissions: Permissions,
     ) -> Result<Self, Error> {
         let (tools, replaced) = calls::register(tools);
-        let resolved = PathBuf::from(&workspace);
-        let resolved = resolved.canonicalize().unwrap_or(resolved);
+        let workspace = PathBuf::from(&permissions.workspace);
+        let workspace = workspace.canonicalize().unwrap_or(workspace);
+        let credentials =
+            calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
         let started = log.append(
             &Event::SessionStarted(SessionStarted {
-                workspace,
+                workspace: permissions.workspace,
                 parent: None,
                 forked_from: None,
                 rewind: None,
@@ -148,7 +176,12 @@ impl Loop {
             sent: None,
             tools,
             replaced,
-            workspace: resolved,
+            workspace,
+            credentials,
+            rules: permissions.rules,
+            grants: Vec::new(),
+            answerable: true,
+            held: VecDeque::new(),
             cut_off: false,
             ledger: usage::Ledger::default(),
             budget: None,
@@ -159,6 +192,13 @@ impl Loop {
     /// (`docs/loop.md`, "Spending budget").
     pub fn budget(mut self, usd: Option<f64>) -> Self {
         self.budget = usd;
+        self
+    }
+
+    /// Whether a person can answer an approval; `false` for `fiber ask`
+    /// (`docs/permissions.md`, "Headless"). Default `true`.
+    pub fn answerable(mut self, yes: bool) -> Self {
+        self.answerable = yes;
         self
     }
 
@@ -173,12 +213,18 @@ impl Loop {
     /// turn"). Returns how the turn ended, or `None` once every sender of the
     /// inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
-        let Ok(first) = self.inbox.recv() else {
-            return Ok(None);
+        // A reply names a pending approval, and nothing is pending while
+        // the loop is idle: it is dropped, and the loop keeps waiting.
+        let first = loop {
+            let Ok(delivery) = self.inbox.recv() else {
+                return Ok(None);
+            };
+            match delivery {
+                Delivery::Message(message) => break message,
+                Delivery::Reply(_) => {}
+            }
         };
-        let input: Vec<Message> = std::iter::once(first)
-            .chain(self.inbox.try_iter())
-            .collect();
+        let input: Vec<Message> = std::iter::once(first).chain(self.messages()).collect();
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         self.append(
@@ -199,11 +245,15 @@ impl Loop {
             match self.step(&turn)? {
                 Step::Next => {}
                 // Anything that arrived while the model wrote its final reply
-                // continues the turn (`docs/loop.md`, "Ending a turn").
-                Step::Replied => match self.inbox.try_recv() {
-                    Ok(message) => self.waiting = Some(message),
-                    Err(_) => break ended(TurnOutcome::Completed, None),
-                },
+                // continues the turn (`docs/loop.md`, "Ending a turn"). A
+                // reply is dropped: nothing is pending at a step boundary.
+                Step::Replied => {
+                    let next = self.messages().next();
+                    match next {
+                        Some(message) => self.waiting = Some(message),
+                        None => break ended(TurnOutcome::Completed, None),
+                    }
+                }
                 Step::Ended(completed) => break completed,
             }
         };
@@ -212,15 +262,24 @@ impl Loop {
         Ok(Some(outcome))
     }
 
+    /// Messages waiting in the inbox, in arrival order. Replies are
+    /// dropped: nothing is pending outside a wait for one.
+    fn messages(&self) -> impl Iterator<Item = Message> + use<'_> {
+        self.inbox.try_iter().filter_map(|delivery| match delivery {
+            Delivery::Message(message) => Some(message),
+            Delivery::Reply(_) => None,
+        })
+    }
+
     /// One step (`docs/loop.md`, "One step").
     fn step(&mut self, turn: &TurnId) -> Result<Step, Error> {
         self.append(&Event::StepStarted(Empty {}), turn, None)?;
-        let steering: Vec<Message> = self
-            .waiting
-            .take()
-            .into_iter()
-            .chain(self.inbox.try_iter())
-            .collect();
+        let waiting = self.waiting.take();
+        // Held first: they arrived while the loop waited for a reply,
+        // before anything else drained now.
+        let mut steering: Vec<Message> = waiting.into_iter().collect();
+        steering.extend(self.held.drain(..));
+        steering.extend(self.messages());
         for message in steering {
             self.append(
                 &Event::SteeringApplied(SteeringApplied {
@@ -526,6 +585,6 @@ fn ended(outcome: TurnOutcome, error: Option<Failure>) -> TurnCompleted {
 
 /// A new id from random bytes (`docs/events.md`, "Identity and ordering").
 /// `RandomState` seeds its keys from the operating system's randomness.
-fn mint(prefix: &str) -> String {
+pub(crate) fn mint(prefix: &str) -> String {
     format!("{prefix}{:016x}", RandomState::new().hash_one(()))
 }

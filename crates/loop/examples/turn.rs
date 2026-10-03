@@ -46,7 +46,7 @@ fn main() -> ExitCode {
     ));
     let weather = support::TestTool::reads("get_weather", "Sunny in Paris.");
     let mut session = support::Session::with_tools(script, None, vec![Arc::new(weather)]);
-    if session.inbox.send(support::message(&prompt)).is_err() {
+    if session.inbox.send(support::delivery(&prompt)).is_err() {
         return ExitCode::FAILURE;
     }
     session.turn();

@@ -23,7 +23,8 @@ use r#loop::rebuild;
 use serde_json::{Value, json};
 
 use support::{
-    MODEL, Session, TestTool, kinds, message, reasoning_item, reasoning_reply, tool_call_reply,
+    MODEL, Session, TestTool, delivery, kinds, message, reasoning_item, reasoning_reply,
+    tool_call_reply,
 };
 
 fn user(text: &str) -> Input {
@@ -50,7 +51,7 @@ fn durable(lines: &[contract::Envelope]) -> Vec<&str> {
 fn messages_waiting_together_start_one_turn_in_arrival_order() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
     for text in ["one", "two", "three"] {
-        session.inbox.send(message(text)).unwrap();
+        session.inbox.send(delivery(text)).unwrap();
     }
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
@@ -89,7 +90,7 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
 #[test]
 fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let mut session = Session::new(vec![Scripted::text("Hello there.")], None);
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
     let turn = lines[1].turn_id.clone().unwrap();
@@ -141,7 +142,7 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
         vec![Scripted::text("First."), Scripted::text("Second.")],
         Some(message("also this")),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     assert_eq!(
@@ -184,7 +185,7 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
         ],
         Some(message("steer")),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
     let kinds = kinds(&lines);
@@ -206,13 +207,13 @@ fn two_fsyncs_per_model_request() {
         ],
         Some(message("more")),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     let before = session.log.fsyncs();
     session.turn();
     assert_eq!(session.requests().len(), 2);
     assert_eq!(session.log.fsyncs() - before, 4);
 
-    session.inbox.send(message("again")).unwrap();
+    session.inbox.send(delivery("again")).unwrap();
     let before = session.log.fsyncs();
     session.turn();
     assert_eq!(session.requests().len(), 3);
@@ -225,11 +226,11 @@ fn the_conversation_is_kept_in_memory_not_reread_from_the_log() {
         vec![Scripted::text("First."), Scripted::text("Second.")],
         None,
     );
-    session.inbox.send(message("one")).unwrap();
+    session.inbox.send(delivery("one")).unwrap();
     session.turn();
     // The log's file is gone; only memory can supply the first turn.
     std::fs::remove_file(session.dir.join("events.jsonl")).unwrap();
-    session.inbox.send(message("two")).unwrap();
+    session.inbox.send(delivery("two")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let requests = session.requests();
     assert_eq!(
@@ -258,9 +259,9 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
         ],
         Some(message("steer")),
     );
-    session.inbox.send(message("one")).unwrap();
+    session.inbox.send(delivery("one")).unwrap();
     session.turn();
-    session.inbox.send(message("two")).unwrap();
+    session.inbox.send(delivery("two")).unwrap();
     session.turn();
     let lines = log::read(&session.dir).unwrap();
     // The log up to the last request is what that request was built from.
@@ -313,7 +314,7 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
 #[test]
 fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
-    session.inbox.send(message("one")).unwrap();
+    session.inbox.send(delivery("one")).unwrap();
     session.turn();
     let mut lines = session.lines();
     assert_eq!(
@@ -332,7 +333,7 @@ fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
         vec![reasoning_reply("Think.", "Hi."), Scripted::text("Again.")],
         None,
     );
-    session.inbox.send(message("one")).unwrap();
+    session.inbox.send(delivery("one")).unwrap();
     session.turn();
     let lines = session.lines();
     let started = lines
@@ -351,7 +352,7 @@ fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     assert_ne!(started.action_id, lines[3].action_id);
     assert_eq!(completed.payload["provider_item"], reasoning_item("Think."));
 
-    session.inbox.send(message("two")).unwrap();
+    session.inbox.send(delivery("two")).unwrap();
     session.turn();
     assert_eq!(
         session.requests()[1].conversation[1],
@@ -391,7 +392,7 @@ fn each_reasoning_action_keeps_the_id_it_was_first_seen_with() {
         end: Ok(end),
     };
     let mut session = Session::new(vec![script], None);
-    session.inbox.send(message("one")).unwrap();
+    session.inbox.send(delivery("one")).unwrap();
     session.turn();
     let lines = session.lines();
     let ids = |kind: &str| -> Vec<ActionId> {
@@ -432,7 +433,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         ],
         None,
     );
-    session.inbox.send(message("weather?")).unwrap();
+    session.inbox.send(delivery("weather?")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
     assert_eq!(
@@ -497,7 +498,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
         provider: None,
     };
     let mut session = Session::new(vec![Scripted::failed(failure)], None);
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
     assert_eq!(
@@ -562,7 +563,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
             "Sunny.",
         ))],
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
 
     let lines = session.lines();
@@ -620,14 +621,14 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
 #[test]
 fn the_loop_runs_turns_until_every_sender_is_gone() {
     let mut session = Session::new(vec![Scripted::text("Hi."), Scripted::text("Bye.")], None);
-    session.inbox.send(message("hi")).unwrap();
-    session.inbox.send(message("and")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
+    session.inbox.send(delivery("and")).unwrap();
     let looped = session.looped.take().unwrap();
     let (done, finished) = std::sync::mpsc::channel();
     let ran = std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
     let lines = session.lines();
     assert_eq!(lines[1].payload["input"].as_array().unwrap().len(), 2);
-    session.inbox.send(message("bye")).unwrap();
+    session.inbox.send(delivery("bye")).unwrap();
     assert_eq!(
         session.lines().last().unwrap().payload["outcome"],
         "completed"
@@ -684,7 +685,7 @@ fn tier_cost() -> f64 {
 #[test]
 fn a_priced_model_logs_the_cost_its_prices_give() {
     let mut session = Session::open(vec![counted("Hello.")], None, Vec::new(), tiered(false));
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let usage = session
         .lines()
@@ -698,7 +699,7 @@ fn a_priced_model_logs_the_cost_its_prices_give() {
 #[test]
 fn a_subscription_model_logs_an_estimate_apart_from_billed_spend() {
     let mut session = Session::open(vec![counted("Hello.")], None, Vec::new(), tiered(true));
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let usage = session
         .lines()
@@ -774,7 +775,7 @@ fn spend_below_the_budget_sends_the_next_request() {
         per_token(false),
         Some(1.0),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(session.requests().len(), 2);
 }
@@ -787,7 +788,7 @@ fn spend_at_the_budget_refuses_the_next_request() {
         per_token(false),
         Some(1.0),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     assert_eq!(session.requests().len(), 1);
     let lines = session.lines();
@@ -820,7 +821,7 @@ fn a_call_that_crosses_the_budget_completes_and_the_next_is_refused() {
         per_token(false),
         Some(1.0),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     assert_eq!(session.requests().len(), 2);
     let lines = session.lines();
@@ -855,7 +856,7 @@ fn subscription_spend_never_reaches_the_budget() {
         per_token(true),
         Some(0.01),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(session.requests().len(), 2);
 }
@@ -875,7 +876,7 @@ fn a_model_with_no_cost_never_reaches_the_budget() {
         },
         Some(0.01),
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(session.requests().len(), 2);
 }
@@ -891,7 +892,7 @@ fn an_unset_budget_never_refuses() {
         per_token(false),
         None,
     );
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(session.requests().len(), 2);
 }
@@ -905,7 +906,7 @@ fn a_zero_budget_refuses_the_first_request() {
         per_token(false),
     )
     .budget(Some(0.0));
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     assert!(session.requests().is_empty());
     let lines = session.lines();
@@ -933,7 +934,7 @@ fn a_negative_budget_refuses_the_first_request() {
         per_token(false),
     )
     .budget(Some(-1.0));
-    session.inbox.send(message("hi")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     assert!(session.requests().is_empty());
     assert_eq!(
