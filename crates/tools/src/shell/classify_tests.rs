@@ -374,6 +374,10 @@ fn a_flag_value_is_not_a_declared_path() {
         Some(vec!["/work/file".to_owned()])
     );
     assert_eq!(
+        classified("grep --include=x y").declared.paths,
+        Some(vec!["/work/y".to_owned()])
+    );
+    assert_eq!(
         classified("find src -name foo").declared.paths,
         Some(vec!["/work/src".to_owned()])
     );
@@ -428,7 +432,11 @@ fn a_writing_or_executing_flag_is_not_read_only() {
         "head -qn",
         "grep -A",
         "grep -A3 file",
+        "grep -A=3 x",
+        "grep --=x y",
         "grep -nA 3 file",
+        "cat -",
+        "sort -",
         "sort -k",
         "sort -k2 file",
         "sort -t, file",
@@ -526,6 +534,11 @@ fn every_part_on_the_list_reads() {
     );
     assert_reads("'ls' src");
     assert_reads("git 'status'");
+    assert_reads("ls -la");
+    assert_eq!(
+        classified("ls -la").declared.paths,
+        Some(vec!["/work".to_owned()])
+    );
     assert_reads("ls -- -l");
     assert_eq!(
         classified("ls -- -l").declared.paths,

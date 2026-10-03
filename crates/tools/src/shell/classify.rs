@@ -121,20 +121,20 @@ fn outcome(parts: &[Part], workdir: &Path) -> Outcome {
 }
 
 fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
-    let Some(first) = part.words.first() else {
+    let mut words = part.words.iter();
+    let Some(first) = words.next() else {
         return Outcome::Executes;
     };
     if first.cooked.contains('=') {
         return Outcome::Executes;
     }
-    let Some((entry, start)) = lookup(&part.words) else {
+    let Some(entry) = lookup(first, &mut words) else {
         return Outcome::Executes;
     };
     let mut paths = Vec::new();
-    let mut index = start;
     let mut ended = false;
     let mut saw_operand = false;
-    while let Some(word) = part.words.get(index) {
+    while let Some(word) = words.next() {
         match word_at(word, ended, entry.ends_flags) {
             WordAt::Operand(cooked) => {
                 if entry.paths {
@@ -144,17 +144,12 @@ fn part_outcome(part: &Part, workdir: &Path) -> Outcome {
                     paths.push(path);
                 }
                 saw_operand = true;
-                index += 1;
             }
-            WordAt::EndFlags => {
-                ended = true;
-                index += 1;
-            }
+            WordAt::EndFlags => ended = true,
             WordAt::Flag => {
-                let Some(next) = accept_flag(entry, &part.words, index) else {
+                if accept_flag(entry, &mut words, &word.cooked).is_none() {
                     return Outcome::Executes;
-                };
-                index = next;
+                }
             }
         }
     }
@@ -183,70 +178,57 @@ fn word_at(word: &Word, ended: bool, ends_flags: bool) -> WordAt {
     }
 }
 
-fn lookup(words: &[Word]) -> Option<(&'static Command, usize)> {
-    let first = words.first()?;
+fn lookup(first: &Word, words: &mut std::slice::Iter<'_, Word>) -> Option<&'static Command> {
     if first.cooked == "git" {
-        let second = words.get(1)?;
-        if second.cooked.is_empty() || second.cooked.starts_with('-') {
-            return None;
-        }
-        let entry = COMMANDS.iter().find(|entry| {
+        let second = words.next()?;
+        return COMMANDS.iter().find(|entry| {
             entry
                 .name
                 .strip_prefix("git ")
                 .is_some_and(|sub| sub == second.cooked)
-        })?;
-        return Some((entry, 2));
+        });
     }
-    let entry = COMMANDS.iter().find(|entry| entry.name == first.cooked)?;
-    Some((entry, 1))
+    COMMANDS.iter().find(|entry| entry.name == first.cooked)
 }
 
-fn accept_flag(entry: &Command, words: &[Word], index: usize) -> Option<usize> {
-    let cooked = &words.get(index)?.cooked;
+fn accept_flag(
+    entry: &Command,
+    words: &mut std::slice::Iter<'_, Word>,
+    cooked: &str,
+) -> Option<()> {
     if let Some(name) = long_value_name(cooked) {
         return entry
             .flags
             .iter()
             .any(|flag| flag.takes_value && flag.spelling == name)
-            .then_some(index + 1);
+            .then_some(());
     }
     if let Some(flag) = entry.flags.iter().find(|flag| flag.spelling == cooked) {
         if flag.takes_value {
-            words.get(index + 1)?;
-            return Some(index + 2);
+            words.next()?;
         }
-        return Some(index + 1);
+        return Some(());
     }
-    if short_cluster(entry, cooked) {
-        return Some(index + 1);
-    }
-    None
+    short_cluster(entry, cooked).then_some(())
 }
 
 /// `--name=value`, and only that form. A short flag does not take `=`.
 fn long_value_name(cooked: &str) -> Option<&str> {
     let (name, _) = cooked.split_once('=')?;
-    if name.starts_with("--") && name.len() > 2 {
-        Some(name)
-    } else {
-        None
-    }
+    name.starts_with("--").then_some(name)
 }
 
 fn short_cluster(entry: &Command, cooked: &str) -> bool {
     let Some(rest) = cooked.strip_prefix('-') else {
         return false;
     };
-    if rest.starts_with('-') || rest.chars().nth(1).is_none() {
-        return false;
-    }
-    rest.chars().all(|ch| {
-        entry
-            .flags
-            .iter()
-            .any(|flag| short_letter(flag) == Some(ch))
-    })
+    !rest.is_empty()
+        && rest.chars().all(|ch| {
+            entry
+                .flags
+                .iter()
+                .any(|flag| short_letter(flag) == Some(ch))
+        })
 }
 
 fn short_letter(flag: &super::read_only::Flag) -> Option<char> {
@@ -283,9 +265,8 @@ struct Part {
     words: Vec<Word>,
 }
 
-struct Lexer {
-    chars: Vec<char>,
-    index: usize,
+struct Lexer<'a> {
+    chars: std::iter::Peekable<std::str::Chars<'a>>,
     parts: Vec<Part>,
     words: Vec<Word>,
     raw: String,
@@ -294,11 +275,10 @@ struct Lexer {
     quote: Option<char>,
 }
 
-impl Lexer {
-    fn new(command: &str) -> Self {
+impl<'a> Lexer<'a> {
+    fn new(command: &'a str) -> Self {
         Self {
-            chars: command.chars().collect(),
-            index: 0,
+            chars: command.chars().peekable(),
             parts: Vec::new(),
             words: Vec::new(),
             raw: String::new(),
@@ -313,7 +293,7 @@ impl Lexer {
     /// (`;;`, `|&`, a lone `&`), an unterminated quote, or a character
     /// outside the plain set.
     fn run(&mut self) -> Option<Vec<Part>> {
-        while let Some(ch) = self.chars.get(self.index).copied() {
+        while let Some(ch) = self.chars.next() {
             self.step(ch)?;
         }
         if self.quote.is_some() || !self.finish_part() {
@@ -342,32 +322,22 @@ impl Lexer {
         } else {
             self.cooked.push(ch);
         }
-        self.index += 1;
         Some(())
     }
 
     fn unquoted(&mut self, ch: char) -> Option<()> {
         if ch == ' ' || ch == '\t' {
             self.finish_word();
-            self.index += 1;
             return Some(());
         }
         if ch == '\'' || ch == '"' {
             self.in_word = true;
             self.raw.push(ch);
             self.quote = Some(ch);
-            self.index += 1;
             return Some(());
         }
-        match self.operator() {
-            Operator::Split(next) => {
-                if !self.finish_part() {
-                    return None;
-                }
-                self.index = next;
-                Some(())
-            }
-            Operator::Unreadable => None,
+        match self.operator(ch) {
+            Operator::Split => self.finish_part().then_some(()),
             Operator::None => {
                 // Globs, `~`, redirects and every other character outside
                 // the plain set expand or mean something this list cannot see.
@@ -377,28 +347,26 @@ impl Lexer {
                 self.in_word = true;
                 self.raw.push(ch);
                 self.cooked.push(ch);
-                self.index += 1;
                 Some(())
             }
         }
     }
 
-    fn operator(&self) -> Operator {
-        let next = self.chars.get(self.index + 1).copied();
-        match self.chars.get(self.index).copied() {
-            Some('|') => match next {
-                Some('|') => Operator::Split(self.index + 2),
-                Some('&') => Operator::Unreadable,
-                _ => Operator::Split(self.index + 1),
-            },
-            Some('&') => match next {
-                Some('&') => Operator::Split(self.index + 2),
-                _ => Operator::Unreadable,
-            },
-            Some(';') => match next {
-                Some(';') => Operator::Unreadable,
-                _ => Operator::Split(self.index + 1),
-            },
+    /// A lone `&` is not an operator: the plain-character check refuses it.
+    /// `;;` is two splits, so the second leaves an empty part.
+    fn operator(&mut self, ch: char) -> Operator {
+        match ch {
+            '|' => {
+                if self.chars.peek() == Some(&'|') {
+                    self.chars.next();
+                }
+                Operator::Split
+            }
+            '&' if self.chars.peek() == Some(&'&') => {
+                self.chars.next();
+                Operator::Split
+            }
+            ';' => Operator::Split,
             _ => Operator::None,
         }
     }
@@ -427,8 +395,7 @@ impl Lexer {
 }
 
 enum Operator {
-    Split(usize),
-    Unreadable,
+    Split,
     None,
 }
 
