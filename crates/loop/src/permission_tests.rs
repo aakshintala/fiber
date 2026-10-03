@@ -229,6 +229,34 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
 }
 
 #[test]
+fn a_grant_matches_only_its_tool_and_prefix() {
+    let (_root, workspace, credentials) = dirs();
+    let effects = call(vec![Effect::Executes], None, Some("npm test --watch"));
+    // The prefix matches but the tool does not, and the other way round:
+    // neither grants the call.
+    for grant in [
+        Grant {
+            tool: "other".into(),
+            prefix: "npm test".into(),
+        },
+        Grant {
+            tool: "shell".into(),
+            prefix: "npm run".into(),
+        },
+    ] {
+        let verdict = judge(
+            "shell",
+            &effects,
+            &empty_rules(),
+            &[grant],
+            &workspace,
+            &credentials,
+        );
+        assert!(matches!(verdict, Verdict::Review));
+    }
+}
+
+#[test]
 fn no_match_on_an_executes_call_is_review() {
     let (_root, workspace, credentials) = dirs();
     let verdict = judge(
