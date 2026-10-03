@@ -1,5 +1,5 @@
 use std::io::{self, ErrorKind, Read};
-use std::sync::{Arc, Weak, mpsc};
+use std::sync::{Arc, TryLockError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime};
 
@@ -160,9 +160,11 @@ impl Read for Scripted {
 }
 
 /// Passes `None` to the closure, the bound a fake clock gives when `until`
-/// was still ahead at registration. With `wake` set, that wake is delivered
-/// before the closure runs. It runs on another thread because the caller
-/// may already hold the waiter lock across `wait_until`.
+/// was still ahead at registration. With `wake` set, it first asserts that
+/// the caller holds the waiter lock across `wait_until`, so no wake can land
+/// between this point and the condvar wait, then delivers a wake from
+/// another thread. That thread blocks on the lock until the wait releases
+/// it, whenever it runs.
 struct BoundlessClock {
     origin: Instant,
     wake: Option<Arc<Shared>>,
@@ -181,13 +183,12 @@ impl Clock for BoundlessClock {
 
     fn wait_until(&self, _until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
         if let Some(shared) = &self.wake {
+            assert!(
+                matches!(shared.inner.try_lock(), Err(TryLockError::WouldBlock)),
+                "park does not hold the waiter lock across wait_until"
+            );
             let shared = Arc::clone(shared);
-            let (started, started_rx) = mpsc::channel();
-            thread::spawn(move || {
-                started.send(()).unwrap();
-                shared.wake();
-            });
-            started_rx.recv().expect("the clock waker did not start");
+            thread::spawn(move || shared.wake());
         }
         wait(None);
     }
