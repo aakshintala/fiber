@@ -239,14 +239,14 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
                 })
                 .collect();
             let streamed = deltas
                 .iter()
                 .any(|d| matches!(d, Delta::Text(_) | Delta::ToolCallArguments(_)));
             if streamed {
-                assert_eq!(text, reply.text, "{label}");
+                assert_eq!(text, reply.text(), "{label}");
                 for (index, call) in calls.iter().enumerate() {
                     let raw: String = deltas
                         .iter()
@@ -292,7 +292,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 continue;
             };
             checked += 1;
-            assert_eq!(reply.text, want.text, "{label}");
+            assert_eq!(reply.text(), want.text, "{label}");
             assert_eq!(calls.len(), want.calls.len(), "{label}");
             for (call, item) in calls.iter().zip(&want.calls) {
                 assert_eq!(call.name, item["name"].as_str().unwrap(), "{label}");
@@ -303,7 +303,12 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 );
                 assert_eq!(&call.arguments, &item["input"], "{label}");
             }
-            assert_eq!(reply.actions.len() - calls.len(), want.reasoning, "{label}");
+            let reasoning = reply
+                .actions
+                .iter()
+                .filter(|action| matches!(action, ReplyAction::Reasoning(_)))
+                .count();
+            assert_eq!(reasoning, want.reasoning, "{label}");
         }
     }
     // 26 streams (16 non-streamed Message bodies, 10 real SSE recordings),
@@ -322,16 +327,22 @@ fn the_hard_question_stream_decodes_thinking_then_text() {
         panic!("expected a stream");
     };
     let reply = decoded(&bytes).0.unwrap();
-    assert!(reply.text.starts_with("There are **62**"), "{}", reply.text);
+    assert!(
+        reply.text().starts_with("There are **62**"),
+        "{}",
+        reply.text()
+    );
     let [
         ReplyAction::Reasoning(ReasoningCompleted {
             text,
             provider_item,
         }),
+        ReplyAction::Text(part),
     ] = reply.actions.as_slice()
     else {
         panic!("{:?}", reply.actions);
     };
+    assert_eq!(part.text, reply.text());
     // The model streamed a signature but no readable summary for this
     // question (`docs/events.md`: "`""` when the provider sent none").
     assert_eq!(text, "");
@@ -840,7 +851,9 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             provider_item: Some(item.clone()),
         },
         Input::Assistant {
-            text: reply.text.clone(),
+            model: "anthropic/claude-sonnet-5-5".into(),
+            text: reply.text().clone(),
+            provider_item: None,
         },
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
@@ -870,7 +883,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         body["messages"],
         json!([
             {"role": "user", "content": "What is the weather in Paris? Use the tool."},
-            {"role": "assistant", "content": [item, {"type": "text", "text": reply.text},
+            {"role": "assistant", "content": [item, {"type": "text", "text": reply.text()},
                 {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}]},
             {"role": "user", "content": [
                 {"type": "tool_result", "tool_use_id": "toolu_1", "content": "18 C, clear",
@@ -1174,7 +1187,9 @@ fn an_empty_reply_text_is_not_sent() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let mut request = request();
     request.conversation.push(Input::Assistant {
+        model: "anthropic/claude-sonnet-5-5".into(),
         text: String::new(),
+        provider_item: None,
     });
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
         .0
@@ -1216,7 +1231,9 @@ fn redacted_thinking_is_kept_and_sent_back_unchanged() {
             provider_item: Some(redacted.clone()),
         },
         Input::Assistant {
+            model: "anthropic/claude-sonnet-5-5".into(),
             text: "Done.".into(),
+            provider_item: None,
         },
     ]);
     run(Box::new(Messages::new(endpoint(&server)).request(&request)))
@@ -1248,4 +1265,91 @@ fn cache_writes_are_split_by_lifetime_from_message_start() {
             output: 9,
         }
     );
+}
+
+#[test]
+fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        text_block(0, "A")[0].clone(),
+        text_block(0, "A")[1].clone(),
+        stopped(0),
+        json!({"type": "content_block_start", "index": 1, "content_block": {
+            "type": "tool_use", "id": "t1", "name": "get_weather", "input": {"city": "Paris"}}}),
+        stopped(1),
+        text_block(2, "B")[0].clone(),
+        text_block(2, "B")[1].clone(),
+        stopped(2),
+        finished("tool_use")[0].clone(),
+        finished("tool_use")[1].clone(),
+    ]));
+    let reply = reply.unwrap();
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [
+            ReplyAction::Text(a),
+            ReplyAction::ToolCall(_),
+            ReplyAction::Text(b),
+        ] if a.text == "A" && a.provider_item.is_none() && b.text == "B"
+    ));
+
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.previous_end = Some(2);
+    request.conversation.extend([
+        Input::Assistant {
+            model: "anthropic/claude-sonnet-5-5".into(),
+            text: "A".into(),
+            provider_item: None,
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: Some(ProviderCallId("t1".into())),
+                repair: None,
+            },
+        },
+        Input::Assistant {
+            model: "anthropic/claude-sonnet-5-5".into(),
+            text: "B".into(),
+            provider_item: None,
+        },
+    ]);
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let marker = json!({"type": "ephemeral"});
+    assert_eq!(
+        sent_body(&server, 0)["messages"][1],
+        json!({"role": "assistant", "content": [
+            {"type": "text", "text": "A", "cache_control": marker},
+            {"type": "tool_use", "id": "t1", "name": "get_weather", "input": {"city": "Paris"}},
+            {"type": "text", "text": "B", "cache_control": {"type": "ephemeral"}},
+        ]})
+    );
+}
+
+#[test]
+fn an_empty_text_block_is_not_logged() {
+    // A text block with no deltas, then one that has text. A part with
+    // neither text nor a provider item is not logged.
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        stopped(0),
+        text_block(1, "B")[0].clone(),
+        text_block(1, "B")[1].clone(),
+        stopped(1),
+        finished("end_turn")[0].clone(),
+        finished("end_turn")[1].clone(),
+    ]));
+    let reply = reply.unwrap();
+    assert_eq!(reply.text(), "B");
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [ReplyAction::Text(part)] if part.text == "B" && part.provider_item.is_none()
+    ));
 }

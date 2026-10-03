@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use contract::events::{
-    AssistantMessageCompleted, Empty, Event, InputItem, MessageOutcome, TurnCompleted, TurnOutcome,
-    TurnStarted, UsageRecorded,
+    AssistantMessageCompleted, Empty, Event, InputItem, MessageOutcome, TextCompleted,
+    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
 use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens};
 use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId, TurnId};
@@ -89,10 +89,16 @@ fn usage(output: u64, cost: Option<f64>, subscription: Option<bool>) -> Event {
     })
 }
 
-fn message(text: &str) -> Event {
+fn text_part(text: &str) -> Event {
+    Event::TextCompleted(TextCompleted {
+        text: text.into(),
+        provider_item: None,
+    })
+}
+
+fn message() -> Event {
     Event::AssistantMessageCompleted(AssistantMessageCompleted {
         outcome: MessageOutcome::Completed,
-        text: text.into(),
         error: None,
         attempt: None,
     })
@@ -138,11 +144,13 @@ fn fiber_exited_carries_the_final_message_and_the_usage() {
     session.append(&turn_started(), None);
     session.append(&Event::StepStarted(Empty {}), None);
     session.append(&usage(3, Some(0.5), None), Some("a_1"));
-    session.append(&message("Let me check."), Some("a_1"));
+    session.append(&text_part("Let me check."), Some("a_1"));
+    session.append(&message(), Some("a_1"));
     session.append(&usage(5, Some(0.25), None), Some("a_2"));
     session.append(&usage(7, None, None), Some("a_2"));
     session.append(&usage(1, Some(2.0), Some(true)), Some("a_2"));
-    session.append(&message("Hello."), Some("a_2"));
+    session.append(&text_part("Hello."), Some("a_2"));
+    session.append(&message(), Some("a_2"));
     session.append(&turn_completed(TurnOutcome::Completed, None), None);
 
     let (code, exited) = session.exit(Ok(()));
@@ -166,7 +174,8 @@ fn a_failed_turn_exits_1_with_its_error_and_no_final_message() {
     let session = Session::new();
     let cause = failure(ErrorCode::ProviderUnavailable, "down");
     session.append(&turn_started(), None);
-    session.append(&message("Earlier."), Some("a_1"));
+    session.append(&text_part("Earlier."), Some("a_1"));
+    session.append(&message(), Some("a_1"));
     session.append(
         &turn_completed(TurnOutcome::Failed, Some(cause.clone())),
         None,
@@ -199,7 +208,8 @@ fn a_new_turn_forgets_the_last_ones_error_and_message() {
     let session = Session::new();
     let cause = failure(ErrorCode::ProviderUnavailable, "down");
     session.append(&turn_started(), None);
-    session.append(&message("Earlier."), Some("a_1"));
+    session.append(&text_part("Earlier."), Some("a_1"));
+    session.append(&message(), Some("a_1"));
     session.append(&turn_completed(TurnOutcome::Failed, Some(cause)), None);
     session.append(&turn_started(), None);
 

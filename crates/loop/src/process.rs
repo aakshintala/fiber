@@ -106,20 +106,28 @@ impl From<Totals> for Usage {
 
 fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
     let mut fold = Fold::default();
+    // Text parts of the open assistant message, joined in log order.
+    // Every message takes them: messages never interleave, and a failed
+    // call logs none, so the next message must not inherit them.
+    let mut text = String::new();
     for line in lines {
         let event = Event::from_envelope(line)?;
         if let Some(Event::TurnStarted(_)) = &event {
             fold.final_message = None;
             fold.error = None;
             fold.questions = None;
-        } else if let Some(Event::AssistantMessageCompleted(message)) = &event
-            && message.outcome == MessageOutcome::Completed
-            && let Some(id) = &line.action_id
-        {
-            fold.final_message = Some(FinalMessage {
-                final_action_id: id.clone(),
-                text: message.text.clone(),
-            });
+        } else if let Some(Event::TextCompleted(part)) = &event {
+            text.push_str(&part.text);
+        } else if let Some(Event::AssistantMessageCompleted(message)) = &event {
+            let part = std::mem::take(&mut text);
+            if message.outcome == MessageOutcome::Completed
+                && let Some(id) = &line.action_id
+            {
+                fold.final_message = Some(FinalMessage {
+                    final_action_id: id.clone(),
+                    text: part,
+                });
+            }
         } else if let Some(Event::TurnCompleted(turn)) = &event {
             if turn.outcome == TurnOutcome::Failed {
                 fold.final_message = None;

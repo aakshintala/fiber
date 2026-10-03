@@ -6,7 +6,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use crate::events::{
-    CacheLifetime, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallArgumentsDelta,
+    ToolCallRequested,
 };
 use crate::shapes::{Failure, Tokens};
 use crate::{ActionId, GenerationId};
@@ -89,10 +90,18 @@ pub enum Input {
         /// Its text.
         text: String,
     },
-    /// The model's reply text, from `assistant_message_completed`.
+    /// One text part of a model's reply, from `text_completed`.
     Assistant {
-        /// Its text.
+        /// The model reference that produced it, `provider/model`. Its
+        /// `provider_item` goes only to that model; its words go to every
+        /// model (`docs/loop.md`, "What the model is sent").
+        model: String,
+        /// The part's text.
         text: String,
+        /// The provider's own form of the part, sent back unchanged only to
+        /// `model`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_item: Option<Value>,
     },
     /// A reasoning action, from `reasoning_completed`.
     Reasoning {
@@ -142,9 +151,8 @@ pub enum Delta {
 /// A reply that reached its protocol's terminal event.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Reply {
-    /// The reply's whole text; `""` for a reply with only tool calls.
-    pub text: String,
-    /// Its reasoning and tool calls, in the order the model emitted them.
+    /// Its text parts, reasoning and tool calls, in the order the model
+    /// emitted them.
     pub actions: Vec<ReplyAction>,
     /// Why the reply ended.
     pub finish: Finish,
@@ -154,9 +162,25 @@ pub struct Reply {
     pub tokens: Tokens,
 }
 
+impl Reply {
+    /// The reply's text: its text parts concatenated, in order, with no
+    /// separator.
+    pub fn text(&self) -> String {
+        self.actions
+            .iter()
+            .filter_map(|action| match action {
+                ReplyAction::Text(part) => Some(part.text.as_str()),
+                ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) => None,
+            })
+            .collect()
+    }
+}
+
 /// A durable action in a reply.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplyAction {
+    /// `text_completed`.
+    Text(TextCompleted),
     /// `reasoning_completed`.
     Reasoning(ReasoningCompleted),
     /// `tool_call_requested`.
@@ -189,3 +213,7 @@ pub enum CallError {
     /// [`ModelCall::cancel`] ended it.
     Cancelled,
 }
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod tests;

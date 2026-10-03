@@ -322,6 +322,7 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::ContextAdded(_)
         | Event::ReasoningStarted(_)
         | Event::ReasoningCompleted(_)
+        | Event::TextCompleted(_)
         | Event::ToolCallRequested(_)
         | Event::PermissionRequested(_)
         | Event::PermissionResolved(_)

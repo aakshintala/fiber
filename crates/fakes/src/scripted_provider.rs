@@ -7,7 +7,10 @@ use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, PoisonError};
 
-use contract::provider::{CallError, Delta, Finish, ModelCall, ModelRequest, Provider, Reply};
+use contract::events::TextCompleted;
+use contract::provider::{
+    CallError, Delta, Finish, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+};
 use contract::shapes::{Failure, Tokens};
 use contract::{ErrorCode, GenerationId};
 
@@ -47,12 +50,18 @@ impl Scripted {
     }
 }
 
-/// A completed reply of `text` with no actions, generation `gen_1`, and
-/// 10 input and 3 output tokens.
+/// A completed reply of one text part, or none when `text` is `""`,
+/// generation `gen_1`, and 10 input and 3 output tokens.
 pub fn reply(text: &str) -> Reply {
     Reply {
-        text: text.into(),
-        actions: Vec::new(),
+        actions: if text.is_empty() {
+            Vec::new()
+        } else {
+            vec![ReplyAction::Text(TextCompleted {
+                text: text.into(),
+                provider_item: None,
+            })]
+        },
         finish: Finish::Completed,
         generation_id: GenerationId("gen_1".into()),
         tokens: Tokens {

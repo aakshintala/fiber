@@ -241,7 +241,7 @@ Durable. The last line a process writes for a session.
 | `exit_code` | integer | yes | the process's exit code (`docs/invocation.md`, "Lifecycle") |
 | `usage` | `usage` | yes | this process's model calls for the session, its delegates included (`docs/loop.md`, "Spending budget"); a cost that settles after exit is missing from it |
 | `final_action_id` | string | no | the `action_id` of the final assistant message, when there is one |
-| `text` | string | no | that message's text; present exactly when `final_action_id` is |
+| `text` | string | no | that message's text: its `text_completed` parts joined in order; present exactly when `final_action_id` is |
 | `error` | `error` | no | why the process failed (`docs/errors.md`, "What a caller gets") |
 | `suspended_on` | string | no | the `request_id` of the pending approval or question the process exited on (`docs/invocation.md`, "Lifecycle") |
 | `questions` | `questions` | no | copied from the last `turn_completed`, when its turn ended on questions |
@@ -465,9 +465,26 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `outcome` | string | yes | `completed` or `failed`; a closed set |
-| `text` | string | yes | the reply's whole text; `""` for a reply with only tool calls, or a failed call |
 | `error` | `error` | no | on `failed`, with `retry_after` and `provider` where they apply (`docs/errors.md`, "A failed model call") |
 | `attempt` | integer | no | on `failed`: 1 for the first attempt at this request, 2 for its first retry, and so on |
+
+#### `text_completed`
+
+Durable. One text part of the reply. A reply with several text parts has one
+line for each, even when two parts hold the same text. The lines carry the
+assistant message's `action_id`. They record no effect: `assistant_message_completed`
+makes them durable.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `text` | string | yes | the part's text; `""` for a part the provider sent with only opaque data |
+| `provider_item` | any JSON | no | the provider's own form of the part, with its thought signature or other opaque data, sent back unchanged only to the model that produced it (`docs/loop.md`, "What the model is sent"); absent when the part carries none |
+
+A reply's items are logged in the order the model produced them: its
+`text_completed`, `reasoning_completed` and `tool_call_requested` lines follow
+its `assistant_message_started` in that order, and its
+`assistant_message_completed` closes it. Replay rebuilds the reply from them
+in that order.
 
 #### `tool_call_arguments_delta`
 

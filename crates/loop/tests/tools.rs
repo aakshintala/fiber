@@ -403,11 +403,8 @@ fn a_cut_off_reply_runs_none_of_its_calls_and_the_turn_continues() {
         assert_eq!(line.payload["error"]["code"], "output_truncated");
         assert!(text(line).contains("may be incomplete"));
     }
-    let message = lines
-        .iter()
-        .find(|l| l.kind == "assistant_message_completed")
-        .unwrap();
-    assert_eq!(message.payload["text"], "Let me");
+    let part = lines.iter().find(|l| l.kind == "text_completed").unwrap();
+    assert_eq!(part.payload["text"], "Let me");
 }
 
 #[test]

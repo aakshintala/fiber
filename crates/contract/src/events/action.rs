@@ -24,14 +24,24 @@ pub enum MessageOutcome {
     Failed,
 }
 
+/// `text_completed`: one text part of a reply.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct TextCompleted {
+    /// The part's text; `""` for a part the provider sent with only opaque
+    /// data.
+    pub text: String,
+    /// The provider's own form of the part, with its thought signature or
+    /// other opaque data. Sent back unchanged only to the model that produced
+    /// it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_item: Option<Value>,
+}
+
 /// `assistant_message_completed`.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct AssistantMessageCompleted {
     /// How the call ended.
     pub outcome: MessageOutcome,
-    /// The reply's whole text; `""` for a reply with only tool calls, or a
-    /// failed call.
-    pub text: String,
     /// On `failed` (`docs/errors.md`, "A failed model call").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<Failure>,

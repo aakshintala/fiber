@@ -20,7 +20,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
+use contract::events::{
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+};
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
     ToolDefinition,
@@ -236,15 +238,15 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                     Delta::Reasoning(_) | Delta::ToolCallArguments(_) => None,
                 })
                 .collect();
-            assert_eq!(text, reply.text, "{label}");
-            assert_eq!(reply.text, want.text, "{label}");
+            assert_eq!(text, reply.text(), "{label}");
+            assert_eq!(reply.text(), want.text, "{label}");
 
             let calls: Vec<&ToolCallRequested> = reply
                 .actions
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
                 })
                 .collect();
             assert_eq!(calls.len(), want.calls.len(), "{label}");
@@ -273,13 +275,22 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 );
                 calls_seen += 1;
             }
-            // No recording holds a `thought` part, so each reasoning action
-            // is a signature that rode on a text or `functionCall` part.
-            assert_eq!(
-                reply.actions.len() - calls.len(),
-                want.signatures,
-                "{label}"
-            );
+            // No recording holds a `thought` part. A signature on text is
+            // the text part's item; a signature on a call is a reasoning
+            // carrier.
+            let signed = reply
+                .actions
+                .iter()
+                .filter(|action| {
+                    let item = match action {
+                        ReplyAction::Text(part) => part.provider_item.as_ref(),
+                        ReplyAction::Reasoning(reasoning) => reasoning.provider_item.as_ref(),
+                        ReplyAction::ToolCall(_) => None,
+                    };
+                    item.is_some_and(|item| item.get("thoughtSignature").is_some())
+                })
+                .count();
+            assert_eq!(signed, want.signatures, "{label}");
 
             let count = |key: &str| want.usage[key].as_u64().unwrap_or(0);
             assert_eq!(
@@ -305,18 +316,14 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
 fn the_recorded_stream_decodes_its_text_and_trailing_signature() {
     let (reply, deltas) = decoded(&recording("sse2-stream-ok.json"));
     let reply = reply.unwrap();
-    assert_eq!(reply.text, "Hello! How can I help you today?");
+    assert_eq!(reply.text(), "Hello! How can I help you today?");
     assert_eq!(deltas.len(), 2);
-    let [
-        ReplyAction::Reasoning(ReasoningCompleted {
-            text,
-            provider_item: Some(item),
-        }),
-    ] = reply.actions.as_slice()
-    else {
+    let [ReplyAction::Text(part)] = reply.actions.as_slice() else {
         panic!("{:?}", reply.actions);
     };
-    assert_eq!(text, "");
+    let item = part.provider_item.as_ref().unwrap();
+    assert_eq!(part.text, "Hello! How can I help you today?");
+    assert_eq!(item["text"], "Hello! How can I help you today?");
     assert!(
         item["thoughtSignature"]
             .as_str()
@@ -498,12 +505,17 @@ fn max_output_tokens_is_the_models_limit_and_never_exceeds_it() {
     );
 }
 
-/// The conversation after `reply` called `get_weather`, as the loop renders
-/// it: the reply's actions in order, then its text.
+/// The conversation after `reply`, as the loop renders it: each action in
+/// the order the model emitted it, then each call's result.
 fn after(reply: &Reply, model: &str) -> Vec<Input> {
     let mut conversation = request().conversation;
     for (n, action) in reply.actions.iter().enumerate() {
         match action {
+            ReplyAction::Text(part) => conversation.push(Input::Assistant {
+                model: model.into(),
+                text: part.text.clone(),
+                provider_item: part.provider_item.clone(),
+            }),
             ReplyAction::Reasoning(r) => conversation.push(Input::Reasoning {
                 model: model.into(),
                 text: r.text.clone(),
@@ -515,9 +527,6 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
             }),
         }
     }
-    conversation.push(Input::Assistant {
-        text: reply.text.clone(),
-    });
     for (n, action) in reply.actions.iter().enumerate() {
         if let ReplyAction::ToolCall(_) = action {
             conversation.push(Input::ToolResult {
@@ -579,13 +588,10 @@ fn expected_parts(bytes: &[u8]) -> Vec<Value> {
 #[test]
 fn a_text_signature_rides_on_the_reply_text_or_alone_when_there_is_none() {
     let reply = decoded(&recording("sse2-stream-ok.json")).0.unwrap();
-    let ReplyAction::Reasoning(ReasoningCompleted {
-        provider_item: Some(item),
-        ..
-    }) = &reply.actions[0]
-    else {
+    let ReplyAction::Text(part) = &reply.actions[0] else {
         panic!("{:?}", reply.actions);
     };
+    let item = part.provider_item.as_ref().unwrap();
     let signature = &item["thoughtSignature"];
     let (contents, _) = sent_contents(after(&reply, REFERENCE));
     assert_eq!(
@@ -601,7 +607,7 @@ fn a_text_signature_rides_on_the_reply_text_or_alone_when_there_is_none() {
         Some("STOP"),
     )]));
     let silent = silent.unwrap();
-    assert_eq!(silent.text, "");
+    assert_eq!(silent.text(), "");
     let (contents, _) = sent_contents(after(&silent, REFERENCE));
     assert_eq!(
         contents[1],
@@ -629,7 +635,7 @@ fn a_function_call_without_an_id_is_logged_without_one_and_sent_back_without_one
         .iter()
         .filter_map(|a| match a {
             ReplyAction::ToolCall(c) => Some(c),
-            ReplyAction::Reasoning(_) => None,
+            ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
         })
         .collect();
     assert_eq!(calls.len(), 2);
@@ -682,10 +688,16 @@ fn thought_parts_stream_as_reasoning_and_go_back_as_one_part() {
     let thought = json!({"text": "Let me think.", "thought": true, "thoughtSignature": "dGhv"});
     assert_eq!(
         reply.actions,
-        [ReplyAction::Reasoning(ReasoningCompleted {
-            text: "Let me think.".into(),
-            provider_item: Some(thought.clone()),
-        })]
+        [
+            ReplyAction::Reasoning(ReasoningCompleted {
+                text: "Let me think.".into(),
+                provider_item: Some(thought.clone()),
+            }),
+            ReplyAction::Text(TextCompleted {
+                text: "Done.".into(),
+                provider_item: None,
+            }),
+        ]
     );
     assert_eq!(
         reply.tokens,
@@ -973,8 +985,8 @@ fn a_text_signature_stays_on_its_text_when_a_call_follows() {
     // The signature rode on the text part, so it is stored with it.
     assert_eq!(
         reply.actions[0],
-        ReplyAction::Reasoning(ReasoningCompleted {
-            text: String::new(),
+        ReplyAction::Text(TextCompleted {
+            text: "Checking.".into(),
             provider_item: Some(json!({"text": "Checking.", "thoughtSignature": "c2ln"})),
         })
     );
@@ -1021,7 +1033,7 @@ fn a_signed_text_marked_not_thought_replays_exactly_once() {
     let part = json!({"text": "Hi.", "thought": false, "thoughtSignature": "c2ln"});
     let (reply, _) = decoded(&stream(&[chunk(json!([part.clone()]), Some("STOP"))]));
     let reply = reply.unwrap();
-    assert_eq!(reply.text, "Hi.");
+    assert_eq!(reply.text(), "Hi.");
     let (contents, raw) = sent_contents(after(&reply, REFERENCE));
     assert_eq!(contents[1], json!({"role": "model", "parts": [part]}));
     assert_eq!(raw.matches("Hi.").count(), 1);
@@ -1057,13 +1069,13 @@ fn a_repeated_text_replays_each_part_with_its_own_signature() {
         ),
     ]));
     let reply = reply.unwrap();
-    assert_eq!(reply.text, "YoYo");
+    assert_eq!(reply.text(), "YoYo");
     let (contents, raw) = sent_contents(after(&reply, REFERENCE));
     assert_eq!(
         contents[1],
         json!({"role": "model", "parts": [
-            {"text": "Yo", "thoughtSignature": "c2ln"},
-            {"text": "Yo"}]})
+            {"text": "Yo"},
+            {"text": "Yo", "thoughtSignature": "c2ln"}]})
     );
     assert_eq!(raw.matches("\"text\":\"Yo\"").count(), 2);
 }
@@ -1079,8 +1091,11 @@ fn a_signed_reply_does_not_eat_the_same_words_in_a_later_reply() {
     conversation.push(Input::User {
         text: "Say it again.".into(),
     });
+    let later = later.unwrap();
     conversation.push(Input::Assistant {
-        text: later.unwrap().text,
+        model: REFERENCE.into(),
+        text: later.text(),
+        provider_item: None,
     });
     let (contents, _) = sent_contents(conversation);
     assert_eq!(contents[1], json!({"role": "model", "parts": [signed]}));
@@ -1118,7 +1133,7 @@ fn unsigned_text_stays_ahead_of_the_signed_text_after_it() {
         Some("STOP"),
     )]));
     let reply = reply.unwrap();
-    assert_eq!(reply.text, "Hello world");
+    assert_eq!(reply.text(), "Hello world");
     let (contents, _) = sent_contents(after(&reply, REFERENCE));
     assert_eq!(
         contents[1],
@@ -1142,15 +1157,20 @@ fn consecutive_replies_each_keep_their_own_text() {
     let mut conversation = request().conversation;
     for reply in [cut.unwrap(), next.unwrap()] {
         for action in &reply.actions {
-            if let ReplyAction::Reasoning(r) = action {
-                conversation.push(Input::Reasoning {
+            match action {
+                ReplyAction::Text(part) => conversation.push(Input::Assistant {
+                    model: REFERENCE.into(),
+                    text: part.text.clone(),
+                    provider_item: part.provider_item.clone(),
+                }),
+                ReplyAction::Reasoning(r) => conversation.push(Input::Reasoning {
                     model: REFERENCE.into(),
                     text: r.text.clone(),
                     provider_item: r.provider_item.clone(),
-                });
+                }),
+                ReplyAction::ToolCall(_) => {}
             }
         }
-        conversation.push(Input::Assistant { text: reply.text });
     }
     let (contents, _) = sent_contents(conversation);
     assert_eq!(
@@ -1167,4 +1187,108 @@ fn overflowing_usage_counts_fail_instead_of_panicking() {
     let (code, message) = error_code(decoded(&stream(&[overflow])).0);
     assert_eq!(code, ErrorCode::StreamIncomplete);
     assert!(message.contains("usageMetadata"), "{message}");
+}
+
+#[test]
+fn text_a_signed_call_and_signed_text_replay_in_model_order() {
+    let (reply, _) = decoded(&stream(&[
+        chunk(json!([{"text": "Yo"}]), None),
+        chunk(
+            json!([{"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+                "thoughtSignature": "c2FsbA"}]),
+            None,
+        ),
+        chunk(
+            json!([{"text": "Yo", "thoughtSignature": "c2ln"}]),
+            Some("STOP"),
+        ),
+    ]));
+    let reply = reply.unwrap();
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [
+            ReplyAction::Text(TextCompleted {
+                provider_item: None,
+                ..
+            }),
+            ReplyAction::Reasoning(_),
+            ReplyAction::ToolCall(_),
+            ReplyAction::Text(TextCompleted {
+                provider_item: Some(_),
+                ..
+            }),
+        ]
+    ));
+    let (contents, _) = sent_contents(after(&reply, REFERENCE));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [
+            {"text": "Yo"},
+            {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}},
+             "thoughtSignature": "c2FsbA"},
+            {"text": "Yo", "thoughtSignature": "c2ln"}]})
+    );
+}
+
+#[test]
+fn a_signed_text_from_another_model_loses_its_signature_and_an_empty_one_adds_nothing() {
+    let (reply, _) = decoded(&stream(&[chunk(
+        json!([{"text": "Hi.", "thoughtSignature": "c2ln"}]),
+        Some("STOP"),
+    )]));
+    let (contents, raw) = sent_contents(after(&reply.unwrap(), "openai/gpt-6-luna"));
+    assert_eq!(
+        contents[1],
+        json!({"role": "model", "parts": [{"text": "Hi."}]})
+    );
+    assert!(!raw.contains("thoughtSignature"));
+
+    let (silent, _) = decoded(&stream(&[chunk(
+        json!([{"text": "", "thoughtSignature": "c2ln"}]),
+        Some("STOP"),
+    )]));
+    let (contents, _) = sent_contents(after(&silent.unwrap(), "openai/gpt-6-luna"));
+    assert_eq!(
+        contents,
+        json!([{"role": "user", "parts": [{"text": "What is the weather in Paris? Use the tool."}]}])
+    );
+}
+
+#[test]
+fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
+    // A call signature with no `functionCall` before the next user message
+    // goes out on an empty text part, ahead of that message. A later call
+    // does not inherit it.
+    let mut conversation = request().conversation;
+    conversation.extend([
+        Input::Reasoning {
+            model: REFERENCE.into(),
+            text: String::new(),
+            provider_item: Some(json!({"thoughtSignature": "c2ln"})),
+        },
+        Input::User {
+            text: "And tomorrow?".into(),
+        },
+        Input::ToolCall {
+            action_id: ActionId("a_later".into()),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: None,
+                repair: None,
+            },
+        },
+    ]);
+    let (contents, _) = sent_contents(conversation);
+    assert_eq!(
+        contents,
+        json!([
+            {"role": "user", "parts": [
+                {"text": "What is the weather in Paris? Use the tool."}]},
+            {"role": "model", "parts": [{"text": "", "thoughtSignature": "c2ln"}]},
+            {"role": "user", "parts": [{"text": "And tomorrow?"}]},
+            {"role": "model", "parts": [
+                {"functionCall": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+        ])
+    );
 }

@@ -76,6 +76,10 @@ fn show(bytes: &[u8]) {
         Ok(reply) => {
             for action in &reply.actions {
                 match action {
+                    ReplyAction::Text(part) => println!(
+                        "text_completed {}",
+                        serde_json::to_value(part).unwrap_or_default()
+                    ),
                     ReplyAction::Reasoning(r) => println!(
                         "reasoning_completed {}",
                         serde_json::to_value(r).unwrap_or_default()
@@ -88,7 +92,7 @@ fn show(bytes: &[u8]) {
             }
             println!(
                 "assistant_message_completed {}",
-                json!({"outcome": "completed", "text": reply.text, "finish": format!("{:?}", reply.finish)})
+                json!({"outcome": "completed", "text": reply.text(), "finish": format!("{:?}", reply.finish)})
             );
             println!(
                 "usage_recorded {}",

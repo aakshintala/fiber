@@ -21,7 +21,9 @@ use std::sync::{Arc, mpsc};
 use std::thread;
 use std::time::Duration;
 
-use contract::events::{CacheLifetime, ReasoningCompleted, TextDelta, ToolCallRequested};
+use contract::events::{
+    CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested,
+};
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
     ToolDefinition,
@@ -252,7 +254,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 _ => Finish::Completed,
             };
             assert_eq!(reply.finish, finish, "{label}");
-            assert_eq!(reply.text, want.text, "{label}");
+            assert_eq!(reply.text(), want.text, "{label}");
             assert_eq!(reply.tokens, tokens(&want.usage, "5m"), "{label}");
             assert!(!reply.generation_id.0.is_empty(), "{label}");
 
@@ -264,14 +266,14 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                     Delta::Reasoning(_) | Delta::ToolCallArguments(_) => None,
                 })
                 .collect();
-            assert_eq!(text, reply.text, "{label}");
+            assert_eq!(text, reply.text(), "{label}");
 
             let calls: Vec<&ToolCallRequested> = reply
                 .actions
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
                 })
                 .collect();
             assert_eq!(calls.len(), want.calls.len(), "{label}");
@@ -303,7 +305,7 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::Reasoning(r) => Some(r),
-                    ReplyAction::ToolCall(_) => None,
+                    ReplyAction::ToolCall(_) | ReplyAction::Text(_) => None,
                 })
                 .collect();
             if want.reasoning.is_empty() {
@@ -656,7 +658,9 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             provider_item: Some(item),
         },
         Input::Assistant {
+            model: "openrouter/z-ai/glm-5.3-flash".into(),
             text: "Checking.".into(),
+            provider_item: None,
         },
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
@@ -673,7 +677,9 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             is_error: false,
         },
         Input::Assistant {
+            model: "openrouter/z-ai/glm-5.3-flash".into(),
             text: String::new(),
+            provider_item: None,
         },
     ]);
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -980,10 +986,16 @@ fn reasoning_in_its_own_field_is_kept_under_that_field() {
     ]));
     assert_eq!(
         reply.unwrap().actions,
-        [ReplyAction::Reasoning(ReasoningCompleted {
-            text: "Thinking.".into(),
-            provider_item: Some(json!({"reasoning_content": "Thinking."})),
-        })]
+        [
+            ReplyAction::Reasoning(ReasoningCompleted {
+                text: "Thinking.".into(),
+                provider_item: Some(json!({"reasoning_content": "Thinking."})),
+            }),
+            ReplyAction::Text(TextCompleted {
+                text: "Done.".into(),
+                provider_item: None,
+            }),
+        ]
     );
     assert_eq!(
         deltas[0],
