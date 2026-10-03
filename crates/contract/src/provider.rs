@@ -253,10 +253,10 @@ impl Cost {
                 self.cache_write.unwrap_or(0.0),
             ),
         };
-        (input * f64_from_u64(tokens.input)
-            + cache_read * f64_from_u64(tokens.cache_read)
-            + cache_write * f64_from_u64(written)
-            + output * f64_from_u64(tokens.output))
+        (input * tokens.input as f64
+            + cache_read * tokens.cache_read as f64
+            + cache_write * written as f64
+            + output * tokens.output as f64)
             / 1_000_000.0
     }
 
@@ -273,17 +273,6 @@ impl Cost {
             }
         }
         chosen
-    }
-}
-
-/// A token count as `f64`. Counts sit far below 2^53, where every integer is
-/// exact.
-fn f64_from_u64(n: u64) -> f64 {
-    // Clippy's precision lint is not in the workspace set; `as` is the
-    // conversion that stays exact for these counts.
-    #[allow(clippy::cast_precision_loss, reason = "token counts are below 2^53")]
-    {
-        n as f64
     }
 }
 
