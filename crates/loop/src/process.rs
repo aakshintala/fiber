@@ -3,17 +3,17 @@
 //! `fiber_exited`, folded from the log, after the loop has stopped. Only the
 //! loop writes durable events (`docs/architecture.md`, "Streaming").
 
-use std::collections::BTreeMap;
 use std::path::Path;
 
 use contract::Envelope;
 use contract::events::{
     Event, FiberExited, FiberStarted, FinalMessage, MessageOutcome, TurnOutcome,
 };
-use contract::shapes::{Failure, Question, Tokens, Usage};
+use contract::shapes::{Failure, Question};
 use log::Log;
 
 use crate::Error;
+use crate::usage::Ledger;
 
 /// Writes `fiber_started` for a new session, the first line this process
 /// writes for it, naming the running Fiber's `version`.
@@ -48,7 +48,7 @@ pub fn fiber_exited(log: &Log, dir: &Path, ran: Result<(), Failure>) -> Result<i
     let exit_code = i32::from(error.is_some());
     let exited = Event::FiberExited(FiberExited {
         exit_code,
-        usage: fold.usage.into(),
+        usage: fold.ledger.usage(),
         final_message: fold.final_message,
         error,
         suspended_on: None,
@@ -64,44 +64,7 @@ struct Fold {
     final_message: Option<FinalMessage>,
     error: Option<Failure>,
     questions: Option<Vec<Question>>,
-    usage: Totals,
-}
-
-/// Usage totals while folding: the tokens, how many calls were billed per
-/// token, and their known costs.
-struct Totals {
-    tokens: Tokens,
-    billed: usize,
-    cost: Option<f64>,
-    subscription_cost: f64,
-}
-
-impl Default for Totals {
-    fn default() -> Self {
-        Self {
-            tokens: Tokens {
-                input: 0,
-                cache_read: 0,
-                cache_write: BTreeMap::new(),
-                output: 0,
-            },
-            billed: 0,
-            cost: None,
-            subscription_cost: 0.0,
-        }
-    }
-}
-
-impl From<Totals> for Usage {
-    fn from(t: Totals) -> Self {
-        Self {
-            tokens: t.tokens,
-            // `docs/events.md`, "usage": 0 with no billed call, null when no
-            // billed call had a known cost.
-            cost: if t.billed == 0 { Some(0.0) } else { t.cost },
-            subscription_cost: t.subscription_cost,
-        }
-    }
+    ledger: Ledger,
 }
 
 fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
@@ -135,22 +98,7 @@ fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
             fold.error = turn.error.clone();
             fold.questions = turn.questions.clone();
         } else if let Some(Event::UsageRecorded(call)) = &event {
-            let usage = &mut fold.usage;
-            let tokens = &mut usage.tokens;
-            tokens.input += call.tokens.input;
-            tokens.cache_read += call.tokens.cache_read;
-            tokens.output += call.tokens.output;
-            for (lifetime, n) in &call.tokens.cache_write {
-                *tokens.cache_write.entry(lifetime.clone()).or_default() += n;
-            }
-            if call.subscription == Some(true) {
-                usage.subscription_cost += call.cost.unwrap_or(0.0);
-            } else {
-                usage.billed += 1;
-                if let Some(cost) = call.cost {
-                    *usage.cost.get_or_insert(0.0) += cost;
-                }
-            }
+            fold.ledger.record(call);
         }
     }
     Ok(fold)

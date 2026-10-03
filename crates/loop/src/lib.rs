@@ -21,7 +21,7 @@ use contract::events::{
 };
 use contract::inbox::Message;
 use contract::provider::{
-    CallError, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
+    CallError, Cost, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
 };
 use contract::shapes::Failure;
 use contract::tool::Tool;
@@ -32,6 +32,7 @@ mod calls;
 mod conversation;
 mod process;
 mod schema;
+mod usage;
 
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
@@ -58,12 +59,24 @@ impl Error {
     }
 }
 
+/// The model a session's calls reach, and the prices those calls are logged
+/// at (`docs/model-routing.md`, "Cost").
+pub struct Model {
+    /// The model reference, `provider/model`.
+    pub reference: String,
+    /// Declared prices. `None` leaves a call's `cost` null.
+    pub cost: Option<Cost>,
+    /// Whether a subscription login serves it. Its calls are logged with
+    /// `subscription`, and `budget.usd` never counts them.
+    pub subscription: bool,
+}
+
 /// One session's loop.
 pub struct Loop {
     log: Arc<Log>,
     provider: Arc<dyn Provider>,
-    /// The model reference, `provider/model`, that `provider` reaches.
-    model: String,
+    /// The model `provider` reaches, and how its calls are priced.
+    model: Model,
     system_prompt: String,
     inbox: Receiver<Message>,
     /// The root session's id, for providers that route by key.
@@ -87,6 +100,10 @@ pub struct Loop {
     workspace: PathBuf,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
+    /// Usage lines this loop has written, latest per generation.
+    ledger: usage::Ledger,
+    /// `budget.usd` for this session. `None` is no limit.
+    budget: Option<f64>,
 }
 
 impl Loop {
@@ -97,7 +114,7 @@ impl Loop {
     pub fn start(
         log: Arc<Log>,
         provider: Arc<dyn Provider>,
-        model: String,
+        model: Model,
         system_prompt: String,
         inbox: Receiver<Message>,
         workspace: String,
@@ -133,7 +150,16 @@ impl Loop {
             replaced,
             workspace: resolved,
             cut_off: false,
+            ledger: usage::Ledger::default(),
+            budget: None,
         })
+    }
+
+    /// Caps billed spend at `usd` US dollars. `None` is no limit
+    /// (`docs/loop.md`, "Spending budget").
+    pub fn budget(mut self, usd: Option<f64>) -> Self {
+        self.budget = usd;
+        self
     }
 
     /// Runs turns until every sender of the inbox is gone.
@@ -217,8 +243,14 @@ impl Loop {
             cache_lifetime: CacheLifetime::OneHour,
             cache_key: self.cache_key.clone(),
             conversation: self.conversation.clone(),
-            previous_end: self.sent.replace(self.conversation.len()),
+            previous_end: self.sent,
         };
+        if let Some(completed) = self.over_budget() {
+            return Ok(Step::Ended(completed));
+        }
+        // A refused request leaves the previous request's end in place, so a
+        // later request still marks the cache where that request ended.
+        self.sent = Some(self.conversation.len());
         let message = ActionId(mint("a_"));
         self.append(
             &Event::AssistantMessageStarted(Empty {}),
@@ -246,6 +278,26 @@ impl Loop {
         }
     }
 
+    /// When billed spend has reached `budget.usd`, the turn fails and the
+    /// request is not sent (`docs/loop.md`, "Spending budget").
+    fn over_budget(&self) -> Option<TurnCompleted> {
+        let limit = self.budget?;
+        if self.ledger.spend() < limit {
+            return None;
+        }
+        Some(ended(
+            TurnOutcome::Failed,
+            Some(Failure {
+                code: ErrorCode::BudgetExceeded,
+                message: format!(
+                    "The session reached its spending budget of ${limit:.2} (budget.usd)."
+                ),
+                retry_after: None,
+                provider: None,
+            }),
+        ))
+    }
+
     /// Sends `request` and streams the reply, emitting each fragment as an
     /// ephemeral event as it arrives: text and tool-call arguments under
     /// `message`, reasoning under its own action, opened with
@@ -265,7 +317,14 @@ impl Loop {
             ..
         } = self;
         let mut emit = |event: &Event, action: &ActionId| {
-            write(log, conversation, model, event, turn, Some(action))
+            write(
+                log,
+                conversation,
+                &model.reference,
+                event,
+                turn,
+                Some(action),
+            )
         };
         // debt: a reasoning fragment does not say which reasoning item it
         // belongs to, so a run of reasoning fragments with nothing between is
@@ -350,22 +409,23 @@ impl Loop {
                 }
             }
         }
-        self.append(
-            &Event::UsageRecorded(UsageRecorded {
-                generation_id: reply.generation_id,
-                model: self.model.clone(),
-                tokens: reply.tokens,
-                web_searches: None,
-                // debt: weakens docs/model-routing.md, "Cost"; fixed by #306.
-                // Cost is null; the model's declared prices are not applied.
-                cost: None,
-                subscription: None,
-                extension: None,
-                origin_session_id: None,
-            }),
-            turn,
-            Some(message),
-        )?;
+        let cost = self
+            .model
+            .cost
+            .as_ref()
+            .map(|prices| prices.price(&reply.tokens));
+        let recorded = UsageRecorded {
+            generation_id: reply.generation_id,
+            model: self.model.reference.clone(),
+            tokens: reply.tokens,
+            web_searches: None,
+            cost,
+            subscription: self.model.subscription.then_some(true),
+            extension: None,
+            origin_session_id: None,
+        };
+        self.append(&Event::UsageRecorded(recorded.clone()), turn, Some(message))?;
+        self.ledger.record(&recorded);
         self.append(
             &Event::AssistantMessageCompleted(AssistantMessageCompleted {
                 outcome: MessageOutcome::Completed,
@@ -418,7 +478,7 @@ impl Loop {
         write(
             &self.log,
             &mut self.conversation,
-            &self.model,
+            &self.model.reference,
             event,
             turn,
             action,

@@ -125,6 +125,7 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     assert_eq!(usage.payload["generation_id"], "gen_1");
     assert_eq!(usage.payload["tokens"]["input"], 10);
     assert_eq!(usage.payload["cost"], Value::Null);
+    assert!(usage.payload.get("subscription").is_none());
     assert_eq!(lines.last().unwrap().payload["outcome"], "completed");
 
     // The durable lines are the log, byte for byte.
@@ -639,4 +640,304 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
     );
     ran.join().unwrap();
     assert_eq!(session.provider.requests().len(), 2);
+}
+
+/// Prices whose tier at 100 tokens differs from the base, so a loop that
+/// priced only the base input would log a different cost.
+fn tiered(subscription: bool) -> r#loop::Model {
+    r#loop::Model {
+        reference: MODEL.into(),
+        cost: Some(contract::provider::Cost {
+            input: 2.0,
+            output: 8.0,
+            cache_read: Some(0.5),
+            cache_write: Some(4.0),
+            tiers: vec![contract::provider::Tier {
+                input_tokens_above: 100,
+                input: 6.0,
+                output: 20.0,
+                cache_read: 1.0,
+                cache_write: 8.0,
+            }],
+        }),
+        subscription,
+    }
+}
+
+/// A reply whose whole prompt is 105 tokens, over the tier above.
+fn counted(text: &str) -> Scripted {
+    let mut scripted = Scripted::text(text);
+    let reply = scripted.end.as_mut().unwrap();
+    reply.tokens = contract::shapes::Tokens {
+        input: 40,
+        cache_read: 50,
+        cache_write: [("5m".into(), 15)].into(),
+        output: 7,
+    };
+    scripted
+}
+
+fn tier_cost() -> f64 {
+    (40.0 * 6.0 + 50.0 * 1.0 + 15.0 * 8.0 + 7.0 * 20.0) / 1_000_000.0
+}
+
+#[test]
+fn a_priced_model_logs_the_cost_its_prices_give() {
+    let mut session = Session::open(vec![counted("Hello.")], None, Vec::new(), tiered(false));
+    session.inbox.send(message("hi")).unwrap();
+    session.turn();
+    let usage = session
+        .lines()
+        .into_iter()
+        .find(|line| line.kind == "usage_recorded")
+        .unwrap();
+    assert_eq!(usage.payload["cost"].as_f64(), Some(tier_cost()));
+    assert!(usage.payload.get("subscription").is_none());
+}
+
+#[test]
+fn a_subscription_model_logs_an_estimate_apart_from_billed_spend() {
+    let mut session = Session::open(vec![counted("Hello.")], None, Vec::new(), tiered(true));
+    session.inbox.send(message("hi")).unwrap();
+    session.turn();
+    let usage = session
+        .lines()
+        .into_iter()
+        .find(|line| line.kind == "usage_recorded")
+        .unwrap();
+    assert_eq!(usage.payload["subscription"], true);
+    assert_eq!(usage.payload["cost"].as_f64(), Some(tier_cost()));
+
+    r#loop::fiber_exited(&session.log, &session.dir, Ok(())).unwrap();
+    let exited = log::read(&session.dir).unwrap();
+    let totals = &exited.last().unwrap().payload["usage"];
+    assert_eq!(totals["cost"], 0.0);
+    assert_eq!(totals["subscription_cost"].as_f64(), Some(tier_cost()));
+}
+
+/// A model priced at $1 per million input tokens and nothing else, so a
+/// reply's cost is its input-token count over a million.
+fn per_token(subscription: bool) -> r#loop::Model {
+    r#loop::Model {
+        reference: MODEL.into(),
+        cost: Some(contract::provider::Cost {
+            input: 1.0,
+            output: 0.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+        subscription,
+    }
+}
+
+fn reply_of(text: &str, id: &str, input: u64) -> Scripted {
+    let mut scripted = Scripted::text(text);
+    let reply = scripted.end.as_mut().unwrap();
+    reply.generation_id = contract::GenerationId(id.into());
+    reply.tokens.input = input;
+    reply.tokens.output = 0;
+    scripted
+}
+
+fn tool_of(id: &str, input: u64) -> Scripted {
+    let mut scripted = tool_call_reply("", &["get_weather"]);
+    let reply = scripted.end.as_mut().unwrap();
+    reply.generation_id = contract::GenerationId(id.into());
+    reply.tokens.input = input;
+    reply.tokens.output = 0;
+    scripted
+}
+
+fn weather() -> std::sync::Arc<TestTool> {
+    std::sync::Arc::new(TestTool::reads("get_weather", "Sunny."))
+}
+
+fn budgeted(
+    script: Vec<Scripted>,
+    during: Option<contract::inbox::Message>,
+    model: r#loop::Model,
+    usd: Option<f64>,
+) -> Session {
+    let mut session = Session::open(script, during, vec![weather()], model);
+    if let Some(usd) = usd {
+        session = session.budget(Some(usd));
+    }
+    session
+}
+
+#[test]
+fn spend_below_the_budget_sends_the_next_request() {
+    let mut session = budgeted(
+        vec![tool_of("gen_1", 500_000), reply_of("Done.", "gen_2", 100)],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn spend_at_the_budget_refuses_the_next_request() {
+    let mut session = budgeted(
+        vec![tool_of("gen_1", 1_000_000), reply_of("Done.", "gen_2", 1)],
+        Some(message("later")),
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    assert_eq!(session.requests().len(), 1);
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines)
+            .iter()
+            .filter(|kind| **kind == "assistant_message_started")
+            .count(),
+        1
+    );
+    assert!(kinds(&lines).contains(&"steering_applied"));
+    let completed = lines.last().unwrap();
+    assert_eq!(completed.payload["outcome"], "failed");
+    assert_eq!(completed.payload["error"]["code"], "budget_exceeded");
+    assert_eq!(
+        completed.payload["error"]["message"],
+        "The session reached its spending budget of $1.00 (budget.usd)."
+    );
+}
+
+#[test]
+fn a_call_that_crosses_the_budget_completes_and_the_next_is_refused() {
+    let mut session = budgeted(
+        vec![
+            tool_of("gen_1", 600_000),
+            tool_of("gen_2", 600_000),
+            reply_of("Done.", "gen_3", 1),
+        ],
+        None,
+        per_token(false),
+        Some(1.0),
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    assert_eq!(session.requests().len(), 2);
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines)
+            .iter()
+            .filter(|kind| **kind == "usage_recorded")
+            .count(),
+        2
+    );
+    assert_eq!(
+        kinds(&lines)
+            .iter()
+            .filter(|kind| **kind == "assistant_message_started")
+            .count(),
+        2
+    );
+    assert_eq!(
+        lines.last().unwrap().payload["error"]["code"],
+        "budget_exceeded"
+    );
+}
+
+#[test]
+fn subscription_spend_never_reaches_the_budget() {
+    let mut session = budgeted(
+        vec![
+            tool_of("gen_1", 5_000_000),
+            reply_of("Done.", "gen_2", 5_000_000),
+        ],
+        None,
+        per_token(true),
+        Some(0.01),
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn a_model_with_no_cost_never_reaches_the_budget() {
+    let mut session = budgeted(
+        vec![
+            tool_call_reply("", &["get_weather"]),
+            Scripted::text("Done."),
+        ],
+        None,
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+        Some(0.01),
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn an_unset_budget_never_refuses() {
+    let mut session = budgeted(
+        vec![
+            tool_of("gen_1", 5_000_000),
+            reply_of("Done.", "gen_2", 5_000_000),
+        ],
+        None,
+        per_token(false),
+        None,
+    );
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn a_zero_budget_refuses_the_first_request() {
+    let mut session = Session::open(
+        vec![Scripted::text("Hello.")],
+        None,
+        Vec::new(),
+        per_token(false),
+    )
+    .budget(Some(0.0));
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    assert!(session.requests().is_empty());
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(
+        lines.last().unwrap().payload["error"]["message"],
+        "The session reached its spending budget of $0.00 (budget.usd)."
+    );
+}
+
+#[test]
+fn a_negative_budget_refuses_the_first_request() {
+    let mut session = Session::open(
+        vec![Scripted::text("Hello.")],
+        None,
+        Vec::new(),
+        per_token(false),
+    )
+    .budget(Some(-1.0));
+    session.inbox.send(message("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    assert!(session.requests().is_empty());
+    assert_eq!(
+        session.lines().last().unwrap().payload["error"]["message"],
+        "The session reached its spending budget of $-1.00 (budget.usd)."
+    );
 }

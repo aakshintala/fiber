@@ -1453,6 +1453,58 @@ fn opencode_go_installed_by_path_completes_a_turn_with_its_session_header() {
         assert_eq!(request.header("x-opencode-session"), Some(run.session_id()));
         assert!(request.header("user-agent").unwrap().starts_with("fiber/"));
     }
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 2);
+    for line in &recorded {
+        assert_eq!(line["payload"]["subscription"], true);
+        assert!(line["payload"]["cost"].as_f64().is_some());
+    }
+    let totals = &run.last()["payload"]["usage"];
+    assert_eq!(totals["cost"], 0.0);
+    assert!(totals["subscription_cost"].as_f64().unwrap() > 0.0);
+}
+
+#[test]
+fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "budget": {"usd": 0}}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "turn_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["outcome"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "budget_exceeded");
+    assert_eq!(
+        completed["payload"]["error"]["message"],
+        "The session reached its spending budget of $0.00 (budget.usd)."
+    );
+    assert!(server.requests().is_empty());
+    assert_eq!(run.last()["payload"]["exit_code"], 1);
 }
 
 /// Meta's own `openai-responses` stream for `muse-spark-1.3-contributor`,
