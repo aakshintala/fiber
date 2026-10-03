@@ -99,6 +99,19 @@ impl FakeClock {
             .unwrap_or_else(PoisonError::into_inner);
         parked_at(&guard, until)
     }
+
+    /// Waits, at most `within` of real time, until at least `count` threads
+    /// are parked in [`Clock::wait_until`] with this `until`. True once they
+    /// are; false at the deadline. The bound is the condvar's timeout, so
+    /// this reads no process clock.
+    pub fn await_parked_count(&self, until: Instant, count: usize, within: Duration) -> bool {
+        let state = lock(&self.state);
+        let (guard, _) = self
+            .parked_cv
+            .wait_timeout_while(state, within, |state| parked_count(state, until) < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        parked_count(&guard, until) >= count
+    }
 }
 
 impl Clock for FakeClock {
@@ -169,10 +182,15 @@ impl Drop for Leave<'_> {
 }
 
 fn parked_at(state: &State, until: Instant) -> bool {
+    parked_count(state, until) > 0
+}
+
+fn parked_count(state: &State, until: Instant) -> usize {
     state
         .parked
         .iter()
-        .any(|parked| parked.until == Some(until))
+        .filter(|parked| parked.until == Some(until))
+        .count()
 }
 
 fn lock(state: &Mutex<State>) -> MutexGuard<'_, State> {

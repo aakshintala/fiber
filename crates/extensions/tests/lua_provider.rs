@@ -490,12 +490,40 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// Accepts one connection, reads its head, reports, and holds the socket
+/// for at most 5 seconds without answering.
+fn hold_after_head(listener: std::net::TcpListener, accepted: mpsc::Sender<()>) {
+    let Ok((mut sock, _)) = listener.accept() else {
+        return;
+    };
+    let mut buf = [0; 1];
+    let mut seen = Vec::new();
+    loop {
+        match sock.read(&mut buf) {
+            Ok(0) | Err(_) => return,
+            Ok(_) => seen.push(buf[0]),
+        }
+        if seen.ends_with(b"\r\n\r\n") {
+            break;
+        }
+    }
+    if accepted.send(()).is_err() {
+        return;
+    }
+    let (_tx, rx) = mpsc::channel::<()>();
+    match rx.recv_timeout(Duration::from_secs(5)) {
+        Ok(()) | Err(mpsc::RecvTimeoutError::Timeout | mpsc::RecvTimeoutError::Disconnected) => {}
+    }
+    drop(sock);
+}
+
 #[test]
 fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let setup = Setup::new();
-    // Accepts connections into its backlog and never answers.
-    let silent = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}/", silent.local_addr().unwrap());
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let url = format!("http://{}/", listener.local_addr().unwrap());
+    let (accepted_tx, accepted_rx) = mpsc::channel();
+    std::thread::spawn(move || hold_after_head(listener, accepted_tx));
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
@@ -510,6 +538,9 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     let call = Arc::clone(&extension);
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(call.command("get", "")));
+    accepted_rx
+        .recv_timeout(WAIT)
+        .expect("waited for get to reach the server");
     // The caller waits out the grace. The extension thread fails a parked
     // callback at the deadline, which is only the 200 ms.
     assert!(

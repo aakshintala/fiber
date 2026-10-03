@@ -108,25 +108,30 @@ fn hold_open(dir: &std::path::Path) -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
     (rx, release_tx)
 }
 
-/// True once `count` threads are parked in `wait_until` at `until`.
-fn parked_at(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) -> bool {
+/// `require("go_<name>")` is a signal, not a barrier. Opening the fifo for
+/// write returns only once the loader has opened it for read; the writer
+/// reports that and closes the fifo at once, so `require` reads an empty
+/// module and the code runs on. Nothing stays blocked in it. Each name is
+/// used once per VM, because `require` caches.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+fn go_module(dir: &std::path::Path, name: &str) -> mpsc::Receiver<()> {
+    let path = dir.join(format!("go_{name}.lua"));
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
     let (tx, rx) = mpsc::channel();
-    let clock = Arc::clone(clock);
     std::thread::spawn(move || {
-        while clock
-            .parked()
-            .iter()
-            .filter(|at| **at == Some(until))
-            .count()
-            < count
-        {
-            std::thread::yield_now();
-        }
+        let held = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
         match tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}
         }
+        drop(held);
     });
-    rx.recv_timeout(WAIT).is_ok()
+    rx
+}
+
+/// True once `count` threads are parked in `wait_until` at `until`.
+fn parked_at(clock: &Arc<FakeClock>, until: std::time::Instant, count: usize) -> bool {
+    clock.await_parked_count(until, count, WAIT)
 }
 
 #[test]
@@ -231,48 +236,99 @@ fn a_command_the_extension_never_registered_is_unknown() {
     assert_eq!(err.code(), ErrorCode::UnknownCommand);
 }
 
-#[test]
-fn a_loop_is_stopped_at_its_timeout_in_a_callback_a_coroutine_and_under_pcall() {
-    let clock = FakeClock::new();
-    let ext = extension(
-        "fixture",
-        fakes::lua_fixture(),
-        "/nonexistent-fiber-home",
-        clock.clone(),
+/// A `while true` loop, in `body` after the go module, is stopped at the
+/// callback's 50 ms timeout. The go module is the callback's first statement,
+/// so the advance lands after the VM's clock check, and the caller is already
+/// parked at the grace. One case per test: five of them in one test would put
+/// its deadlines over the 60 s sum.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a failure is the test's")]
+fn spinning_callback_stops_at_its_timeout(command: &'static str, body: &str) {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "fiber.command(\"echo\", {{ timeout = 1000, run = function(text) return text end }})\n\
+             fiber.command(\"{command}\", {{ timeout = 50, run = function()\n\
+             require(\"go_{command}\")\n\
+             {body}end }})\n"
+        ),
     );
-    for command in [
-        "spin",
+    let went = go_module(&dir, command);
+    let clock = FakeClock::new();
+    let ext = extension("ext", dir, setup.home(), clock.clone());
+    let asked = clock.now();
+    let result = start(&ext, command);
+    went.recv_timeout(WAIT)
+        .expect("waited for the callback to pass its clock check");
+    let parked_at = asked + Duration::from_millis(50) + GRACE;
+    assert!(
+        clock.await_parked(parked_at, WAIT),
+        "waited for {command} to park at its grace"
+    );
+    // The hook stops the loop at the deadline. The grace is the caller's
+    // wait, and it has not run out.
+    clock.advance(Duration::from_millis(50));
+    let err = result
+        .recv_timeout(WAIT)
+        .expect("waited for the spinning callback")
+        .unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    let Error::Timeout {
+        callback,
+        timeout_ms,
+        ..
+    } = &err
+    else {
+        panic!("{command}: {err:?}")
+    };
+    assert_eq!((callback.as_str(), *timeout_ms), (command, 50));
+    assert_eq!(call(&ext, "echo", command).unwrap(), command);
+}
+
+#[test]
+fn a_loop_is_stopped_at_its_timeout_in_a_callback() {
+    spinning_callback_stops_at_its_timeout("spin", "while true do end\n");
+}
+
+#[test]
+fn a_loop_is_stopped_at_its_timeout_under_pcall() {
+    spinning_callback_stops_at_its_timeout(
         "spin_pcall",
+        "while true do pcall(function() while true do end end) end\n",
+    );
+}
+
+#[test]
+fn a_loop_is_stopped_at_its_timeout_in_a_created_coroutine() {
+    spinning_callback_stops_at_its_timeout(
         "spin_create",
+        "local co = coroutine.create(function() while true do end end)\n\
+         return tostring(coroutine.resume(co))\n",
+    );
+}
+
+#[test]
+fn a_loop_is_stopped_at_its_timeout_in_a_wrapped_coroutine() {
+    spinning_callback_stops_at_its_timeout(
         "spin_wrap",
+        "coroutine.wrap(function()\n\
+           while true do pcall(function() while true do end end) end\n\
+         end)()\n",
+    );
+}
+
+#[test]
+fn a_loop_is_stopped_at_its_timeout_in_nested_coroutines() {
+    spinning_callback_stops_at_its_timeout(
         "spin_nested",
-    ] {
-        let asked = clock.now();
-        let result = start(&ext, command);
-        let parked_at = asked + Duration::from_millis(50) + GRACE;
-        assert!(
-            clock.await_parked(parked_at, WAIT),
-            "waited for {command} to park at its grace"
-        );
-        // The hook stops the loop at the deadline. The grace is the caller's
-        // wait, and it has not run out.
-        clock.advance(Duration::from_millis(50));
-        let err = result
-            .recv_timeout(WAIT)
-            .expect("waited for the spinning callback")
-            .unwrap_err();
-        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
-        let Error::Timeout {
-            callback,
-            timeout_ms,
-            ..
-        } = &err
-        else {
-            panic!("{command}: {err:?}")
-        };
-        assert_eq!((callback.as_str(), *timeout_ms), (command, 50));
-        assert_eq!(call(&ext, "echo", command).unwrap(), command);
-    }
+        "return coroutine.wrap(function()\n\
+           local inner = coroutine.create(function() while true do end end)\n\
+           return tostring(coroutine.resume(inner))\n\
+         end)()\n",
+    );
 }
 
 #[test]
@@ -295,31 +351,37 @@ fn unbounded_allocation_is_an_error_in_that_vm_and_the_vm_stays_usable() {
 
 #[test]
 fn a_callback_the_hook_cannot_stop_abandons_the_vm_and_the_session_survives() {
-    // `spin_gc` reads from a finalizer, where the hook is off. `spin_find`
-    // reads from the callback itself: one C call, which the hook does not
-    // interrupt. Either way the clock moves only after that read has started.
+    // The go module is the callback's first statement. `spin_gc` then loops
+    // in a finalizer, where the hook is off. `spin_find` is one backtracking
+    // C call, which the hook does not interrupt. The advance comes after the
+    // go module and after the caller has parked at the grace.
     for (command, body) in [
         (
             "spin_gc",
-            "setmetatable({}, { __gc = function() require(\"hold\") end })\ncollectgarbage()\n",
+            "setmetatable({}, { __gc = function() while true do end end })\ncollectgarbage()\n",
         ),
-        ("spin_find", "require(\"hold\")\n"),
+        (
+            "spin_find",
+            "return tostring(string.find(string.rep(\"a\", 100000), \"a*a*a*a*b\"))\n",
+        ),
     ] {
         let setup = Setup::new();
         let dir = setup.home().join("ext");
         write(
             &dir.join("init.lua"),
             &format!(
-                "fiber.command(\"{command}\", {{ timeout = 50, run = function()\n{body}end }})\n"
+                "fiber.command(\"{command}\", {{ timeout = 50, run = function()\n\
+                 require(\"go_{command}\")\n\
+                 {body}end }})\n"
             ),
         );
-        let (held, _release) = hold_open(&dir);
+        let went = go_module(&dir, command);
         let clock = FakeClock::new();
         let ext = extension("ext", dir, setup.home(), clock.clone());
         let asked = clock.now();
         let result = start(&ext, command);
-        held.recv_timeout(WAIT)
-            .expect("waited for the callback to block past its clock checks");
+        went.recv_timeout(WAIT)
+            .expect("waited for the callback to pass its clock check");
         let parked_at = asked + Duration::from_millis(50) + GRACE;
         assert!(
             clock.await_parked(parked_at, WAIT),
@@ -615,6 +677,9 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let asked = clock.now();
     let ran = start(&ext, "p.sign");
+    ok_rx
+        .recv_timeout(WAIT)
+        .expect("waited for p.sign to reach the server");
     let grace = asked + Duration::from_millis(5000) + GRACE;
     assert!(
         clock.await_parked(grace, WAIT),
@@ -636,7 +701,6 @@ fn a_command_named_like_a_provider_function_keeps_its_own_timeout() {
         ran.recv_timeout(WAIT).expect("waited for p.sign").unwrap(),
         "ok"
     );
-    assert!(ok_rx.try_recv().is_ok(), "p.sign never reached the server");
 }
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
@@ -691,15 +755,17 @@ fn every_call_waiting_on_an_entry_script_the_hook_cannot_stop_is_abandoned() {
     let dir = setup.home().join("ext");
     write(
         &dir.join("init.lua"),
-        "setmetatable({}, { __gc = function() require(\"hold\") end })\ncollectgarbage()\n",
+        "require(\"go_entry\")\n\
+         setmetatable({}, { __gc = function() while true do end end })\n\
+         collectgarbage()\n",
     );
-    let (held, _release) = hold_open(&dir);
+    let went = go_module(&dir, "entry");
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let waiters = [start(&ext, "a"), start(&ext, "b")];
-    held.recv_timeout(WAIT)
-        .expect("waited for the entry script to block past its clock checks");
+    went.recv_timeout(WAIT)
+        .expect("waited for the entry script to pass its clock check");
     assert!(
         parked_at(&clock, abandon, 2),
         "waited for both callers to park until the load grace"
@@ -759,11 +825,17 @@ fn every_call_waiting_on_an_entry_script_that_errors_gets_its_error() {
 fn an_entry_script_past_its_deadline_stops_the_extension_with_its_timeout() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
-    write(&dir.join("init.lua"), "while true do end\n");
+    write(
+        &dir.join("init.lua"),
+        "require(\"go_init\")\nwhile true do end\n",
+    );
+    let went = go_module(&dir, "init");
     let clock = FakeClock::new();
     let ext = extension("ext", dir, setup.home(), clock.clone());
     let abandon = clock.now() + LOAD + GRACE;
     let first = start(&ext, "a");
+    went.recv_timeout(WAIT)
+        .expect("waited for the entry script to pass its clock check");
     assert!(
         clock.await_parked(abandon, WAIT),
         "waited for the caller to park until the load grace"
