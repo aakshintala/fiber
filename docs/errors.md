@@ -200,7 +200,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `config_invalid` | exit | a configuration file is invalid |
 | `connection_failed` | model call, turn | the connection to the provider failed |
 | `context_overflow` | model call, turn | the request does not fit the context window |
-| `credential_failed` | exit | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
+| `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
 | `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |

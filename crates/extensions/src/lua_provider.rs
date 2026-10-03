@@ -115,30 +115,35 @@ impl LuaProvider {
     /// Calls `credential()`, which returns `{ token, expires_at }`, the
     /// expiry in seconds since the Unix epoch.
     fn fetch_token(&self) -> Result<(Secret, SystemTime), Error> {
-        let returned = self.call("credential", Value::Null)?;
-        let token = returned
-            .get("token")
-            .and_then(Value::as_str)
-            .filter(|t| !t.is_empty())
-            .ok_or_else(|| self.bad_return("credential", "no `token`".into()))?;
-        let expires = returned
-            .get("expires_at")
-            .and_then(Value::as_f64)
-            .and_then(|s| Duration::try_from_secs_f64(s).ok())
-            .and_then(|s| UNIX_EPOCH.checked_add(s))
-            .ok_or_else(|| {
-                self.bad_return(
-                    "credential",
-                    "no `expires_at` in seconds since the Unix epoch".into(),
-                )
-            })?;
-        // A token that is already expired, or whose expiry is this instant,
-        // was never usable. Returning it would send a request that the
-        // vendor will reject (`docs/model-routing.md`, "Credentials").
-        if expires <= self.extension.clock().wall() {
-            return Err(self.bad_return("credential", "a token that has already expired".into()));
-        }
-        Ok((Secret::new(token.to_owned()), expires))
+        let inner: Result<(Secret, SystemTime), Error> = (|| {
+            let returned = self.call("credential", Value::Null)?;
+            let token = returned
+                .get("token")
+                .and_then(Value::as_str)
+                .filter(|t| !t.is_empty())
+                .ok_or_else(|| self.bad_return("credential", "no `token`".into()))?;
+            let expires = returned
+                .get("expires_at")
+                .and_then(Value::as_f64)
+                .and_then(|s| Duration::try_from_secs_f64(s).ok())
+                .and_then(|s| UNIX_EPOCH.checked_add(s))
+                .ok_or_else(|| {
+                    self.bad_return(
+                        "credential",
+                        "no `expires_at` in seconds since the Unix epoch".into(),
+                    )
+                })?;
+            // A token that is already expired, or whose expiry is this instant,
+            // was never usable. Returning it would send a request that the
+            // vendor will reject (`docs/model-routing.md`, "Credentials").
+            if expires <= self.extension.clock().wall() {
+                return Err(
+                    self.bad_return("credential", "a token that has already expired".into())
+                );
+            }
+            Ok((Secret::new(token.to_owned()), expires))
+        })();
+        inner.map_err(|e| Error::Credential(Box::new(e)))
     }
 
     fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {

@@ -391,10 +391,8 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
             )
         }
         Protocol::BedrockConverse => {
-            // debt: weakens docs/errors.md, "Before a session exists"; fixed
-            // by #363. extension_missing stands in for protocol_unsupported.
             return Err(failure(
-                ErrorCode::ExtensionMissing,
+                ErrorCode::ProtocolUnsupported,
                 format!(
                     "The model `{}` speaks a protocol this Fiber does not speak yet.",
                     model.reference()

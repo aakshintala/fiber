@@ -68,7 +68,7 @@ fn a_failing_stored_credential_does_not_fall_back() {
     let err = config
         .credential(&acme(command(&["printf", "from-command"])))
         .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(
         err.to_string().contains("credentials/acme is empty"),
         "{err}"
@@ -204,16 +204,13 @@ fn a_failing_shared_credential_names_the_file_actually_read() {
     let err = config
         .credential(&shared("opencode-go", "opencode", None))
         .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
     let message = err.to_string();
     assert!(
         message.contains("credentials/opencode is empty"),
         "{message}"
     );
-    assert!(
-        message.contains("No credential for `opencode-go`"),
-        "{message}"
-    );
+    assert!(message.contains("opencode-go"), "{message}");
 }
 
 #[test]
@@ -254,7 +251,7 @@ fn an_empty_shared_credential_fails_without_falling_back() {
     let err = config
         .credential(&shared("mine", "shared", command(&["printf", "declared"])))
         .unwrap_err();
-    assert_eq!(err.code(), ErrorCode::CredentialMissing);
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
     let message = err.to_string();
     assert!(message.contains("credentials/shared is empty"), "{message}");
 }

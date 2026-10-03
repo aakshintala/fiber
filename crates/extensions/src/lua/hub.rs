@@ -413,6 +413,7 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::UnknownCommand { .. }
         | Error::UnknownCallback { .. }
         | Error::BadReturn { .. }
+        | Error::Credential(_)
         | Error::NoModel => stopped(name),
     }
 }

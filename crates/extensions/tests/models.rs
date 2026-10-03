@@ -101,7 +101,7 @@ fn a_bare_id_two_providers_have_is_an_error_listing_both() {
     assert_eq!(matches, &["databricks/claude-opus-5", "muse/claude-opus-5"]);
     let message = err.to_string();
     assert!(message.contains("databricks/claude-opus-5") && message.contains("muse/claude-opus-5"));
-    assert_eq!(err.code(), ErrorCode::NoModel);
+    assert_eq!(err.code(), ErrorCode::ModelAmbiguous);
 }
 
 #[test]
@@ -198,7 +198,7 @@ fn an_extension_for_another_api_is_left_out_with_a_notice() {
     );
     let (providers, notices) = Providers::load(&setup.home()).unwrap();
     assert_eq!(notices.len(), 1);
-    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionIncompatible);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
     assert!(
         notices[0].message.contains("API 2"),

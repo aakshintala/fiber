@@ -73,12 +73,22 @@ pub enum ConfigError {
         /// What kind of file it should be.
         expected: &'static str,
     },
-    /// No key for a provider, or a stored credential that cannot be used.
+    /// No key for a provider.
     #[error("No credential for `{provider}`: {why}. Run `fiber login {provider}`.")]
     CredentialMissing {
         /// The provider.
         provider: String,
         /// Where Fiber looked, never a value.
+        why: String,
+    },
+    /// A stored credential exists but cannot be used.
+    #[error(
+        "The stored credential for `{provider}` cannot be used: {why}. Run `fiber login {provider}`."
+    )]
+    CredentialFailed {
+        /// The provider.
+        provider: String,
+        /// Why it cannot be used, never a value.
         why: String,
     },
     /// A secret's name that is not one file name.
@@ -97,10 +107,8 @@ impl ConfigError {
             | Self::WrongType { .. }
             | Self::NotPlain { .. }
             | Self::Shape { .. } => ErrorCode::ConfigInvalid,
-            // debt: weakens docs/model-routing.md, "Credentials"; fixed by
-            // #363. A stored credential that exists but is empty reports
-            // credential_missing, not credential_failed.
             Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
+            Self::CredentialFailed { .. } => ErrorCode::CredentialFailed,
             Self::Io { .. } => ErrorCode::IoFailed,
             Self::FiberHome(_) | Self::Override { .. } => ErrorCode::Usage,
             Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,

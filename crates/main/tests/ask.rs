@@ -573,6 +573,46 @@ fn a_missing_credential_fails_before_the_session() {
 }
 
 #[test]
+fn a_bedrock_converse_model_fails_before_the_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    let source = setup.root.join("src");
+    write(
+        &source.join("extension.json"),
+        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    write(
+        &source.join("providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [{"id": "m", "protocol": "bedrock-converse", "base_url": format!("{}/v1", server.url())}]
+        }),
+    );
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m"}),
+    );
+
+    assert_pre_session(
+        &setup.fiber_with_env(&["ask", "hi"], &[("FIBER_TEST_FAKE_KEY", "key")]),
+        1,
+        "protocol_unsupported",
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[test]
 fn fiber_without_ask_is_a_usage_error_naming_fiber_ask() {
     let setup = Setup::new();
 

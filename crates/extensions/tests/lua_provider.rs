@@ -221,8 +221,14 @@ fn an_expired_token_just_returned_is_an_error() {
     let server = ProviderServer::start([token("t1", Duration::ZERO)]).unwrap();
     let provider = fixture(&setup, &server);
     let err = within(move || provider.token()).unwrap_err();
-    assert!(matches!(err, Error::BadReturn { .. }), "{err:?}");
-    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(
+        matches!(
+            &err,
+            Error::Credential(inner) if matches!(inner.as_ref(), Error::BadReturn { .. })
+        ),
+        "{err:?}"
+    );
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(err.to_string().contains("already expired"), "{err}");
 }
 
@@ -237,24 +243,33 @@ fn a_credential_with_no_usable_expiry_is_an_error() {
         let server = ProviderServer::start([Response::status(200, body)]).unwrap();
         let provider = fixture(&setup, &server);
         let err = within(move || provider.token()).unwrap_err();
-        assert!(matches!(err, Error::BadReturn { .. }), "{body}: {err:?}");
-        assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+        assert!(
+            matches!(
+                &err,
+                Error::Credential(inner) if matches!(inner.as_ref(), Error::BadReturn { .. })
+            ),
+            "{body}: {err:?}"
+        );
+        assert_eq!(err.code(), ErrorCode::CredentialFailed);
         assert!(err.to_string().contains("expires_at"), "{err}");
     }
 }
 
 #[test]
-fn a_credential_with_no_token_is_extension_failed() {
+fn a_credential_with_no_token_is_credential_failed() {
     let setup = Setup::new();
     let server = ProviderServer::start([Response::status(200, r#"{"expires_at": 1}"#)]).unwrap();
     let provider = fixture(&setup, &server);
     let err = within(move || provider.token()).unwrap_err();
-    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
+    let Error::Credential(inner) = &err else {
+        panic!("{err:?}")
+    };
     let Error::BadReturn {
         extension,
         callback,
         ..
-    } = &err
+    } = inner.as_ref()
     else {
         panic!("{err:?}")
     };
@@ -429,7 +444,7 @@ fn the_fixture_registers_each_provider_function() {
 }
 
 #[test]
-fn a_function_the_provider_never_registered_is_extension_failed() {
+fn a_function_the_provider_never_registered_is_credential_failed() {
     let setup = Setup::new();
     let dir = setup.home().join("ext");
     write(
@@ -445,8 +460,14 @@ fn a_function_the_provider_never_registered_is_extension_failed() {
     let provider = LuaProvider::new(Arc::clone(&extension), "p");
     let tokens = Arc::clone(&provider);
     let err = within(move || tokens.token()).unwrap_err();
-    assert!(matches!(err, Error::UnknownCallback { .. }), "{err:?}");
-    assert_eq!(err.code(), ErrorCode::ExtensionFailed);
+    assert!(
+        matches!(
+            &err,
+            Error::Credential(inner) if matches!(inner.as_ref(), Error::UnknownCallback { .. })
+        ),
+        "{err:?}"
+    );
+    assert_eq!(err.code(), ErrorCode::CredentialFailed);
     assert!(within(move || provider.models()).unwrap().is_empty());
     let none = within(move || extension.provider_functions("nobody")).unwrap();
     assert!(none.is_empty());
