@@ -17,7 +17,16 @@
       "cost": {
         "input": 2.0,
         "output": 12.0,
-        "cache_read": 0.2
+        "cache_read": 0.2,
+        "tiers": [
+          {
+            "input_tokens_above": 200000,
+            "input": 4,
+            "output": 18,
+            "cache_read": 0.4,
+            "cache_write": 0
+          }
+        ]
       }
     },
     {
@@ -66,6 +75,95 @@
         "input": 0.25,
         "output": 1.5,
         "cache_read": 0.025
+      }
+    },
+    {
+      "id": "gemini-3-flash-preview",
+      "protocol": "google-generative-ai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.5,
+        "output": 3.0,
+        "cache_read": 0.05
+      }
+    },
+    {
+      "id": "gemini-3.1-pro-preview-customtools",
+      "protocol": "google-generative-ai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 2.0,
+        "output": 12.0,
+        "cache_read": 0.2,
+        "tiers": [
+          {
+            "input_tokens_above": 200000,
+            "input": 4,
+            "output": 18,
+            "cache_read": 0.4,
+            "cache_write": 0
+          }
+        ]
+      }
+    },
+    {
+      "id": "gemini-3.5-flash",
+      "protocol": "google-generative-ai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 1.5,
+        "output": 9.0,
+        "cache_read": 0.15
+      }
+    },
+    {
+      "id": "gemini-3.6-flash",
+      "protocol": "google-generative-ai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.75,
+        "output": 3.75,
+        "cache_read": 0.075
+      }
+    },
+    {
+      "id": "gemini-3.7-flash",
+      "protocol": "google-generative-ai",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "input": [
+        "text",
+        "image"
+      ],
+      "cost": {
+        "input": 0.75,
+        "output": 3.75,
+        "cache_read": 0.075
       }
     }
   ]

@@ -1582,29 +1582,75 @@ fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
             "anthropic",
             config::Protocol::AnthropicMessages,
             "https://api.anthropic.com/v1",
-            [
+            &[
                 "claude-fable-5-1",
                 "claude-opus-5-5",
                 "claude-sonnet-5-5",
                 "claude-haiku-4-5",
-            ],
+                "claude-opus-5",
+                "claude-sonnet-5",
+                "claude-fable-5",
+                "claude-opus-4-8",
+                "claude-opus-4-7",
+                "claude-sonnet-4-6",
+                "claude-opus-4-6",
+            ][..],
         ),
         (
             "openai",
             config::Protocol::OpenaiResponses,
             "https://api.openai.com/v1",
-            ["gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"],
+            &[
+                "gpt-6.1-sol",
+                "gpt-6-sol",
+                "gpt-6-astra",
+                "gpt-6-luna",
+                "gpt-4.1-mini",
+                "gpt-3.5-turbo",
+                "gpt-4o-mini",
+                "gpt-5.5-pro",
+                "gpt-5.4",
+                "gpt-5.6-terra",
+                "gpt-4.1-nano",
+                "gpt-4-turbo",
+                "gpt-5.4-pro",
+                "o3",
+                "gpt-4.1",
+                "gpt-5.5",
+                "gpt-5",
+                "gpt-4o",
+                "gpt-5.4-nano",
+                "gpt-5.3-codex",
+                "o3-mini",
+                "gpt-5.2",
+                "o4-mini",
+                "o1",
+                "gpt-5.4-mini",
+                "gpt-5.1",
+                "o1-pro",
+                "gpt-5-pro",
+                "gpt-5.2-pro",
+                "gpt-5-mini",
+                "gpt-5-nano",
+                "gpt-5.6-luna",
+                "gpt-4",
+            ][..],
         ),
         (
             "gemini",
             config::Protocol::GoogleGenerativeAi,
             "https://generativelanguage.googleapis.com/v1beta",
-            [
+            &[
                 "gemini-3.1-pro-preview",
                 "gemini-3.8-flash",
                 "gemini-3.5-flash-lite",
                 "gemini-3.1-flash-lite",
-            ],
+                "gemini-3-flash-preview",
+                "gemini-3.1-pro-preview-customtools",
+                "gemini-3.5-flash",
+                "gemini-3.6-flash",
+                "gemini-3.7-flash",
+            ][..],
         ),
     ];
     for (name, protocol, url, ids) in packages {
@@ -1617,9 +1663,27 @@ fn the_first_party_key_packages_declare_their_protocol_url_and_prices() {
         for model in &provider.models {
             assert_eq!(model.protocol, protocol, "{}", model.id);
             assert_eq!(model.base_url, url, "{}", model.id);
+            assert!(model.context_window.unwrap_or(0) > 0, "{}", model.id);
+            assert!(model.max_output_tokens.unwrap_or(0) > 0, "{}", model.id);
             assert!(!model.input.is_empty(), "{}", model.id);
+            for kind in &model.input {
+                assert!(kind == "text" || kind == "image", "{}", model.id);
+            }
             let cost = model.cost.as_ref().unwrap();
             assert!(cost.input > 0.0 && cost.output > 0.0, "{}", model.id);
+            let mut previous = 0;
+            for tier in &cost.tiers {
+                assert!(tier.input_tokens_above > previous, "{}", model.id);
+                previous = tier.input_tokens_above;
+                assert!(
+                    tier.input >= 0.0
+                        && tier.output >= 0.0
+                        && tier.cache_read >= 0.0
+                        && tier.cache_write >= 0.0,
+                    "{}",
+                    model.id
+                );
+            }
             if name == "openai" {
                 assert_eq!(
                     model.compat.get("store"),
