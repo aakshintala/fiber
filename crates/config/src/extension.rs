@@ -42,6 +42,9 @@ pub struct Manifest {
     /// A file in the package whose text goes in the system prompt.
     #[serde(default)]
     pub prompt: Option<String>,
+    /// Raises a Lua extension's memory cap above the default of 1 MiB.
+    #[serde(default)]
+    pub memory_mib: Option<u64>,
 }
 
 /// One platform's binary: where it is downloaded from and its checksum.
@@ -168,9 +171,24 @@ pub enum Protocol {
     BedrockConverse,
 }
 
+const MIB: u64 = 1 << 20;
+
 /// Reads `extension.json` at the top of an extension's directory.
 pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
-    read_typed(&dir.join("extension.json"), "an extension's manifest")
+    let file = dir.join("extension.json");
+    let manifest: Manifest = read_typed(&file, "an extension's manifest")?;
+    if let Some(n) = manifest.memory_mib
+        && (n == 0
+            || n.checked_mul(MIB)
+                .is_none_or(|bytes| usize::try_from(bytes).is_err()))
+    {
+        return Err(ConfigError::WrongType {
+            source_name: file.display().to_string(),
+            key: "memory_mib".into(),
+            expected: "a whole number of MiB above 0".into(),
+        });
+    }
+    Ok(manifest)
 }
 
 /// Reads every `providers/<name>.json` in an extension's directory, in name

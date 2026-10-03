@@ -59,8 +59,9 @@ impl Item {
     }
 
     /// What it carries, one line each, such as `skills: a, b`: the
-    /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file
-    /// and the platforms it has binaries for.
+    /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file,
+    /// the platforms it has binaries for, and a Lua extension's raised memory
+    /// cap when its manifest sets `memory_mib` above 1.
     // debt: the doc names these kinds and not the directories (#355 item 5,
     // unruled); skills/, prompts/, themes/ and tui/ stand until #191 settles
     // where a package keeps them.
@@ -93,6 +94,12 @@ impl Item {
                 "binaries for {}, of which only this platform's is downloaded",
                 platforms.join(", ")
             ));
+        }
+        if self.manifest.process.is_none()
+            && let Some(n) = self.manifest.memory_mib
+            && n > 1
+        {
+            lines.push(format!("memory cap: {n} MiB"));
         }
         lines
     }

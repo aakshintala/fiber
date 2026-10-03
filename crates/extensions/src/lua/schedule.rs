@@ -36,8 +36,15 @@ enum Work {
 
 /// Runs the entry script, under the deadline `load_by`, then serves calls
 /// until the extension is stopped.
-pub(super) fn serve(name: &str, dir: &Path, home: &Path, hub: &Arc<Hub>, load_by: Option<Instant>) {
-    let loaded = Vm::load(name, dir, home, hub.clock_handle(), load_by);
+pub(super) fn serve(
+    name: &str,
+    dir: &Path,
+    home: &Path,
+    hub: &Arc<Hub>,
+    load_by: Option<Instant>,
+    memory_cap: usize,
+) {
+    let loaded = Vm::load(name, dir, home, hub.clock_handle(), load_by, memory_cap);
     let vm = {
         let mut shared = hub.lock();
         if !matches!(shared.phase, Phase::Registering { .. }) {

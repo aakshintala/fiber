@@ -1405,6 +1405,40 @@ fn a_binary_that_cannot_be_downloaded_aborts() {
 }
 
 #[test]
+fn a_raised_memory_cap_appears_in_carries_only_for_lua_extensions() {
+    let setup = Setup::new();
+    let cases: [(u64, bool, Option<&str>); 3] = [
+        (8, false, Some("memory cap: 8 MiB")),
+        (1, false, None),
+        (8, true, None),
+    ];
+    for (memory_mib, process, expect) in cases {
+        let mut m = manifest("acme");
+        m["memory_mib"] = json!(memory_mib);
+        if process {
+            m["process"] = json!({ "program": "node", "args": [] });
+        }
+        let source = setup.source("local", &m, &[]);
+        let p = plan(
+            &setup.home(),
+            &Request::Path(source),
+            FIBER,
+            &Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap();
+        let carries = p.items().next().unwrap().carries();
+        match expect {
+            Some(line) => assert!(carries.iter().any(|l| l == line), "{carries:?}"),
+            None => assert!(
+                !carries.iter().any(|l| l.starts_with("memory cap:")),
+                "{carries:?}"
+            ),
+        }
+    }
+}
+
+#[test]
 fn what_a_package_carries_is_listed_from_its_files_and_manifest() {
     let setup = Setup::new();
     let mut m = manifest("acme");
