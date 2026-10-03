@@ -8,13 +8,17 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
+use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
-    CallStatus, Event, ToolCallCompleted, ToolCallRequested, ToolCallStarted, ToolReplaced,
+    AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
+    PermissionResolved, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
+    ToolReplaced,
 };
+use contract::inbox::Delivery;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Bound, Output, Tool};
-use contract::{ActionId, ErrorCode, TurnId};
+use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
 use crate::{Error, Loop, schema};
@@ -22,6 +26,40 @@ use crate::{Error, Loop, schema};
 /// A call that runs: its tool, the arguments it runs with, and the effects
 /// it declared.
 type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
+
+/// What a person's answer carries onto its `permission_resolved` line.
+struct Answered {
+    /// Allow or deny.
+    decision: Decision,
+    /// With a denial, what the person typed.
+    feedback: Option<String>,
+    /// On an allow that added a session grant.
+    grant: Option<Grant>,
+    /// On an allow that added a standing rule to the project's rules file.
+    rule: Option<Grant>,
+    /// Why a remembered rule is missing: saving it failed.
+    reason: Option<String>,
+}
+
+impl Answered {
+    /// The `permission_resolved` line for a person's allow of the call
+    /// `request_id` answered: a remembered session grant rides `grant`, a
+    /// remembered project rule rides `rule`, and a rule that could not be
+    /// saved rides `reason`.
+    fn allow(self, request_id: RequestId) -> PermissionResolved {
+        PermissionResolved {
+            grant: self.grant,
+            rule: self.rule,
+            ..resolved(
+                Some(request_id),
+                Decision::Allow,
+                DecidedBy::Person,
+                self.reason,
+                None,
+            )
+        }
+    }
+}
 
 /// A registered tool: who registered it (`builtin`, or the extension or MCP
 /// server), the tool, and its definition.
@@ -56,17 +94,20 @@ impl Loop {
         call
     }
 
-    /// Decides every call, then runs the approved ones concurrently and
-    /// writes each call's completion in request order.
+    /// Decides every call in order, then runs the approved ones concurrently and
+    /// writes each call's completion in request order. Deciding waits for a
+    /// person's reply, so every decision line is written before any
+    /// `tool_call_started`.
     pub(crate) fn run_calls(
         &mut self,
         calls: Vec<(ActionId, ToolCallRequested)>,
         turn: &TurnId,
     ) -> Result<(), Error> {
-        let decided: Vec<(ActionId, Result<Approved, Box<ToolCallCompleted>>)> = calls
-            .into_iter()
-            .map(|(id, call)| (id, self.decide(&call)))
-            .collect();
+        let mut decided = Vec::with_capacity(calls.len());
+        for (id, call) in calls {
+            let decision = self.decide(&call, &id, turn)?;
+            decided.push((id, decision));
+        }
         thread::scope(|scope| {
             let mut running = Vec::new();
             for (id, decision) in decided {
@@ -105,8 +146,14 @@ impl Loop {
     }
 
     /// Checks `call` and decides whether it runs (`docs/loop.md`, "Tool
-    /// calls that do not run").
-    fn decide(&self, call: &ToolCallRequested) -> Result<Approved, Box<ToolCallCompleted>> {
+    /// calls that do not run", and `docs/permissions.md`, "The order a call
+    /// is judged in").
+    fn decide(
+        &mut self,
+        call: &ToolCallRequested,
+        id: &ActionId,
+        turn: &TurnId,
+    ) -> Result<Result<Approved, Box<ToolCallCompleted>>, Error> {
         let Some((_, tool, definition)) = self.tools.get(&call.name) else {
             let names: Vec<String> = self.tools.keys().map(|n| format!("`{n}`")).collect();
             let exist = if names.is_empty() {
@@ -114,49 +161,248 @@ impl Loop {
             } else {
                 format!("The tools are {}.", names.join(", "))
             };
-            return Err(Box::new(failed(
+            return Ok(Err(Box::new(failed(
                 ErrorCode::UnknownTool,
                 format!("No tool is named `{}`. {exist}", call.name),
-            )));
+            ))));
         };
         let arguments = match &call.repair {
             Some(repair) => Value::Object(repair.repaired.clone()),
             None => call.arguments.clone(),
         };
         let Value::Object(arguments) = arguments else {
-            return Err(Box::new(failed(
+            return Ok(Err(Box::new(failed(
                 ErrorCode::InvalidArguments,
                 "The arguments are not a JSON object. Send them as one.".to_owned(),
-            )));
+            ))));
         };
         let errors = schema::check(&definition.input_schema, &Value::Object(arguments.clone()));
         if !errors.is_empty() {
-            return Err(Box::new(failed(
+            return Ok(Err(Box::new(failed(
                 ErrorCode::InvalidArguments,
                 format!(
                     "The arguments do not match the tool's schema:\n{}",
                     errors.join("\n")
                 ),
-            )));
+            ))));
         }
         let effects = match tool.effects(&arguments) {
             Ok(effects) => effects,
-            Err(e) => return Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))),
+            Err(e) => {
+                return Ok(Err(Box::new(failed(ErrorCode::ToolError, e.to_string()))));
+            }
         };
-        // Only the fast paths are decided; every other call is denied until
-        // the permission order (#293) and the reviewer (#294) exist
-        // (`docs/permissions.md`, "The order a call is judged in").
-        if !fast_path(&effects.declared, &self.workspace) {
-            let text = "This call needs a review, and no reviewer is available. \
-                        It did not run."
-                .to_owned();
-            return Err(Box::new(ToolCallCompleted {
-                status: CallStatus::Denied,
-                reason: Some("not_reviewed".to_owned()),
-                ..completed(text, None)
-            }));
+        let tool = Arc::clone(tool);
+        // The rules are read once for every call, including ones that later
+        // fast-path, so a revoked rule applies to the next call judged
+        // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
+        // it looks at them, so an unreadable rules file never stops that
+        // deny.
+        let rules = self.rules.read();
+        match super::permission::judge(
+            &call.name,
+            &effects,
+            &rules,
+            &self.grants,
+            &self.workspace,
+            &self.credentials,
+        ) {
+            super::permission::Verdict::Deny { by, reason, why } => {
+                let text = format!("{why} It did not run.");
+                self.decided(
+                    id,
+                    turn,
+                    resolved(None, Decision::Deny, by, Some(why), None),
+                )?;
+                Ok(Err(denied(reason, text)))
+            }
+            super::permission::Verdict::Ask(rule) => self
+                .ask(id, turn, &call.name, &effects.declared, rule)
+                .map(|answered| {
+                    answered.map(|()| (Arc::clone(&tool), arguments, effects.declared))
+                }),
+            super::permission::Verdict::Allow(decided) => {
+                if let Some(by) = decided {
+                    self.decided(id, turn, resolved(None, Decision::Allow, by, None, None))?;
+                }
+                Ok(Ok((tool, arguments, effects.declared)))
+            }
+            // Step 7 is the reviewer (#294): until then every other call is
+            // denied.
+            super::permission::Verdict::Review => {
+                let text = "This call needs a review, and no reviewer is available. \
+                            It did not run."
+                    .to_owned();
+                Ok(Err(Box::new(ToolCallCompleted {
+                    status: CallStatus::Denied,
+                    reason: Some("not_reviewed".to_owned()),
+                    ..completed(text, None)
+                })))
+            }
         }
-        Ok((Arc::clone(tool), arguments, effects.declared))
+    }
+
+    /// Writes a `permission_resolved` line for `id`.
+    fn decided(
+        &mut self,
+        id: &ActionId,
+        turn: &TurnId,
+        resolved: PermissionResolved,
+    ) -> Result<(), Error> {
+        self.append(&Event::PermissionResolved(resolved), turn, Some(id))
+    }
+
+    /// Asks a person about a call a standing ask matched, waiting for their
+    /// reply (`docs/permissions.md`, "What the log records"). Messages
+    /// that arrive meanwhile are held for the next step boundary; a reply
+    /// that names another request, or does not fit, is dropped and the loop
+    /// keeps waiting.
+    fn ask(
+        &mut self,
+        id: &ActionId,
+        turn: &TurnId,
+        tool: &str,
+        declared: &DeclaredEffects,
+        rule: contract::events::StandingRule,
+    ) -> Result<Result<(), Box<ToolCallCompleted>>, Error> {
+        if !self.answerable {
+            let reason = "No person can answer an approval in this session.";
+            self.decided(
+                id,
+                turn,
+                resolved(
+                    None,
+                    Decision::Deny,
+                    DecidedBy::StandingRule,
+                    Some(reason.to_owned()),
+                    None,
+                ),
+            )?;
+            return Ok(Err(denied(
+                "no_person",
+                format!("{reason} It did not run."),
+            )));
+        }
+        let request_id = RequestId(super::mint("r_"));
+        self.append(
+            &Event::PermissionRequested(PermissionRequested {
+                request_id: request_id.clone(),
+                declared: declared.clone(),
+                step: AskStep::StandingAsk {
+                    standing_rule: rule,
+                },
+            }),
+            turn,
+            Some(id),
+        )?;
+        loop {
+            match self.inbox.recv() {
+                // Every sender is gone, so no answer can come.
+                Err(_) => {
+                    let reason = "The session ended while waiting for an answer.";
+                    self.decided(
+                        id,
+                        turn,
+                        resolved(
+                            Some(request_id),
+                            Decision::Deny,
+                            DecidedBy::StandingRule,
+                            Some(reason.to_owned()),
+                            None,
+                        ),
+                    )?;
+                    return Ok(Err(denied(
+                        "no_person",
+                        format!("{reason} It did not run."),
+                    )));
+                }
+                Ok(Delivery::Message(message)) => self.held.push_back(message),
+                Ok(Delivery::Reply(reply)) => {
+                    if reply.request_id != request_id {
+                        continue;
+                    }
+                    let Some(answered) = self.answered(tool, None, &reply.answer) else {
+                        continue;
+                    };
+                    match answered.decision {
+                        Decision::Deny => {
+                            let text = match &answered.feedback {
+                                Some(feedback) => format!(
+                                    "A person refused this call: {feedback}. It did not run."
+                                ),
+                                None => "A person refused this call. It did not run.".to_owned(),
+                            };
+                            self.decided(
+                                id,
+                                turn,
+                                resolved(
+                                    Some(request_id),
+                                    Decision::Deny,
+                                    DecidedBy::Person,
+                                    None,
+                                    answered.feedback,
+                                ),
+                            )?;
+                            return Ok(Err(denied("person", text)));
+                        }
+                        Decision::Allow => {
+                            self.decided(id, turn, answered.allow(request_id))?;
+                            return Ok(Ok(()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Checks `reply` against `offer`, the request's rule offer (`None` on a
+    /// standing ask, which offers nothing to remember), and applies what an
+    /// allow remembers (`docs/permissions.md`, "Remembering a decision"): a
+    /// session grant goes onto `grants` before the next call is judged, and a
+    /// project rule is appended to the project's rules file. A project rule
+    /// that cannot be saved still allows the call, with a reason saying so.
+    /// `None`: the reply does not fit and is dropped, and the loop keeps
+    /// waiting.
+    fn answered(
+        &mut self,
+        tool: &str,
+        offer: Option<&RuleOffer>,
+        reply: &ReplyAnswer,
+    ) -> Option<Answered> {
+        let super::permission::Answer {
+            decision,
+            feedback,
+            remember,
+        } = super::permission::answer(offer, reply)?;
+        let mut answered = Answered {
+            decision,
+            feedback,
+            grant: None,
+            rule: None,
+            reason: None,
+        };
+        let Some(remembered) = remember else {
+            return Some(answered);
+        };
+        match remembered.scope {
+            RememberScope::Session => {
+                let grant = remembered.grant(tool);
+                self.grants.push(grant.clone());
+                answered.grant = Some(grant);
+            }
+            RememberScope::Project => {
+                let session = SessionId(self.cache_key.clone());
+                match self.rules.remember(tool, &remembered.prefix, &session) {
+                    Ok(()) => {
+                        answered.rule = Some(remembered.grant(tool));
+                    }
+                    Err(error) => {
+                        answered.reason = Some(format!("The rule could not be saved: {error}."));
+                    }
+                }
+            }
+        }
+        Some(answered)
     }
 
     /// The completion of a call that ran and returned `output`, its text cut
@@ -244,6 +490,37 @@ pub(crate) fn truncated() -> ToolCallCompleted {
     )
 }
 
+/// A `permission_resolved` line carrying `request_id`, `decision`,
+/// `decided_by`, `reason` and `feedback`: every other key is absent. A call
+/// whose answer remembered something sets `grant` or `rule` on it.
+fn resolved(
+    request_id: Option<RequestId>,
+    decision: Decision,
+    decided_by: DecidedBy,
+    reason: Option<String>,
+    feedback: Option<String>,
+) -> PermissionResolved {
+    PermissionResolved {
+        request_id,
+        decision,
+        decided_by,
+        reason,
+        feedback,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    }
+}
+
+/// A call that was denied with `reason`, the model told `text`.
+fn denied(reason: &str, text: String) -> Box<ToolCallCompleted> {
+    Box::new(ToolCallCompleted {
+        status: CallStatus::Denied,
+        reason: Some(reason.to_owned()),
+        ..completed(text, None)
+    })
+}
+
 /// A call that failed with `code` before it ran, the model told `message`.
 fn failed(code: ErrorCode, message: String) -> ToolCallCompleted {
     ToolCallCompleted {
@@ -282,7 +559,7 @@ fn completed(text: String, error: Option<Failure>) -> ToolCallCompleted {
 /// Whether a call with `declared` effects takes a fast path
 /// (`docs/permissions.md`, "Fast paths"): it only reads, or it writes only
 /// inside `workspace` and outside `.git/` and `.fiber/`.
-fn fast_path(declared: &DeclaredEffects, workspace: &Path) -> bool {
+pub(crate) fn fast_path(declared: &DeclaredEffects, workspace: &Path) -> bool {
     let only = |allowed: &[Effect]| declared.effects.iter().all(|e| allowed.contains(e));
     if only(&[Effect::Reads]) {
         return true;
@@ -309,7 +586,7 @@ fn inside(path: &Path, workspace: &Path) -> bool {
 /// `path` with its longest existing ancestor canonicalised. `None` when the
 /// part that does not exist yet holds `.` or `..`, which only the file
 /// system can resolve.
-fn resolve(path: &Path) -> Option<PathBuf> {
+pub(crate) fn resolve(path: &Path) -> Option<PathBuf> {
     let parts: Vec<Component<'_>> = path.components().collect();
     (0..=parts.len()).rev().find_map(|split| {
         let (existing, rest) = parts.split_at(split);

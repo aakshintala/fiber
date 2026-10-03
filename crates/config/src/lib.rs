@@ -13,6 +13,7 @@ mod extension;
 mod home;
 mod keys;
 mod path;
+mod rules;
 mod secret;
 mod write;
 
@@ -32,6 +33,7 @@ pub use extension::{
     read_providers,
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
+pub use rules::RulesFiles;
 pub use secret::{CredentialSource, Secret, read_secret, store_secret};
 pub use write::{Scope, remove_extension_settings, set_global};
 

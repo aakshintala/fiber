@@ -20,8 +20,9 @@ use std::time::Duration;
 use contract::events::{
     ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
-use contract::inbox::Message;
+use contract::inbox::{Delivery, Message};
 use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
+use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, SessionId};
@@ -139,6 +140,10 @@ pub(crate) struct TestTool {
     pub(crate) name: &'static str,
     /// What its effects function returns.
     pub(crate) effects: Result<DeclaredEffects, EffectsError>,
+    /// The call's primary argument, as its tool reads it.
+    pub(crate) subject: Option<String>,
+    /// The widening a rule would offer.
+    pub(crate) prefix: Option<String>,
     /// What a call returns.
     pub(crate) output: Output,
     pub(crate) bound: Bound,
@@ -173,6 +178,8 @@ impl TestTool {
                 reversible: true,
                 paths,
             }),
+            subject: Some(String::new()),
+            prefix: None,
             output: Output {
                 content: vec![ContentPart::Text { text: text.into() }],
                 ..Output::default()
@@ -228,8 +235,8 @@ impl Tool for TestTool {
         self.note("effects");
         self.effects.clone().map(|declared| Effects {
             declared,
-            subject: Some(String::new()),
-            prefix: None,
+            subject: self.subject.clone(),
+            prefix: self.prefix.clone(),
         })
     }
 
@@ -267,19 +274,61 @@ pub(crate) fn message(text: &str) -> Message {
     }
 }
 
+/// A driver's message on the loop's inbox.
+pub(crate) fn delivery(text: &str) -> Delivery {
+    Delivery::Message(message(text))
+}
+
+/// Standing rules in memory: `read` returns what the test set.
+pub(crate) struct FakeRules {
+    rules: Mutex<Result<StandingRules, RulesError>>,
+}
+
+impl FakeRules {
+    fn empty() -> Self {
+        Self {
+            rules: Mutex::new(Ok(StandingRules {
+                global: Vec::new(),
+                project: Vec::new(),
+            })),
+        }
+    }
+
+    /// What `read` returns from now on.
+    pub(crate) fn set(&self, rules: StandingRules) {
+        *self.rules.lock().unwrap() = Ok(rules);
+    }
+
+    /// `read` fails with `error` from now on.
+    pub(crate) fn fail(&self, error: RulesError) {
+        *self.rules.lock().unwrap() = Err(error);
+    }
+}
+
+impl Rules for FakeRules {
+    fn read(&self) -> Result<StandingRules, RulesError> {
+        self.rules.lock().unwrap().clone()
+    }
+
+    fn remember(&self, _tool: &str, _prefix: &str, _session: &SessionId) -> Result<(), RulesError> {
+        // Only step 7 (#294) offers a rule to remember; nothing here does.
+        Ok(())
+    }
+}
+
 /// The scripted provider, sending `during` to the inbox as the first call is
 /// made, so it arrives while that reply streams.
 struct Seam {
     inner: Arc<ScriptedProvider>,
     /// Taken by the first call, so the loop sees the inbox close once the
     /// test drops its own sender.
-    during: Mutex<Option<(Message, Sender<Message>)>>,
+    during: Mutex<Option<(Message, Sender<Delivery>)>>,
 }
 
 impl Provider for Seam {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         if let Some((message, inbox)) = self.during.lock().unwrap().take() {
-            inbox.send(message).unwrap();
+            inbox.send(Delivery::Message(message)).unwrap();
         }
         self.inner.call(request)
     }
@@ -292,7 +341,11 @@ pub(crate) struct Session {
     pub(crate) dir: PathBuf,
     /// The workspace, an empty directory.
     pub(crate) workspace: PathBuf,
-    pub(crate) inbox: Sender<Message>,
+    /// Fiber home's `credentials/` directory.
+    pub(crate) credentials: PathBuf,
+    /// The standing rules the loop reads.
+    pub(crate) rules: Arc<FakeRules>,
+    pub(crate) inbox: Sender<Delivery>,
     lines: mpsc::Receiver<Envelope>,
     pub(crate) looped: Option<Loop>,
     _home: TempDir,
@@ -324,6 +377,8 @@ impl Session {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
+        let credentials = home.0.join("credentials");
+        std::fs::create_dir_all(&credentials).unwrap();
         let id = SessionId("s_test".into());
         let log =
             Arc::new(Log::create(&home.0, id.clone(), fakes::clock::FakeClock::new()).unwrap());
@@ -342,29 +397,47 @@ impl Session {
             inner: Arc::clone(&provider),
             during: Mutex::new(during.map(|m| (m, inbox.clone()))),
         };
+        let rules = Arc::new(FakeRules::empty());
         let looped = Loop::start(
             Arc::clone(&log),
             Arc::new(seam),
             model,
             "You are terse.".into(),
             rx,
-            workspace.display().to_string(),
             tools
                 .into_iter()
                 .map(|tool| ("builtin".to_owned(), tool))
                 .collect(),
+            r#loop::Permissions {
+                workspace: workspace.display().to_string(),
+                credentials: credentials.clone(),
+                rules: rules.clone(),
+            },
         )
         .unwrap();
         Self {
             provider,
             dir: home.0.join(&id.0),
             workspace,
+            credentials,
+            rules,
             log,
             inbox,
             lines,
             looped: Some(looped),
             _home: home,
         }
+    }
+
+    /// Whether a person can answer an approval.
+    pub(crate) fn answerable(mut self, yes: bool) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.answerable(yes));
+        self
+    }
+
+    /// Sends a person's answer to a pending approval.
+    pub(crate) fn reply(&self, reply: contract::commands::Reply) {
+        self.inbox.send(Delivery::Reply(reply)).unwrap();
     }
 
     /// Caps the session's billed spend at `usd` US dollars.

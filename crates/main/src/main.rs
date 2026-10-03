@@ -37,6 +37,7 @@ struct Parts {
     home: PathBuf,
     sessions: PathBuf,
     workspace: PathBuf,
+    project: config::ProjectKey,
     provider: Arc<dyn Provider>,
     model: Model,
     /// `budget.usd`, or none when the key is absent or not a number.
@@ -307,6 +308,7 @@ fn ask(
     };
     let id = SessionId(doors::mint("s_"));
     let dir = parts.sessions.join(&id.0);
+    let rules = config::RulesFiles::new(parts.home.clone(), parts.project.clone(), clock.clone());
     let log = match Log::create(&parts.sessions, id, clock) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
@@ -328,10 +330,14 @@ fn ask(
             // #304. The system prompt is empty.
             String::new(),
             inbox,
-            parts.workspace.to_string_lossy().into_owned(),
             Vec::new(),
+            r#loop::Permissions {
+                workspace: parts.workspace.to_string_lossy().into_owned(),
+                credentials: parts.home.join("credentials"),
+                rules: Arc::new(rules),
+            },
         )
-        .map(|looped| looped.budget(parts.budget))
+        .map(|looped| looped.budget(parts.budget).answerable(false))
         .and_then(Loop::run)
         .map_err(|e| failed(e.code(), e))
     });
@@ -356,10 +362,11 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
         .and_then(Path::file_name)
         .map(|key| key.to_string_lossy().into_owned())
         .unwrap_or_default();
+    let project = config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?;
     let config = Config::load(Sources {
         home: home.clone(),
         workspace: workspace.clone(),
-        project: config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?,
+        project: project.clone(),
         overrides: model.map(|m| format!("model={m}")).into_iter().collect(),
     })
     .map_err(|e| failed(e.code(), e))?;
@@ -436,6 +443,7 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
         sessions,
         home,
         workspace,
+        project,
         provider,
         model: Model {
             reference: model.reference(),

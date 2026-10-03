@@ -15,3 +15,13 @@ pub struct Message {
     /// Where it came from.
     pub sender: Sender,
 }
+
+/// What the loop's inbox carries: a message, or a person's answer to an
+/// approval (`docs/permissions.md`, "What the log records").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Delivery {
+    /// A message for the loop.
+    Message(Message),
+    /// A person's answer to a pending approval.
+    Reply(crate::commands::Reply),
+}

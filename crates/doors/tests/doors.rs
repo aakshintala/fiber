@@ -19,6 +19,7 @@ use std::process::Command;
 use std::sync::{Arc, Mutex};
 
 use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
+use contract::inbox::Delivery;
 use contract::shapes::{ContentPart, Failure, Origin};
 use contract::{ErrorCode, SessionId, TurnId};
 use doors::{
@@ -275,7 +276,9 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
     let ran = session.ask("hi".into(), |inbox| {
-        let message = inbox.recv().unwrap();
+        let Delivery::Message(message) = inbox.recv().unwrap() else {
+            panic!("the prompt arrives as a message");
+        };
         assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
         assert!(matches!(message.sender.origin, Origin::Driver));
         assert!(message.sender.command_id.0.starts_with("c_"));
