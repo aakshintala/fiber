@@ -28,9 +28,6 @@ impl Clock for System {
         SystemTime::now()
     }
 
-    // Untestable without sleeping on the wall clock, which no test may do
-    // (`docs/testing.md`, "Values that change every run"). Exempted in
-    // `.cargo/mutants.toml` under the name cargo-mutants prints.
     #[expect(
         clippy::disallowed_methods,
         reason = "the process clock behind contract::clock::Clock::sleep"

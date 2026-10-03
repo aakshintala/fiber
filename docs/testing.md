@@ -68,7 +68,9 @@ did not happen passes when the feature never ran.
 Binary-level tests replace `ts`, ids and durations with placeholders before
 comparing. Behaviour that depends on time, such as a monitor's deadline or a
 retry's backoff, is tested at crate level under an injected clock. No test
-sleeps on the wall clock (`docs/tools.md`, "Background jobs").
+sleeps on the wall clock (`docs/tools.md`, "Background jobs"), except `main`'s
+test of the real clock's own `sleep`: it sleeps 1 ms and asserts the clock
+advanced at least that much.
 
 ### Screens
 

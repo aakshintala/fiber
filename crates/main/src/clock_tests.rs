@@ -19,6 +19,16 @@ fn now_does_not_go_backwards() {
     assert!(second >= first);
 }
 
+/// The one test that sleeps on the wall clock (`docs/testing.md`, "Values
+/// that change every run"). The OS guarantees the lower bound.
+#[test]
+fn sleep_waits_at_least_the_duration_asked() {
+    let asked = Duration::from_millis(1);
+    let before = System.now();
+    System.sleep(asked);
+    assert!(System.now().duration_since(before) >= asked);
+}
+
 #[test]
 fn wait_until_at_or_before_now_hands_the_closure_zero() {
     let now = System.now();

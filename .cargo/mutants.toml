@@ -1,7 +1,0 @@
-# Mutation testing (docs/testing.md, "Proving a test bites").
-#
-# `<impl Clock for System>::sleep` blocks on the wall clock. A test of it
-# would sleep, which no test may do (docs/testing.md, "Values that change
-# every run"), so this function is exempt. The pattern is the name
-# cargo-mutants prints. It is untestable, not an edit that changes nothing.
-exclude_re = ["<impl Clock for System>::sleep"]
