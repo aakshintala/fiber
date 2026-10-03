@@ -621,7 +621,7 @@ fn a_missing_credential_fails_before_the_session() {
 fn a_bedrock_converse_model_fails_before_the_session() {
     let setup = Setup::new();
     let server = ProviderServer::start([]).unwrap();
-    let source = setup.root.join("src");
+    let source = setup.root.path().join("src");
     write(
         &source.join("extension.json"),
         &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
