@@ -11,17 +11,18 @@ use super::{Paths, commit_all, swap};
 
 struct Dirs {
     root: PathBuf,
+    _held: fakes::TempDir,
 }
 
 impl Dirs {
     fn new(name: &str) -> Self {
-        let root = std::env::temp_dir().join(format!("fiber-swap-{}-{name}", std::process::id()));
-        fs::remove_dir_all(&root).unwrap_or(());
+        let held = fakes::TempDir::new(&format!("fiber-swap-{name}"));
+        let root = held.path().to_path_buf();
         fs::create_dir_all(root.join("fresh")).unwrap();
         fs::write(root.join("fresh/v"), "new").unwrap();
         fs::create_dir_all(root.join("target")).unwrap();
         fs::write(root.join("target/v"), "old").unwrap();
-        Self { root }
+        Self { root, _held: held }
     }
 
     fn path(&self, name: &str) -> PathBuf {
@@ -43,12 +44,6 @@ impl Dirs {
                 }
             },
         )
-    }
-}
-
-impl Drop for Dirs {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap_or(());
     }
 }
 
@@ -276,21 +271,9 @@ fn set_mode(path: &Path, mode: u32) {
     fs::set_permissions(path, perms).unwrap();
 }
 
-/// Puts the directory back to `0o755` so the temporary tree can be removed.
-struct Open(PathBuf);
-
-impl Drop for Open {
-    fn drop(&mut self) {
-        if fs::metadata(&self.0).is_ok() {
-            set_mode(&self.0, 0o755);
-        }
-    }
-}
-
 #[test]
 fn a_target_that_cannot_be_stated_stops_before_any_move() {
     let (dirs, paths) = pair("meta");
-    let _open = Open(dirs.root.clone());
     set_mode(&dirs.root, 0);
     let err = commit_all(&paths, |from, to| fs::rename(from, to)).unwrap_err();
     set_mode(&dirs.root, 0o755);
@@ -305,7 +288,6 @@ fn a_path_whose_metadata_fails_is_an_error_naming_it() {
     let hidden = dirs.path("hidden");
     fs::create_dir(&hidden).unwrap();
     fs::write(hidden.join("f"), "x").unwrap();
-    let _open = Open(hidden.clone());
     set_mode(&hidden, 0);
     let err = super::exists(&hidden.join("f")).unwrap_err();
     set_mode(&hidden, 0o755);

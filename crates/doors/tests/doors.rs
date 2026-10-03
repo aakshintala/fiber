@@ -16,7 +16,6 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
 use contract::events::{Event, FiberStarted, InputItem, TurnStarted};
@@ -29,25 +28,18 @@ use doors::{
 use log::Log;
 use serde_json::Value;
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
 /// A temporary directory, removed on drop, with a short name: a session's
 /// socket path must fit in 103 bytes on macOS.
-struct Temp(PathBuf);
+struct Temp(
+    PathBuf,
+    #[expect(dead_code, reason = "Drop removes the directory")] fakes::TempDir,
+);
 
 impl Temp {
     fn new() -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let dir = std::env::temp_dir().join(format!("fd{}-{n}", std::process::id()));
-        fs::remove_dir_all(&dir).unwrap_or(());
-        fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-}
-
-impl Drop for Temp {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.0).unwrap_or(());
+        let held = fakes::TempDir::new("fd");
+        let dir = held.path().to_path_buf();
+        Self(dir, held)
     }
 }
 
@@ -462,14 +454,13 @@ fn a_summary_shows_the_program_the_install_step_and_what_the_package_carries() {
 
 #[test]
 fn the_s_key_shows_every_staged_file_and_asks_again() {
-    let dir = std::env::temp_dir().join(format!("fiber-doors-source-{}", std::process::id()));
-    fs::remove_dir_all(&dir).unwrap_or(());
-    fs::create_dir_all(dir.join("lib")).unwrap();
-    fs::write(dir.join("extension.json"), "{}").unwrap();
-    fs::write(dir.join("lib/a.lua"), "return 1\n").unwrap();
-    fs::write(dir.join("blob"), [0xff, 0xfe, 0xfd]).unwrap();
+    let dir = fakes::TempDir::new("fiber-doors-source");
+    fs::create_dir_all(dir.path().join("lib")).unwrap();
+    fs::write(dir.path().join("extension.json"), "{}").unwrap();
+    fs::write(dir.path().join("lib/a.lua"), "return 1\n").unwrap();
+    fs::write(dir.path().join("blob"), [0xff, 0xfe, 0xfd]).unwrap();
     let shown = InstallSummary {
-        staged: dir.clone(),
+        staged: dir.path().to_path_buf(),
         ..summary()
     };
     let mut out = Vec::new();
@@ -489,11 +480,10 @@ fn the_s_key_shows_every_staged_file_and_asks_again() {
     // `s` then no is still no, and nothing else asks again.
     let mut out = Vec::new();
     let shown = InstallSummary {
-        staged: dir.clone(),
+        staged: dir.path().to_path_buf(),
         ..summary()
     };
     assert!(!install_approved(&[shown], true, &mut "s\nn\n".as_bytes(), &mut out).unwrap());
-    fs::remove_dir_all(&dir).unwrap_or(());
 }
 
 #[test]

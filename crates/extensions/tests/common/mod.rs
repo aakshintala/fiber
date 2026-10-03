@@ -6,44 +6,38 @@
 
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use extensions::{Error, Origin, Request, plan};
 use serde_json::{Value, json};
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
 pub(crate) struct Setup {
-    root: PathBuf,
+    root: fakes::TempDir,
 }
 
 impl Setup {
     pub(crate) fn new() -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root =
-            std::env::temp_dir().join(format!("fiber-extensions-{}-{n}", std::process::id()));
-        fs::remove_dir_all(&root).unwrap_or(());
-        fs::create_dir_all(root.join("home")).unwrap();
-        fs::create_dir_all(root.join("workspace")).unwrap();
+        let root = fakes::TempDir::new("fiber-extensions");
+        fs::create_dir(root.path().join("home")).unwrap();
+        fs::create_dir(root.path().join("workspace")).unwrap();
         Self { root }
     }
 
     pub(crate) fn home(&self) -> PathBuf {
-        self.root.join("home")
+        self.root.path().join("home")
     }
 
     pub(crate) fn root(&self) -> PathBuf {
-        self.root.clone()
+        self.root.path().to_path_buf()
     }
 
     pub(crate) fn workspace(&self) -> PathBuf {
-        self.root.join("workspace")
+        self.root.path().join("workspace")
     }
 
     /// An extension source directory named `dir` with this manifest and
     /// these provider files.
     pub(crate) fn source(&self, dir: &str, manifest: &Value, providers: &[Value]) -> PathBuf {
-        let path = self.root.join("src").join(dir);
+        let path = self.root.path().join("src").join(dir);
         write(&path.join("extension.json"), &manifest.to_string());
         for provider in providers {
             let name = provider["name"].as_str().unwrap();
@@ -53,12 +47,6 @@ impl Setup {
             );
         }
         path
-    }
-}
-
-impl Drop for Setup {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap_or(());
     }
 }
 

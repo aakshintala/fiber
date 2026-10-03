@@ -85,15 +85,16 @@ fn show(request: &Request) -> String {
 mod tests {
     use super::*;
 
-    fn temp_file(name: &str, bytes: &[u8]) -> String {
-        let path = std::env::temp_dir().join(format!("fakes-jig-{}-{name}", std::process::id()));
+    fn temp_file(dir: &fakes::TempDir, name: &str, bytes: &[u8]) -> String {
+        let path = dir.path().join(name);
         std::fs::write(&path, bytes).unwrap();
         path.to_string_lossy().into_owned()
     }
 
     #[test]
     fn a_bare_file_is_a_stream_and_a_status_prefix_sets_the_status() {
-        let file = temp_file("body", b"data: x\n\n");
+        let dir = fakes::TempDir::new("fakes-jig-body");
+        let file = temp_file(&dir, "body", b"data: x\n\n");
 
         assert_eq!(response(&file).unwrap(), Response::stream("data: x\n\n"));
         assert_eq!(

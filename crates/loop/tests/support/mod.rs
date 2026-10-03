@@ -11,7 +11,6 @@
     reason = "test code, helpers included; each test binary uses some helpers"
 )]
 
-use std::hash::BuildHasher as _;
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
@@ -400,22 +399,12 @@ pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
 }
 
 /// A directory removed when dropped.
-pub(crate) struct TempDir(pub(crate) PathBuf);
+pub(crate) struct TempDir(pub(crate) PathBuf, fakes::TempDir);
 
 impl TempDir {
     pub(crate) fn new() -> Self {
-        let dir = std::env::temp_dir().join(format!(
-            "fiber-loop-{}-{:x}",
-            std::process::id(),
-            std::collections::hash_map::RandomState::new().hash_one(())
-        ));
-        std::fs::create_dir_all(&dir).unwrap();
-        Self(dir)
-    }
-}
-
-impl Drop for TempDir {
-    fn drop(&mut self) {
-        std::fs::remove_dir_all(&self.0).unwrap_or(());
+        let held = fakes::TempDir::new("fiber-loop");
+        let dir = held.path().to_path_buf();
+        Self(dir, held)
     }
 }

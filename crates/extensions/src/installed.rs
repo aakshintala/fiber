@@ -215,30 +215,26 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
 #[allow(clippy::unwrap_used, reason = "a failure is the test's")]
 mod tests {
     use std::fs;
-    use std::path::PathBuf;
 
     use super::read;
 
-    fn home(name: &str) -> PathBuf {
-        let root = std::env::temp_dir().join(format!("fiber-read-{}-{name}", std::process::id()));
-        fs::remove_dir_all(&root).unwrap_or(());
-        fs::create_dir_all(&root).unwrap();
-        root
+    fn home(name: &str) -> fakes::TempDir {
+        fakes::TempDir::new(&format!("fiber-read-{name}"))
     }
 
     #[test]
     fn a_missing_extensions_directory_lists_nothing() {
         let home = home("missing");
-        assert!(read(&home).unwrap().is_empty());
-        fs::remove_dir_all(&home).unwrap();
+        assert!(read(home.path()).unwrap().is_empty());
+        fs::remove_dir_all(home.path()).unwrap();
     }
 
     #[test]
     fn an_extensions_path_that_is_not_a_directory_is_an_error() {
         let home = home("file");
-        fs::write(home.join("extensions"), "nope").unwrap();
-        let err = read(&home).unwrap_err();
+        fs::write(home.path().join("extensions"), "nope").unwrap();
+        let err = read(home.path()).unwrap_err();
         assert!(err.to_string().contains("extensions"), "{err}");
-        fs::remove_dir_all(&home).unwrap();
+        fs::remove_dir_all(home.path()).unwrap();
     }
 }

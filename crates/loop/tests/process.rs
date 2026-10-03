@@ -8,9 +8,7 @@
 )]
 
 use std::collections::BTreeMap;
-use std::fs;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::events::{
     AssistantMessageCompleted, Empty, Event, InputItem, MessageOutcome, TurnCompleted, TurnOutcome,
@@ -22,29 +20,26 @@ use log::Log;
 use r#loop::{fiber_exited, fiber_started};
 use serde_json::Value;
 
-static NEXT: AtomicUsize = AtomicUsize::new(0);
-
 /// A session log in a temporary directory, removed on drop.
 struct Session {
-    root: PathBuf,
+    _root: fakes::TempDir,
     dir: PathBuf,
     log: Log,
 }
 
 impl Session {
     fn new() -> Self {
-        let n = NEXT.fetch_add(1, Ordering::Relaxed);
-        let root = std::env::temp_dir().join(format!("fiber-process-{}-{n}", std::process::id()));
-        fs::remove_dir_all(&root).unwrap_or(());
+        let root = fakes::TempDir::new("fiber-process");
         let log = Log::create(
-            &root,
+            root.path(),
             SessionId("s_1".into()),
             fakes::clock::FakeClock::new(),
         )
         .unwrap();
+        let dir = root.path().join("s_1");
         Self {
-            dir: root.join("s_1"),
-            root,
+            dir,
+            _root: root,
             log,
         }
     }
@@ -64,12 +59,6 @@ impl Session {
         assert_eq!(last.kind, "fiber_exited");
         assert!(last.turn_id.is_none());
         (code, Value::Object(last.payload.clone()))
-    }
-}
-
-impl Drop for Session {
-    fn drop(&mut self) {
-        fs::remove_dir_all(&self.root).unwrap_or(());
     }
 }
 
