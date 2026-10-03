@@ -90,8 +90,8 @@ groups, then the flags and examples.
 
 | Command | What it does |
 |---|---|
-| `fiber` | Opens the terminal ("Two doors"). |
-| `ask [--model <model>] [--resume <id>] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). |
+| `fiber [--model <model>] [-c <key>=<value>]...` | Opens the terminal ("Two doors"). |
+| `ask [--model <model>] [-c <key>=<value>]... [--resume <id>] [<prompt>] [-]` | Runs one session of one turn; its events go to stdout. `--resume` sends the prompt to an existing session ("Lifecycle"). |
 | `resume [<id>]` | Opens a session in the terminal, resuming it if it has exited. With no id, opens home at the session list (`docs/tui.md`, "The session list"). |
 | `continue` | Opens the most recent session in this project, live or exited, in the terminal. With none, it is a usage error naming `fiber`. |
 | `sessions [--all]` | Lists sessions: id, state, the name or first prompt, what it waits on, and spend. It takes `--json`. |
@@ -107,6 +107,11 @@ discovery").
 
 `fiber ask` has no `--continue`. Several callers run `fiber ask` at once, so
 "the most recent session" is a race.
+
+`-c <key>=<value>` sets one configuration key for one run, the per-run layer
+(`docs/configuration.md`, "Layers"). Both doors take it, as they take
+`--model`, and it may be given more than once. The terminal passes it to each
+session it asks the hub to start.
 
 **Fiber itself.**
 

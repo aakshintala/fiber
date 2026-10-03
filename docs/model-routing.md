@@ -397,7 +397,9 @@ When a person types a model:
 3. A bare model id works if exactly one installed provider has it. Two matches
    are the error `model_ambiguous`, which lists every match. Prefix the
    provider, as `provider/model`. A provider that is installed but lacks the
-   named model is `no_model`.
+   named model is `no_model`. A bare id that no installed provider has is
+   `no_model` too, and its message says to run `fiber models`. Only a
+   `provider/model` whose provider is not installed is `extension_missing`.
 
 The exact match comes first because OpenRouter model ids contain colons.
 
