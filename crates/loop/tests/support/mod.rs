@@ -39,10 +39,13 @@ pub(crate) const MODEL: &str = "fake/model-1";
 /// A reply with readable reasoning, then `text`.
 pub(crate) fn reasoning_reply(thought: &str, text: &str) -> Scripted {
     let mut end = reply(text);
-    end.actions = vec![ReplyAction::Reasoning(ReasoningCompleted {
-        text: thought.into(),
-        provider_item: Some(reasoning_item(thought)),
-    })];
+    end.actions.insert(
+        0,
+        ReplyAction::Reasoning(ReasoningCompleted {
+            text: thought.into(),
+            provider_item: Some(reasoning_item(thought)),
+        }),
+    );
     Scripted {
         deltas: vec![
             Delta::Reasoning(TextDelta {

@@ -221,9 +221,8 @@ the model that produced it; its words go to every model.
 Each reasoning item goes only to the model that produced it, by its whole model
 reference, `provider/model` (`docs/model-routing.md`). After `/model` or the
 `model` command switches to another model reference, a request leaves out
-every reasoning item another one produced: both the opaque part and its readable text.
-A text part's words go to every model; its opaque data goes only to the model
-that produced it.
+every reasoning item another one produced: both the opaque part and its
+readable text.
 A change of effort or thinking alone keeps the model, so its items are still
 sent. A fork keeps its parent's model and sends them unchanged. Probed on
 Sonnet 5, Haiku 4.5 and GPT-6 Luna: `research/reasoning-resume/`.

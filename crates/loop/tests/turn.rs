@@ -38,20 +38,6 @@ fn assistant(text: &str) -> Input {
     }
 }
 
-/// `reasoning_reply` keeps only the reasoning action. Put the text part back
-/// after it, which is the order a reply logs them.
-fn reasoning_then_text(thought: &str, text: &str) -> Scripted {
-    let mut scripted = reasoning_reply(thought, text);
-    let Ok(reply) = &mut scripted.end else {
-        return scripted;
-    };
-    reply.actions.push(ReplyAction::Text(TextCompleted {
-        text: text.into(),
-        provider_item: None,
-    }));
-    scripted
-}
-
 /// The durable kinds of `lines`, in order.
 fn durable(lines: &[contract::Envelope]) -> Vec<&str> {
     kinds(lines)
@@ -265,7 +251,7 @@ fn the_conversation_is_kept_in_memory_not_reread_from_the_log() {
 fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     let mut session = Session::new(
         vec![
-            reasoning_then_text("Think.", "Hi."),
+            reasoning_reply("Think.", "Hi."),
             tool_call_reply("Checking.", &["get_weather", "get_time"]),
             Scripted::text("Done."),
         ],
@@ -342,10 +328,7 @@ fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
 #[test]
 fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     let mut session = Session::new(
-        vec![
-            reasoning_then_text("Think.", "Hi."),
-            Scripted::text("Again."),
-        ],
+        vec![reasoning_reply("Think.", "Hi."), Scripted::text("Again.")],
         None,
     );
     session.inbox.send(message("one")).unwrap();
