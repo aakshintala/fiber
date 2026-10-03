@@ -266,12 +266,8 @@ impl LuaExtension {
             return Ok(());
         }
         let load_by = self.hub.clock().now().checked_add(LOAD_TIMEOUT);
-        let (name, dir, home, memory_cap) = (
-            self.name.clone(),
-            self.dir.clone(),
-            self.home.clone(),
-            self.memory_cap,
-        );
+        let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
+        let memory_cap = self.memory_cap;
         let hub = Arc::clone(&self.hub);
         thread::Builder::new()
             .name(format!("lua {}", self.name))
