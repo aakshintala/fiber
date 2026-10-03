@@ -95,7 +95,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `thinking` | the model's own default | yes | The thinking level for a new session (`docs/model-routing.md`, "Thinking"). |
-| `scoped_models` | none | no | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
+| `scoped_models` | none | yes | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"` (`docs/delegates.md`). |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
@@ -106,8 +106,8 @@ set the key.
 | `handoff.window_fraction` | 0.7 | yes | The trigger as a fraction of the model's context window. |
 | `handoff.nudge` | true | yes | Whether the nudge is given. |
 | `cache.lifetime` | `"1h"` | yes | The prompt-cache lifetime, `"5m"` or `"1h"` (`docs/prompt-cache.md`). |
-| `cache.warm_idle` | false | no | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
-| `cache.warm_cap` | set by the replay in [#436](https://github.com/aakshintala/fiber/issues/436) | no | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes. |
+| `cache.warm_idle` | false | yes | Whether an idle session keeps its prompt cache warm (`docs/prompt-cache.md`, "Warming while idle"). |
+| `cache.warm_cap` | set by the replay in [#436](https://github.com/aakshintala/fiber/issues/436) | yes | How long after the last turn warming stops, as a duration such as `"4h"`; never more than 19 cache lifetimes. |
 | `keys."<action>"` | the binding in `docs/tui.md` | no | A key, or a list of keys, for a terminal action; `[]` unbinds it (`docs/tui.md`, "Bindings"). |
 | `retry.attempts` | 3 | yes | Retries of a failed model call (`docs/model-routing.md`, "When a model call fails"). |
 | `retry.initial_delay_ms` | 2000 | yes | The first backoff, doubling each retry. |
