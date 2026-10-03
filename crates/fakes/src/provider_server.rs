@@ -10,8 +10,8 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 /// Header names whose values are credentials, lowercase. Their values are
-/// masked before a request is recorded, as is a `key` query parameter, which
-/// Google's API also accepts (`docs/model-routing.md`).
+/// replaced by a fingerprint before a request is recorded, as is a `key`
+/// query parameter, which Google's API also accepts (`docs/model-routing.md`).
 const CREDENTIAL_HEADERS: [&str; 6] = [
     "authorization",
     "proxy-authorization",
@@ -21,8 +21,19 @@ const CREDENTIAL_HEADERS: [&str; 6] = [
     "cookie",
 ];
 
-/// What a masked credential reads as in a recorded request.
-const MASK: &str = "<masked>";
+/// A credential's fingerprint: `sha256:` and the first 8 lowercase hex digits
+/// of SHA-256 over `value`, so a recording can be asserted without holding
+/// the credential.
+pub fn fingerprint(value: &str) -> String {
+    let digest = ring::digest::digest(&ring::digest::SHA256, value.as_bytes());
+    let hex: String = digest
+        .as_ref()
+        .iter()
+        .take(4)
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    format!("sha256:{hex}")
+}
 
 /// One scripted response: a status, headers and the body bytes, sent as they
 /// are. A recorded stream is served by passing its bytes as the body.
@@ -64,16 +75,17 @@ impl Response {
     }
 }
 
-/// One request the server received, with credentials masked.
+/// One request the server received, with credentials replaced by their
+/// fingerprints.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
     /// The method, such as `POST`.
     pub method: String,
     /// The request target: the path and any query, with a `key` query
-    /// parameter's value masked.
+    /// parameter's value replaced by its fingerprint.
     pub path: String,
     /// Headers in the order received, names lowercased, credential values
-    /// masked.
+    /// replaced by their fingerprints.
     pub headers: Vec<(String, String)>,
     /// The body bytes, as received.
     pub body: Vec<u8>,
@@ -242,7 +254,7 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<(Request, Option<Malfor
     let (Some(method), Some(target)) = (parts.next(), parts.next()) else {
         return Err(invalid("no request line"));
     };
-    let (method, path) = (method.to_owned(), mask_query(target));
+    let (method, path) = (method.to_owned(), fingerprint_query(target));
 
     let mut headers = Vec::new();
     loop {
@@ -258,12 +270,13 @@ fn read_request(reader: &mut impl BufRead) -> io::Result<(Request, Option<Malfor
             .split_once(':')
             .ok_or_else(|| invalid("header without a colon"))?;
         let name = name.trim().to_ascii_lowercase();
+        let value = value.trim();
         let value = if CREDENTIAL_HEADERS.contains(&name.as_str()) {
-            MASK
+            fingerprint(value)
         } else {
-            value.trim()
+            value.to_owned()
         };
-        headers.push((name, value.to_owned()));
+        headers.push((name, value));
     }
 
     let chunked = headers
@@ -346,19 +359,17 @@ fn framing_line(reader: &mut impl BufRead) -> Result<String, Malformed> {
     }
 }
 
-/// The request target with any `key` query parameter's value masked.
-fn mask_query(target: &str) -> String {
+/// The request target with any `key` query parameter's value replaced by
+/// its fingerprint.
+fn fingerprint_query(target: &str) -> String {
     let Some((path, query)) = target.split_once('?') else {
         return target.to_owned();
     };
-    let query: Vec<&str> = query
+    let query: Vec<String> = query
         .split('&')
-        .map(|p| {
-            if p.starts_with("key=") {
-                "key=<masked>"
-            } else {
-                p
-            }
+        .map(|param| match param.split_once('=') {
+            Some(("key", value)) => format!("key={}", fingerprint(value)),
+            _ => param.to_owned(),
         })
         .collect();
     format!("{path}?{}", query.join("&"))

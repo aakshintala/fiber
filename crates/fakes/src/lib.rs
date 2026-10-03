@@ -10,7 +10,7 @@ mod temp_dir;
 
 use std::path::PathBuf;
 
-pub use provider_server::{ProviderServer, Request, Response};
+pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};
 pub use temp_dir::TempDir;
 
