@@ -97,8 +97,8 @@ fn models_runs_when_there_is_no_cached_copy_and_its_list_is_cached() {
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].path, "/v1/models");
     assert_eq!(
-        requests[0].header("authorization").map(str::to_owned),
-        Some(fingerprint("Bearer k1"))
+        requests[0].header("authorization"),
+        Some(fingerprint("Bearer k1").as_str())
     );
     let cached = config::read_model_cache(&setup.home(), "fixture").unwrap();
     assert_eq!(cached.as_deref(), Some(models.as_slice()));

@@ -219,8 +219,8 @@ impl Setup {
 /// bytes that package sends (`docs/testing.md`, "Model calls").
 fn assert_fingerprint(request: &Request, header: &str, value: &str) {
     assert_eq!(
-        request.header(header).map(str::to_owned),
-        Some(fingerprint(value)),
+        request.header(header),
+        Some(fingerprint(value).as_str()),
         "{header}"
     );
 }
@@ -419,29 +419,18 @@ fn a_killed_test_kills_the_stand_in_group() {
     let stdout = helper.stdout.take().unwrap();
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
-        let mut lines = std::io::BufReader::new(stdout);
-        let mut line = String::new();
-        let mut saw_group = false;
-        loop {
-            line.clear();
-            match lines.read_line(&mut line) {
-                Ok(0) => {
-                    send_group(&tx, None);
-                    break;
-                }
-                Ok(_) if !saw_group => {
-                    if let Some(id) = line.trim().strip_prefix("group ") {
-                        saw_group = true;
-                        send_group(&tx, id.parse().ok());
-                    }
-                }
-                Ok(_) => {}
-                Err(_) => {
-                    send_group(&tx, None);
-                    break;
-                }
-            }
+        let mut reader = std::io::BufReader::new(stdout);
+        // libtest prints its own lines before the helper's.
+        let group = (&mut reader)
+            .lines()
+            .map_while(Result::ok)
+            .find_map(|line| line.strip_prefix("group ")?.parse().ok());
+        send_group(&tx, group);
+        // EOF comes once every process holding the pipe has exited.
+        match std::io::copy(&mut reader, &mut std::io::sink()) {
+            Ok(_) | Err(_) => {}
         }
+        send_group(&tx, None);
     });
     let group = match rx.recv_timeout(DEADLINE) {
         Ok(Some(group)) => group,

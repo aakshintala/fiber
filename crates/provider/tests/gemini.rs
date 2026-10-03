@@ -365,8 +365,8 @@ fn a_recording_served_by_the_fake_server_runs_through_the_seam() {
         "/v1beta/models/gemini-3.1-flash-lite:streamGenerateContent?alt=sse"
     );
     assert_eq!(
-        sent.header("x-goog-api-key").map(str::to_owned),
-        Some(fingerprint("AIza-secret"))
+        sent.header("x-goog-api-key"),
+        Some(fingerprint("AIza-secret").as_str())
     );
     assert_eq!(sent.header("authorization"), None);
     assert!(!String::from_utf8_lossy(&sent.body).contains("AIza-secret"));

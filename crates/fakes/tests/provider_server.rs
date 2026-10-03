@@ -214,20 +214,10 @@ fn it_records_each_request_with_credential_fingerprints() {
     assert_eq!(first.body, br#"{"model":"m"}"#);
     let secret = fingerprint("sk-secret");
     let bearer = fingerprint("Bearer sk-secret");
-    assert_eq!(
-        first.header("authorization").map(str::to_owned),
-        Some(bearer.clone())
-    );
-    assert_eq!(
-        first.header("proxy-authorization").map(str::to_owned),
-        Some(bearer)
-    );
+    assert_eq!(first.header("authorization"), Some(bearer.as_str()));
+    assert_eq!(first.header("proxy-authorization"), Some(bearer.as_str()));
     for name in ["x-api-key", "x-goog-api-key", "api-key", "cookie"] {
-        assert_eq!(
-            first.header(name).map(str::to_owned),
-            Some(secret.clone()),
-            "{name}"
-        );
+        assert_eq!(first.header(name), Some(secret.as_str()), "{name}");
     }
     assert_eq!(first.header("anthropic-version"), Some("2023-06-01"));
     assert_eq!(first.header("content-length"), Some("13"));
