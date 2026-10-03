@@ -1,0 +1,41 @@
+name: completion-bench
+# Throwaway: measures the cost of one dynamic completion on a Linux runner.
+# Put this file at .github/workflows/bench.yml on a throwaway branch, next to
+# the bench crate in research/clap-dynamic-completion/bench/.
+on:
+  workflow_dispatch:
+  push:
+    branches: [completion-bench]
+permissions:
+  contents: read
+jobs:
+  bench:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: research/clap-dynamic-completion/bench
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install hyperfine
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y hyperfine
+      - name: Build
+        run: cargo build --release
+      - name: Platform
+        run: |
+          uname -srm
+          grep -m1 'model name' /proc/cpuinfo || true
+          nproc
+          rustc --version
+          hyperfine --version
+          grep -A1 'name = "clap_complete"' Cargo.lock
+      - name: Benchmark
+        run: ./bench.sh | tee bench.txt
+      - uses: actions/upload-artifact@v7
+        with:
+          name: completion-bench
+          path: |
+            research/clap-dynamic-completion/bench/bench.txt
+            research/clap-dynamic-completion/bench/results.json
