@@ -9,7 +9,7 @@ use super::hub::Progress;
 use super::*;
 
 /// Wall-clock bound on a wait for the VM, a server, or a thread.
-const WAIT: Duration = Duration::from_secs(10);
+const WAIT: Duration = Duration::from_secs(5);
 
 /// A panic in a host function is never a Lua error the extension's `pcall`
 /// can catch (`docs/code-quality.md`, "Panics"). Tests run under unwind,
@@ -307,7 +307,9 @@ fn provider_functions_abandoning_registration_wakes_every_waiter() {
         }
         woke_tx.send(()).unwrap();
     });
-    waiting_rx.recv().unwrap();
+    waiting_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the other waiter to take the lock");
     // Its own thread, so a call that never returns fails the test.
     let (done_tx, done_rx) = mpsc::channel();
     let caller = Arc::clone(&ext);

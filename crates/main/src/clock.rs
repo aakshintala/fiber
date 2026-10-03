@@ -28,6 +28,9 @@ impl Clock for System {
         SystemTime::now()
     }
 
+    // Untestable without sleeping on the wall clock, which no test may do
+    // (`docs/testing.md`, "Values that change every run"). Exempted in
+    // `.cargo/mutants.toml` under the name cargo-mutants prints.
     #[expect(
         clippy::disallowed_methods,
         reason = "the process clock behind contract::clock::Clock::sleep"
@@ -37,17 +40,9 @@ impl Clock for System {
     }
 
     fn wait_until(&self, until: Option<Instant>, wait: &mut dyn FnMut(Option<Duration>)) {
-        let bound = match until {
-            None => None,
-            Some(until) => {
-                let now = self.now();
-                if until <= now {
-                    Some(Duration::ZERO)
-                } else {
-                    Some(until.saturating_duration_since(now))
-                }
-            }
-        };
+        // `saturating_duration_since` is zero when `until` is at or before now,
+        // so that branch needs no separate arm.
+        let bound = until.map(|until| until.saturating_duration_since(self.now()));
         wait(bound);
     }
 

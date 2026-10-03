@@ -16,9 +16,10 @@ use contract::clock::Clock;
 use extensions::{Error, LuaExtension};
 use fakes::clock::FakeClock;
 
-/// How long a test waits for one call before failing. Far past every timeout
-/// the fixture declares, so it fires only when a callback is never stopped.
-const WAIT: Duration = Duration::from_secs(10);
+/// How long a test waits for one call before failing. A callback that is
+/// stopped returns on the fake clock, so this fires only when one is never
+/// stopped.
+const WAIT: Duration = Duration::from_secs(5);
 
 /// Reading, compiling and running an entry script is bounded at 2 seconds
 /// (`docs/extensions.md`).

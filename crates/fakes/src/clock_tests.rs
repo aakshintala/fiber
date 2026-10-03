@@ -148,6 +148,39 @@ fn await_parked_returns_once_a_thread_parks_at_the_deadline() {
     assert!(clock.parked().is_empty());
 }
 
+/// A thread is already parked. `await_parked` on a helper must answer at once.
+/// Deleting the `!` in its wait would block for the 30 s `within`, and this
+/// test's 5 s wait would fail.
+#[test]
+fn await_parked_returns_at_once_when_a_thread_is_already_parked() {
+    let clock = FakeClock::new();
+    let until = clock.origin() + Duration::from_secs(30);
+    let (release_tx, release_rx) = mpsc::channel();
+    let clock_t = Arc::clone(&clock);
+    let parked = thread::spawn(move || {
+        clock_t.wait_until(Some(until), &mut |_bound| {
+            release_rx
+                .recv_timeout(Duration::from_secs(5))
+                .expect("waited for the test to release the parked thread");
+        });
+    });
+    assert!(
+        clock.await_parked(until, Duration::from_secs(5)),
+        "waited for a thread to park at the deadline"
+    );
+    let clock_t = Arc::clone(&clock);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _ = tx.send(clock_t.await_parked(until, Duration::from_secs(30)));
+    });
+    assert!(
+        rx.recv_timeout(Duration::from_secs(5))
+            .expect("waited for await_parked to see the thread already parked")
+    );
+    release_tx.send(()).unwrap();
+    parked.join().unwrap();
+}
+
 #[test]
 fn await_parked_is_false_when_nobody_parks() {
     let clock = FakeClock::new();

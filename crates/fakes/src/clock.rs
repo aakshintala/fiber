@@ -66,7 +66,6 @@ impl FakeClock {
         let wakers = {
             let mut state = lock(&self.state);
             state.offset = state.offset.saturating_add(d);
-            state.wakers.retain(|waker| waker.strong_count() > 0);
             state
                 .wakers
                 .iter()
@@ -182,7 +181,10 @@ impl Drop for Leave<'_> {
 }
 
 fn parked_at(state: &State, until: Instant) -> bool {
-    parked_count(state, until) > 0
+    state
+        .parked
+        .iter()
+        .any(|parked| parked.until == Some(until))
 }
 
 fn parked_count(state: &State, until: Instant) -> usize {

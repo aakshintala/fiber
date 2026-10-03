@@ -81,8 +81,8 @@ impl Hub {
             let Some(shared) = slot.take() else {
                 return;
             };
+            // A zero bound returns at once: `wait_timeout` of zero does not block.
             slot = Some(match bound {
-                Some(d) if d.is_zero() => shared,
                 Some(d) => {
                     changed
                         .wait_timeout(shared, d)
