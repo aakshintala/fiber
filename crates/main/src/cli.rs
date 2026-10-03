@@ -80,6 +80,8 @@ pub(crate) enum Run {
     List,
     /// `fiber version`.
     Version,
+    /// `fiber help`, or `fiber help <command>`.
+    Help(Option<String>),
     /// No arguments: the terminal door, which is not built.
     Bare,
 }
@@ -89,7 +91,8 @@ pub(crate) enum Run {
     name = "fiber",
     version = env!("CARGO_PKG_VERSION"),
     about = "Fiber, a coding agent.",
-    disable_version_flag = true
+    disable_version_flag = true,
+    disable_help_subcommand = true
 )]
 struct Cli {
     #[command(subcommand)]
@@ -122,6 +125,12 @@ enum Commands {
     List,
     /// Print the version
     Version,
+    /// Print this menu, or a command's help
+    Help {
+        /// The command to describe. Absent prints the menu.
+        #[arg(value_name = "command")]
+        command: Option<String>,
+    },
 }
 
 #[derive(clap::Args)]
@@ -200,7 +209,25 @@ fn run(cli: Cli) -> Result<Run, String> {
         Some(Commands::Remove { name }) => Run::Remove(name),
         Some(Commands::List) => Run::List,
         Some(Commands::Version) => Run::Version,
+        Some(Commands::Help { command }) => Run::Help(command),
     })
+}
+
+/// The menu, or one command's help. An unknown name is the same sentence
+/// as invoking that name directly.
+pub(crate) fn render_help(name: Option<&str>) -> Result<String, String> {
+    let mut cmd = command();
+    let Some(name) = name else {
+        return Ok(cmd.render_help().to_string());
+    };
+    let Some(sub) = cmd.find_subcommand_mut(name) else {
+        let error = match command().try_get_matches_from(["fiber", name]) {
+            Err(error) => error,
+            Ok(_) => return Err(format!("Unrecognized subcommand '{name}'.{HELP_SUFFIX}")),
+        };
+        return Err(usage_sentence(&error));
+    };
+    Ok(sub.render_help().to_string())
 }
 
 /// `-` is only the last positional. Anything else is one prompt too many.

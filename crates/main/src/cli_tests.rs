@@ -36,14 +36,10 @@ fn the_menu_is_hand_grouped_and_names_every_subcommand() {
     }
     assert!(
         cmd.get_subcommands().any(|sub| sub.get_name() == "help"),
-        "clap's help subcommand was not built"
+        "the help command is missing from the parser"
     );
 
-    for args in [
-        &["fiber", "--help"][..],
-        &["fiber", "-h"],
-        &["fiber", "help"],
-    ] {
+    for args in [&["fiber", "--help"][..], &["fiber", "-h"]] {
         let parsed = parse_from(args.iter().copied());
         if let Invocation::Help(error) = parsed {
             assert_eq!(error.to_string(), menu(), "{args:?}");
@@ -51,6 +47,12 @@ fn the_menu_is_hand_grouped_and_names_every_subcommand() {
             panic!("{args:?} did not print help: {parsed:?}");
         }
     }
+    let parsed = parse_from(["fiber", "help"]);
+    assert!(
+        matches!(parsed, Invocation::Run(Run::Help(None))),
+        "{parsed:?}"
+    );
+    assert_eq!(super::render_help(None).unwrap(), menu());
 }
 
 #[test]
