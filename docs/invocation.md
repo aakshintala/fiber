@@ -121,6 +121,7 @@ session it asks the hub to start.
 | `login [<provider>]` | Stores a provider's key (`docs/configuration.md`, "Secrets"). With no provider, a terminal offers the installed providers; without a terminal, it is a usage error. |
 | `logout <provider>` | Deletes a provider's stored key. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
+| `completion <shell>` | Prints a completion script for `bash`, `zsh` or `fish`, such as `source <(fiber completion zsh)`. It completes commands and flags, generated from the same parser definitions, and no values. |
 | `help [<command>]` | Prints the menu, or a command's help. |
 | `version` | Prints the version. |
 
