@@ -26,21 +26,22 @@ use crate::{Error, host};
 
 /// Each Lua extension's memory cap. Past it, an allocation is a Lua error in
 /// that extension's VM, and a file larger than it is not read.
-// ponytail: one cap for every extension until #331 settles its size and
-// setting; docs/extensions.md calls it optional and per extension.
+// debt: weakens docs/extensions.md, "Loading, and cost when nothing is
+// loaded"; fixed by #369. One 64 MiB cap for every extension, not 1 MiB with
+// a manifest memory_mib.
 pub const MEMORY_CAP: usize = 64 << 20;
 
 /// The script Fiber runs when it creates the VM.
-// ponytail: docs/configuration.md's manifest names no Lua entry script; #331.
+// docs/configuration.md, "An extension's manifest".
 const ENTRY: &str = "init.lua";
 
 /// How long reading, compiling and running the entry script may take. It is
 /// not a callback, so it declares no timeout of its own.
-// ponytail: no doc names this bound; #331.
+// docs/extensions.md, "How an extension runs".
 const LOAD_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How long past a deadline the caller waits before it abandons the VM.
-// ponytail: picked, not measured; #331.
+// docs/extensions.md, "How an extension runs".
 const GRACE: Duration = Duration::from_secs(1);
 
 /// Instructions between two looks at the clock while a deadline is ahead.
@@ -50,7 +51,8 @@ pub(super) const CHECK_EVERY: u32 = 1000;
 /// `coroutine.create`, `require`, `fiber.command` and `fiber.provider`, which
 /// fill the two tables the prelude returns. Lua's own `wrap` is a
 /// separate C function that would make an unarmed coroutine.
-// ponytail: `timeout` is in milliseconds until #331 names its unit.
+// A callback's timeout is in milliseconds (docs/extensions.md, "How an
+// extension runs").
 pub(super) const PRELUDE: &str = r#"
 local create, load_module = ...
 local commands, providers = {}, {}

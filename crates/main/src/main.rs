@@ -278,8 +278,8 @@ fn ask(args: &[String], clock: Arc<dyn contract::clock::Clock>) -> i32 {
             Arc::clone(&log),
             parts.provider,
             parts.model,
-            // ponytail: an empty system prompt until the system prompt is
-            // built (`docs/system-prompt.md`).
+            // debt: weakens docs/system-prompt.md, "Two parts"; fixed by
+            // #304. The system prompt is empty.
             String::new(),
             inbox,
             parts.workspace.to_string_lossy().into_owned(),
@@ -316,8 +316,9 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
         overrides: model.map(|m| format!("model={m}")).into_iter().collect(),
     })
     .map_err(|e| failed(e.code(), e))?;
-    // ponytail: notices from configuration and loading are dropped until the
-    // session writes them (`docs/events.md`, `notice`).
+    // debt: weakens docs/configuration.md, "When Fiber reads configuration",
+    // and docs/extensions.md, "The extension API version"; fixed by #382.
+    // Notices from configuration and loading are dropped.
     let (providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
     let model = providers
         .choose(None, &config)
@@ -372,8 +373,8 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
             )
         }
         Protocol::BedrockConverse => {
-            // ponytail: docs/errors.md has no code for a protocol this Fiber
-            // does not speak yet; `extension_missing` stands in.
+            // debt: weakens docs/errors.md, "Before a session exists"; fixed
+            // by #363. extension_missing stands in for protocol_unsupported.
             return Err(failure(
                 ErrorCode::ExtensionMissing,
                 format!(

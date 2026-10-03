@@ -40,8 +40,8 @@ pub fn is_path(typed: &str) -> bool {
 
 /// A name as its repository and the directory inside it: the first three
 /// segments are the repository (`github.com/owner/repo`).
-// ponytail: a host whose repositories sit deeper, such as GitLab subgroups,
-// is not told apart; add a rule when someone needs one.
+// debt: weakens docs/extensions.md, "Names"; fixed by #365. The first three
+// parts are always the repository; a .git marker for subgroups is not read.
 pub(crate) fn split(name: &str) -> Result<(&str, &str), Error> {
     let (repo, dir) = match name.match_indices('/').nth(2) {
         Some((i, _)) => {

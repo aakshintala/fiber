@@ -210,8 +210,9 @@ impl Loop {
             system_prompt: self.system_prompt.clone(),
             tools: self.tools.values().map(|(_, _, d)| d.clone()).collect(),
             effort: None,
-            // ponytail: fixed until the preamble is built and logged
-            // (`docs/prompt-cache.md`, "The preamble").
+            // debt: weakens docs/prompt-cache.md, "The preamble"; fixed by
+            // #304. tool_choice is fixed at "auto" and no preamble_built is
+            // logged.
             tool_choice: "auto".to_owned(),
             cache_lifetime: CacheLifetime::OneHour,
             cache_key: self.cache_key.clone(),
@@ -267,7 +268,7 @@ impl Loop {
         let mut emit = |event: &Event, action: &ActionId| {
             write(log, conversation, model, event, turn, Some(action))
         };
-        // ponytail: a reasoning fragment does not say which reasoning item it
+        // debt: a reasoning fragment does not say which reasoning item it
         // belongs to, so a run of reasoning fragments with nothing between is
         // taken as one action. Two readable items back to back would share an
         // id; exact once `Delta::Reasoning` carries the item's index, as
@@ -353,8 +354,8 @@ impl Loop {
                 model: self.model.clone(),
                 tokens: reply.tokens,
                 web_searches: None,
-                // ponytail: no prices yet; the model's declared prices come
-                // with the spending budget (`docs/model-routing.md`, "Cost").
+                // debt: weakens docs/model-routing.md, "Cost"; fixed by #306.
+                // Cost is null; the model's declared prices are not applied.
                 cost: None,
                 subscription: None,
                 extension: None,

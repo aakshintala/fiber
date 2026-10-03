@@ -224,8 +224,10 @@ impl Shared {
         if let Phase::Registering { abandon_at } = self.phase
             && expired(abandon_at, now)
         {
-            // ponytail: the abandoned thread is leaked, still running, until
-            // the process exits; Rust cannot stop a thread.
+            // debt: the abandoned thread is leaked, still running, until the
+            // process exits; Rust cannot stop a thread. Cap abandoned VMs per
+            // session if leaked threads show in a session's peak memory
+            // (docs/performance.md).
             self.phase = Phase::Stopped(Error::Abandoned {
                 extension: name.to_owned(),
                 callback: ENTRY.to_owned(),
@@ -291,8 +293,10 @@ impl Shared {
             // Queued or parked, not on the thread: failing it leaves the VM up.
             return Next::Return(Err(timed_out(name, target, timeout)));
         }
-        // ponytail: the abandoned thread is leaked, still running, until
-        // the process exits; Rust cannot stop a thread.
+        // debt: the abandoned thread is leaked, still running, until the
+        // process exits; Rust cannot stop a thread. Cap abandoned VMs per
+        // session if leaked threads show in a session's peak memory
+        // (docs/performance.md).
         self.phase = Phase::Stopped(stopped(name));
         Next::Return(Err(Error::Abandoned {
             extension: name.to_owned(),

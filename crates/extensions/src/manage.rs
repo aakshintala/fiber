@@ -61,9 +61,9 @@ impl Item {
     /// What it carries, one line each, such as `skills: a, b`: the
     /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file
     /// and the platforms it has binaries for.
-    // ponytail: #355 item 5 option A. The doc names these kinds and not the
-    // directories; `skills/`, `prompts/`, `themes/` and `tui/` stand until
-    // the owner picks.
+    // debt: the doc names these kinds and not the directories (#355 item 5,
+    // unruled); skills/, prompts/, themes/ and tui/ stand until #191 settles
+    // where a package keeps them.
     pub fn carries(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for (dir, label) in [

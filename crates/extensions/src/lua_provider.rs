@@ -80,9 +80,10 @@ impl LuaProvider {
     /// [`REFRESH_BEFORE`] of expiry it returns the token it has and calls
     /// `credential()` again on another thread, so a request never waits on
     /// a refresh.
-    // ponytail: a refresh that fails leaves the old token, and the next call
+    // debt: a refresh that fails leaves the old token, and the next call
     // inside the window tries again; nothing reports the failure until the
-    // token expires.
+    // token expires. Report a failed refresh as a notice if tokens are seen
+    // expiring mid-session.
     pub fn token(self: &Arc<Self>) -> Result<Secret, Error> {
         let mut state = lock(&self.token);
         if let Some((token, expires)) = &state.current

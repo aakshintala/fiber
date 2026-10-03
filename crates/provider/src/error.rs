@@ -63,8 +63,9 @@ impl Error {
             Self::UnknownStopReason(_) => ErrorCode::UnknownStopReason,
             Self::ContextOverflow(_) => ErrorCode::ContextOverflow,
             Self::Refused(_) => ErrorCode::Refused,
-            // ponytail: #322 has not named the code a failed `sign()` reports,
-            // so this is `connection_failed` until it does. It is not retried.
+            // debt: weakens docs/model-routing.md, "Signing a request"; fixed
+            // by #363. A failed sign() is connection_failed, not
+            // credential_failed. It is not retried.
             Self::Sign(_) => ErrorCode::ConnectionFailed,
         }
     }

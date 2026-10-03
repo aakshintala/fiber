@@ -79,7 +79,7 @@ impl Ext {
             let mut h = std::collections::hash_map::DefaultHasher::new();
             (input.to_string(), w).hash(&mut h);
             let key = h.finish();
-            // ponytail: never evicted; a paged TUI would drop rows that leave its window
+            // debt: never evicted; a paged TUI would drop rows that leave its window
             if let Some(hit) = self.cache.borrow().get(&key) {
                 hit.clone()
             } else {

@@ -156,9 +156,10 @@ impl Deadline {
                     return Ok(VmState::Continue);
                 }
                 let escalated = deadline.clone();
-                // ponytail: an escalated coroutine stays on the per-instruction
+                // debt: an escalated coroutine stays on the per-instruction
                 // hook if a later callback resumes it; that callback runs slower,
-                // and is still stopped at its own deadline.
+                // and is still stopped at its own deadline. Reset the hook when a
+                // callback arms the coroutine if a profile shows the slowdown.
                 lua.current_thread().set_hook(
                     HookTriggers::new().every_nth_instruction(1),
                     move |_, _| {
