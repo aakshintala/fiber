@@ -90,8 +90,9 @@ impl Log {
             .append(true)
             .open(&path)
             .map_err(io_at(&path))?;
-        // ponytail: reads the whole log to find its tail; resume folds the
-        // whole log anyway (`docs/events.md`, "Resume").
+        // debt: reads the whole log to find its tail; resume folds the whole
+        // log anyway (docs/events.md, "Resume"). Seek to the tail once resume
+        // reads a range by seq.
         let bytes = fs::read(&path).map_err(io_at(&path))?;
         // A no-op unless the tail is torn.
         let complete = u64::try_from(complete_len(&bytes)).unwrap_or(u64::MAX);
@@ -395,7 +396,7 @@ fn lock(dir: &Path, id: &SessionId) -> Result<Lock, Error> {
     }
 }
 
-// ponytail: a holder that crashed leaves its pid, and a new holder that has
+// debt: a holder that crashed leaves its pid, and a new holder that has
 // not yet replaced it is misnamed for those microseconds; a liveness check on
 // the pid if that ever matters.
 /// Names the holder of the lock at `path`. A holder writes its pid just

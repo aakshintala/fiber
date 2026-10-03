@@ -116,9 +116,8 @@ impl ModelCall for Call {
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes").
 ///
-/// ponytail: deferred tools are sent in full; `defer_loading` needs tool
-/// search, which is not built yet (`crates/provider/src/openai_responses.rs`,
-/// same note; #326).
+/// debt: deferred tools are sent in full, without defer_loading, until tool
+/// search is built (#368); nothing defers a tool yet.
 fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let mut tools: Vec<_> = request.tools.iter().collect();
     tools.sort_by(|a, b| a.name.cmp(&b.name));
@@ -644,9 +643,8 @@ impl Decoder {
                     "the reply reached the end of the model's context window".into(),
                 ));
             }
-            // ponytail: `pause_turn` (a hosted tool's loop paused) stays
-            // unknown: no doc says what Fiber does with it, and Fiber sends
-            // no hosted tool yet.
+            // debt: pause_turn (a hosted tool's loop paused) stays an unknown
+            // stop reason while Fiber sends no hosted tool; #372 continues it.
             Some(other) => return Err(Error::UnknownStopReason(other.to_owned())),
             None => {
                 return Err(Error::StreamIncomplete(
@@ -668,7 +666,7 @@ impl Decoder {
 /// cache reads and writes, unlike `openai-responses` (`docs/events.md`), and
 /// splits writes by lifetime in `cache_creation`.
 ///
-/// ponytail: a usage with `cache_creation_input_tokens` but no
+/// debt: a usage with `cache_creation_input_tokens` but no
 /// `cache_creation` split (no probed endpoint sent one) reports no write;
 /// attribute it to the request's lifetime if such an endpoint turns up.
 fn tokens(usage: &Value) -> Tokens {

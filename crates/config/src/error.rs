@@ -97,9 +97,9 @@ impl ConfigError {
             | Self::WrongType { .. }
             | Self::NotPlain { .. }
             | Self::Shape { .. } => ErrorCode::ConfigInvalid,
-            // ponytail: a stored credential that exists but is empty also
-            // reports `credential_missing`; a dedicated code waits on the
-            // owner (docs/errors.md has none).
+            // debt: weakens docs/model-routing.md, "Credentials"; fixed by
+            // #363. A stored credential that exists but is empty reports
+            // credential_missing, not credential_failed.
             Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
             Self::Io { .. } => ErrorCode::IoFailed,
             Self::FiberHome(_) | Self::Override { .. } => ErrorCode::Usage,

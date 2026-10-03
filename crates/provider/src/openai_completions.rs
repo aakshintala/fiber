@@ -129,8 +129,9 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
     // header is sent, and strips it otherwise
     // (openrouter.ai/docs/guides/routing/provider-selection, "Anthropic beta
     // features").
-    // ponytail: deferred tools are sent in full until tool search is built
-    // (docs/tools.md "Tool search"); see #326.
+    // A model without deferral declares every tool in full (docs/tools.md,
+    // "Deferral is a property of the model"); Chat Completions has no
+    // defer_loading.
     let mut strict_left = MAX_STRICT_TOOLS;
     let tools: Vec<Value> = tools
         .into_iter()
@@ -448,7 +449,7 @@ fn take_assistant(out: &mut Vec<Map<String, Value>>, keys: &[&str]) -> Map<Strin
 /// for a 1-hour cache, which OpenRouter passes through to Anthropic
 /// (`research/openai-completions-probe`).
 ///
-/// ponytail: an assistant message holding only tool calls has no text part
+/// debt: an assistant message holding only tool calls has no text part
 /// to mark and is left unmarked; mark its last call if a session's cache
 /// shows the gap.
 fn mark(message: &mut Map<String, Value>, lifetime: &CacheLifetime) {
