@@ -172,6 +172,8 @@ codes! {
     UnknownTool,
     /// `session_message` named an id no running session has.
     Unreachable,
+    /// A model replied, but not in the format Fiber asked for.
+    UnreadableReply,
     /// A file tool was given a directory, device or file it cannot handle.
     UnsupportedFile,
     /// The invocation or its environment is wrong; exits 2.

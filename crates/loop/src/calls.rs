@@ -11,7 +11,7 @@ use std::thread;
 use contract::clock::Wake;
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
-    AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
+    AskStep, CallStatus, DecidedBy, Decision, Escalation, Event, Grant, PermissionRequested,
     PermissionResolved, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
     ToolReplaced,
 };
@@ -26,10 +26,10 @@ use crate::{Error, Loop, schema};
 
 /// A call that runs: its tool, the arguments it runs with, and the effects
 /// it declared.
-type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
+pub(crate) type Approved = (Arc<dyn Tool>, Map<String, Value>, DeclaredEffects);
 
 /// What a person's answer carries onto its `permission_resolved` line.
-struct Answered {
+pub(crate) struct Answered {
     /// Allow or deny.
     decision: Decision,
     /// With a denial, what the person typed.
@@ -220,28 +220,29 @@ impl Loop {
                 )?;
                 Ok(Err(denied(reason, text)))
             }
-            super::permission::Verdict::Ask(rule) => self
-                .ask(id, turn, &call.name, &effects.declared, rule)
-                .map(|answered| {
-                    answered.map(|()| (Arc::clone(&tool), arguments, effects.declared))
-                }),
+            super::permission::Verdict::Ask(rule) => match self.ask(
+                id,
+                turn,
+                &call.name,
+                &effects.declared,
+                AskAbout::Standing(rule),
+            )? {
+                Asked::Allow => Ok(Ok((tool, arguments, effects.declared))),
+                Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
+                Asked::Closed(request_id) => {
+                    Ok(Err(self.unanswerable(id, turn, Some(request_id))?))
+                }
+            },
             super::permission::Verdict::Allow(decided) => {
                 if let Some(by) = decided {
                     self.decided(id, turn, resolved(None, Decision::Allow, by, None, None))?;
                 }
                 Ok(Ok((tool, arguments, effects.declared)))
             }
-            // Step 7 is the reviewer (#294): until then every other call is
-            // denied.
+            // Step 7 is the reviewer: the call is judged by a separate
+            // model (`docs/permissions.md`, "The reviewer").
             super::permission::Verdict::Review => {
-                let text = "This call needs a review, and no reviewer is available. \
-                            It did not run."
-                    .to_owned();
-                Ok(Err(Box::new(ToolCallCompleted {
-                    status: CallStatus::Denied,
-                    reason: Some("not_reviewed".to_owned()),
-                    ..completed(text, None)
-                })))
+                self.review(call, id, turn, tool, arguments, &effects)
             }
         }
     }
@@ -256,30 +257,48 @@ impl Loop {
         self.append(&Event::PermissionResolved(resolved), turn, Some(id))
     }
 
-    /// Asks a person about a call a standing ask matched, waiting for their
-    /// reply (`docs/permissions.md`, "What the log records"). Other
-    /// deliveries are admitted as at any drain. A reply that does not fit
-    /// is rejected and the wait goes on; one that names another request is
-    /// rejected `stale_request`.
-    fn ask(
+    /// Asks a person about a call, waiting for their reply
+    /// (`docs/permissions.md`, "What the log records"). Other deliveries
+    /// are admitted as at any drain. A reply that does not fit is rejected
+    /// and the wait goes on; one that names another request is rejected
+    /// `stale_request`. `close` taken while waiting denies as the step
+    /// does; the inbox closing denies with no person to answer.
+    pub(crate) fn ask(
         &mut self,
         id: &ActionId,
         turn: &TurnId,
         tool: &str,
         declared: &DeclaredEffects,
-        rule: contract::events::StandingRule,
-    ) -> Result<Result<(), Box<ToolCallCompleted>>, Error> {
+        about: AskAbout,
+    ) -> Result<Asked, Error> {
         if !self.answerable {
-            return self.unanswerable(id, turn, None);
+            // Step 7 checks `answerable` before asking; only a standing
+            // ask reaches this denial.
+            return Ok(Asked::Gone(self.unanswerable(id, turn, None)?));
         }
         let request_id = RequestId(super::mint("r_"));
+        let (step, offer) = match &about {
+            AskAbout::Standing(rule) => (
+                AskStep::StandingAsk {
+                    standing_rule: rule.clone(),
+                },
+                None,
+            ),
+            AskAbout::Review {
+                escalation, offer, ..
+            } => (
+                AskStep::Review {
+                    escalation: Some(escalation.clone()),
+                    rule: offer.clone(),
+                },
+                offer.clone(),
+            ),
+        };
         self.append(
             &Event::PermissionRequested(PermissionRequested {
                 request_id: request_id.clone(),
                 declared: declared.clone(),
-                step: AskStep::StandingAsk {
-                    standing_rule: rule,
-                },
+                step,
             }),
             turn,
             Some(id),
@@ -290,18 +309,22 @@ impl Loop {
                 // Every sender is gone, so no answer can come.
                 Err(_) => {
                     let reason = "The session ended while waiting for an answer.";
+                    let by = match &about {
+                        AskAbout::Standing(_) => DecidedBy::StandingRule,
+                        AskAbout::Review { .. } => DecidedBy::Reviewer,
+                    };
                     self.decided(
                         id,
                         turn,
                         resolved(
                             Some(request_id),
                             Decision::Deny,
-                            DecidedBy::StandingRule,
+                            by,
                             Some(reason.to_owned()),
                             None,
                         ),
                     )?;
-                    return Ok(Err(denied(
+                    return Ok(Asked::Gone(denied(
                         "no_person",
                         format!("{reason} It did not run."),
                     )));
@@ -309,9 +332,9 @@ impl Loop {
             };
             match self.take_while_waiting(&request_id, delivery) {
                 Waited::Again => {}
-                Waited::Closed => return self.unanswerable(id, turn, Some(request_id)),
+                Waited::Closed => return Ok(Asked::Closed(request_id)),
                 Waited::Reply(reply, ack) => {
-                    let Some(answered) = self.answered(tool, None, &reply.answer) else {
+                    let Some(answered) = self.answered(tool, offer.as_ref(), &reply.answer) else {
                         inbox::reject(ack, ErrorCode::InvalidArguments, inbox::UNFIT_REPLY);
                         continue;
                     };
@@ -335,11 +358,11 @@ impl Loop {
                                     answered.feedback,
                                 ),
                             )?;
-                            return Ok(Err(denied("person", text)));
+                            return Ok(Asked::Deny(denied("person", text)));
                         }
                         Decision::Allow => {
                             self.decided(id, turn, answered.allow(request_id))?;
-                            return Ok(Ok(()));
+                            return Ok(Asked::Allow);
                         }
                     }
                 }
@@ -355,7 +378,7 @@ impl Loop {
         id: &ActionId,
         turn: &TurnId,
         request_id: Option<RequestId>,
-    ) -> Result<Result<(), Box<ToolCallCompleted>>, Error> {
+    ) -> Result<Box<ToolCallCompleted>, Error> {
         let reason = "No person can answer an approval in this session.";
         self.decided(
             id,
@@ -368,10 +391,7 @@ impl Loop {
                 None,
             ),
         )?;
-        Ok(Err(denied(
-            "no_person",
-            format!("{reason} It did not run."),
-        )))
+        Ok(denied("no_person", format!("{reason} It did not run.")))
     }
 
     /// Checks `reply` against `offer`, the request's rule offer (`None` on a
@@ -382,7 +402,7 @@ impl Loop {
     /// that cannot be saved still allows the call, with a reason saying so.
     /// `None`: the reply does not fit, so the caller rejects it and the loop
     /// keeps waiting.
-    fn answered(
+    pub(crate) fn answered(
         &mut self,
         tool: &str,
         offer: Option<&RuleOffer>,
@@ -544,8 +564,36 @@ fn resolved(
     }
 }
 
+/// What an approval wait asks about: a standing ask, or step 7's review.
+pub(crate) enum AskAbout {
+    /// A standing ask matched: the request names the rule that asked.
+    Standing(contract::events::StandingRule),
+    /// Step 7 review: the request carries the escalation and the rule an
+    /// allow can remember. A close taken while waiting denies as its step
+    /// does: the caller holds the reason.
+    Review {
+        /// Why the reviewer handed the call to a person.
+        escalation: Escalation,
+        /// The rule an allow can remember; absent when no rule can match.
+        offer: Option<RuleOffer>,
+    },
+}
+
+/// What waiting for a person's answer came back with. The decision lines
+/// are written, except on `Closed`, which wrote nothing.
+pub(crate) enum Asked {
+    /// The person allowed the call.
+    Allow,
+    /// The person refused the call.
+    Deny(Box<ToolCallCompleted>),
+    /// The inbox closed with no answer.
+    Gone(Box<ToolCallCompleted>),
+    /// `close` was taken while waiting; the caller denies as its step does.
+    Closed(RequestId),
+}
+
 /// A call that was denied with `reason`, the model told `text`.
-fn denied(reason: &str, text: String) -> Box<ToolCallCompleted> {
+pub(crate) fn denied(reason: &str, text: String) -> Box<ToolCallCompleted> {
     Box::new(ToolCallCompleted {
         status: CallStatus::Denied,
         reason: Some(reason.to_owned()),

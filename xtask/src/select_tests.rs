@@ -528,16 +528,44 @@ fn contract_src(source: &str) -> RustFile {
     }
 }
 
-fn listed_includes() -> String {
+fn loop_src(source: &str) -> RustFile {
+    RustFile {
+        krate: "loop".to_owned(),
+        path: "crates/loop/src/reviewer.rs".to_owned(),
+        rel: "src/reviewer.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+/// The listed includes of `krate`, each resolvable from its fixture source.
+fn listed_includes(krate: &str) -> String {
     COMPILED_IN
         .iter()
-        .map(|(path, _)| format!("include_str!(\"../../../{path}\");\n"))
+        .filter(|(_, listed)| *listed == krate)
+        .map(|(path, _)| {
+            let path: &str = path;
+            match krate {
+                "loop" => format!(
+                    "include_str!(\"../{rel}\");\n",
+                    rel = path.strip_prefix("crates/loop/").unwrap_or(path)
+                ),
+                _ => format!("include_str!(\"../../../{path}\");\n"),
+            }
+        })
         .collect()
+}
+
+/// Every listed include, each in a source of the crate the list names.
+fn listed_files() -> Vec<RustFile> {
+    vec![
+        contract_src(&listed_includes("contract")),
+        loop_src(&listed_includes("loop")),
+    ]
 }
 
 #[test]
 fn a_listed_include_passes() {
-    let files = [contract_src(&listed_includes())];
+    let files = listed_files();
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         Vec::<String>::new()
@@ -546,8 +574,11 @@ fn a_listed_include_passes() {
 
 #[test]
 fn an_unlisted_outside_include_fails() {
-    let source = format!("{}include_str!(\"../../../README.md\");", listed_includes());
-    let files = [contract_src(&source)];
+    let source = format!(
+        "{}include_str!(\"../../../README.md\");",
+        listed_includes("contract")
+    );
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         ["README.md: contract compiles it in, but the compiled-in list does not list it"]
@@ -556,8 +587,11 @@ fn an_unlisted_outside_include_fails() {
 
 #[test]
 fn an_unlisted_non_docs_outside_include_fails() {
-    let source = format!("{}include_str!(\"../../../LICENSE\");", listed_includes());
-    let files = [contract_src(&source)];
+    let source = format!(
+        "{}include_str!(\"../../../LICENSE\");",
+        listed_includes("contract")
+    );
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         ["LICENSE: contract compiles it in, but the compiled-in list does not list it"]
@@ -568,9 +602,9 @@ fn an_unlisted_non_docs_outside_include_fails() {
 fn an_unlisted_markdown_inside_the_crate_dir_fails() {
     let source = format!(
         "{}include_str!(\"../prompt/system.md\");",
-        listed_includes()
+        listed_includes("contract")
     );
-    let files = [contract_src(&source)];
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         [
@@ -594,8 +628,11 @@ fn a_listed_markdown_inside_the_crate_dir_runs_that_crate_alone() {
 
 #[test]
 fn a_non_docs_include_inside_the_crate_dir_is_unlisted() {
-    let source = format!("{}include_str!(\"owned.bin\");", listed_includes());
-    let files = [contract_src(&source)];
+    let source = format!(
+        "{}include_str!(\"owned.bin\");",
+        listed_includes("contract")
+    );
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         Vec::<String>::new()
@@ -608,8 +645,8 @@ fn a_raw_string_include_is_resolved() {
         r#"include_str!(r"../../../README.md");"#,
         r##"include_str!(r#"../../../README.md"#);"##,
     ] {
-        let source = format!("{}{extra}", listed_includes());
-        let files = [contract_src(&source)];
+        let source = format!("{}{extra}", listed_includes("contract"));
+        let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
         assert_eq!(
             compiled_in_mismatches(&files, &members()).unwrap(),
             ["README.md: contract compiles it in, but the compiled-in list does not list it"],
@@ -622,9 +659,9 @@ fn a_raw_string_include_is_resolved() {
 fn an_unresolvable_include_argument_fails() {
     let source = format!(
         "{}include_str!(concat!(env!(\"CARGO_MANIFEST_DIR\"), \"/../../README.md\"));",
-        listed_includes()
+        listed_includes("contract")
     );
-    let files = [contract_src(&source)];
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         [
@@ -635,8 +672,8 @@ fn an_unresolvable_include_argument_fails() {
 
 #[test]
 fn another_macro_with_a_string_argument_yields_no_target() {
-    let source = format!("{}my_macro!(\"../x.md\");", listed_includes());
-    let files = [contract_src(&source)];
+    let source = format!("{}my_macro!(\"../x.md\");", listed_includes("contract"));
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         Vec::<String>::new()
@@ -645,8 +682,11 @@ fn another_macro_with_a_string_argument_yields_no_target() {
 
 #[test]
 fn include_bytes_yields_its_target() {
-    let source = format!("{}include_bytes!(\"../x.md\");", listed_includes());
-    let files = [contract_src(&source)];
+    let source = format!(
+        "{}include_bytes!(\"../x.md\");",
+        listed_includes("contract")
+    );
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         [
@@ -661,8 +701,8 @@ fn a_trailing_comma_on_an_include_is_accepted() {
         r#"include_str!("../../../README.md",);"#,
         r#"include_bytes!("../../../README.md",);"#,
     ] {
-        let source = format!("{}{extra}", listed_includes());
-        let files = [contract_src(&source)];
+        let source = format!("{}{extra}", listed_includes("contract"));
+        let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
         assert_eq!(
             compiled_in_mismatches(&files, &members()).unwrap(),
             ["README.md: contract compiles it in, but the compiled-in list does not list it"],
@@ -673,8 +713,11 @@ fn a_trailing_comma_on_an_include_is_accepted() {
 
 #[test]
 fn an_include_with_tokens_after_the_literal_fails() {
-    let source = format!(r#"{}include_str!("a.md", "b");"#, listed_includes());
-    let files = [contract_src(&source)];
+    let source = format!(
+        r#"{}include_str!("a.md", "b");"#,
+        listed_includes("contract")
+    );
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         [
@@ -687,9 +730,9 @@ fn an_include_with_tokens_after_the_literal_fails() {
 fn an_include_str_in_a_comment_is_ignored() {
     let source = format!(
         "{}// include_str!(\"../../../README.md\");",
-        listed_includes()
+        listed_includes("contract")
     );
-    let files = [contract_src(&source)];
+    let files = [contract_src(&source), loop_src(&listed_includes("loop"))];
     assert_eq!(
         compiled_in_mismatches(&files, &members()).unwrap(),
         Vec::<String>::new()

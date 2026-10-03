@@ -33,11 +33,13 @@ mod conversation;
 mod inbox;
 mod permission;
 mod process;
+mod reviewer;
 mod schema;
 mod usage;
 
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
+pub use reviewer::{BlockLimits, Reviewer};
 
 /// What stops the loop.
 #[derive(Debug, thiserror::Error)]
@@ -123,6 +125,32 @@ pub struct Loop {
     /// The session grants this loop's answers added, in order: the fold of
     /// the `permission_resolved` lines this loop wrote.
     grants: Vec<Grant>,
+    /// What judges step 7's calls; `Err(no_model)` until `reviewer` sets
+    /// one (`docs/permissions.md`, "How it runs").
+    reviewer: Result<Reviewer, Failure>,
+    /// When a reviewer block hands the call to a person.
+    limits: BlockLimits,
+    /// What the reviewer is shown, rendered from the same events as
+    /// `conversation` (`docs/permissions.md`, "What it is shown").
+    reviewed: Vec<reviewer::Reviewed>,
+    /// The reviewer's cache key: the session's id plus `reviewer`
+    /// (`docs/prompt-cache.md`, "Rules for other areas").
+    reviewer_key: String,
+    /// How much of `reviewed` the previous reviewer request sent.
+    reviewer_sent: Option<usize>,
+    /// Consecutive reviewer blocks; a reviewer allow or a person's answer
+    /// to a review escalation resets it.
+    consecutive: u64,
+    /// Reviewer blocks this session; never reset.
+    session_blocks: u64,
+    /// Whether the `no_model` notice was written.
+    no_model_noticed: bool,
+    /// A headless block-budget exhaustion, ending the turn once this step's
+    /// calls complete (`docs/permissions.md`, "Headless").
+    turn_blocked: Option<Failure>,
+    /// The workspace as `session_started` records it, for the reviewer's
+    /// effects item.
+    workspace_label: String,
     /// Whether a person can answer an approval; `false` for `fiber ask`.
     answerable: bool,
     /// Whether this turn's previous reply was cut off by the output limit.
@@ -154,7 +182,7 @@ impl Loop {
             calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
         let started = log.append(
             &Event::SessionStarted(SessionStarted {
-                workspace: permissions.workspace,
+                workspace: permissions.workspace.clone(),
                 variables: variables(),
                 parent: None,
                 forked_from: None,
@@ -172,7 +200,8 @@ impl Loop {
             inbox,
             // A new session is its own root (`docs/prompt-cache.md`, "Cache
             // markers and keys").
-            cache_key: started.session_id.0,
+            cache_key: started.session_id.0.clone(),
+            reviewer_key: format!("{}:reviewer", started.session_id.0),
             queued: VecDeque::new(),
             closing: false,
             conversation: Vec::new(),
@@ -183,6 +212,22 @@ impl Loop {
             credentials,
             rules: permissions.rules,
             grants: Vec::new(),
+            reviewer: Err(Failure {
+                code: ErrorCode::NoModel,
+                message: "No reviewer model is set, so every reviewed call goes to a \
+                            person. Set reviewer.model."
+                    .to_owned(),
+                retry_after: None,
+                provider: None,
+            }),
+            limits: BlockLimits::default(),
+            reviewed: Vec::new(),
+            reviewer_sent: None,
+            consecutive: 0,
+            session_blocks: 0,
+            no_model_noticed: false,
+            turn_blocked: None,
+            workspace_label: permissions.workspace,
             answerable: true,
             cut_off: false,
             ledger: usage::Ledger::default(),
@@ -201,6 +246,15 @@ impl Loop {
     /// (`docs/permissions.md`, "Headless"). Default `true`.
     pub fn answerable(mut self, yes: bool) -> Self {
         self.answerable = yes;
+        self
+    }
+
+    /// Who judges step 7's calls, and when a block hands the call to a
+    /// person (`docs/permissions.md`, "The reviewer"). Without it every
+    /// reviewed call escalates `no_model`, with the default limits.
+    pub fn reviewer(mut self, reviewer: Result<Reviewer, Failure>, limits: BlockLimits) -> Self {
+        self.reviewer = reviewer;
+        self.limits = limits;
         self
     }
 
@@ -352,12 +406,14 @@ impl Loop {
             provider,
             model,
             conversation,
+            reviewed,
             ..
         } = self;
         let mut emit = |event: &Event, action: &ActionId| {
             write(
                 log,
                 conversation,
+                reviewed,
                 &model.reference,
                 event,
                 turn,
@@ -503,6 +559,12 @@ impl Loop {
             return Ok(Step::Replied);
         }
         self.run_calls(calls, turn)?;
+        if let Some(error) = self.turn_blocked.take() {
+            // Headless, the block budget ran out: the step's calls
+            // completed, and the turn ends `failed` with code `blocked`
+            // (`docs/permissions.md`, "Headless").
+            return Ok(Step::Ended(ended(TurnOutcome::Failed, Some(error))));
+        }
         Ok(Step::Next)
     }
 
@@ -516,6 +578,7 @@ impl Loop {
         write(
             &self.log,
             &mut self.conversation,
+            &mut self.reviewed,
             &self.model.reference,
             event,
             turn,
@@ -524,12 +587,15 @@ impl Loop {
     }
 }
 
-/// Writes `event` to `log` and renders it into `conversation`: the one path
-/// every event the loop emits takes, so the conversation is the log's
-/// rendering (`docs/loop.md`, "What the model is sent").
+/// Writes `event` to `log` and renders it into `conversation` and
+/// `reviewed`: the one path every event the loop emits takes, so the
+/// conversation is the log's rendering (`docs/loop.md`, "What the model is
+/// sent") and the reviewer's transcript its projection
+/// (`docs/permissions.md`, "What it is shown").
 fn write(
     log: &Log,
     conversation: &mut Vec<Input>,
+    reviewed: &mut Vec<reviewer::Reviewed>,
     model: &str,
     event: &Event,
     turn: &TurnId,
@@ -538,6 +604,7 @@ fn write(
     log.append(event, Some(turn.clone()), action.cloned())?;
     if event.class() == Class::Durable {
         conversation::render(conversation, event, action, model);
+        reviewer::render_reviewed(reviewed, event, action);
     }
     Ok(())
 }
