@@ -103,7 +103,9 @@ The full output behind a bounded tool result goes in that session's
 
 A fork's history, and a rewind's, is a pointer into another session's log
 (`docs/delegates.md`, "Forks"; `docs/events.md`, "Rewind"). Deleting a session
-a fork or a rewind points at deletes them or is refused.
+a fork or a rewind points at is refused unless the person asks for those to
+be deleted too (`docs/invocation.md`, "Deleting and pruning"). Nothing deletes
+a session on its own.
 
 ## What each part holds
 
@@ -157,8 +159,11 @@ in Fiber, not a session, so nothing reads one to decide anything, and
 deleting them is always safe. Nothing prunes them.
 
 **Worktrees.** Per project, `worktrees/<id>/`: the git worktree of a delegate
-started with `isolation: worktree`. When one is removed or kept is
-`docs/delegates.md` ("Worktrees").
+started with `isolation: worktree`, of `fiber ask --worktree` or of the
+terminal's new-worktree switch (`docs/invocation.md`, "Isolation"). When one
+is removed or kept is `docs/delegates.md` ("Worktrees"). A kept worktree is
+removed only by `fiber sessions prune` (`docs/invocation.md`, "Deleting and
+pruning").
 
 **Sockets.** `run/<session_id>` is the local socket of a running session
 (`docs/invocation.md`, "Processes"), mode 0600 in a 0700 directory. The hub, a
@@ -178,7 +183,8 @@ error naming the variable.
 JSON line per session that exited, appended by the session itself as it
 exits, with its id, workspace, name and what it stopped on. A session
 appends whether or not a hub is running, and nothing rewrites it, so an
-append is never lost to a rewrite. The hub reads its tail at start and keeps
+append is never lost to a rewrite. Deleting a session leaves its row, and
+every reader skips a row whose session directory is gone. The hub reads its tail at start and keeps
 the newest 100. It grows by about 200 bytes per exited session: 10,000
 sessions is about 2 MB. It is a derived index, rebuildable from the logs, and never the
 truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).

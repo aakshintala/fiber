@@ -244,7 +244,9 @@ final message, any questions, usage totals and worktree state. Their keys are
   `git` program; no git library is linked in.
 - At the end of a run, a worktree with nothing uncommitted and no commits beyond
   its base is removed. Otherwise it is kept. Fiber never removes a kept
-  worktree.
+  worktree on its own; `fiber sessions prune` removes one that holds nothing
+  to lose, or any with `--force` (`docs/invocation.md`, "Deleting and
+  pruning").
 - `delegate_finished` reports the path, the branch and whether it is dirty.
 - A resume goes back into the kept worktree, or gets a fresh one from the
   current HEAD if it was removed.
@@ -261,9 +263,10 @@ final message, any questions, usage totals and worktree state. Their keys are
   that `seq`. Nothing is copied: the parent's log is append-only, so the shared
   part is never written again. This is copy-on-write where the write never
   happens, as with a git branch or a ZFS clone.
-- A session some fork points at cannot be deleted on its own. Deleting it
-  deletes its forks or is refused, as `zfs destroy` refuses a snapshot with
-  clones (`docs/state.md`).
+- A session some fork points at cannot be deleted on its own. Deleting it is
+  refused, as `zfs destroy` refuses a snapshot with clones, unless the person
+  passes `--cascade`, which deletes its forks too (`docs/invocation.md`,
+  "Deleting and pruning").
 - A fork exists to share its parent's prompt cache. Its first request must match
   the parent's byte for byte up to the new content, so:
   - It takes no model or thinking level. It runs on the parent's model and
