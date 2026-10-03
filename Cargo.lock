@@ -178,6 +178,7 @@ name = "config"
 version = "0.0.0"
 dependencies = [
  "contract",
+ "fakes",
  "serde",
  "serde_json",
  "thiserror",
