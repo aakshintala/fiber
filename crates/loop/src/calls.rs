@@ -193,10 +193,11 @@ impl Loop {
             }
         };
         let tool = Arc::clone(tool);
-        // The rules are read for every call that reaches step 2, including
-        // ones that later fast-path (`docs/permissions.md`, "Scope").
-        // `judge` runs the credential deny first, so a call it refuses never
-        // touches the rules, even when the rules file is unreadable.
+        // The rules are read once for every call, including ones that later
+        // fast-path, so a revoked rule applies to the next call judged
+        // (`docs/tui.md`, "/rules"). `judge` runs the credential deny before
+        // it looks at them, so an unreadable rules file never stops that
+        // deny.
         let rules = self.rules.read();
         match super::permission::judge(
             &call.name,
