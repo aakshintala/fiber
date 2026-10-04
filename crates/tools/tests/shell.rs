@@ -680,7 +680,9 @@ fn output_streams_before_the_call_returns() {
         matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
         "the call returned before streaming"
     );
-    std::fs::write(&fifo, "go\n").unwrap();
+    // Opening the pipe blocks until the command opens its end, so the
+    // write runs on its own thread and the wait below carries the deadline.
+    thread::spawn(move || std::fs::write(&fifo, "go\n"));
     let output = rx.recv_timeout(DEADLINE).expect("the call to finish");
     assert_eq!(text(&output), "line\ngot:go\nExit code 0.\n");
     assert_eq!(recorder.text(), "line\ngot:go\n");

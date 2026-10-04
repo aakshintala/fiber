@@ -8,23 +8,18 @@ use std::time::Duration;
 use contract::emit::Emit;
 use contract::events::{Class, Event};
 
-#[derive(Default)]
-struct Inner {
-    events: Vec<Event>,
-}
-
 /// An [`Emit`] a test hands a tool's `run`: it records every ephemeral
 /// event, ignoring durable ones.
 #[derive(Default)]
 pub struct Recorder {
-    inner: Mutex<Inner>,
+    inner: Mutex<Vec<Event>>,
     changed: Condvar,
 }
 
 impl Recorder {
     /// Every ephemeral event recorded so far, in arrival order.
     pub fn events(&self) -> Vec<Event> {
-        lock(&self.inner).events.clone()
+        lock(&self.inner).clone()
     }
 
     /// The concatenated `text` of every `tool_call_delta` recorded so far.
@@ -50,15 +45,15 @@ impl Emit for Recorder {
         if event.class() != Class::Ephemeral {
             return;
         }
-        lock(&self.inner).events.push(event.clone());
+        lock(&self.inner).push(event.clone());
         self.changed.notify_all();
     }
 }
 
-/// The concatenated `text` of every `tool_call_delta` in `inner`.
-fn text_of(inner: &Inner) -> String {
+/// The concatenated `text` of every `tool_call_delta` in `events`.
+fn text_of(events: &[Event]) -> String {
     let mut out = String::new();
-    for event in &inner.events {
+    for event in events {
         if let Event::ToolCallDelta(progress) = event
             && let Some(text) = &progress.text
         {
@@ -68,7 +63,7 @@ fn text_of(inner: &Inner) -> String {
     out
 }
 
-fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
+fn lock(inner: &Mutex<Vec<Event>>) -> MutexGuard<'_, Vec<Event>> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

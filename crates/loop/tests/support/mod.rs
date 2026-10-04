@@ -724,27 +724,24 @@ impl Tap {
     /// The next line of `kind`, buffering the rest for later calls, and
     /// failing the test at [`DEADLINE`].
     pub(crate) fn wait_for(&self, kind: &str) -> Envelope {
-        loop {
-            if let Some(found) = take_from(&self.buffered, |line| line.kind == kind) {
-                return found;
-            }
-            let line = self.lines.recv_timeout(DEADLINE).expect("a line in time");
-            if line.kind == kind {
-                return line;
-            }
-            self.buffered.lock().unwrap().push(line);
-        }
+        self.wait_until(|line| line.kind == kind)
     }
 
     /// The next `tool_call_delta` whose text is `text`, buffering the
     /// rest, and failing the test at [`DEADLINE`].
     pub(crate) fn wait_for_delta(&self, text: &str) -> Envelope {
+        self.wait_until(|line| delta_text(line) == Some(text))
+    }
+
+    /// The next line `matches` accepts, buffering the rest, and failing the
+    /// test at [`DEADLINE`].
+    fn wait_until(&self, matches: impl Fn(&Envelope) -> bool) -> Envelope {
         loop {
-            if let Some(found) = take_from(&self.buffered, |line| delta_text(line) == Some(text)) {
+            if let Some(found) = take_from(&self.buffered, &matches) {
                 return found;
             }
             let line = self.lines.recv_timeout(DEADLINE).expect("a line in time");
-            if delta_text(&line) == Some(text) {
+            if matches(&line) {
                 return line;
             }
             self.buffered.lock().unwrap().push(line);
