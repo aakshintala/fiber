@@ -14,7 +14,7 @@ const MENU: &str = r#"Fiber, a coding agent.
 Usage: fiber <command> [arguments]
 
 Sessions:
-  ask [--model <model>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
 Fiber itself:
   help [<command>]  Print this menu, or a command's help
@@ -117,6 +117,11 @@ pub(crate) struct AskArgs {
     #[arg(long, value_name = "model")]
     pub(crate) model: Option<String>,
 
+    /// Resume the session: sends the prompt to an existing session instead
+    /// of starting a new one (`docs/invocation.md`, "Lifecycle").
+    #[arg(long, value_name = "id")]
+    pub(crate) resume: Option<String>,
+
     /// The prompt. A final `-` reads stdin.
     #[arg(value_name = "prompt", num_args = 0..)]
     pub(crate) prompt: Vec<String>,
@@ -156,7 +161,19 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
     let ask = args.get(1).is_some_and(|arg| arg == "ask");
     match command().try_get_matches_from(&args) {
         Ok(matches) => match Cli::from_arg_matches(&matches) {
-            Ok(cli) => Invocation::Run(cli.command),
+            // `--resume` with an empty value names no session: a usage
+            // error before `resolve` runs, which itself matches none.
+            Ok(cli) => match cli.command {
+                Some(Commands::Ask(args)) if args.resume.as_deref() == Some("") => {
+                    Invocation::Usage {
+                        ask,
+                        sentence: "The argument '--resume <id>' requires a session id but \
+                                 none was given. Run `fiber --help` for usage."
+                            .to_owned(),
+                    }
+                }
+                command => Invocation::Run(command),
+            },
             Err(error) => usage(error, ask),
         },
         Err(error) => {

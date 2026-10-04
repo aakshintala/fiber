@@ -4,6 +4,8 @@
 //! it writes it, and a resume renders the log the same way, so the two never
 //! differ.
 
+use std::collections::HashSet;
+
 use contract::events::{CallStatus, Event, InputItem};
 use contract::provider::Input;
 use contract::shapes::ContentPart;
@@ -11,16 +13,219 @@ use contract::{ActionId, Envelope};
 
 use crate::Error;
 
+/// A call with no `tool_call_completed`, which only a crash can leave
+/// (`docs/events.md`, "Resume"), is sent with a fixed result: it never
+/// ran when the log shows no `tool_call_started` for it, and its outcome
+/// is unknown when it does. Fiber never runs such a call again; the model
+/// may make it again.
+const NEVER_RAN: &str = "It never ran.";
+/// A call that started but has no result is sent with this fixed result
+/// (`docs/events.md`, "Resume").
+const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
+
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped.
 pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
-    let mut conversation = Vec::new();
+    let completed = completed_actions(lines)?;
+    rebuild_with(lines, model, &completed)
+}
+
+/// The actions with a `tool_call_completed` in `lines`.
+pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>, Error> {
+    let mut completed = HashSet::new();
     for line in lines.iter().filter(|l| l.is_durable()) {
-        if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
-            render(&mut conversation, &event, line.action_id.as_ref(), model);
+        if let Some(Event::ToolCallCompleted(_)) =
+            Event::from_envelope(line).map_err(Error::Unreadable)?
+            && let Some(action) = &line.action_id
+        {
+            completed.insert(action.clone());
         }
     }
-    Ok(conversation)
+    Ok(completed)
+}
+
+/// [`rebuild`], with `completed` computed once: the actions whose calls
+/// need no fixed result. A prefix rebuilt with the whole log's set is the
+/// prefix of the whole log's conversation.
+pub(crate) fn rebuild_with(
+    lines: &[Envelope],
+    model: &str,
+    completed: &HashSet<ActionId>,
+) -> Result<Vec<Input>, Error> {
+    Ok(rebuild_and_sent(lines, model, completed)?.0)
+}
+
+/// [`rebuild_with`], with the conversation's length at the last
+/// `assistant_message_started`: the previous request's end, for the cache
+/// markers (`docs/prompt-cache.md`). `None` when the log holds none.
+pub(crate) fn rebuild_and_sent(
+    lines: &[Envelope],
+    model: &str,
+    completed: &HashSet<ActionId>,
+) -> Result<(Vec<Input>, Option<usize>), Error> {
+    let mut rendered = Rendered::default();
+    let mut sent = None;
+    for line in lines.iter().filter(|l| l.is_durable()) {
+        if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
+            if matches!(event, Event::AssistantMessageStarted(_)) {
+                sent = Some(rendered.conversation.len());
+            }
+            rendered.push(&event, line.action_id.as_ref(), model, completed);
+        }
+    }
+    Ok((rendered.finish(), sent))
+}
+
+/// `rebuild`'s state: the conversation so far, and the calls requested but
+/// not yet completed, in request order. A call with no `tool_call_completed`
+/// gets its fixed result after the whole batch of calls it belongs to,
+/// before the next input that is not a call or a result, or at the end of
+/// the log.
+#[derive(Default)]
+struct Rendered {
+    conversation: Vec<Input>,
+    pending: Vec<Pending>,
+}
+
+struct Pending {
+    action_id: ActionId,
+    started: bool,
+}
+
+impl Rendered {
+    fn push(
+        &mut self,
+        event: &Event,
+        action: Option<&ActionId>,
+        model: &str,
+        completed: &HashSet<ActionId>,
+    ) {
+        match event {
+            Event::ToolCallRequested(call) => {
+                if let Some(action) = action {
+                    self.conversation.push(Input::ToolCall {
+                        action_id: action.clone(),
+                        call: call.clone(),
+                    });
+                    // A call the log completes needs no fixed result.
+                    if !completed.contains(action) {
+                        self.pending.push(Pending {
+                            action_id: action.clone(),
+                            started: false,
+                        });
+                    }
+                }
+            }
+            Event::ToolCallStarted(_) => {
+                if let Some(action) = action
+                    && let Some(pending) = self.pending.iter_mut().find(|p| &p.action_id == action)
+                {
+                    pending.started = true;
+                }
+            }
+            Event::ToolCallCompleted(completed) => {
+                if let Some(action) = action {
+                    self.conversation.push(Input::ToolResult {
+                        action_id: action.clone(),
+                        text: text(&completed.content),
+                        is_error: completed.status == CallStatus::Failed,
+                    });
+                    self.pending.retain(|p| &p.action_id != action);
+                }
+            }
+            // Every other kind either adds an input that is not a call or
+            // a result, ending the batch, or adds nothing. Each is listed,
+            // so a new kind does not compile until it is placed.
+            Event::TurnStarted(_)
+            | Event::SteeringApplied(_)
+            | Event::ReasoningCompleted(_)
+            | Event::TextCompleted(_)
+            | Event::AssistantMessageCompleted(_)
+            | Event::FiberStarted(_)
+            | Event::FiberExited(_)
+            | Event::SessionStarted(_)
+            | Event::Rewound(_)
+            | Event::StepStarted(_)
+            | Event::TurnCompleted(_)
+            | Event::SteeringQueue(_)
+            | Event::ShellCommand(_)
+            | Event::SessionNamed(_)
+            | Event::Clients(_)
+            | Event::SessionStatus(_)
+            | Event::ContextAdded(_)
+            | Event::AssistantMessageStarted(_)
+            | Event::AssistantMessageDelta(_)
+            | Event::ToolCallArgumentsDelta(_)
+            | Event::ReasoningStarted(_)
+            | Event::ReasoningDelta(_)
+            | Event::ToolCallDelta(_)
+            | Event::PermissionRequested(_)
+            | Event::PermissionResolved(_)
+            | Event::InteractionRequested(_)
+            | Event::InteractionResolved(_)
+            | Event::UsageRecorded(_)
+            | Event::QuotaNoticed(_)
+            | Event::RetryScheduled(_)
+            | Event::Notice(_)
+            | Event::PreambleBuilt(_)
+            | Event::ModelChanged(_)
+            | Event::OpeningMessage(_)
+            | Event::InstructionFile(_)
+            | Event::DateChanged(_)
+            | Event::HandoffStarted(_)
+            | Event::HandoffCompleted(_)
+            | Event::ContextNudged(_)
+            | Event::McpServerFailed(_)
+            | Event::McpServerReady(_)
+            | Event::Reloaded(_)
+            | Event::ExtensionsLoaded(_)
+            | Event::ExtensionStateSet(_)
+            | Event::ExtensionStateUnset(_)
+            | Event::ExtensionUi(_)
+            | Event::ExtensionMessage(_)
+            | Event::ExtensionExec(_)
+            | Event::JobStarted(_)
+            | Event::DelegateStarted(_)
+            | Event::JobDelta(_)
+            | Event::JobLine(_)
+            | Event::DelegateFinished(_)
+            | Event::JobCompleted(_)
+            | Event::JobsPendingNotified(_)
+            | Event::CommandAccepted(_)
+            | Event::CommandRejected(_) => {
+                let before = self.conversation.len();
+                render(&mut self.conversation, event, action, model);
+                // A new input that is not a call or a result ends the batch,
+                // so the fixed results sit after the whole batch and before
+                // it. Nothing moves on a normal log: no call is pending.
+                if self.conversation.len() > before && !self.pending.is_empty() {
+                    let mut tail = self.conversation.split_off(before);
+                    self.flush();
+                    self.conversation.append(&mut tail);
+                }
+            }
+        }
+    }
+
+    fn flush(&mut self) {
+        for pending in std::mem::take(&mut self.pending) {
+            self.conversation.push(Input::ToolResult {
+                action_id: pending.action_id,
+                text: if pending.started {
+                    OUTCOME_UNKNOWN
+                } else {
+                    NEVER_RAN
+                }
+                .to_owned(),
+                is_error: true,
+            });
+        }
+    }
+
+    fn finish(mut self) -> Vec<Input> {
+        self.flush();
+        self.conversation
+    }
 }
 
 /// Adds what `event`, about `action`, puts in the conversation. `model` is

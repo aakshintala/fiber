@@ -33,12 +33,14 @@ mod conversation;
 mod inbox;
 mod permission;
 mod process;
+mod resume;
 mod reviewer;
 mod schema;
 mod usage;
 
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
+pub use resume::{Resumed, resumed};
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 
 /// What stops the loop.

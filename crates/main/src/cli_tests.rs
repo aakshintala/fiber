@@ -318,3 +318,57 @@ fn suggestions_are_the_text_clap_stored() {
         );
     }
 }
+
+#[test]
+fn ask_resume_takes_a_session_id() {
+    let Invocation::Run(Some(Commands::Ask(args))) =
+        parse_from(["fiber", "ask", "--resume", "s_abc", "hi"])
+    else {
+        panic!("resume with a prompt");
+    };
+    assert_eq!(args.resume.as_deref(), Some("s_abc"));
+    assert_eq!(
+        super::ask_parts(&args.prompt).unwrap(),
+        (Some("hi".to_owned()), false)
+    );
+
+    let Invocation::Run(Some(Commands::Ask(args))) =
+        parse_from(["fiber", "ask", "--resume", "s_abc"])
+    else {
+        panic!("resume without a prompt");
+    };
+    assert_eq!(args.resume.as_deref(), Some("s_abc"));
+
+    let Invocation::Run(Some(Commands::Ask(args))) = parse_from(["fiber", "ask", "hi"]) else {
+        panic!("no resume");
+    };
+    assert_eq!(args.resume, None);
+}
+
+#[test]
+fn ask_resume_without_an_id_is_a_usage_error() {
+    assert_eq!(
+        sentence(&["fiber", "ask", "--resume"]),
+        "A value is required for '--resume <id>' but none was supplied. Run `fiber --help` for usage."
+    );
+    let (ask, empty) = usage(&["fiber", "ask", "--resume", ""]);
+    assert!(ask);
+    assert_eq!(
+        empty,
+        "The argument '--resume <id>' requires a session id but none was given. Run `fiber --help` for usage."
+    );
+}
+
+#[test]
+fn the_menu_and_ask_help_show_resume() {
+    assert!(
+        menu().contains("[--resume <id>]"),
+        "the menu shows --resume:\n{}",
+        menu()
+    );
+    let rendered = super::render_help(Some("ask")).unwrap();
+    assert!(
+        rendered.contains("--resume <id>"),
+        "ask's help shows --resume:\n{rendered}"
+    );
+}
