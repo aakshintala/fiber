@@ -59,6 +59,18 @@ fn dotdot_in_the_nonexistent_rest_is_invalid_arguments() {
 }
 
 #[test]
+fn dotdot_through_a_regular_file_is_tool_error() {
+    let dir = TempDir::new("fiber-resolve-file-dotdot");
+    fs::write(dir.path().join("f"), "x").unwrap();
+    fs::write(dir.path().join("a.txt"), "y").unwrap();
+    let err = resolve(dir.path(), "f/../a.txt").unwrap_err();
+    match err {
+        ResolveError::Tool(message) => assert!(message.contains("not a directory"), "{message}"),
+        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
+    }
+}
+
+#[test]
 fn dotdot_through_an_existing_directory_resolves() {
     let dir = TempDir::new("fiber-resolve-dotdot-ok");
     fs::create_dir(dir.path().join("sub")).unwrap();
@@ -101,7 +113,7 @@ fn a_regular_file_is_text() {
     let path = dir.path().join("a.txt");
     fs::write(&path, "hi\n").unwrap();
     match inspect(&path).unwrap() {
-        Inspected::Text { bytes } => assert_eq!(bytes, b"hi\n"),
+        Inspected::Text { text } => assert_eq!(text, "hi\n"),
         Inspected::Unsupported { kind, .. } => panic!("expected text, got {kind}"),
     }
 }

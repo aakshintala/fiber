@@ -38,7 +38,7 @@ fn two_paths_do_not_block_each_other() {
     let held = locks.lock(std::path::Path::new("/ws/a.txt"));
     let other = Arc::clone(&locks);
     let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let guard = other.lock(std::path::Path::new("/ws/b.txt"));
         done.send(()).unwrap();
         drop(guard);
@@ -48,6 +48,7 @@ fn two_paths_do_not_block_each_other() {
         "waited {DEADLINE:?} for a lock on a different path"
     );
     drop(held);
+    handle.join().unwrap();
     assert!(locks.is_clear());
 }
 
@@ -59,7 +60,7 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
     let waiting = Arc::clone(&locks);
     let path_for_wait = path.clone();
     let (entered, entered_rx) = mpsc::channel();
-    thread::spawn(move || {
+    let handle = thread::spawn(move || {
         let guard = waiting.lock(&path_for_wait);
         entered.send(()).unwrap();
         drop(guard);
@@ -75,6 +76,7 @@ fn a_second_lock_on_a_held_path_blocks_until_the_guard_drops() {
         entered_rx.recv_timeout(DEADLINE).is_ok(),
         "waited {DEADLINE:?} for the second lock to acquire the path"
     );
+    handle.join().unwrap();
     assert!(locks.is_clear());
 }
 

@@ -125,6 +125,12 @@ fn line_endings_and_the_byte_order_mark_follow_the_existing_file() {
 }
 
 #[test]
+fn a_lone_carriage_return_is_kept() {
+    assert_eq!(shape_replacement(b"a\nb\n", "x\ry\n"), b"x\ry\n");
+    assert_eq!(shape_replacement(b"a\r\nb\r\n", "x\ry\n"), b"x\ry\r\n");
+}
+
+#[test]
 fn a_parent_that_is_a_file_creates_nothing() {
     let dir = TempDir::new("fiber-land-parent-file");
     let parent = dir.path().join("f");

@@ -2,7 +2,6 @@
 
 use std::fs;
 use std::io;
-use std::os::unix::fs::FileTypeExt;
 use std::path::Path;
 use std::sync::Arc;
 
@@ -16,10 +15,9 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::files::land::{land, shape_replacement};
 use crate::files::{
-    ResolveError, Shared, declare, failed, hash_bytes, path_text, resolve, unsupported_message,
+    ResolveError, Shared, declare, effects_error, failed, hash_bytes, kind_of, path_text, resolve,
+    string_argument, text_output, unsupported_message,
 };
-
-const DIRECTORY_HINT: &str = "List it through the shell.";
 
 /// Creates or replaces a text file.
 pub struct Write {
@@ -71,7 +69,7 @@ impl Tool for Write {
 
     fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
         if cancel.is_cancelled() {
-            return failed_text("Cancelled before it started.\n".to_owned());
+            return text_output("Cancelled before it started.\n".to_owned());
         }
         let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
             Ok(raw) => raw,
@@ -139,30 +137,6 @@ impl Tool for Write {
     }
 }
 
-fn failed_text(text: String) -> Output {
-    crate::files::text_output(text)
-}
-
-fn effects_error(error: ResolveError) -> EffectsError {
-    match error {
-        ResolveError::Arguments(message) | ResolveError::Tool(message) => {
-            EffectsError::Arguments(message)
-        }
-    }
-}
-
-fn string_argument(
-    arguments: &Map<String, Value>,
-    key: &str,
-    missing: &str,
-) -> Result<String, String> {
-    match arguments.get(key) {
-        Some(Value::String(value)) => Ok(value.clone()),
-        Some(_) => Err(format!("`{key}` must be a string.")),
-        None => Err(missing.to_owned()),
-    }
-}
-
 /// A path that is not there yet is a reversible create. Anything we cannot
 /// stat is declared irreversible, so a replace is never offered as reversible.
 fn reversible(path: &Path) -> bool {
@@ -183,32 +157,20 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
             ));
         }
     };
-    let file_type = meta.file_type();
-    if file_type.is_file() {
-        return match fs::read(path) {
-            Ok(bytes) => Ok(Some(bytes)),
-            Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err((
-                ErrorCode::ToolError,
-                format!("`{}` could not be written: {err}.", path.display()),
-            )),
-        };
+    if let Some((kind, hint)) = kind_of(meta.file_type()) {
+        return Err((
+            ErrorCode::UnsupportedFile,
+            unsupported_message(path, kind, meta.len(), hint),
+        ));
     }
-    let (kind, hint) = if file_type.is_dir() {
-        ("a directory", DIRECTORY_HINT)
-    } else if file_type.is_fifo() {
-        ("a fifo", "")
-    } else if file_type.is_socket() {
-        ("a socket", "")
-    } else if file_type.is_block_device() || file_type.is_char_device() {
-        ("a device", "")
-    } else {
-        ("a special file", "")
-    };
-    Err((
-        ErrorCode::UnsupportedFile,
-        unsupported_message(path, kind, meta.len(), hint),
-    ))
+    match fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err((
+            ErrorCode::ToolError,
+            format!("`{}` could not be written: {err}.", path.display()),
+        )),
+    }
 }
 
 fn stale(path: &Path, captured: Option<u64>, bytes: &[u8]) -> Option<Output> {

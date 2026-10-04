@@ -297,6 +297,23 @@ fn images_pdfs_binary_and_non_utf8_are_unsupported() {
 }
 
 #[test]
+fn a_retargeted_symlink_reads_nothing() {
+    let dir = TempDir::new("fiber-read-retarget");
+    fs::write(dir.path().join("a.txt"), "harmless\n").unwrap();
+    fs::write(dir.path().join("b.txt"), "secret\n").unwrap();
+    symlink("a.txt", dir.path().join("link")).unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    let arguments = args(json!({"path": "link"}));
+    files.read().effects(&arguments).unwrap();
+    fs::remove_file(dir.path().join("link")).unwrap();
+    symlink("b.txt", dir.path().join("link")).unwrap();
+    let output = files.read().run(&arguments, &CancelToken::new());
+    assert_eq!(code(&output), Some(ErrorCode::PathChanged));
+    assert!(!text(&output).contains("secret"), "{}", text(&output));
+    assert!(!text(&output).contains("harmless"), "{}", text(&output));
+}
+
+#[test]
 fn a_symlink_reads_its_target() {
     let dir = TempDir::new("fiber-read-link");
     fs::write(dir.path().join("real.txt"), "target\n").unwrap();

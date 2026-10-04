@@ -9,8 +9,8 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
 use crate::files::{
-    InspectError, Inspected, ResolveError, Shared, declare, failed, hash_bytes, inspect, resolve,
-    text_output, unsupported_message,
+    InspectError, Inspected, ResolveError, Shared, declare, effects_error, failed, hash_bytes,
+    inspect, resolve, string_argument, text_output, unsupported_message,
 };
 
 /// The tool's own cut (`docs/tools.md`, "Bounded results"). The loop's bound
@@ -60,7 +60,8 @@ impl Tool for Read {
     }
 
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
-        let raw = path_argument(arguments).map_err(EffectsError::Arguments)?;
+        let raw = string_argument(arguments, "path", "Give the file path as `path`.")
+            .map_err(EffectsError::Arguments)?;
         let resolved = resolve(self.shared.workspace(), &raw).map_err(effects_error)?;
         self.shared.note_judged(&raw, &resolved);
         Ok(declare(Effect::Reads, true, &resolved))
@@ -70,7 +71,7 @@ impl Tool for Read {
         if cancel.is_cancelled() {
             return text_output("Cancelled before it started.\n".to_owned());
         }
-        let raw = match path_argument(arguments) {
+        let raw = match string_argument(arguments, "path", "Give the file path as `path`.") {
             Ok(raw) => raw,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
@@ -89,9 +90,21 @@ impl Tool for Read {
             }
             Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
+        if self
+            .shared
+            .judged(&raw)
+            .is_some_and(|judged| judged != path)
+        {
+            return failed(
+                ErrorCode::PathChanged,
+                format!(
+                    "`{raw}` changed between the permission check and the read. Nothing was read."
+                ),
+            );
+        }
         // debt: the whole file is read into memory, a measured file that does not fit
-        let bytes = match inspect(&path) {
-            Ok(Inspected::Text { bytes }) => bytes,
+        let text = match inspect(&path) {
+            Ok(Inspected::Text { text }) => text,
             Ok(Inspected::Unsupported { kind, size, hint }) => {
                 return failed(
                     ErrorCode::UnsupportedFile,
@@ -106,19 +119,10 @@ impl Tool for Read {
             }
             Err(InspectError::Tool(message)) => return failed(ErrorCode::ToolError, message),
         };
-        let text = match std::str::from_utf8(&bytes) {
-            Ok(text) => text,
-            Err(_) => {
-                return failed(
-                    ErrorCode::UnsupportedFile,
-                    unsupported_message(&path, "not UTF-8 text", bytes_len(&bytes), ""),
-                );
-            }
-        };
-        let body = text.strip_prefix('\u{feff}').unwrap_or(text);
+        let body = text.strip_prefix('\u{feff}').unwrap_or(text.as_str());
         match slice_text(body, offset, limit) {
             Ok(shown) => {
-                self.shared.set_seen(&path, hash_bytes(&bytes));
+                self.shared.set_seen(&path, hash_bytes(text.as_bytes()));
                 text_output(shown)
             }
             Err(message) => failed(ErrorCode::InvalidArguments, message),
@@ -130,22 +134,6 @@ impl Tool for Read {
             start: 32_768,
             end: 0,
         }
-    }
-}
-
-fn effects_error(error: ResolveError) -> EffectsError {
-    match error {
-        ResolveError::Arguments(message) | ResolveError::Tool(message) => {
-            EffectsError::Arguments(message)
-        }
-    }
-}
-
-fn path_argument(arguments: &Map<String, Value>) -> Result<String, String> {
-    match arguments.get("path") {
-        Some(Value::String(path)) => Ok(path.clone()),
-        Some(_) => Err("`path` must be a string.".to_owned()),
-        None => Err("Give the file path as `path`.".to_owned()),
     }
 }
 
@@ -171,12 +159,13 @@ fn line_argument(
     usize::try_from(value).map_err(|_| format!("`{key}` is too large."))
 }
 
-fn bytes_len(bytes: &[u8]) -> u64 {
-    u64::try_from(bytes.len()).unwrap_or(u64::MAX)
-}
-
 fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String> {
-    let lines = split_lines(text);
+    // `split_inclusive` yields one empty slice for an empty file, which has no lines.
+    let lines: Vec<&str> = if text.is_empty() {
+        Vec::new()
+    } else {
+        text.split_inclusive('\n').collect()
+    };
     let total = lines.len();
     if offset > total && !(total == 0 && offset == 1) {
         return Err(format!(
@@ -198,7 +187,9 @@ fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String>
             break;
         }
         if len > CAP && count == 0 {
-            let prefix = cut_to_chars(line, CAP);
+            let prefix = line
+                .get(..line.floor_char_boundary(CAP))
+                .unwrap_or_default();
             cut_at = Some(prefix.len());
             shown.push_str(prefix);
             count = 1;
@@ -222,38 +213,6 @@ fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String>
         ));
     }
     Ok(shown)
-}
-
-fn split_lines(text: &str) -> Vec<&str> {
-    let mut lines = Vec::new();
-    let mut start = 0;
-    for (index, ch) in text.char_indices() {
-        if ch == '\n' {
-            let end = index + ch.len_utf8();
-            if let Some(line) = text.get(start..end) {
-                lines.push(line);
-            }
-            start = end;
-        }
-    }
-    if start < text.len()
-        && let Some(line) = text.get(start..)
-    {
-        lines.push(line);
-    }
-    lines
-}
-
-fn cut_to_chars(line: &str, cap: usize) -> &str {
-    let mut end = 0;
-    for (index, ch) in line.char_indices() {
-        let next = index + ch.len_utf8();
-        if next > cap {
-            break;
-        }
-        end = next;
-    }
-    line.get(..end).unwrap_or_default()
 }
 
 #[cfg(test)]

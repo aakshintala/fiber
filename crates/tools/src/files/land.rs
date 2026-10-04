@@ -34,22 +34,12 @@ pub(crate) fn ending_of(bytes: &[u8]) -> Ending {
 }
 
 /// `content` stored with `existing`'s line endings and byte order mark.
+///
+/// A `\r\n` pair is a CRLF ending. A lone `\r` is a byte of the line, not an
+/// ending, so it is kept.
 pub(crate) fn shape_replacement(existing: &[u8], content: &str) -> Vec<u8> {
-    let mut body = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let mut lf = String::new();
-    while !body.is_empty() {
-        if let Some(rest) = body.strip_prefix("\r\n") {
-            lf.push('\n');
-            body = rest;
-        } else if let Some(rest) = body.strip_prefix('\r') {
-            lf.push('\n');
-            body = rest;
-        } else {
-            let ch = body.chars().next().unwrap_or('\n');
-            lf.push(ch);
-            body = body.get(ch.len_utf8()..).unwrap_or("");
-        }
-    }
+    let body = content.strip_prefix('\u{feff}').unwrap_or(content);
+    let lf = body.replace("\r\n", "\n");
     let mut out = Vec::new();
     if existing.starts_with(BOM) {
         out.extend_from_slice(BOM);

@@ -13,7 +13,8 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
-use contract::tool::{Effects, Output};
+use contract::tool::{Effects, EffectsError, Output};
+use serde_json::{Map, Value};
 
 pub(crate) mod land;
 mod locks;
@@ -39,10 +40,10 @@ pub(crate) enum ResolveError {
 /// What a resolved path is, without opening a fifo, socket or device.
 #[derive(Debug)]
 pub(crate) enum Inspected {
-    /// UTF-8 bytes, byte order mark included.
+    /// UTF-8 text, byte order mark included.
     Text {
-        /// The file's bytes.
-        bytes: Vec<u8>,
+        /// The file's text.
+        text: String,
     },
     /// A directory, device or file the tool will not read.
     Unsupported {
@@ -100,30 +101,40 @@ pub(crate) fn resolve(workspace: &Path, raw: &str) -> Result<PathBuf, ResolveErr
                 }
                 let candidate = out.join(&name);
                 match fs::symlink_metadata(&candidate) {
-                    Ok(meta) if meta.file_type().is_symlink() => {
-                        follows += 1;
-                        if follows > MAX_SYMLINKS {
+                    Ok(meta) => {
+                        let file_type = meta.file_type();
+                        if file_type.is_symlink() {
+                            follows += 1;
+                            if follows > MAX_SYMLINKS {
+                                return Err(ResolveError::Tool(format!(
+                                    "`{raw}` could not be resolved: too many levels of symbolic links."
+                                )));
+                            }
+                            let target = fs::read_link(&candidate).map_err(|err| {
+                                ResolveError::Tool(format!(
+                                    "`{}` could not be resolved: {err}.",
+                                    candidate.display()
+                                ))
+                            })?;
+                            if target.as_os_str().is_empty() {
+                                return Err(ResolveError::Tool(format!(
+                                    "`{}` could not be resolved: the symbolic link is empty.",
+                                    candidate.display()
+                                )));
+                            }
+                            for piece in target.components().map(Piece::from).rev() {
+                                pending.push_front(piece);
+                            }
+                        } else if !file_type.is_dir() && !pending.is_empty() {
+                            // A later `..` would discard this file and keep resolving.
                             return Err(ResolveError::Tool(format!(
-                                "`{raw}` could not be resolved: too many levels of symbolic links."
-                            )));
-                        }
-                        let target = fs::read_link(&candidate).map_err(|err| {
-                            ResolveError::Tool(format!(
-                                "`{}` could not be resolved: {err}.",
-                                candidate.display()
-                            ))
-                        })?;
-                        if target.as_os_str().is_empty() {
-                            return Err(ResolveError::Tool(format!(
-                                "`{}` could not be resolved: the symbolic link is empty.",
+                                "`{raw}` could not be resolved: `{}` is not a directory.",
                                 candidate.display()
                             )));
-                        }
-                        for piece in target.components().map(Piece::from).rev() {
-                            pending.push_front(piece);
+                        } else {
+                            out.push(&name);
                         }
                     }
-                    Ok(_) => out.push(&name),
                     Err(err) if err.kind() == io::ErrorKind::NotFound => {
                         missing = true;
                         out.push(&name);
@@ -176,24 +187,8 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
         }
     };
     let size = meta.len();
-    let file_type = meta.file_type();
-    if file_type.is_dir() {
-        return Ok(unsupported("a directory", size, DIRECTORY_HINT));
-    }
-    if file_type.is_fifo() {
-        return Ok(unsupported("a fifo", size, ""));
-    }
-    if file_type.is_socket() {
-        return Ok(unsupported("a socket", size, ""));
-    }
-    if file_type.is_block_device() || file_type.is_char_device() {
-        return Ok(unsupported("a device", size, ""));
-    }
-    if file_type.is_symlink() {
-        return Ok(unsupported("a symbolic link", size, ""));
-    }
-    if !file_type.is_file() {
-        return Ok(unsupported("a special file", size, ""));
+    if let Some((kind, hint)) = kind_of(meta.file_type()) {
+        return Ok(unsupported(kind, size, hint));
     }
     let bytes = match fs::read(path) {
         Ok(bytes) => bytes,
@@ -217,10 +212,30 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     if bytes.contains(&0) {
         return Ok(unsupported("binary data", size, ""));
     }
-    if std::str::from_utf8(&bytes).is_err() {
-        return Ok(unsupported("not UTF-8 text", size, ""));
+    match String::from_utf8(bytes) {
+        Ok(text) => Ok(Inspected::Text { text }),
+        Err(_) => Ok(unsupported("not UTF-8 text", size, "")),
     }
-    Ok(Inspected::Text { bytes })
+}
+
+/// Kind and hint of anything that is not a regular file. A regular file is
+/// `None`; the caller reads its bytes.
+pub(crate) fn kind_of(file_type: fs::FileType) -> Option<(&'static str, &'static str)> {
+    if file_type.is_file() {
+        None
+    } else if file_type.is_dir() {
+        Some(("a directory", DIRECTORY_HINT))
+    } else if file_type.is_fifo() {
+        Some(("a fifo", ""))
+    } else if file_type.is_socket() {
+        Some(("a socket", ""))
+    } else if file_type.is_block_device() || file_type.is_char_device() {
+        Some(("a device", ""))
+    } else if file_type.is_symlink() {
+        Some(("a symbolic link", ""))
+    } else {
+        Some(("a special file", ""))
+    }
 }
 
 /// The sentence a file tool returns for [`Inspected::Unsupported`].
@@ -375,6 +390,26 @@ pub(crate) fn declare(effect: Effect, reversible: bool, resolved: &Path) -> Effe
         },
         subject: Some(path),
         prefix: Some(dir_prefix(resolved)),
+    }
+}
+
+pub(crate) fn effects_error(error: ResolveError) -> EffectsError {
+    match error {
+        ResolveError::Arguments(message) | ResolveError::Tool(message) => {
+            EffectsError::Arguments(message)
+        }
+    }
+}
+
+pub(crate) fn string_argument(
+    arguments: &Map<String, Value>,
+    key: &str,
+    missing: &str,
+) -> Result<String, String> {
+    match arguments.get(key) {
+        Some(Value::String(value)) => Ok(value.clone()),
+        Some(_) => Err(format!("`{key}` must be a string.")),
+        None => Err(missing.to_owned()),
     }
 }
 
