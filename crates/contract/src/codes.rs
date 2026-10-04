@@ -69,6 +69,8 @@ codes! {
     ExtensionNotFound,
     /// A required extension failed to start.
     ExtensionRequiredFailed,
+    /// A repository's required extension is not approved.
+    ExtensionUnapproved,
     /// The extension providing the tool died twice.
     ExtensionUnavailable,
     /// An install or update could not fetch: git or the network failed.
@@ -77,6 +79,8 @@ codes! {
     Flooded,
     /// An extension hook errored or ran out of time.
     HookFailed,
+    /// A repository's required hook is not approved.
+    HookUnapproved,
     /// `web_fetch` got a status other than 2xx.
     HttpError,
     /// Fiber cannot tell whether the call completed.
@@ -97,7 +101,7 @@ codes! {
     McpCancelRequested,
     /// A required MCP server failed to start.
     McpRequiredServerFailed,
-    /// A repository's MCP server is not approved.
+    /// A repository's required MCP server is not approved.
     McpServerUnapproved,
     /// The server failed to start or died.
     McpServerUnavailable,
@@ -141,6 +145,9 @@ codes! {
     RateLimited,
     /// The provider declined on policy grounds.
     Refused,
+    /// Code a repository declares was skipped: nobody approved it and nobody
+    /// could be asked.
+    RepositoryCodeSkipped,
     /// A delete names a session that forks or rewinds point at.
     SessionHasDependents,
     /// Another process holds the session.

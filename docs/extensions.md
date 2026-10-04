@@ -50,6 +50,13 @@ An extension is one directory. Its manifest, `extension.json`, states
   session needs it (`required`), and how long it may take to finish when the
   session ends (`exit_timeout_ms`, no default)
 - an install step, if it has one, such as `npm ci`
+- the built-in tools and commands it replaces, and the providers it
+  registers with each one's base URLs (`replaces` and `providers`). An
+  extension that registers a replacement or a provider its manifest does not
+  declare is not loaded for the session, with the notice `extension_failed`,
+  and a model whose base URL its provider's entry does not list is left out of
+  the model list. So what an install or an offer shows is everything the
+  extension can take over
 
 Beside the manifest it may hold:
 
@@ -96,7 +103,8 @@ with the account's full rights; the stripped stdlib is a structural fact — the
 host owns I/O — not a sandbox. A hostile extension is contained the way `npm
 install` is contained: not at all at runtime, only by the decision to install
 it. Trust is resolved when an extension is installed or approved, not while
-it runs. How that works is [Distribution](#distribution).
+it runs, and an approval holds only for the exact files approved. How that
+works is [Distribution](#distribution).
 
 ## Process extensions
 
@@ -198,7 +206,7 @@ fiber.tool(name, { description, input_schema, effects, run })
 fiber.provider(name, { models, quota, credential, sign })
 fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
-fiber.hook(point, { on_failure, timeout, run })
+fiber.hook(point, { phase, on_failure, timeout, run })
 fiber.watch(kinds, { timeout, run })
 fiber.command(name, { description, timeout, run })
 ```
@@ -500,17 +508,39 @@ When none does, Fiber makes its own (`docs/handoff.md`, "The handoff note").
 
 ### When several hooks share a point
 
-Hooks at the same point run one after another. Configuration can set the
-order of extensions at each hook point. Extensions it does not name run after
-those it does, ordered by name, and one extension's hooks at the same point run
-in the order it registered them. Each hook sees what the one before it
-returned. A refusal ends the chain. The order is fixed so that the same inputs
-give the same result on every run.
+Hooks at the same point run one after another, in three phases. A hook names
+its phase when it registers:
+
+1. **`sanitize`** makes the content safe to handle, such as removing a secret
+   or masking personal data. Sanitize hooks run first, so every later hook,
+   including one that calls a network service, sees the cleaned content.
+2. **`transform`** changes or adds to it, such as rewriting a call's arguments
+   or adding context. A hook that names no phase is a transform hook.
+3. **`check`** refuses or lets it pass, without changing it. Check hooks run
+   last, so a check judges what will actually happen. A check hook exists only
+   at the points that can refuse: `before_message`, `before_tool` and
+   `before_model_call`; one registered at any other point is not registered.
+   A check hook that returns a change has failed, and its `on_failure` decides
+   what happens ("When a hook fails").
+
+Within a phase, configuration can set the order of extensions at each hook
+point (`hooks.order`, `docs/configuration.md`). Extensions it does not name
+run after those it does, ordered by name, and one extension's hooks at the
+same point and phase run in the order it registered them. Each hook sees what
+the one before it returned. A refusal ends the chain. The order is fixed so
+that the same inputs give the same result on every run.
+
+The order is precedence, not protection. Every hook runs with the account's
+full rights, so a hook placed later could read a secret from wherever it came
+from. Phases exist so that well-meaning hooks run in the right order: a
+company's redaction hook, shipped with its repository, runs before a person's
+own notifier sees the text.
 
 ### When a hook fails
 
 Every hook declares two things when it registers, and neither has a default.
-A hook that leaves either out is not registered.
+A hook that leaves either out is not registered. Its phase is optional
+("When several hooks share a point").
 
 - `timeout`: how long it may run. Its author knows whether it only computes or
   calls a web service or a model. Configuration can override the timeout for
@@ -556,6 +586,78 @@ Handing a value to a hook and taking its answer back is cheap next to the
 hook's own work. A 16 KiB tool result crosses into Lua and back in under
 10 µs, and a 1 MiB one in about 50 µs (macOS arm64,
 [research/hook-conversion-cost](../research/hook-conversion-cost/README.md)).
+
+## Hooks declared in configuration
+
+A person can declare a hook or a watcher as a command in configuration,
+without writing an extension. The first-party `hooks` extension,
+`github.com/aakshintala/fiber/extensions/hooks`, reads the declarations and
+registers each one as a real hook or watcher, so a declared hook follows every
+rule on this page. Whether a fresh install ships with it is not yet decided
+([#429](https://github.com/aakshintala/fiber/issues/429)).
+
+The declarations are the extension's settings (`docs/configuration.md`,
+"Extension settings"), under `hooks`, one entry per name, so each layer adds
+entries instead of replacing the list:
+
+```json
+{
+  "hooks": {
+    "fmt": {
+      "point": "after_tool", "tools": ["edit", "write"],
+      "command": "cargo", "args": ["fmt"],
+      "timeout": 30000, "on_failure": "non-blocking"
+    },
+    "main-checked-out": {
+      "point": "session_start", "command": "scripts/warn-main.sh",
+      "timeout": 2000, "on_failure": "non-blocking"
+    },
+    "done": { "watch": ["turn_completed"], "command": "notify-send", "args": ["turn done"] }
+  }
+}
+```
+
+- **A hook entry** names its `point`, its `command` and `args`, a `timeout`
+  and an `on_failure`, and may name a `phase`. An entry missing `timeout` or
+  `on_failure` is not registered, and a `notice` names the entry and the
+  missing field, as for any hook ("When a hook fails").
+- **`tools`** lists exact tool names, with no patterns, on a `before_tool` or
+  `after_tool` hook. The command runs only for those tools, so a formatter
+  does not start a process on every `read`.
+- **A watcher entry** names `watch`, the event kinds it wants
+  (`docs/events.md`), and its `command`.
+
+The command runs as `host.exec` runs a program ("Host calls"): in the
+session's workspace, in its own process group, with the session's
+environment. It runs once for each time its hook point or event comes round.
+
+**What the command reads.** Standard input carries one JSON line: the hook
+request a process extension receives for that point ("Process extensions"),
+or, for a watcher, the event.
+
+**How the command answers.** Standard output may carry the reply a process
+extension would send, as one JSON line. Two shorthands keep a shell script
+short:
+
+- Exit 0 with plain text on standard output adds the text as context at the
+  points that take context: `session_start`, `before_message` and
+  `turn_start`. Exit 0 with nothing on standard output changes nothing.
+- Exit 2 refuses, with standard error as the reason, at the points that can
+  refuse: `before_message`, `before_tool` and `before_model_call`.
+
+Any other exit, exit 2 at a point that cannot refuse, a signal or a timeout is
+a failure, which the entry's `on_failure` decides. A failure is never a pass,
+so a `blocking` guard fails closed. A watcher's answer is ignored.
+
+The extension registers its entries in name order, so declared hooks at the
+same point and phase run in name order. `hooks.order` places the `hooks`
+extension among the others.
+
+A repository may declare hooks in its layer of these settings. Each one runs
+only after a person approves it, pinned to its exact content ("Code a
+repository ships"); one nobody has approved is withheld from what the
+extension reads. A repository cannot set `hooks.order` or a hook timeout
+override, so the order within a phase and every timeout stay the person's.
 
 ## Watchers
 
@@ -616,10 +718,10 @@ slash commands. A future GUI's extensions take the same shape.
 A TUI extension, or any other client's half of an extension, belongs to the
 client.
 
-- **It loads only from the client's own Fiber home,** as every extension
-  loads only once installed ("Extensions in a repository"). A remote client
-  could not load one from the session's disk, and a session never sends
-  drawing code.
+- **It loads only from the client's own Fiber home,** never from a
+  repository: a repository's package brings only its session half ("Code a
+  repository ships"). A remote client could not load one from the session's
+  disk, and a session never sends drawing code.
 - **One instance serves every session the client shows.** Each callback
   receives the `session_id` it is for (`docs/tui.md`, "How a TUI extension
   runs").
@@ -689,8 +791,8 @@ process extension is restarted. Both are handed their folded state again.
   process extension's memory is its own process's.
 - **It dies.** A process extension is restarted once ("Process extensions").
 - **It is hostile.** Nothing stops it at runtime; it has the account's rights.
-  This is the trust model, not a gap. Fiber's obligation is that installing an
-  extension is a deliberate act.
+  This is the trust model, not a gap. Fiber's obligation is that installing or
+  approving an extension is a deliberate act.
 
 ## When a session ends
 
@@ -799,9 +901,10 @@ running on.
 | Command | What it does |
 |---|---|
 | `fiber extension install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
-| `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. The new version stays a minimum (see [Versions](#versions)). |
+| `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. The new version stays a minimum (see [Versions](#versions)). It never touches a repository's extension. |
 | `fiber extension remove <name>` | Removes an extension, and any dependency nothing else uses. |
-| `fiber extension list` | Lists installed extensions with their versions and commits. |
+| `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |
+| `fiber approve [--yes]` | Shows everything the current repository declares and approves it ("Code a repository ships"). |
 
 In a terminal, `install` and `update` show a summary and ask before going
 ahead. The summary is the one in
@@ -862,31 +965,118 @@ tool set is fixed before the first request (`docs/prompt-cache.md`, "Tools").
 A fresh install has no extensions, providers included. In the terminal, the
 model picker offers the first-party providers, and choosing one installs it.
 On a headless machine, `fiber extension install <name>` installs one. A headless run
-whose provider is not installed fails with `extension_missing`.
+whose provider is not installed fails with `extension_missing`. An extension a
+repository declares and nobody has approved is skipped, or fails the run when
+the repository marks it `required` ("Code a repository ships").
 
 ### Staying current
 
 `fiber update` updates the Fiber binary and every installed extension
 together, so a new Fiber and the extensions written for it arrive at the same
-time. `fiber extension update <name>` updates one extension, and
+time. A repository's extensions are not among them: one changes only through a
+new offer ("Code a repository ships"). `fiber extension update <name>` updates one extension, and
 `fiber extension update` with no name updates every extension.
 
 Nothing checks for updates on a timer. Extensions change only when someone runs
 one of these commands, so an idle Fiber does no work.
 
-### Extensions in a repository
+### Code a repository ships
 
-A repository never loads an extension. Extensions are executable code, so
-only one a person installed into Fiber home loads, and it behaves the same in
-every repository. A repository's MCP servers, instruction files, skills and
-prompt templates still load from it: an MCP server after its own approval
-(`docs/mcp.md`, "A repository's servers"), the rest as data.
+A repository can ship three kinds of code: extensions, hooks declared in
+configuration ("Hooks declared in configuration") and MCP servers
+(`docs/mcp.md`, "A repository's servers"). All three follow one rule: the
+repository declares the code, the session offers it, the person approves it,
+and the approval holds for the exact content, so a change brings a new offer.
+A cloned repository is someone else's text, read before anything is approved,
+so nothing it declares runs before a person has seen it.
 
-A repository may ship an extension's package, in any directory. A person who
-wants it installs it from there, `fiber extension install ./tools/fiber-lint`, which
-shows the summary in "What an install shows" like any install. The
-repository's `AGENTS.md` or README can say which to install; Fiber reads no
-list of them.
+**Declaring.** A repository lists the extension packages it ships in
+`.fiber/config.json`, under `repository_extensions`, each as a path inside the
+repository and whether the repository needs it (`required`)
+(`docs/configuration.md`). It declares hooks in the `hooks` extension's
+settings and MCP servers under `mcp.servers`. A package's client half never
+loads from a repository ("Client halves"): only its session half is offered.
+
+**Offering.** Before its first model request, a session gathers everything
+its repository declares that has no approval for this project and this
+content, and raises one offer listing all of it, so approving costs no
+prompt-cache rebuild. Each item shows what an install shows ("What an install
+shows"), and an item whose content changed shows the diff against the copy
+approved before. For each item the person chooses: approve, skip for this
+session, or never. Any client may answer, local or remote, and the first
+answer wins, as for every interaction (`docs/invocation.md`, "Replying").
+
+Whether the session waits depends on whether a client that can answer is
+connected, not on how the session started:
+
+- **With one connected,** the session waits for the answer before its first
+  request. Waiting counts as idle, so the idle exit bounds it
+  (`docs/invocation.md`, "Lifecycle").
+- **With none,** as in a `fiber ask` run, a schedule or a CI job, it does not
+  wait. Each unapproved item is skipped, and a `notice` with code
+  `repository_code_skipped` names it and says to run `fiber approve`. An item
+  the repository marks `required` fails the run instead, with
+  `extension_unapproved`, `hook_unapproved` or `mcp_server_unapproved`.
+- **A delegate never asks.** It checks the same approvals and skips or fails
+  in the same way.
+
+**Approving outside a session.** `fiber approve`, run in the repository, shows
+everything the repository declares now, as one offer would, and approves it.
+`--yes` approves without asking, for a script or a machine image. It is the
+only way to approve without a session, and only a person runs it: nothing in
+configuration or in a repository starts it. It prints each approval it
+records on stderr.
+
+**Pinning.** An approval holds for one SHA-256 hash of the content:
+
+- **An extension:** every file in its package directory that git does not
+  ignore. Approving copies the package into Fiber home (`docs/state.md`,
+  "What each part holds") and runs its install step there, and its dependencies
+  install inside the same copy, so two versions never share one. A session
+  loads the copy, never the repository's files.
+- **A declared hook or a repository's MCP server:** its declaration, plus each
+  file its `command` or `args` names inside the repository. Approving copies
+  those files into Fiber home, and the copy is what runs, in the session's
+  workspace.
+
+A path counts as inside the repository after symbolic links are resolved, so
+a link that points out of the repository is not pinned. What a pinned program
+fetches or reads while it runs is not pinned: a server started with `npx -y`
+can run different code later under the same approval, and a hook script that
+reads other files of the repository reads them as they are now.
+
+**Every approved version is kept.** All worktrees of a repository are one
+project, but each branch can carry its own version of a package. Each session
+loads the version that matches its own worktree's files, so two sessions on
+two branches each run their own, and switching back to a branch finds its
+version still approved. `fiber sessions prune` removes pinned copies that no
+worktree matches any more (`docs/invocation.md`, "Deleting and pruning").
+
+**What an approved extension may do.** Everything an installed one may. Its
+manifest declares the built-ins it replaces and the providers it registers,
+with their base URLs ("What a package holds"), and the offer states each in
+plain words, such as "replaces `shell`" or "registers provider `acme` at
+`https://api.acme.dev/v1`".
+
+**Scope.** An approved repository extension loads in its project only.
+`fiber update` and `fiber extension update` never touch it: it changes only
+through a new offer. `fiber extension remove <name>`, run in the project,
+removes it and records never for that content, so it is not offered again
+until its content changes.
+
+**Where approvals live.** An approval, or a never, is recorded per project and
+content for extensions and hooks, and per machine for an MCP server
+(`docs/state.md`, "What each part holds"). A repository cannot write or read them.
+
+**What a session checks at start.** It hashes only the paths its repository
+declares, never the rest of the tree. One index in Fiber home records each
+declared path's size, modification time and hash, so a session reads an
+unchanged file only to compare those two (`docs/performance.md`).
+
+A person can still install a repository's package as their own, with
+`fiber extension install ./tools/fiber-lint`. That is an ordinary install,
+global unless `--project` is given, and does not follow the repository's
+copy.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions
@@ -896,15 +1086,19 @@ home (`docs/configuration.md`). A repository cannot set it.
 
 ### What an install shows
 
-In a terminal, `fiber extension install` and `fiber extension update` show:
+`fiber extension install`, `fiber extension update` and an offer
+("Code a repository ships") show:
 
-- its name, where it comes from and its version
-- the providers it registers, each with its base URLs
-- the program a process extension runs, and its install step
+- its name, where it comes from and its version, and for an offer, its path in
+  the repository and that it loads in this project only
+- the built-in tools and commands it replaces, and the providers it registers,
+  each with its base URLs
+- the program a process extension runs, and its install step, which runs its
+  dependencies' own install scripts too
 - the memory cap of a Lua extension, when its manifest raises it above 1 MiB
 - the skills, prompt templates, themes, binaries and TUI files it carries
 
-The summary shows what the manifest and the files tell. It does not list tools,
-hooks, watchers or commands: a Lua extension registers those only when its
-script runs, and installing runs none of its code. The full source is one key
-away, so a person can read them.
+The summary shows what the manifest and the files tell. It does not list the
+new tools, hooks, watchers or commands an extension adds: a Lua extension
+registers those only when its script runs, and installing runs none of its
+code. The full source is one key away, so a person can read them.

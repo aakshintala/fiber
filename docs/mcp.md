@@ -270,28 +270,33 @@ Fiber does not advertise roots. codex advertises none; Claude Code does.
 
 ## A repository's servers
 
-A server declared in a repository's configuration runs a program, so it needs
-a person's approval before it starts. The session that would start it raises
-the approval as an interaction before its first model request, showing the
-server's declaration, so any client can answer it (`docs/tui.md`, "Approving
-a repository's MCP servers"). The approval covers the server's exact
-declaration: a changed declaration needs a new approval, and approvals are
-recorded per machine in Fiber home (`docs/state.md`). A headless run fails
-with `mcp_server_unapproved` if a repository declares a server nobody has
-approved. `fiber mcp approve`, run in the repository from a terminal, records the
-approvals.
+A server declared in a repository's configuration runs a program, so it
+follows the rule for all code a repository ships (`docs/extensions.md`, "Code
+a repository ships"): the session that would start it offers it before its
+first model request, showing the server's declaration, and any client can
+answer (`docs/tui.md`, "Approving what a repository ships"). With nobody to
+ask, an unapproved server is skipped with a `notice`, and a `required` one
+fails the run with `mcp_server_unapproved`. `fiber approve`, run in the
+repository, approves it outside a session.
+
+The approval covers the server's exact declaration and each file its
+`command` or `args` names inside the repository. Fiber copies those files into
+Fiber home and starts the copy, so a changed declaration or a changed file
+needs a new approval. Approvals are recorded per machine (`docs/state.md`,
+"What each part holds").
 
 `fiber mcp add --repo` writes the declaration to the repository and records
 the approval of that exact declaration for the person who ran it. Another
 person who gets the declaration with the repository has no approval on their
 machine, and is asked.
 
-A repository's servers load per repository, unlike extensions, which never
-load from one (`docs/extensions.md`, "Extensions in a repository").
+The approval does not cover what the program fetches or reads while it runs.
+A declaration that fetches its program at start, such as `npx -y`, can run
+different code later under the same approval, and a server that loads other
+files of the repository loads them as they are now.
 
-The approval covers what the declaration says to run, not the program itself. A
-declaration that fetches its program at start, such as `npx -y`, can run
-different code later under the same approval.
+The tool-list cache ("Starting servers") is keyed by the declaration alone. It
+is a different hash from the approval's, which also covers the pinned files.
 
 ## Error codes
 

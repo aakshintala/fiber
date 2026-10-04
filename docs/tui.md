@@ -95,17 +95,18 @@ accent gradient, the version dim.
   `⌇ fiber 0.0.1`. Fiber cannot tell whether the terminal's font has ⌇, so
   `tui.logo_glyph` switches it to ≈ ("Configuration").
 
-### Approving a repository's MCP servers
+### Approving what a repository ships
 
-MCP servers a repository declares are approved by the session that would
-start them (`docs/mcp.md`, "A repository's servers"). When the hub starts a
-session in a workspace whose repository declares an unapproved server, the
-session raises the approval as an interaction before its first model request,
-so approving costs no prompt-cache rebuild, and any client can answer it. The
-terminal shows it in the session's view, as a swapped view with the server's
-declaration and three choices: approve, skip for this session, or never. A
-repository brings no extensions (`docs/extensions.md`, "Extensions in a
-repository").
+Extensions, hooks and MCP servers a repository declares are offered by the
+session that would load them (`docs/extensions.md`, "Code a repository
+ships"). When the hub starts a session in a workspace whose repository
+declares code with no approval for its content, the session raises one offer
+before its first model request, so approving costs no prompt-cache rebuild,
+and any client can answer it. The terminal shows it in the session's view, as
+a swapped view listing every pending item with what an install shows, a diff
+for an item whose content changed, and three choices for each: approve, skip
+for this session, or never. A package's TUI files are never installed from a
+repository, and the offer says so.
 
 ### The session list
 
@@ -246,8 +247,8 @@ the conversation. The views are:
   Which fields a skill has, and whether one can be switched off here, is the
   Skills item of [Map: designing Fiber](https://github.com/aakshintala/fiber/issues/1).
 - **`/rewind`** ("Rewind").
-- **A repository's MCP server approval**, before a new session's first
-  request ("Approving a repository's MCP servers").
+- **A repository's offer**, before a new session's first request ("Approving
+  what a repository ships").
 
 ### The working line
 
@@ -874,7 +875,7 @@ itself is a separate client of the hub, not a TUI extension.
 | `overlay:<name>` | An overlay an extension adds, drawn over the conversation |
 | `approval` | The approval panel, draw-only |
 | `question_form` | The question form, draw-only |
-| `server_approval` | The approval of a repository's MCP servers, draw-only |
+| `repository_offer` | The offer of what a repository ships, draw-only |
 
 A slot receives what its built-in renderer receives, and all of it comes from
 the event stream. A ledger row, for example, receives the call's name,
@@ -887,7 +888,7 @@ shown. A layout does its own narrow layout and shedding. The "Fiber needs
 40×10" floor stays the terminal's.
 
 The three draw-only slots decide how an approval, a question form or a
-server approval looks, never what it sends. An extension may restyle and
+repository's offer looks, never what it sends. An extension may restyle and
 reorder their choices. It cannot add, remove or relabel one, and its key
 handler never sees their keys. The choices, their keys and the `reply` they
 send stay the terminal's, so an extension never approves a tool call
@@ -934,8 +935,8 @@ built-in rather than drawing the row again.
 ### How a TUI extension runs
 
 - **From the terminal's own Fiber home only.** A TUI extension belongs to the
-  client. A repository brings session halves only, and its TUI extensions do
-  not load (`docs/extensions.md`, "Client halves").
+  client. A repository's packages bring session halves only, and their TUI
+  extensions never load (`docs/extensions.md`, "Client halves").
 - **One VM per extension, for every session.** Every callback and event
   handler receives the `session_id` it is for, and the extension keys its own
   state by it. Timers belong to the extension, not to a session. `on_focus`

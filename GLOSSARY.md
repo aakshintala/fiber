@@ -236,6 +236,14 @@ One of the fixed places in a session where hooks are asked, such as
 to the model.
 _Avoid_: hook event, lifecycle event
 
+### Hook phase
+
+Where a hook runs among the others at its point: `sanitize` first, which makes
+content safe to handle; `transform`, the default, which changes or adds to it;
+and `check` last, which only refuses or lets it pass. See `docs/extensions.md`,
+"When several hooks share a point".
+_Avoid_: priority, stage
+
 ### Extension
 
 A package Fiber installs and loads, registering tools, providers and hooks
@@ -292,12 +300,13 @@ A directory in Fiber home that belongs to one extension, one per machine and
 one per project, for what it keeps across sessions.
 _Avoid_: storage, cache, extension home
 
-### Server approval
+### Repository approval
 
-A person's decision to let an MCP server a repository declares start, made
-after seeing its declaration. It covers the exact declaration: a changed one
-needs a new approval. A repository brings no extensions, so there is no
-extension approval.
+A person's decision to let code a repository declares run: an extension, a
+hook declared in configuration or an MCP server. The session raises it as one
+offer before its first model request, and `fiber approve` makes it outside a
+session. It holds for one hash of the exact content, and the approved content
+is copied into Fiber home and run from there, so a change brings a new offer.
 _Avoid_: review (the reviewer is the permission model), trust
 
 ### MCP server

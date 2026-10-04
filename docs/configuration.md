@@ -70,6 +70,9 @@ A repository may set a key only when the worst a hostile value can do is cost
 the person time or money. It never sets a key that widens what runs without
 asking, changes where requests go, or weakens a safety check. A cloned
 repository is someone else's text, and it is read before anything is approved.
+The one exception is code the repository declares, which runs only after a
+person approves it, pinned to its exact content: those keys are marked "yes,
+with approval".
 
 Each key says whether a repository may set it. A key that says nothing is
 person-only, so a key added without thought stays safe. A repository that sets
@@ -81,10 +84,9 @@ this one:
 
 - A repository cannot declare a provider or change a base URL
   (`docs/model-routing.md`, "Choosing the model").
-- A repository can declare MCP servers, which start only after a person
-  approves them (`docs/mcp.md`, "A repository's servers"). It cannot declare
-  or enable an extension (`docs/extensions.md`, "Extensions in a
-  repository").
+- A repository can declare extensions, hooks and MCP servers, and each runs
+  only after a person approves its exact content (`docs/extensions.md`, "Code
+  a repository ships"). It cannot enable an extension a person installed.
 
 ## Keys
 
@@ -119,7 +121,8 @@ set the key.
 | `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
 | `quota.notice_at` | 80 | yes | The percent used of a quota window at which the model gets a notice (`docs/tools.md`, "Provider quota"). |
 | `mcp.servers."<name>"` | none | yes, with approval | An MCP server ("MCP servers"). |
-| `extensions."<name>".enabled` | true | no | Whether an installed extension loads; `false` globally and `true` in a project's file scopes it to that project (`docs/extensions.md`, "Extensions in a repository"). |
+| `repository_extensions` | none | yes, with approval | The extension packages the repository ships: a list of objects with `path`, inside the repository, and `required`, default false (`docs/extensions.md`, "Code a repository ships"). Set anywhere but the repository's file, it is ignored with a `notice`. |
+| `extensions."<name>".enabled` | true | no | Whether an installed extension loads; `false` globally and `true` in a project's file scopes it to that project (`docs/extensions.md`, "Code a repository ships"). |
 | `extensions."<name>".startup_timeout_ms` | 5000 | yes | A process extension's startup deadline. |
 | `extensions."<name>".commands."<command>"` | none | yes | A new name for one of the extension's commands, when two extensions clash. |
 | `extensions."<name>".tools.enabled`, `extensions."<name>".tools.disabled` | none | yes | Lists of the extension's tool names to declare or leave out, as an MCP server's `tools.enabled` and `tools.disabled` do ("MCP servers"); the terminal's `/tools` switch writes them (`docs/tui.md`, "Swapped views"). |
@@ -139,9 +142,11 @@ set the key.
 | `tui.logo_glyph` | `"⌇"` | no | The glyph before the name in the logo, `"⌇"` or `"≈"`, for a font without ⌇ (`docs/tui.md`, "The logo"). |
 | `tui.slots."<slot>"` | none | no | The extension that fills a slot two extensions replace, such as `tui.slots."ledger_row:shell"`; the same for a key two extensions bind, as `tui.slots."key:ctrl+k"` (`docs/tui.md`, "When two extensions want one slot"). |
 
-Hook order and hook timeouts are person-only because a redaction hook depends
-on both. A repository that could move another hook in front of it, or cut its
-timeout, could send text out before the secret is removed.
+Hook order and hook timeouts are person-only so that the person keeps the
+final say over the hooks they run. Order is precedence, not a security
+boundary: every approved hook runs with the account's full rights. Phases put
+redaction first whoever ships it (`docs/extensions.md`, "When several hooks
+share a point").
 
 ### Per model
 
@@ -179,7 +184,9 @@ lists:
 | `tools.enabled`, `tools.disabled` | lists of tool names |
 | `tools."<tool>".hints` | overrides of that tool's MCP hints |
 
-A repository may declare a server, subject to approval. `tools."<tool>".hints`
+A repository may declare a server, subject to approval of its declaration and
+of each file its `command` or `args` names inside the repository
+(`docs/extensions.md`, "Code a repository ships"). `tools."<tool>".hints`
 is person-only: a repository that marked a tool `readOnlyHint` would skip the
 reviewer for it.
 
@@ -206,7 +213,11 @@ holds"). The layers merge exactly as Fiber's own keys do.
 - A repository sets only the keys the extension's manifest lists under
   `repo_settings`. Fiber cannot judge a key it does not know, but the author
   can, so the author applies the rule in "What a repository may set". Any
-  other key in the repository's file gets a `notice` and is ignored.
+  other key in the repository's file gets a `notice` and is ignored. The list
+  comes from the manifest of the installed or approved copy, never from a
+  repository's working files. The `hooks` extension lists `hooks`, and each
+  hook a repository declares there is withheld until a person approves it
+  (`docs/extensions.md`, "Hooks declared in configuration").
 - `fiber extension remove` deletes the extension's file in the global and every
   per-project layer, asking first in a terminal, as it does for its data
   directories.
@@ -325,10 +336,12 @@ file.
 
 ```
 .fiber/
-  config.json                 repository configuration
-  config/<extension>.json     settings for an approved extension, repo_settings keys only
-  extensions/<name>/          extensions the repository ships
+  config.json                 repository configuration, including repository_extensions
+  config/<extension>.json     settings for an extension, repo_settings keys only
 ```
+
+The packages a repository ships may sit in any directory of it;
+`repository_extensions` names them.
 
 ## An extension's manifest
 
@@ -354,6 +367,8 @@ holds what `docs/extensions.md` ("What a package holds") lists:
   "install": ["npm", "ci"],
   "memory_mib": 8,
   "repo_settings": ["workspace_url"],
+  "replaces": ["web_search"],
+  "providers": { "acme": ["https://api.acme.dev/v1"] },
   "prompt": "prompt.md"
 }
 ```
@@ -364,7 +379,11 @@ major version it was written for; Fiber loads it only when that is Fiber's own
 a process extension, and `exit_timeout_ms` has no default. A Lua extension's
 entry script is `init.lua` at the top of its directory. `memory_mib` raises a
 Lua extension's memory cap, in MiB, above the default of 1
-(`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `prompt` names a
+(`docs/extensions.md`, "Loading, and cost when nothing is loaded"). `replaces`
+lists the built-in tools and commands the extension replaces, and `providers`
+maps each provider it registers to its base URLs; both default to none, and a
+registration beyond them stops the extension loading (`docs/extensions.md`,
+"What a package holds"). `prompt` names a
 file in the package whose text goes in the system prompt
 (`docs/system-prompt.md`, "Extension texts").
 
