@@ -245,7 +245,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `orphaned` | job | the process that ran the job died |
 | `output_cap` | job | a job's output file passed 5 GB |
 | `output_truncated` | tool call, turn | a reply was cut off by the output-token limit, so its calls did not run |
-| `path_changed` | tool call | a symbolic link changed between the permission decision and the write |
+| `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write |
 | `protocol_unsupported` | exit | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
