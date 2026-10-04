@@ -982,5 +982,9 @@ fn close_after_resume_keeps_a_session_that_has_turns() {
         Session::resume(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())).unwrap();
     close_within(session, log);
 
-    assert!(dir.join("events.jsonl").is_file());
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["turn_started"]
+    );
 }
