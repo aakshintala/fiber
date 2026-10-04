@@ -91,12 +91,15 @@ fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
 }
 
 #[test]
-fn signal_sites_ignores_a_dash_operand_without_kill() {
-    let files = [file(
-        "tools",
-        "src/classify.rs",
-        "names.push(\"find x -- -delete\")".to_owned(),
-    )];
+fn signal_sites_ignores_dash_operands_without_kill() {
+    let source = [
+        "names.push(\"find x -- -delete\")",
+        "effects(&shell, \"npm test -- --watch\")",
+        "classified(\"ls -- -l\")",
+        "\"cargo clippy -- -D warnings\"",
+    ]
+    .join("\n");
+    let files = [file("tools", "src/classify.rs", source)];
     assert_eq!(signal_sites(&files), Vec::<String>::new());
 }
 
@@ -108,6 +111,21 @@ fn signal_sites_ignores_the_word_kill_on_its_own() {
         "the watchdog kills the group".to_owned(),
     )];
     assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_reports_a_shell_kill_split_across_lines() {
+    // Built from parts so this file holds no signal pattern itself: the
+    // first line ends with a backslash, the second carries the operand.
+    let first = ["kill -TERM ", "\\"].concat();
+    let second = ["  --", " -1\""].concat();
+    let source = format!("{first}\n{second}");
+    let files = [file("log", "src/lib.rs", source)];
+    let dash = ["--", " -"].concat();
+    assert_eq!(
+        signal_sites(&files),
+        [format!("crates/log/src/lib.rs:2: {dash}")]
+    );
 }
 
 fn file(krate: &str, rel: &str, source: String) -> RustFile {

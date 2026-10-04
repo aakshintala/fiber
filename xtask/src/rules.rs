@@ -144,16 +144,16 @@ const SIGNAL_ALLOWLIST: &[&str] = &[
 ];
 
 /// What counts as a process signal: the pattern, and whether it only counts
-/// beside the word kill on the same line. A bare double dash also starts an
-/// operand such as find's `-delete`, so the shell fragments need their kill.
-/// The strings are joined from halves so this file holds no pattern itself;
-/// otherwise the check would fail on its own source.
+/// beside the word kill, on its own line or in the backslash-continued
+/// lines around it. A bare double dash also starts an operand such as
+/// find's `-delete`, so the shell fragments need their kill. The strings
+/// are joined from halves so this file holds no pattern itself; otherwise
+/// the check would fail on its own source.
 const SIGNAL_PATTERNS: &[(&str, bool)] = &[
     (concat!("Command::", "new(\"kill\")"), false),
     (concat!("--", " -"), true),
     (concat!("\"-", "$"), true),
     (concat!("kill_process_", "group"), false),
-    (concat!("test_kill_", "process_group"), false),
     (concat!("kill_process", "("), false),
     (concat!("kill", "pg"), false),
     (concat!("libc::", "kill"), false),
@@ -166,12 +166,13 @@ pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
         if SIGNAL_ALLOWLIST.contains(&f.path.as_str()) {
             continue;
         }
-        for (index, line) in f.source.lines().enumerate() {
+        let lines: Vec<&str> = f.source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
             for &(pattern, needs_kill) in SIGNAL_PATTERNS {
                 if !line.contains(pattern) {
                     continue;
                 }
-                if needs_kill && !line.contains("kill") {
+                if needs_kill && !chain_has_kill(&lines, index) {
                     continue;
                 }
                 failures.push(format!("{}:{}: {pattern}", f.path, index + 1));
@@ -179,6 +180,40 @@ pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
         }
     }
     failures
+}
+
+/// Whether `line` continues a shell command from the line before it: the
+/// earlier text ends with a backslash, possibly followed by the closing
+/// quote or a newline escape.
+fn continues(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    let trimmed = trimmed.strip_suffix('"').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix("\\n").unwrap_or(trimmed);
+    trimmed.ends_with('\\')
+}
+
+/// Whether the word kill is on the fragment's own line or anywhere in the
+/// backslash-linked lines around it.
+fn chain_has_kill(lines: &[&str], index: usize) -> bool {
+    let has_kill = |i: usize| lines.get(i).is_some_and(|line| line.contains("kill"));
+    if has_kill(index) {
+        return true;
+    }
+    let mut back = index;
+    while back > 0 && lines.get(back - 1).is_some_and(|line| continues(line)) {
+        back -= 1;
+        if has_kill(back) {
+            return true;
+        }
+    }
+    let mut next = index;
+    while lines.get(next).is_some_and(|line| continues(line)) {
+        next += 1;
+        if has_kill(next) {
+            return true;
+        }
+    }
+    false
 }
 
 /// Crate names in the tables of "Runtime dependencies" and "Tests and
