@@ -147,15 +147,20 @@ impl Drop for TempFile {
         if !self.armed {
             return;
         }
-        // `remove_file` ignores NotFound and every other error, so the guard's
-        // predicate changes nothing.
-        #[cfg_attr(false, mutants::skip)]
-        match fs::remove_file(&self.path) {
-            Ok(()) => {}
-            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
-            // Drop cannot report this. The caller already has the landing error.
-            Err(_err) => {}
-        }
+        remove_quietly(&self.path);
+    }
+}
+
+/// Removes `path`, ignoring every error: Drop cannot report one, and the
+/// caller already has the landing error.
+// The NotFound arm and the catch-all do the same thing, so a mutant of the
+// guard changes nothing.
+#[cfg_attr(false, mutants::skip)]
+fn remove_quietly(path: &Path) {
+    match fs::remove_file(path) {
+        Ok(()) => {}
+        Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+        Err(_err) => {}
     }
 }
 
