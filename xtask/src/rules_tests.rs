@@ -50,6 +50,66 @@ const DEPENDENCIES: &str = "# Dependencies
 | insta | dev-dependency | snapshots |
 ";
 
+fn signal_line(pattern: &str, needs_kill: bool) -> String {
+    let body = if needs_kill {
+        format!("run kill {pattern}1")
+    } else {
+        format!("call {pattern} now")
+    };
+    format!("clean\n{body}")
+}
+
+#[test]
+fn signal_sites_reports_each_pattern_outside_the_allowlist() {
+    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
+        let files = [file("log", "src/lib.rs", signal_line(pattern, needs_kill))];
+        let hits = signal_sites(&files);
+        assert!(
+            hits.contains(&format!("crates/log/src/lib.rs:2: {pattern}")),
+            "{pattern}: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .all(|hit| hit.starts_with("crates/log/src/lib.rs:2: ")),
+            "{pattern}: {hits:?}"
+        );
+    }
+}
+
+#[test]
+fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
+    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
+        let line = signal_line(pattern, needs_kill);
+        for (krate, rel) in [
+            ("fakes", "src/process_group.rs"),
+            ("tools", "src/shell/command.rs"),
+        ] {
+            let files = [file(krate, rel, line.clone())];
+            assert_eq!(signal_sites(&files), Vec::<String>::new(), "{pattern}");
+        }
+    }
+}
+
+#[test]
+fn signal_sites_ignores_a_dash_operand_without_kill() {
+    let files = [file(
+        "tools",
+        "src/classify.rs",
+        "names.push(\"find x -- -delete\")".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_the_word_kill_on_its_own() {
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "the watchdog kills the group".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
 fn file(krate: &str, rel: &str, source: String) -> RustFile {
     let dir = if krate == "xtask" {
         "xtask".to_owned()
