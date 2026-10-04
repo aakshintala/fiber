@@ -259,8 +259,8 @@ fn unsupported(kind: &str, size: u64, hint: &'static str) -> Inspected {
     }
 }
 
-/// One session's file tools. `read` and `write` share the lock, what the
-/// session has seen, and the path permission judged.
+/// One session's file tools. `read`, `write` and `edit` share the lock, what
+/// the session has seen, and the path permission judged.
 pub struct Files {
     shared: Arc<Shared>,
 }
@@ -303,6 +303,11 @@ impl Files {
     /// A `write` tool sharing this session's state.
     pub fn write(&self) -> crate::write::Write {
         crate::write::Write::new(Arc::clone(&self.shared))
+    }
+
+    /// An `edit` tool sharing this session's state.
+    pub fn edit(&self) -> crate::edit::Edit {
+        crate::edit::Edit::new(Arc::clone(&self.shared))
     }
 
     /// The per-path lock file-mutating tools take.
