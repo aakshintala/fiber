@@ -8,11 +8,11 @@ use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Weak};
 use std::thread;
 
-use contract::clock::Wake;
+use contract::clock::{Clock, Wake};
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{
     AskStep, CallStatus, DecidedBy, Decision, Event, Grant, PermissionRequested,
-    PermissionResolved, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
+    PermissionResolved, Progress, RuleOffer, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
     ToolReplaced,
 };
 use contract::provider::ToolDefinition;
@@ -22,7 +22,39 @@ use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
 use crate::inbox::{self, Waited};
+use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
+
+/// One call in a step: decided calls wait their turn while running calls
+/// stream their output.
+struct Running {
+    id: ActionId,
+    state: State,
+}
+
+/// What a call in a step is doing.
+enum State {
+    /// Decided without running: its completion is written in request order.
+    Ready(Box<ToolCallCompleted>),
+    /// Running on its own thread, streaming through its call's emitter.
+    Running { bound: Bound, stream: Arc<Stream> },
+    /// Its completion is written.
+    Done,
+}
+
+/// Whether a call's completion is written.
+fn is_done(call: &Running) -> bool {
+    matches!(call.state, State::Done)
+}
+
+/// The written delta's payload serialised as JSON, in bytes
+/// (`docs/tools.md`, "Progress"): what the next interval is paced on.
+fn encoded(delta: &Progress) -> u64 {
+    let bytes = serde_json::to_vec(delta)
+        .map(|bytes| bytes.len())
+        .unwrap_or(0);
+    u64::try_from(bytes).unwrap_or(u64::MAX)
+}
 
 /// A call that runs: its tool, the arguments it runs with, and the effects
 /// it declared.
@@ -110,10 +142,18 @@ impl Loop {
             decided.push((id, decision));
         }
         thread::scope(|scope| {
-            let mut running = Vec::new();
+            let wake = Arc::new(SharedWake::new());
+            // A clock move wakes the wait below: without it a held change
+            // would wait for the call to end instead of its interval, and
+            // the timer that flushes it would never fire (`docs/tools.md`,
+            // "Progress").
+            let clock: Arc<dyn Clock> = Arc::clone(self.log.clock());
+            let clock_wake: Arc<dyn Wake> = wake.clone();
+            clock.subscribe(Arc::downgrade(&clock_wake));
+            let mut running: Vec<Running> = Vec::new();
             for (id, decision) in decided {
-                let ran = match decision {
-                    Err(completed) => Ok(completed),
+                let state = match decision {
+                    Err(completed) => State::Ready(completed),
                     Ok((tool, arguments, declared)) => {
                         self.append(
                             &Event::ToolCallStarted(ToolCallStarted {
@@ -125,27 +165,62 @@ impl Loop {
                             Some(&id),
                         )?;
                         let bound = tool.bound();
-                        Err((
-                            bound,
-                            scope.spawn(move || tool.run(&arguments, &NeverCancel)),
-                        ))
+                        let stream = Arc::new(Stream::new(Arc::clone(&wake)));
+                        let thread_stream = Arc::clone(&stream);
+                        scope.spawn(move || {
+                            let output = tool.run(&arguments, &NeverCancel, thread_stream.as_ref());
+                            thread_stream.finish(output);
+                        });
+                        State::Running { bound, stream }
                     }
                 };
-                running.push((id, ran));
+                running.push(Running { id, state });
             }
-            for (id, ran) in running {
-                let completed = match ran {
-                    Ok(completed) => *completed,
-                    Err((bound, handle)) => {
-                        // A panic aborts the process (`docs/code-quality.md`,
-                        // "Panics"), so a join never fails.
-                        let output = handle.join().unwrap_or_default();
-                        self.finish(output, bound, &id)
+            loop {
+                let now = clock.now();
+                let seen = wake.seq();
+                // Every delta due now, in request order. A held change the
+                // interval still covers stays held for the flush below.
+                for call in running.iter() {
+                    let State::Running { stream, .. } = &call.state else {
+                        continue;
+                    };
+                    if let Some(delta) = stream.take_due(now) {
+                        stream.wrote(self.write_delta(&delta, turn, &call.id), now);
                     }
-                };
-                self.append(&Event::ToolCallCompleted(completed), turn, Some(&id))?;
+                }
+                // Every returned call's final flush, whatever the interval:
+                // a later call's flush may precede an earlier call's
+                // completion, while completions stay in request order.
+                for call in running.iter() {
+                    let State::Running { stream, .. } = &call.state else {
+                        continue;
+                    };
+                    if stream.is_done()
+                        && let Some(delta) = stream.take_final()
+                    {
+                        self.write_delta(&delta, turn, &call.id);
+                    }
+                }
+                // The next completion in request order, if its prefix is done.
+                if self.complete_next(&mut running, turn)? {
+                    continue;
+                }
+                if running.iter().all(is_done) {
+                    return Ok(());
+                }
+                // Nothing to write: park until the earliest held change is
+                // due, an emit, a call returning or a clock move. Each pass
+                // either wrote something above or parks here, never spins.
+                let earliest = running
+                    .iter()
+                    .filter_map(|call| match &call.state {
+                        State::Running { stream, .. } => stream.deadline(),
+                        State::Ready(_) | State::Done => None,
+                    })
+                    .min();
+                wake.park(clock.as_ref(), earliest, seen);
             }
-            Ok(())
         })
     }
 
@@ -519,6 +594,46 @@ impl Cancel for NeverCancel {
     }
 
     fn subscribe(&self, _waker: Weak<dyn Wake>) {}
+}
+
+impl Loop {
+    /// Writes one due or flushed delta under the call's action, and returns
+    /// its encoded bytes for pacing. Errors are ignored: the line is
+    /// ephemeral (`docs/architecture.md`, "Streaming").
+    fn write_delta(&mut self, delta: &Progress, turn: &TurnId, id: &ActionId) -> u64 {
+        let event = Event::ToolCallDelta(delta.clone());
+        match self.append(&event, turn, Some(id)) {
+            Ok(()) | Err(_) => {}
+        }
+        encoded(delta)
+    }
+
+    /// Writes the next completion in request order, once every earlier call
+    /// is done: true after writing one. A later call's completion waits for
+    /// its prefix, while its final flush does not (written above).
+    fn complete_next(&mut self, running: &mut [Running], turn: &TurnId) -> Result<bool, Error> {
+        // The first call whose completion is not written: everything
+        // before it is done, so writing this one keeps request order.
+        let Some(call) = running.iter_mut().find(|call| !is_done(call)) else {
+            return Ok(false);
+        };
+        let next = match &call.state {
+            State::Done => None,
+            State::Ready(completed) => Some(completed.clone()),
+            State::Running { stream, bound, .. } => match stream.take_done() {
+                Some(output) => Some(Box::new(self.finish(output, *bound, &call.id))),
+                None => return Ok(false),
+            },
+        };
+        // `find` skipped done calls, so this is always `Some`; `None`
+        // exits without writing either way.
+        let Some(completed) = next else {
+            return Ok(false);
+        };
+        call.state = State::Done;
+        self.append(&Event::ToolCallCompleted(*completed), turn, Some(&call.id))?;
+        Ok(true)
+    }
 }
 
 /// How a call the reply cut off completes (`docs/loop.md`, "A reply cut off

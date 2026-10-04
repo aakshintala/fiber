@@ -9,6 +9,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Clock;
+use contract::emit::Emit;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
@@ -95,7 +96,7 @@ impl Tool for Shell {
         }
     }
 
-    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
             return line_only(CANCELLED_BEFORE);
         }
@@ -115,6 +116,7 @@ impl Tool for Shell {
                 Duration::from_millis(parsed.timeout_ms),
                 self.clock.as_ref(),
                 cancel,
+                emit,
             ),
             parsed.timeout_ms,
         )

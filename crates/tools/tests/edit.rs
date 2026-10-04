@@ -14,7 +14,7 @@ use std::fs;
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::Tool;
-use fakes::{CancelToken, TempDir};
+use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 use tools::Files;
 
@@ -89,6 +89,7 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
             ]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"AAA\nBBB\n");
@@ -115,6 +116,7 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
             ]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert_eq!(
         missed.error.as_ref().map(|error| error.code.clone()),
@@ -129,6 +131,7 @@ fn edit_applies_every_block_or_none_and_a_later_write_is_allowed() {
     let replaced = files.write().run(
         &args(json!({"path": "a.txt", "content": "done\n"})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(replaced.error.is_none(), "{}", text(&replaced));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"done\n");
@@ -144,6 +147,7 @@ fn a_missing_file_and_a_directory_fail_and_effects_are_irreversible() {
             "edits": [{"old_text": "a", "new_text": "b"}]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert_eq!(
         missing.error.as_ref().map(|error| error.code.clone()),
@@ -157,6 +161,7 @@ fn a_missing_file_and_a_directory_fail_and_effects_are_irreversible() {
             "edits": [{"old_text": "a", "new_text": "b"}]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert_eq!(
         directory.error.as_ref().map(|error| error.code.clone()),

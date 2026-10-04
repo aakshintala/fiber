@@ -40,7 +40,7 @@ impl Tool for Named {
         unreachable!("registration never asks for effects")
     }
 
-    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel) -> Output {
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn contract::emit::Emit) -> Output {
         unreachable!("registration never runs a tool")
     }
 }

@@ -10,7 +10,7 @@ use contract::ErrorCode;
 use contract::events::FileChange;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::Tool;
-use fakes::{CancelToken, TempDir};
+use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
 use crate::Files;
@@ -128,9 +128,11 @@ fn strict(schema: &Value) {
 }
 
 fn edit_of(dir: &Path, value: Value) -> contract::tool::Output {
-    Files::new(dir.to_path_buf())
-        .edit()
-        .run(&args(value), &CancelToken::new())
+    Files::new(dir.to_path_buf()).edit().run(
+        &args(value),
+        &CancelToken::new(),
+        &Recorder::default(),
+    )
 }
 
 #[test]
@@ -155,6 +157,7 @@ fn a_multi_block_edit_is_written_once() {
             ]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(output.error.is_none(), "{}", text(&output));
     let path = resolved(dir.path(), "a.txt");
@@ -204,6 +207,7 @@ fn a_normalised_match_says_so_and_the_diff_is_not_in_the_content() {
             "edits": [{"old_text": "it's", "new_text": "it is"}]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(output.error.is_none(), "{}", text(&output));
     let path = resolved(dir.path(), "a.txt");
@@ -397,11 +401,13 @@ fn edit_does_not_need_a_prior_read_and_a_later_write_does_not_either() {
             "edits": [{"old_text": "old", "new_text": "new"}]
         })),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(edited.error.is_none(), "{}", text(&edited));
     let replaced = files.write().run(
         &args(json!({"path": "a.txt", "content": "later\n"})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(replaced.error.is_none(), "{}", text(&replaced));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"later\n");
@@ -427,6 +433,7 @@ fn two_edits_of_one_file_serialise_and_both_apply() {
                     "edits": [{"old_text": "aaa", "new_text": "AAA"}]
                 })),
                 &CancelToken::new(),
+                &Recorder::default(),
             ))
             .unwrap();
     });
@@ -438,6 +445,7 @@ fn two_edits_of_one_file_serialise_and_both_apply() {
                     "edits": [{"old_text": "bbb", "new_text": "BBB"}]
                 })),
                 &CancelToken::new(),
+                &Recorder::default(),
             ))
             .unwrap();
     });
@@ -475,6 +483,7 @@ fn a_held_lock_blocks_edit_until_it_is_released() {
                     "edits": [{"old_text": "old", "new_text": "new"}]
                 })),
                 &CancelToken::new(),
+                &Recorder::default(),
             ))
             .unwrap();
     });
@@ -505,7 +514,9 @@ fn a_retargeted_symlink_writes_nothing() {
     files.edit().effects(&arguments).unwrap();
     fs::remove_file(dir.path().join("link")).unwrap();
     symlink("b.txt", dir.path().join("link")).unwrap();
-    let output = files.edit().run(&arguments, &CancelToken::new());
+    let output = files
+        .edit()
+        .run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::PathChanged));
     assert_eq!(fs::read(dir.path().join("a.txt")).unwrap(), b"A\n");
     assert_eq!(fs::read(dir.path().join("b.txt")).unwrap(), b"B\n");
@@ -532,6 +543,7 @@ fn a_symlink_retargeted_while_the_lock_is_held_writes_nothing() {
                     "edits": [{"old_text": "A", "new_text": "Z"}]
                 })),
                 &CancelToken::new(),
+                &Recorder::default(),
             ))
             .unwrap();
     });
@@ -853,6 +865,7 @@ fn already_cancelled_edits_nothing() {
             "edits": [{"old_text": "old", "new_text": "new"}]
         })),
         &cancel,
+        &Recorder::default(),
     );
     assert!(output.error.is_none());
     assert_eq!(text(&output), "Cancelled before it started.\n");

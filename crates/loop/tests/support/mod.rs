@@ -17,8 +17,9 @@ use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use contract::emit::Emit;
 use contract::events::{
-    ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
+    Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
@@ -26,6 +27,7 @@ use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, RequestId, SessionId};
+use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider, reply};
 use log::Log;
 use r#loop::{BlockLimits, Loop, Model, Reviewer};
@@ -194,6 +196,9 @@ pub(crate) struct TestTool {
     /// What happened, in order, shared between tools: `effects <name>`,
     /// `run <name>`, `done <name>`.
     pub(crate) trace: Arc<Trace>,
+    /// Scripted steps `run` performs after recording its arguments: emits
+    /// through the call's emitter and rendezvous with the test, in order.
+    pub(crate) script: Vec<Script>,
     /// The arguments each call ran with.
     pub(crate) ran: Mutex<Vec<Map<String, Value>>>,
     /// What [`Cancel::is_cancelled`] returned at each call.
@@ -230,6 +235,7 @@ impl TestTool {
             barrier: None,
             after: None,
             trace: Arc::default(),
+            script: Vec::new(),
             ran: Mutex::default(),
             cancelled: Mutex::default(),
         }
@@ -283,10 +289,18 @@ impl Tool for TestTool {
         })
     }
 
-    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output {
         self.note("run");
         self.cancelled.lock().unwrap().push(cancel.is_cancelled());
         self.ran.lock().unwrap().push(arguments.clone());
+        for step in &self.script {
+            match step {
+                Script::Emit(event) => emit.emit(event),
+                Script::Wait(barrier) => {
+                    barrier.wait();
+                }
+            }
+        }
         if let Some(other) = self.after {
             self.trace.wait_for(&format!("done {other}"));
         }
@@ -300,6 +314,15 @@ impl Tool for TestTool {
     fn bound(&self) -> Bound {
         self.bound
     }
+}
+
+/// One step of a test tool's scripted run: emit an event through the
+/// call's emitter, or rendezvous with the test at a barrier.
+pub(crate) enum Script {
+    /// Emits `Event` through the call's emitter.
+    Emit(Box<Event>),
+    /// Blocks until the test arrives at the same barrier.
+    Wait(Arc<Barrier>),
 }
 
 /// The reasoning item a reasoning reply carries, as a provider sent it.
@@ -395,6 +418,8 @@ impl Provider for Seam {
 pub(crate) struct Session {
     pub(crate) provider: Arc<ScriptedProvider>,
     pub(crate) log: Arc<Log>,
+    /// The clock the log stamps `ts` with, driving every deadline.
+    pub(crate) clock: Arc<FakeClock>,
     pub(crate) dir: PathBuf,
     /// The workspace, an empty directory.
     pub(crate) workspace: PathBuf,
@@ -451,8 +476,8 @@ impl Session {
         let credentials = home.0.join("credentials");
         std::fs::create_dir_all(&credentials).unwrap();
         let id = SessionId("s_test".into());
-        let log =
-            Arc::new(Log::create(&home.0, id.clone(), fakes::clock::FakeClock::new()).unwrap());
+        let clock: Arc<FakeClock> = FakeClock::new();
+        let log = Arc::new(Log::create(&home.0, id.clone(), clock.clone()).unwrap());
         let mut watcher = log.watch();
         let (forward, lines) = mpsc::channel();
         thread::spawn(move || {
@@ -493,6 +518,7 @@ impl Session {
             credentials,
             rules,
             log,
+            clock,
             inbox,
             lines,
             looped: Some(looped),
@@ -607,6 +633,87 @@ fn unpriced() -> Model {
 /// The kinds of `lines`, in order.
 pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
     lines.iter().map(|l| l.kind.as_str()).collect()
+}
+
+/// A live tap on a session's log: its own watcher, readable mid-turn with
+/// a deadline, alongside `Session::lines`, which drains after the turn.
+/// Lines read here stay in the session's own queue: each watcher has one.
+pub(crate) struct Tap {
+    lines: mpsc::Receiver<Envelope>,
+    buffered: Mutex<Vec<Envelope>>,
+}
+
+impl Tap {
+    /// Taps `log` from now on.
+    pub(crate) fn new(log: &Arc<Log>) -> Self {
+        let mut watcher = log.watch();
+        let (forward, lines) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(Some(line)) = watcher.recv() {
+                if forward.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            lines,
+            buffered: Mutex::default(),
+        }
+    }
+
+    /// The next line of `kind`, buffering the rest for later calls, and
+    /// failing the test at [`DEADLINE`].
+    pub(crate) fn wait_for(&self, kind: &str) -> Envelope {
+        loop {
+            if let Some(found) = take_from(&self.buffered, |line| line.kind == kind) {
+                return found;
+            }
+            let line = self.lines.recv_timeout(DEADLINE).expect("a line in time");
+            if line.kind == kind {
+                return line;
+            }
+            self.buffered.lock().unwrap().push(line);
+        }
+    }
+
+    /// The next `tool_call_delta` whose text is `text`, buffering the
+    /// rest, and failing the test at [`DEADLINE`].
+    pub(crate) fn wait_for_delta(&self, text: &str) -> Envelope {
+        loop {
+            if let Some(found) = take_from(&self.buffered, |line| delta_text(line) == Some(text)) {
+                return found;
+            }
+            let line = self.lines.recv_timeout(DEADLINE).expect("a line in time");
+            if delta_text(&line) == Some(text) {
+                return line;
+            }
+            self.buffered.lock().unwrap().push(line);
+        }
+    }
+
+    /// Every line received and buffered so far, without waiting.
+    pub(crate) fn pending(&self) -> Vec<Envelope> {
+        let mut lines = std::mem::take(&mut *self.buffered.lock().unwrap());
+        lines.extend(self.lines.try_iter());
+        lines
+    }
+}
+
+/// Removes and returns the first buffered line `matches` accepts, if any.
+fn take_from(
+    buffered: &Mutex<Vec<Envelope>>,
+    matches: impl Fn(&Envelope) -> bool,
+) -> Option<Envelope> {
+    let mut buffered = buffered.lock().unwrap();
+    let found = buffered.iter().position(&matches)?;
+    Some(buffered.remove(found))
+}
+
+/// The text of a `tool_call_delta` line, if it carries any.
+fn delta_text(line: &Envelope) -> Option<&str> {
+    (line.kind == "tool_call_delta")
+        .then(|| line.payload.get("text")?.as_str())
+        .flatten()
 }
 
 /// A directory removed when dropped.

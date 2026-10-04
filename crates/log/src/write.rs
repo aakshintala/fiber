@@ -241,6 +241,13 @@ impl Log {
         self.lock().fsyncs
     }
 
+    /// The clock this log was built with, stamping `ts` (`docs/tools.md`,
+    /// "Progress"): the loop paces a running call's `tool_call_delta`
+    /// lines on it.
+    pub fn clock(&self) -> &Arc<dyn Clock> {
+        &self.clock
+    }
+
     fn lock(&self) -> MutexGuard<'_, Inner> {
         self.inner.lock().unwrap_or_else(PoisonError::into_inner)
     }

@@ -6,11 +6,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use fakes::CancelToken;
+use fakes::Recorder;
 use fakes::clock::FakeClock;
 
 use super::{
-    Inner, Shared, StopKind, already_woken, bump, finish, group_alive, lock, note_eof, park,
-    poll_while_occupied, read_output, refused_group, suppress_term,
+    Inner, Shared, StopKind, already_woken, bump, complete_prefix, finish, group_alive, lock,
+    note_eof, park, poll_while_occupied, read_output, refused_group, stream_output, stream_rest,
+    suppress_term,
 };
 
 #[test]
@@ -290,4 +292,58 @@ fn note_eof_is_idempotent() {
     note_eof(&shared);
     assert_eq!(lock(&shared.inner).seq, seq);
     assert!(lock(&shared.inner).eof);
+}
+
+#[test]
+fn a_complete_prefix_ends_on_a_character_boundary() {
+    assert_eq!(complete_prefix(b""), 0);
+    assert_eq!(complete_prefix(b"hi"), 2);
+    // U+00E9, two bytes: a split lead waits.
+    assert_eq!(complete_prefix(b"a\xC3"), 1);
+    assert_eq!(complete_prefix(b"\xC3\xA9"), 2);
+    // U+20AC, three bytes: one and two leads wait.
+    assert_eq!(complete_prefix(b"\xE2"), 0);
+    assert_eq!(complete_prefix(b"\xE2\x82"), 0);
+    assert_eq!(complete_prefix(b"\xE2\x82\xAC"), 3);
+    // An invalid byte is consumed as U+FFFD at once, not held.
+    assert_eq!(complete_prefix(b"\xFF"), 1);
+    assert_eq!(complete_prefix(b"\xFFx"), 2);
+}
+
+#[test]
+fn an_incomplete_tail_waits_for_the_next_chunk_and_streams_once_whole() {
+    let shared = Shared::default();
+    let recorder = Recorder::default();
+    lock(&shared.inner).output.extend_from_slice(b"a\xC3");
+    let streamed = stream_output(&shared, &recorder, 0);
+    assert_eq!(recorder.text(), "a");
+    assert_eq!(streamed, 1);
+    lock(&shared.inner).output.extend_from_slice(b"\xA9b");
+    let streamed = stream_output(&shared, &recorder, streamed);
+    assert_eq!(recorder.text(), "a\u{e9}b");
+    assert_eq!(streamed, 4);
+}
+
+#[test]
+fn an_invalid_byte_streams_as_the_replacement_character() {
+    let shared = Shared::default();
+    let recorder = Recorder::default();
+    lock(&shared.inner).output.extend_from_slice(b"\xFFx");
+    let streamed = stream_output(&shared, &recorder, 0);
+    assert_eq!(recorder.text(), "�x");
+    assert_eq!(streamed, 2);
+}
+
+#[test]
+fn trailing_incomplete_bytes_go_out_lossily_at_finish() {
+    let shared = Shared::default();
+    let recorder = Recorder::default();
+    lock(&shared.inner).output.extend_from_slice(b"a\xE2\x82");
+    let streamed = stream_output(&shared, &recorder, 0);
+    assert_eq!(recorder.text(), "a");
+    stream_rest(&shared, &recorder, streamed);
+    assert_eq!(
+        recorder.text(),
+        String::from_utf8_lossy(b"a\xE2\x82").into_owned()
+    );
 }

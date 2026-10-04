@@ -201,7 +201,7 @@ impl Tool for SendTool {
         })
     }
 
-    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel) -> Output {
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn contract::emit::Emit) -> Output {
         let inbox = self
             .inbox
             .lock()

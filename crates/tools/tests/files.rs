@@ -13,7 +13,7 @@ use std::fs;
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::Tool;
-use fakes::{CancelToken, TempDir};
+use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 use tools::Files;
 
@@ -41,6 +41,7 @@ fn read_returns_the_file_text_and_a_continue_notice() {
     let output = files.read().run(
         &args(json!({"path": "a.txt", "offset": 2, "limit": 1})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(output.error.is_none());
     assert_eq!(
@@ -63,17 +64,21 @@ fn read_returns_the_file_text_and_a_continue_notice() {
 fn read_of_a_missing_file_is_not_found_and_a_directory_points_at_the_shell() {
     let dir = TempDir::new("fiber-files-read-miss");
     let files = Files::new(dir.path().to_path_buf());
-    let missing = files
-        .read()
-        .run(&args(json!({"path": "nope.txt"})), &CancelToken::new());
+    let missing = files.read().run(
+        &args(json!({"path": "nope.txt"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
     assert_eq!(
         missing.error.as_ref().map(|error| error.code.clone()),
         Some(ErrorCode::NotFound)
     );
     fs::create_dir(dir.path().join("sub")).unwrap();
-    let directory = files
-        .read()
-        .run(&args(json!({"path": "sub"})), &CancelToken::new());
+    let directory = files.read().run(
+        &args(json!({"path": "sub"})),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
     assert_eq!(
         directory.error.as_ref().map(|error| error.code.clone()),
         Some(ErrorCode::UnsupportedFile)
@@ -88,6 +93,7 @@ fn write_creates_a_file_and_refuses_an_unread_replace() {
     let created = files.write().run(
         &args(json!({"path": "a.txt", "content": "x\ny\n"})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(created.error.is_none(), "{}", text(&created));
     assert!(text(&created).contains("Created "), "{}", text(&created));
@@ -115,6 +121,7 @@ fn write_creates_a_file_and_refuses_an_unread_replace() {
     let stale = files.write().run(
         &args(json!({"path": "c.txt", "content": "new\n"})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert_eq!(
         stale.error.as_ref().map(|error| error.code.clone()),

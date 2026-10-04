@@ -33,6 +33,7 @@ mod conversation;
 mod inbox;
 mod permission;
 mod process;
+mod progress;
 mod resume;
 mod reviewer;
 mod schema;

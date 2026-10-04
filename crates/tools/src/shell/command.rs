@@ -10,6 +10,8 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use contract::emit::Emit;
+use contract::events::{Event, Progress};
 use contract::tool::Cancel;
 use rustix::process::{Pid, Signal};
 
@@ -50,7 +52,10 @@ pub(crate) struct Finished {
 }
 
 /// Runs `command` as `program -c` in `workdir` until the group is empty, the
-/// timeout, or a cancel. `program` is `/bin/bash` or `sh`.
+/// timeout, or a cancel. `program` is `/bin/bash` or `sh`. Output streams
+/// as `tool_call_delta` through `emit` while the call runs, text only
+/// (`docs/tools.md`, "Shell", "Result and output"): the drive loop below
+/// holds the emitter, so nothing emits after this returns.
 pub(crate) fn execute(
     program: &Path,
     command: &str,
@@ -58,6 +63,7 @@ pub(crate) fn execute(
     timeout: Duration,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
+    emit: &dyn Emit,
 ) -> Result<Finished, std::io::Error> {
     let (read, write) = std::io::pipe()?;
     let write_err = write.try_clone()?;
@@ -80,7 +86,7 @@ pub(crate) fn execute(
     thread::spawn(move || read_output(read, &reader));
     let waiter = Arc::clone(&shared);
     thread::spawn(move || wait_child(child, &waiter));
-    Ok(drive(pgid, timeout, clock, cancel, &shared))
+    Ok(drive(pgid, timeout, clock, cancel, &shared, emit))
 }
 
 fn scrub_env(cmd: &mut Command) {
@@ -116,7 +122,7 @@ struct Inner {
     reaped: bool,
     status: Option<ExitStatus>,
     eof: bool,
-    // debt: the whole output is held in memory until the call returns, #299's job output file or #435
+    // debt: the whole output is held in memory until the call returns, #299's job output file
     output: Vec<u8>,
     discard: bool,
     seq: u64,
@@ -152,6 +158,10 @@ fn read_output(mut read: impl Read, shared: &Shared) {
                 if !inner.discard {
                     inner.output.extend_from_slice(buf.get(..n).unwrap_or(&[]));
                 }
+                // The drive loop streams every chunk: it wakes on this.
+                bump(&mut inner);
+                drop(inner);
+                shared.cv.notify_all();
             }
             Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
             Err(_) => {
@@ -185,6 +195,68 @@ fn bump(inner: &mut Inner) {
     inner.seq = inner.seq.wrapping_add(1);
 }
 
+/// The longest prefix of `chunk` that ends on a complete UTF-8 sequence:
+/// an incomplete sequence at the end waits for the next chunk, while an
+/// invalid one is consumed, decoding as U+FFFD as `String::from_utf8_lossy`
+/// does. Splits fall where the decoder is clean, so the emitted texts
+/// concatenate to the lossy whole.
+fn complete_prefix(chunk: &[u8]) -> usize {
+    let mut at = 0;
+    while at < chunk.len() {
+        let rest = chunk.get(at..).unwrap_or(&[]);
+        match str::from_utf8(rest) {
+            Ok(_) => return chunk.len(),
+            Err(err) => match err.error_len() {
+                // An incomplete sequence at the end waits for more bytes.
+                None => return at.saturating_add(err.valid_up_to()),
+                // An invalid sequence decodes as U+FFFD; what follows may
+                // still end mid-sequence, so keep looking past it.
+                Some(len) => at = at.saturating_add(err.valid_up_to()).saturating_add(len),
+            },
+        }
+    }
+    at
+}
+
+/// Emits the output past `streamed`, holding back an incomplete UTF-8 tail
+/// for the next chunk, and returns the new streamed offset. Output only
+/// grows, so bytes read between the copy and the return stay past it.
+fn stream_output(shared: &Shared, emit: &dyn Emit, streamed: usize) -> usize {
+    let chunk = {
+        lock(&shared.inner)
+            .output
+            .get(streamed..)
+            .unwrap_or_default()
+            .to_vec()
+    };
+    let complete = complete_prefix(&chunk);
+    if let Some(prefix) = chunk.get(..complete).filter(|prefix| !prefix.is_empty()) {
+        emit.emit(&Event::ToolCallDelta(Progress {
+            text: Some(String::from_utf8_lossy(prefix).into_owned()),
+            details: None,
+        }));
+    }
+    streamed.saturating_add(complete)
+}
+
+/// Emits whatever is left, lossily: an incomplete tail goes out as U+FFFD,
+/// so the concatenated delta texts equal the lossy whole output.
+fn stream_rest(shared: &Shared, emit: &dyn Emit, streamed: usize) {
+    let rest = {
+        lock(&shared.inner)
+            .output
+            .get(streamed..)
+            .unwrap_or_default()
+            .to_vec()
+    };
+    if !rest.is_empty() {
+        emit.emit(&Event::ToolCallDelta(Progress {
+            text: Some(String::from_utf8_lossy(&rest).into_owned()),
+            details: None,
+        }));
+    }
+}
+
 struct View {
     reaped: bool,
     eof: bool,
@@ -207,6 +279,7 @@ fn drive(
     clock: &dyn Clock,
     cancel: &dyn Cancel,
     shared: &Arc<Shared>,
+    emit: &dyn Emit,
 ) -> Finished {
     let start = clock.now();
     let timeout_at = start.checked_add(timeout);
@@ -219,6 +292,7 @@ fn drive(
     let mut stop = None;
     let mut sent_signal = false;
     let mut seen_empty = false;
+    let mut streamed = 0;
 
     loop {
         let view = view(shared, cancel);
@@ -226,6 +300,10 @@ fn drive(
         if view.reaped && !group_alive(pgid) {
             seen_empty = true;
         }
+        // The drive loop holds the emitter and streams every pass, woken by
+        // the reader on every chunk; the reader never holds it, so nothing
+        // emits after this returns.
+        streamed = stream_output(shared, emit, streamed);
         match phase {
             Phase::Running => {
                 if timeout_due(clock, timeout_at) {
@@ -278,6 +356,8 @@ fn drive(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && seen_empty;
                 if settled || clock.now() >= until {
+                    // At finish, any remaining bytes go out lossily.
+                    stream_rest(shared, emit, streamed);
                     return finish(shared, stop, sent_signal, seen_empty, view.eof);
                 }
                 park(
