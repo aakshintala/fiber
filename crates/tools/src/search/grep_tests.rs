@@ -497,25 +497,68 @@ fn newline_patterns_read_as_alternatives() {
 }
 
 #[test]
+fn a_utf8_bom_searches_as_raw_bytes() {
+    // As GNU in the C locale: the BOM stays part of the line, not a
+    // stripped marker.
+    let dir = bytes_tree(&BTreeMap::from([(
+        "a.txt",
+        &b"\xef\xbb\xbfneedle\nplain\n"[..],
+    )]));
+    let (code, stdout, _) = search(&dir, &["needle", "a.txt"], &[]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"\xef\xbb\xbfneedle\n");
+}
+
+#[test]
+fn utf16_bytes_search_as_raw_bytes() {
+    // No decoding: UTF-16 bytes hold no contiguous `needle` and read as
+    // binary, so the file skips silently as `grep -I` does instead of
+    // printing a transcoded match.
+    let dir = bytes_tree(&BTreeMap::from([(
+        "a.txt",
+        &b"\xff\xfen\x00e\x00e\x00d\x00l\x00e\x00\n\x00"[..],
+    )]));
+    let (code, stdout, stderr) = search(&dir, &["needle", "a.txt"], &[]);
+    assert_eq!(code, 1);
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+}
+
+#[test]
 fn a_closed_pipe_stops_before_the_input_ends() {
     let dir = text_tree(&BTreeMap::from([("a.txt", "x\n")]));
     let owned: Vec<OsString> = [OsString::from("needle")].to_vec();
-    let mut generator = Generator {
-        read: 0,
-        limit: 1 << 20,
-    };
-    let mut closed = Closed { writes: 0 };
-    let mut stderr = Vec::new();
-    let code = match run(dir.path(), &owned, &mut generator, &mut closed, &mut stderr) {
-        Outcome::Done(code) => code,
-        Outcome::Fallback => panic!("fell back"),
-    };
+    let path = dir.path().to_path_buf();
+    // The search runs aside so the wait below bounds it: a regression
+    // that reads to the end still finishes at the generator's limit,
+    // while a hang fails naming what was waited for instead of the
+    // harness timing out. The bounded generator is the cleanup: the
+    // thread always ends after `limit` bytes.
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut generator = Generator {
+            read: 0,
+            limit: 1 << 20,
+        };
+        let mut closed = Closed { writes: 0 };
+        let mut stderr = Vec::new();
+        let code = match run(&path, &owned, &mut generator, &mut closed, &mut stderr) {
+            Outcome::Done(code) => code,
+            Outcome::Fallback => panic!("fell back"),
+        };
+        done.send((code, generator.read, closed.writes, stderr))
+            .unwrap_or(());
+    });
+    let deadline = std::time::Duration::from_secs(10);
+    let (code, read, writes, stderr) = finished
+        .recv_timeout(deadline)
+        .expect("waited 10s for the bounded generator search to finish");
     // The first line matched, the pipe closed quietly, and most of the
     // megabyte was never read: nothing accumulated until end of input.
     assert_eq!(code, 0);
     assert!(stderr.is_empty());
-    assert!(generator.read < generator.limit, "read {}", generator.read);
-    assert!(closed.writes < 16, "writes {}", closed.writes);
+    assert!(read < (1 << 20), "read {read}");
+    assert!(writes < 16, "writes {writes}");
 }
 
 #[test]

@@ -172,6 +172,9 @@ pub(crate) fn run(
                             failed |= searched.failed;
                             matched |= searched.matched;
                             preceded |= searched.printed;
+                            // Each searched file's output is flushed before
+                            // the next begins, so a pipe sees it promptly.
+                            out.flush();
                         }
                         Err(error) => {
                             complaint(stderr, &error.display, &error.message);
@@ -247,6 +250,10 @@ fn compile(options: &Options) -> Result<Search, ()> {
     searcher.invert_match(options.invert);
     searcher.before_context(options.before);
     searcher.after_context(options.after);
+    // Raw bytes, as GNU in the C locale: no BOM sniffing, so a UTF-8
+    // BOM stays part of the line and UTF-16 bytes are searched as they
+    // read instead of decoded. No encoding is set anywhere.
+    searcher.bom_sniffing(false);
     // A NUL byte in what is read skips the file silently, as `grep -I` does.
     searcher.binary_detection(BinaryDetection::quit(0));
     Ok(Search {
