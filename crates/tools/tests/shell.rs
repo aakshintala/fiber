@@ -21,7 +21,7 @@ use contract::shapes::{ContentPart, Process};
 use contract::tool::Tool;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, Watchdog, kill_group, kill_pid};
+use fakes::{CancelToken, Recorder, Watchdog, kill_group, kill_pid};
 use serde_json::{Map, Value, json};
 use tools::Shell;
 
@@ -50,7 +50,7 @@ fn args(command: &str) -> Map<String, Value> {
 
 fn run(dir: &Path, command: &str) -> contract::tool::Output {
     let shell = Shell::new(dir.to_path_buf(), FakeClock::new());
-    shell.run(&args(command), &CancelToken::new())
+    shell.run(&args(command), &CancelToken::new(), &Recorder::default())
 }
 
 fn group_alive(group: u32) -> bool {
@@ -91,7 +91,8 @@ fn start(dir: PathBuf, command: String, timeout_ms: Option<u64>, cancel: CancelT
     let (tx, rx) = mpsc::channel();
     let cancel_for_run = cancel.clone();
     thread::spawn(move || {
-        tx.send(shell.run(&arguments, &cancel_for_run)).unwrap();
+        tx.send(shell.run(&arguments, &cancel_for_run, &Recorder::default()))
+            .unwrap();
     });
     Running {
         clock,
@@ -178,7 +179,7 @@ fn the_workdir_defaults_to_the_workspace_and_a_relative_path_is_resolved() {
     let shell = Shell::new(workspace.clone(), FakeClock::new());
     let mut arguments = args("pwd -P");
     arguments.insert("workdir".into(), json!("sub"));
-    let output = shell.run(&arguments, &CancelToken::new());
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert!(output.error.is_none(), "{}", text(&output));
     assert_eq!(
         Path::new(text(&output).lines().next().unwrap())
@@ -197,9 +198,10 @@ fn a_cd_does_not_carry_to_the_next_call() {
     let first = shell.run(
         &args(&format!("cd {} && pwd -P", quote(&elsewhere))),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(text(&first).contains("elsewhere"), "{}", text(&first));
-    let second = shell.run(&args("pwd -P"), &CancelToken::new());
+    let second = shell.run(&args("pwd -P"), &CancelToken::new(), &Recorder::default());
     assert_eq!(
         Path::new(text(&second).lines().next().unwrap())
             .canonicalize()
@@ -383,7 +385,7 @@ fn a_zero_timeout_stops_at_once() {
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     let mut arguments = args("echo hi");
     arguments.insert("timeout_ms".into(), json!(0));
-    let output = shell.run(&arguments, &CancelToken::new());
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(output.process.as_ref().unwrap().timed_out);
     assert!(text(&output).contains("Timed out after 0 ms and stopped."));
@@ -562,12 +564,20 @@ fn two_calls_at_once_do_not_share_a_command() {
     let (tx, rx) = mpsc::channel();
     let tx_right = tx.clone();
     thread::spawn(move || {
-        tx.send(left.run(&args("echo left"), &CancelToken::new()))
-            .unwrap();
+        tx.send(left.run(
+            &args("echo left"),
+            &CancelToken::new(),
+            &Recorder::default(),
+        ))
+        .unwrap();
     });
     thread::spawn(move || {
         tx_right
-            .send(right.run(&args("echo right"), &CancelToken::new()))
+            .send(right.run(
+                &args("echo right"),
+                &CancelToken::new(),
+                &Recorder::default(),
+            ))
             .unwrap();
     });
     let texts = [
@@ -612,4 +622,124 @@ impl Drop for KillPid {
             Ok(_) | Err(_) => {}
         }
     }
+}
+
+struct Streamed {
+    clock: Arc<FakeClock>,
+    start: Instant,
+    output: mpsc::Receiver<contract::tool::Output>,
+    recorder: Arc<Recorder>,
+}
+
+/// As `start`, but tapping the call's streamed output: the test reads
+/// `recorder` while the command runs.
+fn streamed(dir: PathBuf, command: String, timeout_ms: Option<u64>) -> Streamed {
+    let clock = FakeClock::new();
+    let start = clock.origin();
+    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>);
+    let mut arguments = args(&command);
+    if let Some(timeout_ms) = timeout_ms {
+        arguments.insert("timeout_ms".into(), json!(timeout_ms));
+    }
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
+            .unwrap();
+    });
+    Streamed {
+        clock,
+        start,
+        output: rx,
+        recorder,
+    }
+}
+
+#[test]
+fn output_streams_before_the_call_returns() {
+    let dir = fakes::TempDir::new("fiber-shell-stream");
+    let fifo = dir.path().join("pipe");
+    Command::new("mkfifo").arg(&fifo).status().unwrap();
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let command = format!("echo line; read x < {}; echo got:$x", quote(&fifo));
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(shell.run(&args(&command), &CancelToken::new(), tapped.as_ref()))
+            .unwrap();
+    });
+    assert!(
+        recorder.wait_for_text("line\n", DEADLINE),
+        "waited {DEADLINE:?} for the line to stream"
+    );
+    // The command is still blocked reading the pipe, so the line streamed
+    // before the call returned.
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the call returned before streaming"
+    );
+    // Opening the pipe blocks until the command opens its end, so the
+    // write runs on its own thread and the wait below carries the deadline.
+    thread::spawn(move || std::fs::write(&fifo, "go\n"));
+    let output = rx.recv_timeout(DEADLINE).expect("the call to finish");
+    assert_eq!(text(&output), "line\ngot:go\nExit code 0.\n");
+    assert_eq!(recorder.text(), "line\ngot:go\n");
+}
+
+#[test]
+fn a_completed_command_streams_its_whole_output() {
+    let dir = fakes::TempDir::new("fiber-shell-stream-done");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let recorder = Recorder::default();
+    let output = shell.run(&args("printf 'hi\\n'"), &CancelToken::new(), &recorder);
+    assert!(output.error.is_none());
+    assert_eq!(text(&output), "hi\nExit code 0.\n");
+    assert_eq!(recorder.text(), "hi\n");
+}
+
+#[test]
+fn a_failing_command_streams_what_it_printed() {
+    let dir = fakes::TempDir::new("fiber-shell-stream-failing");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let recorder = Recorder::default();
+    let output = shell.run(
+        &args("printf 'oops\\n'; exit 3"),
+        &CancelToken::new(),
+        &recorder,
+    );
+    assert_eq!(code(&output), Some(ErrorCode::NonzeroExit));
+    assert_eq!(text(&output), "oops\nExit code 3.\n");
+    assert_eq!(recorder.text(), "oops\n");
+}
+
+#[test]
+fn a_timed_out_command_streams_what_it_printed_before_the_deadline() {
+    let dir = fakes::TempDir::new("fiber-shell-stream-timeout");
+    // Blocked in `read`, like `waits`: no child to reap, so the timeout's
+    // SIGTERM empties the group at once.
+    let block = dir.path().join("block");
+    let command = format!(
+        "echo partial; mkfifo {block}; read -r _ < {block}",
+        block = quote(&block),
+    );
+    let running = streamed(dir.path().to_path_buf(), command, Some(1000));
+    assert!(
+        running.recorder.wait_for_text("partial\n", DEADLINE),
+        "waited {DEADLINE:?} for the partial line to stream"
+    );
+    let due = running.start + Duration::from_secs(1);
+    assert!(
+        running.clock.await_parked(due, DEADLINE),
+        "the run did not park at the timeout"
+    );
+    running.clock.advance(Duration::from_secs(1));
+    let output = running
+        .output
+        .recv_timeout(DEADLINE)
+        .expect("the command to finish");
+    assert_eq!(code(&output), Some(ErrorCode::Timeout));
+    assert!(text(&output).starts_with("partial\n"), "{}", text(&output));
+    assert_eq!(running.recorder.text(), "partial\n");
 }

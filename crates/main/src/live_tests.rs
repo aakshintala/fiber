@@ -108,7 +108,12 @@ impl Tool for Shell {
         })
     }
 
-    fn run(&self, _: &Map<String, Value>, _: &dyn contract::tool::Cancel) -> Output {
+    fn run(
+        &self,
+        _: &Map<String, Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> Output {
         Output {
             content: vec![ContentPart::Text {
                 text: "Ran it.".into(),

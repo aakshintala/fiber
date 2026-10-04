@@ -1,6 +1,7 @@
 //! An emitter of ephemeral events (`docs/architecture.md`, "Streaming").
 //! Any thread may hold one. Durable events stay the loop's to write, so
-//! [`Emit::emit`] refuses them.
+//! [`Emit::emit`] refuses them. A running tool call holds one that writes
+//! under its own call (`docs/tools.md`, "Progress").
 
 use crate::events::Event;
 

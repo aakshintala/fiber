@@ -8,6 +8,7 @@ use std::sync::Weak;
 use serde_json::{Map, Value};
 
 use crate::clock::Wake;
+use crate::emit::Emit;
 use crate::events::{Control, FileChange};
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
@@ -37,8 +38,10 @@ pub trait Tool: Send + Sync {
     fn effects(&self, arguments: &Map<String, Value>) -> Result<Effects, EffectsError>;
 
     /// Runs the call, blocking until it ends. `cancel` is how the call sees
-    /// that Fiber has stopped it.
-    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output;
+    /// that Fiber has stopped it. `emit` carries its `tool_call_delta` lines:
+    /// only that event is accepted through it, and it is borrowed for the
+    /// call's duration only, so nothing emits after `run` returns.
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, emit: &dyn Emit) -> Output;
 
     /// How a long result is cut (`docs/tools.md`, "Bounded results").
     fn bound(&self) -> Bound {

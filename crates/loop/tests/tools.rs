@@ -15,16 +15,22 @@
 mod support;
 
 use std::sync::{Arc, Barrier};
+use std::thread;
+use std::time::Duration;
 
-use contract::events::{Control, FileChange, TurnOutcome};
+use contract::clock::Clock;
+use contract::events::{
+    Control, Event, FileChange, Progress, TextDelta, ToolCallStarted, TurnOutcome,
+};
 use contract::provider::{Finish, Input};
-use contract::shapes::{ContentPart, Effect, Process};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Process};
 use contract::tool::{Bound, EffectsError, Tool};
 use contract::{Envelope, ErrorCode};
 use fakes::Scripted;
+use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use support::{Session, TestTool, calls_reply, delivery, kinds};
+use support::{Gate, Script, Session, Tap, TestTool, calls_reply, delivery, kinds};
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` registered. Runs one turn and returns its lines.
@@ -589,4 +595,442 @@ fn two_fsyncs_per_tool_call() {
     session.turn();
     // Two model requests at two each, and three calls at two each.
     assert_eq!(session.log.fsyncs() - before, 2 * 2 + 3 * 2);
+}
+
+/// A script step emitting `event` through the call's emitter.
+fn emit(event: Event) -> Script {
+    Script::Emit(Box::new(event))
+}
+
+/// A `tool_call_delta` carrying `text` and nothing else, as a tool emits it.
+fn delta(text: &str) -> Event {
+    Event::ToolCallDelta(Progress {
+        text: Some(text.into()),
+        details: None,
+    })
+}
+
+/// A session whose first reply makes `calls` and whose second says "Done.",
+/// with its prompt already sent and a live tap on its log: the test runs the
+/// turn on a scoped thread while reading `tap`, advancing `clock` and
+/// arriving at the tools' gates.
+fn streaming_turn(
+    tools: Vec<Arc<dyn Tool>>,
+    calls: &[(&str, Value)],
+) -> (Session, Tap, Arc<FakeClock>) {
+    let session = Session::with_tools(
+        vec![calls_reply("", calls), Scripted::text("Done.")],
+        None,
+        tools,
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    let clock = Arc::clone(&session.clock);
+    let tap = Tap::new(&session.log);
+    (session, tap, clock)
+}
+
+/// Every `tool_call_*` lifecycle kind, requested, started, delta and
+/// completed, in log order: not the model's `tool_call_arguments_delta`
+/// fragments, which stream while the reply arrives.
+fn tool_kinds(lines: &[Envelope]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|l| {
+            matches!(
+                l.kind.as_str(),
+                "tool_call_requested"
+                    | "tool_call_started"
+                    | "tool_call_delta"
+                    | "tool_call_completed"
+            )
+        })
+        .map(|l| l.kind.as_str())
+        .collect()
+}
+
+/// The `text` of every `tool_call_delta` in `lines`, in order.
+fn delta_texts(lines: &[Envelope]) -> Vec<&str> {
+    lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_delta")
+        .map(|l| l.payload["text"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_running_call_streams_one_delta_between_started_and_completed() {
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.script = vec![emit(delta("half "))];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("get_weather", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        let started = tap.wait_for("tool_call_started");
+        let first = tap.wait_for("tool_call_delta");
+        assert_eq!(first.payload["text"], "half ");
+        assert_eq!(first.action_id, started.action_id);
+        assert_eq!(first.turn_id, started.turn_id);
+        assert!(first.turn_id.is_some());
+        assert_eq!(first.seq, None);
+        tap.wait_for("tool_call_completed");
+    });
+    let lines = session.lines();
+    assert_eq!(
+        tool_kinds(&lines),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed"
+        ]
+    );
+}
+
+#[test]
+fn a_second_delta_within_the_interval_waits_for_the_clock() {
+    let gate1 = Arc::new(Gate::default());
+    let gate2 = Arc::new(Gate::default());
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.script = vec![
+        emit(delta("one")),
+        Script::Wait(Arc::clone(&gate1)),
+        emit(delta("two")),
+        Script::Wait(Arc::clone(&gate2)),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, clock) = streaming_turn(tools, &[("get_weather", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        tap.wait_for("tool_call_started");
+        let first = tap.wait_for_delta("one");
+        // The tool is past its first emit and blocked at its first gate, so
+        // "two" is not yet emitted and the loop holds nothing.
+        gate1.open();
+        let due = clock.now() + Duration::from_millis(100);
+        assert!(
+            clock.await_parked(due, Duration::from_secs(10)),
+            "the loop did not park until the interval ends"
+        );
+        assert!(
+            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            "a delta leaked before the clock moved"
+        );
+        clock.advance(Duration::from_millis(100));
+        let second = tap.wait_for_delta("two");
+        assert_eq!(second.action_id, first.action_id);
+        gate2.open();
+        tap.wait_for("tool_call_completed");
+    });
+    gate1.check("first emit's gate");
+    gate2.check("second emit's gate");
+    let lines = session.lines();
+    assert_eq!(
+        tool_kinds(&lines),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call_completed"
+        ]
+    );
+    assert_eq!(delta_texts(&lines), ["one", "two"]);
+}
+
+#[test]
+fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving() {
+    let gate = Arc::new(Gate::default());
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.script = vec![
+        emit(delta("a")),
+        Script::Wait(Arc::clone(&gate)),
+        emit(delta("b")),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("get_weather", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        tap.wait_for("tool_call_started");
+        tap.wait_for_delta("a");
+        // "b" is not yet emitted: the tool is blocked at its gate, so no
+        // second delta can have been written.
+        assert!(
+            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            "a delta leaked before the gate opened"
+        );
+        gate.open();
+        tap.wait_for("tool_call_completed");
+    });
+    gate.check("first delta's gate");
+    // The clock never moved, so "b" reached the log only as the final flush,
+    // written just before the completion.
+    let lines = session.lines();
+    assert_eq!(delta_texts(&lines), ["a", "b"]);
+    let at: Vec<usize> = lines
+        .iter()
+        .position(|l| l.kind == "tool_call_delta" && l.payload["text"] == "b")
+        .into_iter()
+        .chain(lines.iter().position(|l| l.kind == "tool_call_completed"))
+        .collect();
+    assert_eq!(at.len(), 2);
+    assert_eq!(at[1], at[0] + 1);
+}
+
+#[test]
+fn back_to_back_deltas_collapse_to_one_with_both_texts_in_order() {
+    let gate = Arc::new(Gate::default());
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.script = vec![
+        emit(delta("a")),
+        Script::Wait(Arc::clone(&gate)),
+        emit(delta("b")),
+        emit(delta("c")),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("get_weather", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        tap.wait_for("tool_call_started");
+        tap.wait_for_delta("a");
+        gate.open();
+        tap.wait_for("tool_call_completed");
+    });
+    gate.check("first delta's gate");
+    // The clock never moved and "a" was already written, so the interval
+    // held "b" and "c" for the final flush: one collapsed delta.
+    let lines = session.lines();
+    assert_eq!(delta_texts(&lines), ["a", "bc"]);
+}
+
+#[test]
+fn events_that_are_not_deltas_write_nothing_extra() {
+    let mut tool = TestTool::reads("get_weather", "Sunny.");
+    tool.script = vec![
+        emit(Event::ToolCallStarted(ToolCallStarted {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Reads],
+                reversible: true,
+                paths: None,
+            },
+            arguments: None,
+            changed_by: None,
+        })),
+        emit(Event::AssistantMessageDelta(TextDelta {
+            text: "half ".into(),
+        })),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("get_weather", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        tap.wait_for("tool_call_completed");
+    });
+    let lines = session.lines();
+    assert_eq!(
+        tool_kinds(&lines),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed"
+        ]
+    );
+}
+
+#[test]
+fn two_calls_complete_in_request_order_with_their_own_deltas() {
+    let gate = Arc::new(Gate::default());
+    let mut slow = TestTool::reads("slow", "first");
+    slow.script = vec![emit(delta("S")), Script::Wait(Arc::clone(&gate))];
+    let mut fast = TestTool::reads("fast", "second");
+    fast.script = vec![emit(delta("F"))];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(slow), Arc::new(fast)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("slow", paris()), ("fast", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        // Either delta may arrive first; each tool is past its emit once its
+        // text is seen.
+        let (ds, df) = (tap.wait_for_delta("S"), tap.wait_for_delta("F"));
+        gate.open();
+        let done_first = tap.wait_for("tool_call_completed");
+        let done_last = tap.wait_for("tool_call_completed");
+        assert_eq!(
+            (ds.payload["text"].as_str(), df.payload["text"].as_str()),
+            (Some("S"), Some("F"))
+        );
+        assert_ne!(ds.action_id, df.action_id);
+        drop((done_first, done_last));
+    });
+    gate.check("slow call's gate");
+    let lines = session.lines();
+    let requested: Vec<(String, _)> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_requested")
+        .map(|l| {
+            (
+                l.payload["name"].as_str().unwrap().to_owned(),
+                l.action_id.clone(),
+            )
+        })
+        .collect();
+    let (slow_id, fast_id) = (
+        requested
+            .iter()
+            .find(|(n, _)| n == "slow")
+            .unwrap()
+            .1
+            .clone(),
+        requested
+            .iter()
+            .find(|(n, _)| n == "fast")
+            .unwrap()
+            .1
+            .clone(),
+    );
+    let done: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.action_id.clone())
+        .collect();
+    assert_eq!(done, [slow_id.clone(), fast_id.clone()]);
+    for line in lines.iter().filter(|l| l.kind == "tool_call_delta") {
+        let text = line.payload["text"].as_str().unwrap();
+        let want = if text == "S" { &slow_id } else { &fast_id };
+        assert_eq!(&line.action_id, want, "delta {text} rides the wrong call");
+    }
+}
+
+#[test]
+fn a_large_write_paces_the_next_delta_past_100_ms() {
+    let gate1 = Arc::new(Gate::default());
+    let gate2 = Arc::new(Gate::default());
+    // 20 KiB of text: the written payload paces the next delta at
+    // 20 KiB ÷ 100 KiB/s = 200 ms, past the 100 ms floor. The byte count is
+    // the payload serialised as JSON, exactly what the loop measures.
+    let big = "x".repeat(20 * 1024);
+    let bytes = serde_json::to_vec(&Progress {
+        text: Some(big.clone()),
+        details: None,
+    })
+    .unwrap()
+    .len();
+    let interval = Duration::from_nanos(u64::try_from(bytes).unwrap() * 1_000_000_000 / 102_400)
+        .max(Duration::from_millis(100));
+    assert!(
+        interval > Duration::from_millis(100),
+        "the large delta does not pace past the floor"
+    );
+    let mut tool = TestTool::reads("big", "done.");
+    tool.script = vec![
+        emit(delta(&big)),
+        Script::Wait(Arc::clone(&gate1)),
+        emit(delta("small")),
+        Script::Wait(Arc::clone(&gate2)),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, clock) = streaming_turn(tools, &[("big", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        tap.wait_for("tool_call_started");
+        let first = tap.wait_for_delta(&big);
+        // The tool is past its large emit and blocked at its first gate, so
+        // "small" is not yet emitted and the loop holds nothing.
+        gate1.open();
+        let due = clock.now() + interval;
+        assert!(
+            clock.await_parked(due, Duration::from_secs(10)),
+            "the loop did not park until the byte-paced interval ends"
+        );
+        assert!(
+            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            "a delta leaked before the clock moved"
+        );
+        clock.advance(interval);
+        let second = tap.wait_for_delta("small");
+        assert_eq!(second.action_id, first.action_id);
+        gate2.open();
+        tap.wait_for("tool_call_completed");
+    });
+    gate1.check("large emit's gate");
+    gate2.check("second emit's gate");
+    let lines = session.lines();
+    assert_eq!(
+        tool_kinds(&lines),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call_completed"
+        ]
+    );
+    assert_eq!(delta_texts(&lines), [big.as_str(), "small"]);
+}
+
+#[test]
+fn a_returned_call_flushes_while_an_earlier_call_still_runs() {
+    let gate_a = Arc::new(Gate::default());
+    let gate_b = Arc::new(Gate::default());
+    let mut slow = TestTool::reads("a", "first");
+    slow.script = vec![Script::Wait(Arc::clone(&gate_a))];
+    let mut fast = TestTool::reads("b", "second");
+    fast.script = vec![
+        emit(delta("x")),
+        Script::Wait(Arc::clone(&gate_b)),
+        emit(delta("y")),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(slow), Arc::new(fast)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("a", paris()), ("b", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        // "x" goes out at once; opening the gate lets the call emit "y" and
+        // return while "a" is still blocked.
+        tap.wait_for_delta("x");
+        gate_b.open();
+        // "y" is held by the interval, so only the flush on return writes
+        // it: seeing it proves the call returned, still before "a" is
+        // released and before any completion.
+        tap.wait_for_delta("y");
+        assert!(
+            tap.pending()
+                .iter()
+                .all(|l| l.kind != "tool_call_completed"),
+            "a completion preceded the earlier call's release"
+        );
+        gate_a.open();
+        tap.wait_for("tool_call_completed");
+        tap.wait_for("tool_call_completed");
+    });
+    gate_a.check("call a's release");
+    gate_b.check("call b's second emit");
+    let lines = session.lines();
+    assert_eq!(delta_texts(&lines), ["x", "y"]);
+    let completed: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.payload["status"].clone())
+        .collect();
+    assert_eq!(completed.len(), 2);
+    let done: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.action_id.clone())
+        .collect();
+    let requested: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_requested")
+        .map(|l| l.action_id.clone())
+        .collect();
+    assert_eq!(done, requested);
+    let first_completed = lines
+        .iter()
+        .position(|l| l.kind == "tool_call_completed")
+        .unwrap();
+    let flushed = lines
+        .iter()
+        .position(|l| l.kind == "tool_call_delta" && l.payload["text"] == "y")
+        .unwrap();
+    assert!(
+        flushed < first_completed,
+        "the flush did not precede every completion"
+    );
 }

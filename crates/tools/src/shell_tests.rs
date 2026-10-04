@@ -4,8 +4,8 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::shapes::Effect;
 use contract::tool::Tool;
-use fakes::CancelToken;
 use fakes::clock::FakeClock;
+use fakes::{CancelToken, Recorder};
 use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 
@@ -269,7 +269,7 @@ fn a_bare_wait_never_starts() {
     let marker = dir.path().join("marker");
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     let command = format!("sleep 30; touch {}", marker.display());
-    let output = shell.run(&args(&command), &CancelToken::new());
+    let output = shell.run(&args(&command), &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("run_in_background"));
     assert!(text(&output).contains("jobs wait"));
@@ -304,7 +304,7 @@ fn a_missing_or_bad_argument_never_starts() {
         (Map::new(), "command"),
         (not_string, "string"),
     ] {
-        let output = shell.run(&arguments, &CancelToken::new());
+        let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
         assert_eq!(code(&output), Some(ErrorCode::InvalidArguments), "{needle}");
         assert!(
             text(&output).contains(needle),
@@ -323,7 +323,7 @@ fn an_absolute_workdir_that_is_a_directory_is_accepted_by_parsing() {
     let mut arguments = args("echo hi");
     arguments.insert("workdir".into(), json!(dir.path().display().to_string()));
     // Parsing accepts it. The command itself is covered by the integration tests.
-    let output = shell.run(&arguments, &CancelToken::new());
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert!(output.error.is_none(), "{}", text(&output));
 }
 
@@ -359,6 +359,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         Duration::from_secs(1),
         FakeClock::new().as_ref(),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(err.is_err());
 }
@@ -370,7 +371,11 @@ fn already_cancelled_starts_nothing() {
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     let cancel = CancelToken::new();
     cancel.cancel();
-    let output = shell.run(&args(&format!("touch {}", marker.display())), &cancel);
+    let output = shell.run(
+        &args(&format!("touch {}", marker.display())),
+        &cancel,
+        &Recorder::default(),
+    );
     assert!(output.error.is_none());
     assert!(output.process.is_none());
     assert_eq!(text(&output), "Cancelled before it started.\n");

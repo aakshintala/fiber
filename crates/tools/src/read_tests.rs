@@ -6,7 +6,7 @@ use std::process::Command;
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Bound, Tool};
-use fakes::{CancelToken, TempDir};
+use fakes::{CancelToken, Recorder, TempDir};
 use serde_json::{Map, Value, json};
 
 use crate::Files;
@@ -22,9 +22,11 @@ fn args(value: Value) -> Map<String, Value> {
 }
 
 fn run(dir: &Path, value: Value) -> contract::tool::Output {
-    Files::new(dir.to_path_buf())
-        .read()
-        .run(&args(value), &CancelToken::new())
+    Files::new(dir.to_path_buf()).read().run(
+        &args(value),
+        &CancelToken::new(),
+        &Recorder::default(),
+    )
 }
 
 fn text(output: &contract::tool::Output) -> String {
@@ -325,7 +327,9 @@ fn a_retargeted_symlink_reads_nothing() {
     files.read().effects(&arguments).unwrap();
     fs::remove_file(dir.path().join("link")).unwrap();
     symlink("b.txt", dir.path().join("link")).unwrap();
-    let output = files.read().run(&arguments, &CancelToken::new());
+    let output = files
+        .read()
+        .run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::PathChanged));
     assert!(!text(&output).contains("secret"), "{}", text(&output));
     assert!(!text(&output).contains("harmless"), "{}", text(&output));
@@ -396,6 +400,7 @@ fn a_ranged_read_records_the_whole_file() {
     let output = files.read().run(
         &args(json!({"path": "a.txt", "offset": 2, "limit": 1})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert!(output.error.is_none());
     let resolved = canonical(dir.path()).join("a.txt");
@@ -410,6 +415,7 @@ fn a_failed_read_records_nothing() {
     let output = files.read().run(
         &args(json!({"path": "a.txt", "offset": 9})),
         &CancelToken::new(),
+        &Recorder::default(),
     );
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     let resolved = canonical(dir.path()).join("a.txt");

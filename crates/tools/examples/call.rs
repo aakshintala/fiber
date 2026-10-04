@@ -19,7 +19,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::{Output, Tool};
-use fakes::CancelToken;
+use fakes::{CancelToken, Recorder};
 use serde_json::{Map, Value};
 use tools::{Files, Shell};
 
@@ -60,10 +60,20 @@ fn main() -> ExitCode {
     };
     let cancel = CancelToken::new();
     let output = match name.as_str() {
-        "shell" => Shell::new(workspace, Arc::new(ProcessClock)).run(&arguments, &cancel),
-        "read" => Files::new(workspace).read().run(&arguments, &cancel),
-        "write" => Files::new(workspace).write().run(&arguments, &cancel),
-        "edit" => Files::new(workspace).edit().run(&arguments, &cancel),
+        "shell" => Shell::new(workspace, Arc::new(ProcessClock)).run(
+            &arguments,
+            &cancel,
+            &Recorder::default(),
+        ),
+        "read" => Files::new(workspace)
+            .read()
+            .run(&arguments, &cancel, &Recorder::default()),
+        "write" => Files::new(workspace)
+            .write()
+            .run(&arguments, &cancel, &Recorder::default()),
+        "edit" => Files::new(workspace)
+            .edit()
+            .run(&arguments, &cancel, &Recorder::default()),
         _ => {
             usage();
             return ExitCode::from(2);

@@ -6,6 +6,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use contract::ErrorCode;
+use contract::emit::Emit;
 use contract::events::FileChange;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Effect};
@@ -83,7 +84,7 @@ impl Tool for Edit {
         Ok(declare(Effect::Writes, false, &resolved))
     }
 
-    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
+    fn run(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel, _emit: &dyn Emit) -> Output {
         if cancel.is_cancelled() {
             return text_output("Cancelled before it started.\n".to_owned());
         }
