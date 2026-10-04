@@ -334,6 +334,11 @@ fn a_complete_prefix_ends_on_a_character_boundary() {
     assert_eq!(complete_prefix(b"\xE2"), 0);
     assert_eq!(complete_prefix(b"\xE2\x82"), 0);
     assert_eq!(complete_prefix(b"\xE2\x82\xAC"), 3);
+    // U+1F600, four bytes: one, two and three leads wait.
+    assert_eq!(complete_prefix(b"a\xF0"), 1);
+    assert_eq!(complete_prefix(b"a\xF0\x9F"), 1);
+    assert_eq!(complete_prefix(b"a\xF0\x9F\x98"), 1);
+    assert_eq!(complete_prefix(b"a\xF0\x9F\x98\x80"), 5);
     // An invalid byte is consumed as U+FFFD at once, not held.
     assert_eq!(complete_prefix(b"\xFF"), 1);
     assert_eq!(complete_prefix(b"\xFFx"), 2);
