@@ -91,6 +91,7 @@ On Linux x86_64 alone:
 - `cargo fmt --check`
 - no non-test source file over 800 lines
 - the `unsafe` table in `docs/code-quality.md` matches the code
+- a process signal appears only in the guarded helpers (`cargo xtask signal-sites`)
 - the compiled-in list matches the files crates compile in, Markdown
   anywhere or any file outside the crate, and every include argument is a
   string literal

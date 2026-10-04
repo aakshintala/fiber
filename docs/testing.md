@@ -249,7 +249,8 @@ and files, never a machine-wide count.
 Every process-group signal in a test goes through the guarded helper in
 `fakes`, which refuses a group id of 1 or less: `kill(-1)` signals every
 process the user owns. Code that signals a process or group refuses an id of
-1 or less the same way. A test of that refusal passes the probe signal `0`, or
+1 or less the same way, and `scripts/check` fails on a signal sent anywhere
+else. A test of that refusal passes the probe signal `0`, or
 tests the refusal as a function that signals nothing, so a mutant that removes
 the check sends nothing. Mutation testing runs in CI only, never on a
 developer machine.

@@ -50,6 +50,108 @@ const DEPENDENCIES: &str = "# Dependencies
 | insta | dev-dependency | snapshots |
 ";
 
+fn signal_line(pattern: &str, needs_kill: bool) -> String {
+    let body = if needs_kill {
+        format!("run kill {pattern}1")
+    } else {
+        format!("call {pattern} now")
+    };
+    format!("clean\n{body}")
+}
+
+#[test]
+fn signal_sites_reports_each_pattern_outside_the_allowlist() {
+    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
+        let files = [file("log", "src/lib.rs", signal_line(pattern, needs_kill))];
+        let hits = signal_sites(&files);
+        assert!(
+            hits.contains(&format!("crates/log/src/lib.rs:2: {pattern}")),
+            "{pattern}: {hits:?}"
+        );
+        assert!(
+            hits.iter()
+                .all(|hit| hit.starts_with("crates/log/src/lib.rs:2: ")),
+            "{pattern}: {hits:?}"
+        );
+    }
+}
+
+#[test]
+fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
+    for &(pattern, needs_kill) in SIGNAL_PATTERNS {
+        let line = signal_line(pattern, needs_kill);
+        for (krate, rel) in [
+            ("fakes", "src/process_group.rs"),
+            ("tools", "src/shell/command.rs"),
+        ] {
+            let files = [file(krate, rel, line.clone())];
+            assert_eq!(signal_sites(&files), Vec::<String>::new(), "{pattern}");
+        }
+    }
+}
+
+#[test]
+fn signal_sites_ignores_dash_operands_without_kill() {
+    let source = [
+        "names.push(\"find x -- -delete\")",
+        "effects(&shell, \"npm test -- --watch\")",
+        "classified(\"ls -- -l\")",
+        "\"cargo clippy -- -D warnings\"",
+    ]
+    .join("\n");
+    let files = [file("tools", "src/classify.rs", source)];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_ignores_the_word_kill_on_its_own() {
+    let files = [file(
+        "log",
+        "src/lib.rs",
+        "the watchdog kills the group".to_owned(),
+    )];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_reports_a_shell_kill_split_across_lines() {
+    // Built from parts so this file holds no signal pattern itself: the
+    // first line ends with a backslash, the second carries the operand.
+    let first = ["kill -TERM ", "\\"].concat();
+    let second = ["  --", " -1\""].concat();
+    let source = format!("{first}\n{second}");
+    let files = [file("log", "src/lib.rs", source)];
+    let dash = ["--", " -"].concat();
+    assert_eq!(
+        signal_sites(&files),
+        [format!("crates/log/src/lib.rs:2: {dash}")]
+    );
+}
+
+#[test]
+fn signal_sites_ignores_a_kill_the_fragment_does_not_continue() {
+    // A kill two lines up, with an unbroken line between, is another
+    // command: the operand's line is not joined to it.
+    let dash = ["--", " -"].concat();
+    let source = format!("kill -TERM 5\nlet x = 1;\nrun {dash}l");
+    let files = [file("log", "src/lib.rs", source)];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_follows_a_chain_of_continued_lines() {
+    let first = ["kill -TERM ", "\\"].concat();
+    let middle = ["  -s KILL ", "\\"].concat();
+    let last = ["  --", " -1"].concat();
+    let source = format!("{first}\n{middle}\n{last}");
+    let files = [file("log", "src/lib.rs", source)];
+    let dash = ["--", " -"].concat();
+    assert_eq!(
+        signal_sites(&files),
+        [format!("crates/log/src/lib.rs:3: {dash}")]
+    );
+}
+
 fn file(krate: &str, rel: &str, source: String) -> RustFile {
     let dir = if krate == "xtask" {
         "xtask".to_owned()

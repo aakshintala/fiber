@@ -1,6 +1,7 @@
 //! Checks that the code matches the rules and tables in the docs: the
 //! 800-line cap (`docs/code-quality.md`, "Size"), the `unsafe` table in
-//! `docs/code-quality.md`, and the crate list in `docs/dependencies.md`.
+//! `docs/code-quality.md`, the crate list in `docs/dependencies.md`, and
+//! that process signals stay in the guarded helpers.
 
 use std::collections::BTreeSet;
 
@@ -133,6 +134,74 @@ pub(crate) fn unsafe_mismatches(
         format!("{path}: listed for {krate} in docs/code-quality.md, but uses no unsafe")
     }));
     Ok(failures)
+}
+
+/// Files that may send a process signal. An entry must refuse an id of 1 or
+/// less before anything runs: group -1 reaches every process the user owns.
+const SIGNAL_ALLOWLIST: &[&str] = &[
+    "crates/fakes/src/process_group.rs",
+    "crates/tools/src/shell/command.rs",
+];
+
+/// What counts as a process signal: the pattern, and whether it only counts
+/// beside the word kill, on its own line or in the backslash-continued
+/// lines around it. A bare double dash also starts an operand such as
+/// find's `-delete`, so the shell fragments need their kill. The strings
+/// are joined from halves so this file holds no pattern itself; otherwise
+/// the check would fail on its own source.
+const SIGNAL_PATTERNS: &[(&str, bool)] = &[
+    (concat!("Command::", "new(\"kill\")"), false),
+    (concat!("--", " -"), true),
+    (concat!("\"-", "$"), true),
+    (concat!("kill_process_", "group"), false),
+    (concat!("kill_process", "("), false),
+    (concat!("kill", "pg"), false),
+    (concat!("libc::", "kill"), false),
+    (concat!("nix::sys::", "signal"), false),
+];
+
+pub(crate) fn signal_sites(files: &[RustFile]) -> Vec<String> {
+    let mut failures = Vec::new();
+    for f in files {
+        if SIGNAL_ALLOWLIST.contains(&f.path.as_str()) {
+            continue;
+        }
+        let lines: Vec<&str> = f.source.lines().collect();
+        for (index, line) in lines.iter().enumerate() {
+            for &(pattern, needs_kill) in SIGNAL_PATTERNS {
+                if !line.contains(pattern) {
+                    continue;
+                }
+                if needs_kill && !chain_has_kill(&lines, index) {
+                    continue;
+                }
+                failures.push(format!("{}:{}: {pattern}", f.path, index + 1));
+            }
+        }
+    }
+    failures
+}
+
+/// Whether `line` continues a shell command from the line before it: the
+/// earlier text ends with a backslash, possibly followed by the closing
+/// quote or a newline escape.
+fn continues(line: &str) -> bool {
+    let trimmed = line.trim_end();
+    let trimmed = trimmed.strip_suffix('"').unwrap_or(trimmed);
+    let trimmed = trimmed.strip_suffix("\\n").unwrap_or(trimmed);
+    trimmed.ends_with('\\')
+}
+
+/// Whether the word kill is on the fragment's own line or on an earlier line
+/// the fragment continues through backslashes. A command names `kill` before
+/// its arguments, so only earlier lines count.
+fn chain_has_kill(lines: &[&str], index: usize) -> bool {
+    let (earlier, rest) = lines.split_at(index.min(lines.len()));
+    let earlier = earlier.iter().rev().take_while(|line| continues(line));
+    rest.iter()
+        .take(1)
+        .chain(earlier)
+        .any(|line| line.contains("kill"))
 }
 
 /// Crate names in the tables of "Runtime dependencies" and "Tests and

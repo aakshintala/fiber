@@ -337,6 +337,53 @@ fn the_unsafe_table_fails_unlisted_unsafe() {
 }
 
 #[test]
+fn the_signal_check_fails_a_signal_outside_the_allowlist() {
+    let dir = workspace();
+    assert_eq!(
+        xtask(&dir, &["signal-sites"], &[], ""),
+        (0, "signal-sites: ok\n".to_owned())
+    );
+    // Built from parts so this file holds no signal pattern itself; the
+    // file is an untracked test file, which the check still scans.
+    let pattern = ["kill", "pg"].concat();
+    dir.write("crates/b/tests/evil.rs", &format!("call {pattern}(1);\n"));
+    let (code, out) = xtask(&dir, &["signal-sites"], &[], "");
+    assert_eq!(code, 1);
+    assert_eq!(
+        out,
+        format!("signal-sites: crates/b/tests/evil.rs:1: {pattern}\n")
+    );
+}
+
+#[test]
+fn the_signal_check_passes_a_signal_in_the_allowlist() {
+    let dir = TestDir::new("signal-allowlist");
+    dir.write(
+        "Cargo.toml",
+        "[workspace]\nmembers = [\"crates/fakes\"]\nresolver = \"3\"\n",
+    );
+    dir.write(".gitignore", "target/\nCargo.lock\n");
+    dir.write(
+        "crates/fakes/Cargo.toml",
+        "[package]\nname = \"fakes\"\nversion = \"0.0.0\"\nedition = \"2024\"\n",
+    );
+    // Built from parts so this file holds no signal pattern itself.
+    let pattern = ["kill", "pg"].concat();
+    dir.write("crates/fakes/src/lib.rs", "//! fakes\n");
+    dir.write(
+        "crates/fakes/src/process_group.rs",
+        &format!("call {pattern}(1);\n"),
+    );
+    git(&dir, &["init", "-q", "-b", "main"]);
+    git(&dir, &["add", "."]);
+    git(&dir, &["commit", "-qm", "base"]);
+    assert_eq!(
+        xtask(&dir, &["signal-sites"], &[], ""),
+        (0, "signal-sites: ok\n".to_owned())
+    );
+}
+
+#[test]
 fn the_dependency_list_fails_an_unlisted_crate() {
     let dir = workspace();
     assert_eq!(
