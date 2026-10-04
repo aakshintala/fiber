@@ -186,6 +186,7 @@ fn live_reviewer() {
                 arguments: json!({"command": command}),
                 provider_id: None,
                 repair: None,
+                ran_by: None,
             })
         })
         .collect();

@@ -37,6 +37,7 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
             arguments: json!({}),
             provider_id: Some(ProviderCallId("c".into())),
             repair: None,
+            ran_by: None,
         }),
         ReplyAction::Text(TextCompleted {
             text: "B".into(),
@@ -55,6 +56,7 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
             arguments: json!({}),
             provider_id: None,
             repair: None,
+            ran_by: None,
         }),
     ]);
     assert_eq!(none.text(), "");

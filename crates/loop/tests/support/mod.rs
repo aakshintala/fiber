@@ -122,6 +122,7 @@ pub(crate) fn calls_reply(text: &str, calls: &[(&str, Value)]) -> Scripted {
             arguments: arguments.clone(),
             provider_id: None,
             repair: None,
+            ran_by: None,
         }));
     }
     Scripted {

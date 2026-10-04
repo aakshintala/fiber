@@ -125,6 +125,10 @@ recorded in the session log** (`replaced` on `preamble_built`,
 `docs/events.md`), so a headless caller, a resumed session and an
 audit all see it. The loop asks the registry for a name and runs what comes
 back; it never learns whether the answer was Fiber's or an extension's.
+An extension runs a tool through the same registry with `host.tool`: the
+inner call takes the deny steps and the tool hooks, is logged as a call of
+its own, and is never sent to the model as one of its calls
+(`docs/extensions.md`, "Running a tool").
 
 ### Provider seam
 

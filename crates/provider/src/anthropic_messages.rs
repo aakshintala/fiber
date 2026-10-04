@@ -619,6 +619,7 @@ impl Decoder {
                     arguments,
                     provider_id: Some(ProviderCallId(id)),
                     repair: None,
+                    ran_by: None,
                 }));
             }
             Some(Block::Redacted(item)) => {

@@ -547,6 +547,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 arguments: json!({"city": "Paris"}),
                 provider_id: Some(ProviderCallId("call_1".into())),
                 repair: None,
+                ran_by: None,
             },
         },
         Input::ToolResult {
@@ -691,6 +692,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 arguments: json!({"city": "Paris"}),
                 provider_id: None,
                 repair: None,
+                ran_by: None,
             },
         },
         Input::ToolResult {
@@ -960,6 +962,7 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
             arguments: json!({"city": id}),
             provider_id: None,
             repair: None,
+            ran_by: None,
         },
     };
     let result = |id: &str| Input::ToolResult {
@@ -1071,12 +1074,14 @@ fn tool_call_deltas_without_an_index_are_told_apart_by_id() {
                 arguments: json!({"city": "Paris"}),
                 provider_id: Some(ProviderCallId("c1".into())),
                 repair: None,
+                ran_by: None,
             }),
             ReplyAction::ToolCall(ToolCallRequested {
                 name: "f".into(),
                 arguments: json!({}),
                 provider_id: Some(ProviderCallId("c2".into())),
                 repair: None,
+                ran_by: None,
             }),
         ]
     );

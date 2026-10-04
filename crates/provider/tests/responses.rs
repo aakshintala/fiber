@@ -350,6 +350,7 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
                 "call_01a0f68bc62570139103eeb490cad7a4".into()
             )),
             repair: None,
+            ran_by: None,
         }
     );
     assert!(deltas.contains(&Delta::ToolCallArguments(

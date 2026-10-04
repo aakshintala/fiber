@@ -385,6 +385,7 @@ impl Decoder {
                         .and_then(Value::as_str)
                         .map(|id| ProviderCallId(id.to_owned())),
                     repair: None,
+                    ran_by: None,
                 }));
             }
             // Items Fiber does not act on, such as a hosted tool's.

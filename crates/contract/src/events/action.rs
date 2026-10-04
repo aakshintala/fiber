@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::shapes::{Choice, ContentPart, DeclaredEffects, Failure, Process, Question, True};
-use crate::{ActionId, ProviderCallId, RequestId};
+use crate::{ActionId, CommandId, ProviderCallId, RequestId};
 
 /// Text added since the last delta, on `assistant_message_delta` and
 /// `reasoning_delta`.
@@ -73,8 +73,9 @@ pub struct ReasoningCompleted {
     pub provider_item: Option<Value>,
 }
 
-/// `tool_call_requested`: the model finished emitting the call. A line with
-/// `repaired` or `repairs` but not both fails to read.
+/// `tool_call_requested`: the model finished emitting the call, or an
+/// extension ran an inner call. A line with `repaired` or `repairs` but not
+/// both fails to read.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(try_from = "ToolCallRequestedLine")]
 pub struct ToolCallRequested {
@@ -89,6 +90,70 @@ pub struct ToolCallRequested {
     /// The repair, absent when nothing was repaired.
     #[serde(flatten, skip_serializing_if = "Option::is_none")]
     pub repair: Option<ArgumentRepair>,
+    /// On an inner call, its extension and anchor; absent on the model's calls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ran_by: Option<RanBy>,
+}
+
+/// An inner call's extension and the outer call or command it ran inside
+/// (`docs/events.md`, "`ran_by`"). A line with both anchors or neither fails
+/// to read.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "RanByLine", into = "RanByLine")]
+pub struct RanBy {
+    /// The extension's name.
+    pub extension: String,
+    /// What the inner call ran inside.
+    pub anchor: Anchor,
+}
+
+/// What an inner call ran inside.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Anchor {
+    /// The extension's own tool call.
+    OuterCall(ActionId),
+    /// The invocation of one of the extension's commands.
+    Command(CommandId),
+}
+
+/// `ran_by` as a line carries it, before its anchor is checked.
+#[derive(Serialize, Deserialize)]
+struct RanByLine {
+    extension: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    outer_action_id: Option<ActionId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    command_id: Option<CommandId>,
+}
+
+impl TryFrom<RanByLine> for RanBy {
+    type Error = &'static str;
+
+    fn try_from(line: RanByLine) -> Result<Self, Self::Error> {
+        let anchor = match (line.outer_action_id, line.command_id) {
+            (Some(id), None) => Anchor::OuterCall(id),
+            (None, Some(id)) => Anchor::Command(id),
+            _ => return Err("`ran_by` carries exactly one of `outer_action_id` and `command_id`"),
+        };
+        Ok(Self {
+            extension: line.extension,
+            anchor,
+        })
+    }
+}
+
+impl From<RanBy> for RanByLine {
+    fn from(ran_by: RanBy) -> Self {
+        let (outer_action_id, command_id) = match ran_by.anchor {
+            Anchor::OuterCall(id) => (Some(id), None),
+            Anchor::Command(id) => (None, Some(id)),
+        };
+        Self {
+            extension: ran_by.extension,
+            outer_action_id,
+            command_id,
+        }
+    }
 }
 
 /// The arguments after repair and the fixes that made them.
@@ -109,6 +174,7 @@ struct ToolCallRequestedLine {
     provider_id: Option<ProviderCallId>,
     repaired: Option<Map<String, Value>>,
     repairs: Option<Vec<Repair>>,
+    ran_by: Option<RanBy>,
 }
 
 impl TryFrom<ToolCallRequestedLine> for ToolCallRequested {
@@ -125,6 +191,7 @@ impl TryFrom<ToolCallRequestedLine> for ToolCallRequested {
             arguments: line.arguments,
             provider_id: line.provider_id,
             repair,
+            ran_by: line.ran_by,
         })
     }
 }

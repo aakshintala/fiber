@@ -89,6 +89,14 @@ a command. It carries a request, a result, and a record of whether it actually
 ran.
 _Avoid_: tool use, function call
 
+### Inner call
+
+A tool call an extension makes with `host.tool` while its own tool call, the
+outer call, or one of its commands is running. The outer call is what was
+judged; the inner call still meets the denies and the tool hooks, and is logged
+as a call of its own.
+_Avoid_: nested call, sub-call, child call
+
 ### Job
 
 Work a tool call starts that outlives the call, such as a background command, a

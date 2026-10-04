@@ -211,6 +211,18 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 An array of the names of the extensions whose hooks changed the line's
 content, in the order they ran. Absent when no hook changed it.
 
+### `ran_by`
+
+An inner call's anchor: the extension that ran it with `host.tool`, and the
+outer call or command it ran inside (`docs/extensions.md`, "Running a tool").
+Exactly one of `outer_action_id` and `command_id` is present.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the extension's name |
+| `outer_action_id` | string | no | the `action_id` of the extension's tool call the inner call ran inside |
+| `command_id` | string | no | the id of the `command` driver command whose invocation the inner call ran inside |
+
 ## Kinds
 
 Fiber's loop emits the kinds below. MCP elicitation and `ask_user` add no kind
@@ -522,7 +534,10 @@ Durable.
 
 #### `tool_call_requested`
 
-Durable. The model finished emitting the call.
+Durable. The model finished emitting the call, or an extension ran an inner
+call with `host.tool`. A line with `ran_by` is an inner call: it is never
+part of the history a provider is sent, and its outcome reaches the model only
+through the outer call's result.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
@@ -531,6 +546,7 @@ Durable. The model finished emitting the call.
 | `provider_id` | string | no | the provider's own id for the call ("Identity and ordering"); absent when the reply carried none |
 | `repaired` | object | no | the arguments after repair (`docs/tools.md`, "Before a call runs"); absent when nothing was repaired |
 | `repairs` | array | no | with `repaired`, one object per fix: `path` (string, a JSON Pointer into `arguments`) and `fix`, one of `null_dropped`, `string_to_number`, `string_to_boolean` or `string_parsed` |
+| `ran_by` | `ran_by` | no | on an inner call, its extension and anchor; absent on the model's calls |
 
 #### `tool_call_started`
 

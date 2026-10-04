@@ -319,6 +319,16 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"name": "read", "arguments": "{not json"}),
         ),
         (
+            "tool_call_requested",
+            json!({"name": "read", "arguments": {"path": "/a"},
+            "ran_by": {"extension": "codemode", "outer_action_id": "a_1"}}),
+        ),
+        (
+            "tool_call_requested",
+            json!({"name": "read", "arguments": {"path": "/a"},
+            "ran_by": {"extension": "checks", "command_id": "c_1"}}),
+        ),
+        (
             "tool_call_started",
             json!({"effects": ["reads", "writes", "executes", "network"],
             "reversible": false, "paths": ["/a"], "arguments": {"path": "/a"},
@@ -652,6 +662,20 @@ fn a_permission_request_carries_only_the_keys_its_step_defines() {
         }
         assert!(
             read("permission_requested", payload.clone()).is_err(),
+            "{payload}"
+        );
+    }
+}
+
+#[test]
+fn an_inner_call_names_exactly_one_anchor() {
+    for ran_by in [
+        json!({"extension": "e"}),
+        json!({"extension": "e", "outer_action_id": "a_1", "command_id": "c_1"}),
+    ] {
+        let payload = json!({"name": "read", "arguments": {}, "ran_by": ran_by});
+        assert!(
+            read("tool_call_requested", payload.clone()).is_err(),
             "{payload}"
         );
     }
