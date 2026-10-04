@@ -402,6 +402,19 @@ pub(crate) fn declare(effect: Effect, reversible: bool, resolved: &Path) -> Effe
     }
 }
 
+/// Resolves `raw` against `workspace`. A failure is the call's output.
+#[allow(
+    clippy::result_large_err,
+    reason = "the error is the call's Output, returned unchanged"
+)]
+pub(crate) fn resolved(workspace: &Path, raw: &str) -> Result<PathBuf, Output> {
+    match resolve(workspace, raw) {
+        Ok(path) => Ok(path),
+        Err(ResolveError::Arguments(message)) => Err(failed(ErrorCode::InvalidArguments, message)),
+        Err(ResolveError::Tool(message)) => Err(failed(ErrorCode::ToolError, message)),
+    }
+}
+
 pub(crate) fn effects_error(error: ResolveError) -> EffectsError {
     match error {
         ResolveError::Arguments(message) | ResolveError::Tool(message) => {

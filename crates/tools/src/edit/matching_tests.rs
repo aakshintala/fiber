@@ -467,17 +467,153 @@ fn a_later_block_does_not_shift_an_earlier_line() {
 }
 
 #[test]
-fn an_origin_miss_is_zero_and_a_hit_is_the_entry() {
-    assert_eq!(at(&[], 0), 0);
-    assert_eq!(at(&[4], 1), 0);
-    assert_eq!(at(&[4, 9], 0), 4);
-    assert_eq!(at(&[4, 9], 1), 9);
+fn an_origin_hit_is_the_entry_and_a_miss_is_an_error() {
+    assert_eq!(at(&[4, 9], 0), Ok(4));
+    assert_eq!(at(&[4, 9], 1), Ok(9));
+    assert_eq!(at(&[], 0), Err(MatchError::Boundary));
+    assert_eq!(at(&[4], 1), Err(MatchError::Boundary));
 }
 
 #[test]
-fn a_slice_is_the_range_and_empty_past_the_end() {
-    assert_eq!(slice("ab", 0, 1), "a");
-    assert_eq!(slice("ab", 0, 2), "ab");
-    assert_eq!(slice("ab", 2, 2), "");
-    assert_eq!(slice("ab", 3, 4), "");
+fn a_slice_is_the_range_only_when_both_ends_are_boundaries() {
+    assert_eq!(slice("ab", 0, 1), Ok("a"));
+    assert_eq!(slice("ab", 0, 2), Ok("ab"));
+    assert_eq!(slice("ab", 2, 2), Ok(""));
+    assert_eq!(slice("ab", 3, 4), Err(MatchError::Boundary));
+    assert_eq!(slice("ab", 2, 1), Err(MatchError::Boundary));
+    // `é` occupies bytes 3 and 4 of `café`. Byte 4 is inside the character.
+    assert_eq!(slice("caf\u{00E9}", 3, 5), Ok("\u{00E9}"));
+    assert_eq!(slice("caf\u{00E9}", 4, 5), Err(MatchError::Boundary));
+}
+
+#[test]
+fn a_folded_match_ending_on_a_multibyte_character_keeps_the_next_line() {
+    let applied = must(
+        "head\nit\u{2019}s caf\u{00E9}\nKEEP  \n",
+        &[("it's caf\u{00E9}", "OK")],
+    );
+    assert_eq!(applied.bytes, b"head\nOK\nKEEP  \n");
+    assert_eq!(applied.reports, vec![report(0, 2, 2, Some((2, 2)), true)]);
+    let applied = must(
+        "it\u{2019}s caf\u{00E9}\r\nKEEP  \n",
+        &[("it's caf\u{00E9}", "OK")],
+    );
+    assert_eq!(applied.bytes, b"OK\r\nKEEP  \n");
+}
+
+#[test]
+fn an_exact_multibyte_match_after_line_one_reports_that_line() {
+    let applied = must("head\ncaf\u{00E9}\ntail\n", &[("caf\u{00E9}", "X")]);
+    assert_eq!(applied.bytes, b"head\nX\ntail\n");
+    assert_eq!(applied.reports, vec![report(0, 2, 2, Some((2, 2)), false)]);
+}
+
+#[test]
+fn a_folded_match_ending_on_its_newline_stops_at_that_line() {
+    let applied = must("it\u{2019}s\nKEEP  \n", &[("it's\n", "X")]);
+    assert_eq!(applied.bytes, b"XKEEP  \n");
+    assert_eq!(applied.reports[0].old_start, 1);
+    assert_eq!(applied.reports[0].old_end, 1);
+    assert!(applied.reports[0].normalised);
+}
+
+#[test]
+fn multibyte_matches_keep_later_lines_and_report_their_own() {
+    // U+00E9 is 2 bytes, U+2014 is 3, U+1F600 is 4.
+    let marks = ["\u{00E9}", "\u{2014}", "\u{1F600}"];
+    for mark in marks {
+        for (place, core) in [
+            ("start", format!("{mark}ab")),
+            ("middle", format!("a{mark}b")),
+            ("end", format!("ab{mark}")),
+        ] {
+            let keep = "KEEP  \n";
+            let on_first = format!("{core} tail  \n{keep}");
+            let applied = must(&on_first, &[(&core, "Z")]);
+            assert_eq!(
+                String::from_utf8(applied.bytes).unwrap(),
+                format!("Z tail  \n{keep}"),
+                "exact first {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_start, 1,
+                "exact first {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_end, 1,
+                "exact first {place} {mark:?}"
+            );
+            assert!(
+                !applied.reports[0].normalised,
+                "exact first {place} {mark:?}"
+            );
+
+            let later = format!("head\n{core} tail  \n{keep}");
+            let applied = must(&later, &[(&core, "Z")]);
+            assert_eq!(
+                String::from_utf8(applied.bytes).unwrap(),
+                format!("head\nZ tail  \n{keep}"),
+                "exact later {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_start, 2,
+                "exact later {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_end, 2,
+                "exact later {place} {mark:?}"
+            );
+
+            let (file_core, old_core) = folded_around(place, mark);
+            let folded_later = format!("head\n{file_core}  \n{keep}");
+            let applied = must(&folded_later, &[(&old_core, "Z")]);
+            assert_eq!(
+                String::from_utf8(applied.bytes).unwrap(),
+                format!("head\nZ\n{keep}"),
+                "folded later {place} {mark:?}"
+            );
+            assert!(
+                applied.reports[0].normalised,
+                "folded later {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_start, 2,
+                "folded later {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_end, 2,
+                "folded later {place} {mark:?}"
+            );
+
+            let folded_first = format!("{file_core}  \n{keep}");
+            let applied = must(&folded_first, &[(&old_core, "Z")]);
+            assert_eq!(
+                String::from_utf8(applied.bytes).unwrap(),
+                format!("Z\n{keep}"),
+                "folded first {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_start, 1,
+                "folded first {place} {mark:?}"
+            );
+            assert_eq!(
+                applied.reports[0].old_end, 1,
+                "folded first {place} {mark:?}"
+            );
+            assert!(
+                applied.reports[0].normalised,
+                "folded first {place} {mark:?}"
+            );
+        }
+    }
+}
+
+fn folded_around(place: &str, mark: &str) -> (String, String) {
+    let curly = "\u{2019}";
+    match place {
+        "start" => (format!("{mark}it{curly}s"), format!("{mark}it's")),
+        "middle" => (format!("it{mark}{curly}s"), format!("it{mark}'s")),
+        "end" => (format!("it{curly}s{mark}"), format!("it's{mark}")),
+        _ => panic!("place"),
+    }
 }

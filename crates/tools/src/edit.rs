@@ -16,8 +16,8 @@ use similar::TextDiff;
 use matching::{Applied, Block, MatchError, Report};
 
 use crate::files::{
-    InspectError, Inspected, ResolveError, Shared, declare, effects_error, failed, hash_bytes,
-    inspect, path_text, resolve, string_argument, text_output, unsupported_message,
+    InspectError, Inspected, Shared, declare, effects_error, failed, hash_bytes, inspect,
+    path_text, resolve, resolved, string_argument, text_output, unsupported_message,
 };
 use crate::write::line_changes;
 
@@ -95,21 +95,15 @@ impl Tool for Edit {
             Ok(blocks) => blocks,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        let key = match resolve(self.shared.workspace(), &raw) {
+        let key = match resolved(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(ResolveError::Arguments(message)) => {
-                return failed(ErrorCode::InvalidArguments, message);
-            }
-            Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
+            Err(output) => return output,
         };
         let locks = self.shared.locks();
         let _guard = locks.lock(&key);
-        let path = match resolve(self.shared.workspace(), &raw) {
+        let path = match resolved(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(ResolveError::Arguments(message)) => {
-                return failed(ErrorCode::InvalidArguments, message);
-            }
-            Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
+            Err(output) => return output,
         };
         if path != key
             || self
@@ -188,6 +182,7 @@ fn match_failed(error: MatchError) -> Output {
         MatchError::NoMatch { .. } => ErrorCode::NoMatch,
         MatchError::Ambiguous { .. } => ErrorCode::AmbiguousMatch,
         MatchError::Invalid(_) => ErrorCode::InvalidArguments,
+        MatchError::Boundary => ErrorCode::ToolError,
     };
     failed(code, error.message())
 }

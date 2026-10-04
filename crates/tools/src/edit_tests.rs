@@ -860,6 +860,67 @@ fn already_cancelled_edits_nothing() {
 }
 
 #[test]
+fn a_boundary_failure_is_a_tool_error() {
+    let output = super::match_failed(super::matching::MatchError::Boundary);
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert_eq!(
+        message(&output),
+        "The edit could not be applied: a match offset was not a character boundary."
+    );
+}
+
+#[test]
+fn a_folded_multibyte_edit_keeps_the_next_line_byte_for_byte() {
+    let dir = TempDir::new("fiber-edit-folded-multibyte");
+    fs::write(
+        dir.path().join("a.txt"),
+        "head\nit\u{2019}s caf\u{00E9}\nKEEP  \n",
+    )
+    .unwrap();
+    let output = edit_of(
+        dir.path(),
+        json!({
+            "path": "a.txt",
+            "edits": [{"old_text": "it's caf\u{00E9}", "new_text": "OK"}]
+        }),
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert_eq!(
+        fs::read(dir.path().join("a.txt")).unwrap(),
+        "head\nOK\nKEEP  \n".as_bytes()
+    );
+    assert!(
+        text(&output).contains("replaced lines 2-2"),
+        "{}",
+        text(&output)
+    );
+    assert!(text(&output).contains("normalising"), "{}", text(&output));
+}
+
+#[test]
+fn an_exact_multibyte_edit_reports_the_line_it_replaced() {
+    let dir = TempDir::new("fiber-edit-exact-multibyte");
+    fs::write(dir.path().join("a.txt"), "head\ncaf\u{00E9}\ntail\n").unwrap();
+    let output = edit_of(
+        dir.path(),
+        json!({
+            "path": "a.txt",
+            "edits": [{"old_text": "caf\u{00E9}", "new_text": "X"}]
+        }),
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert_eq!(
+        fs::read(dir.path().join("a.txt")).unwrap(),
+        "head\nX\ntail\n".as_bytes()
+    );
+    assert!(
+        text(&output).contains("replaced lines 2-2"),
+        "{}",
+        text(&output)
+    );
+}
+
+#[test]
 fn deleting_a_line_reports_that_no_lines_were_written() {
     let dir = TempDir::new("fiber-edit-delete");
     fs::write(dir.path().join("a.txt"), "a\nb\nc\n").unwrap();

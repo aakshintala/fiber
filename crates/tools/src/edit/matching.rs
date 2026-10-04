@@ -7,8 +7,6 @@
 //! CRLF pair is two bytes seen as one. Untouched lines are copied from the
 //! original bytes, so a mixed-ending file keeps those endings.
 
-use std::cmp::Ordering;
-
 use crate::files::land::shape_replacement;
 use crate::write::line_count;
 
@@ -60,6 +58,8 @@ pub(crate) enum MatchError {
     },
     /// Empty input, an overlap, or a no-op.
     Invalid(String),
+    /// A match offset was not a character boundary. Nothing is written.
+    Boundary,
 }
 
 impl MatchError {
@@ -72,6 +72,10 @@ impl MatchError {
                 "edits[{index}]: old_text matched {count} times. Read the file again and include more surrounding text."
             ),
             Self::Invalid(message) => message.clone(),
+            Self::Boundary => {
+                "The edit could not be applied: a match offset was not a character boundary."
+                    .to_owned()
+            }
         }
     }
 }
@@ -123,7 +127,7 @@ pub(crate) fn apply(text: &str, blocks: &[Block]) -> Result<Applied, MatchError>
         ));
     }
     Ok(Applied {
-        reports: reports(&view, &located),
+        reports: reports(&view, &located)?,
         bytes,
     })
 }
@@ -144,24 +148,18 @@ fn lf_normalise(text: &str) -> String {
 fn lf_view(body: &str) -> (String, Vec<usize>) {
     let mut text = String::with_capacity(body.len());
     let mut origin = Vec::with_capacity(body.len() + 1);
-    let bytes = body.as_bytes();
-    let mut index = 0usize;
-    while index < bytes.len() {
-        if bytes.get(index) == Some(&b'\r') && bytes.get(index + 1) == Some(&b'\n') {
+    let mut chars = body.char_indices().peekable();
+    while let Some((index, ch)) = chars.next() {
+        if ch == '\r' && chars.next_if(|(_, next)| *next == '\n').is_some() {
             origin.push(index);
             text.push('\n');
-            index += 2;
             continue;
         }
-        let Some(ch) = body.get(index..).and_then(|rest| rest.chars().next()) else {
-            break;
-        };
         let len = ch.len_utf8();
         for offset in 0..len {
             origin.push(index + offset);
         }
         text.push(ch);
-        index += len;
     }
     origin.push(body.len());
     (text, origin)
@@ -174,52 +172,36 @@ fn place(
     old: &str,
     new: &str,
 ) -> Result<Located, MatchError> {
-    let exact = hits(view, old);
-    if exact.count > 1 {
-        return Err(MatchError::Ambiguous {
-            index,
-            count: exact.count,
-        });
+    let (count, first) = hits(view, old);
+    if count > 1 {
+        return Err(MatchError::Ambiguous { index, count });
     }
-    if exact.count == 1 {
-        let start = exact.first;
-        let end = start + old.len();
-        return Ok(located(
-            index,
-            view,
-            origin,
-            start,
-            end,
-            new.to_owned(),
-            false,
-        ));
+    if count == 1 {
+        let end = first + old.len();
+        return located(index, view, origin, first, end, new.to_owned(), false);
     }
     let (folded, fold_origin) = fold_view(view);
     let needle = fold_view(old).0;
     if needle.is_empty() {
         return Err(MatchError::NoMatch { index });
     }
-    let folded_hits = hits(&folded, &needle);
-    if folded_hits.count > 1 {
-        return Err(MatchError::Ambiguous {
-            index,
-            count: folded_hits.count,
-        });
+    let (count, first) = hits(&folded, &needle);
+    if count > 1 {
+        return Err(MatchError::Ambiguous { index, count });
     }
-    if folded_hits.count == 0 {
+    if count == 0 {
         return Err(MatchError::NoMatch { index });
     }
-    let match_start = folded_hits.first;
-    let match_end = match_start + needle.len();
-    let (line_start, line_end) = line_bounds(&folded, match_start, match_end);
-    let prefix = slice(&folded, line_start, match_start);
-    let suffix = slice(&folded, match_end, line_end);
+    let match_end = first + needle.len();
+    let (line_start, line_end) = line_bounds(&folded, first, match_end)?;
+    let prefix = slice(&folded, line_start, first)?;
+    let suffix = slice(&folded, match_end, line_end)?;
     let mut replacement = String::with_capacity(prefix.len() + new.len() + suffix.len());
     replacement.push_str(prefix);
     replacement.push_str(new);
     replacement.push_str(suffix);
-    let (start, end) = map_span(&fold_origin, line_start, line_end);
-    Ok(located(index, view, origin, start, end, replacement, true))
+    let (start, end) = map_span(&fold_origin, line_start, line_end)?;
+    located(index, view, origin, start, end, replacement, true)
 }
 
 fn located(
@@ -230,10 +212,10 @@ fn located(
     lf_end: usize,
     replacement: String,
     normalised: bool,
-) -> Located {
-    let (body_start, body_end) = map_span(origin, lf_start, lf_end);
-    let spanned = slice(view, lf_start, lf_end);
-    Located {
+) -> Result<Located, MatchError> {
+    let (body_start, body_end) = map_span(origin, lf_start, lf_end)?;
+    let spanned = slice(view, lf_start, lf_end)?;
+    Ok(Located {
         index,
         lf_start,
         lf_end,
@@ -242,31 +224,17 @@ fn located(
         newline_delta: newline_delta(spanned, &replacement),
         replacement,
         normalised,
-    }
+    })
 }
 
-fn hits(haystack: &str, needle: &str) -> Hits {
-    let mut count = 0usize;
-    let mut first = 0usize;
-    let mut from = 0usize;
-    while let Some(rest) = haystack.get(from..) {
-        let Some(pos) = rest.find(needle) else {
-            break;
-        };
-        if count == 0 {
-            first = from + pos;
-        }
-        count += 1;
-        // The next search starts at this match's end, so overlapping copies
-        // of the needle count once.
-        from = from + pos + needle.len();
+/// Non-overlapping matches: the search resumes at the end of each one, so
+/// overlapping copies of the needle count once. `(count, first byte)`.
+fn hits(haystack: &str, needle: &str) -> (usize, usize) {
+    let mut found = haystack.match_indices(needle);
+    match found.next() {
+        Some((first, _)) => (1 + found.count(), first),
+        None => (0, 0),
     }
-    Hits { count, first }
-}
-
-struct Hits {
-    count: usize,
-    first: usize,
 }
 
 /// Fold used by the second pass. Trailing spaces and tabs are dropped after
@@ -292,7 +260,13 @@ fn fold_view(text: &str) -> (String, Vec<usize>) {
                 folded_origin.push(start);
             }
             folded.push(mapped);
-            byte += ch.len_utf8();
+            // `byte` starts at 0. A folded span reads the line start (still 0)
+            // and the newline sentinel, never a later character's origin, so
+            // `*=` would leave `byte` at 0 and change nothing a caller sees.
+            #[cfg_attr(false, mutants::skip)]
+            {
+                byte += ch.len_utf8();
+            }
         }
         let kept = folded.trim_end_matches([' ', '\t']);
         out.push_str(kept);
@@ -318,19 +292,31 @@ fn fold_char(ch: char) -> char {
     }
 }
 
-fn line_bounds(text: &str, start: usize, end: usize) -> (usize, usize) {
-    let line_start = match text.get(..start).and_then(|prefix| prefix.rfind('\n')) {
-        Some(index) => index + 1,
-        None => 0,
+/// The line containing `[start, end)`. `end` is exclusive and the match is
+/// non-empty, so the line runs through the newline that contains byte
+/// `end - 1`, or to the end of `text`. That byte can sit inside a character,
+/// so the search is over bytes.
+fn line_bounds(text: &str, start: usize, end: usize) -> Result<(usize, usize), MatchError> {
+    let bytes = text.as_bytes();
+    if end == 0 || end > bytes.len() || start > bytes.len() || start >= end {
+        return Err(MatchError::Boundary);
+    }
+    let line_start = match bytes.get(..start) {
+        Some(prefix) => match prefix.iter().rposition(|&byte| byte == b'\n') {
+            Some(index) => index + 1,
+            None => 0,
+        },
+        None => return Err(MatchError::Boundary),
     };
-    // `end` is exclusive and the needle is non-empty, so `end - 1` is the
-    // last byte of the match.
     let last = end - 1;
-    let line_end = match text.get(last..).and_then(|rest| rest.find('\n')) {
-        Some(offset) => last + offset + 1,
-        None => text.len(),
+    let line_end = match bytes.get(last..) {
+        Some(rest) => match rest.iter().position(|&byte| byte == b'\n') {
+            Some(offset) => last + offset + 1,
+            None => bytes.len(),
+        },
+        None => return Err(MatchError::Boundary),
     };
-    (line_start, line_end)
+    Ok((line_start, line_end))
 }
 
 fn reject_overlap(located: &[Located]) -> Result<(), MatchError> {
@@ -341,11 +327,8 @@ fn reject_overlap(located: &[Located]) -> Result<(), MatchError> {
         if let Some(before) = previous
             && item.body_start < before.body_end
         {
-            let (left, right) = if before.index < item.index {
-                (before.index, item.index)
-            } else {
-                (item.index, before.index)
-            };
+            let left = before.index.min(item.index);
+            let right = before.index.max(item.index);
             return Err(MatchError::Invalid(format!(
                 "edits[{left}] and edits[{right}] overlap."
             )));
@@ -374,49 +357,44 @@ fn splice(body: &[u8], located: &[Located]) -> Vec<u8> {
     out
 }
 
-fn reports(view: &str, located: &[Located]) -> Vec<Report> {
-    located
-        .iter()
-        .map(|item| {
-            let shift: i64 = located
-                .iter()
-                .filter(|other| other.body_end <= item.body_start)
-                .map(|other| other.newline_delta)
-                .sum();
-            let start = apply_delta(line_at(view, item.lf_start), shift);
-            let occupied = line_count(item.replacement.as_bytes());
-            let new_span = if occupied == 0 {
-                None
-            } else {
-                Some((start, start + occupied - 1))
-            };
-            Report {
-                index: item.index,
-                old_start: line_at(view, item.lf_start),
-                old_end: line_at(view, item.lf_end - 1),
-                new_span,
-                normalised: item.normalised,
-            }
-        })
-        .collect()
+fn reports(view: &str, located: &[Located]) -> Result<Vec<Report>, MatchError> {
+    let mut out = Vec::with_capacity(located.len());
+    for item in located {
+        let shift: i64 = located
+            .iter()
+            .filter(|other| other.body_end <= item.body_start)
+            .map(|other| other.newline_delta)
+            .sum();
+        let old_start = line_at(view, item.lf_start)?;
+        let old_end = line_at(view, item.lf_end - 1)?;
+        let start = old_start.saturating_add_signed(shift);
+        let occupied = line_count(item.replacement.as_bytes());
+        let new_span = if occupied == 0 {
+            None
+        } else {
+            Some((start, start + occupied - 1))
+        };
+        out.push(Report {
+            index: item.index,
+            old_start,
+            old_end,
+            new_span,
+            normalised: item.normalised,
+        });
+    }
+    Ok(out)
 }
 
-fn line_at(text: &str, byte: usize) -> u64 {
-    let mut newlines = 0u64;
-    for one in slice(text, 0, byte).bytes() {
-        if one == b'\n' {
-            newlines += 1;
-        }
-    }
-    newlines + 1
-}
-
-fn apply_delta(line: u64, delta: i64) -> u64 {
-    match delta.cmp(&0) {
-        Ordering::Equal => line,
-        Ordering::Greater => line + delta.unsigned_abs(),
-        Ordering::Less => line - delta.unsigned_abs(),
-    }
+/// 1-based line of `byte`. The offset may sit inside a character, so the cut
+/// moves back to a boundary first: a newline is one byte and cannot hide in
+/// the tail of a character. A cut that does not land is an error.
+fn line_at(text: &str, byte: usize) -> Result<u64, MatchError> {
+    let end = text.floor_char_boundary(byte);
+    let prefix = text.get(..end).ok_or(MatchError::Boundary)?;
+    let newlines = prefix.matches('\n').count();
+    Ok(u64::try_from(newlines)
+        .unwrap_or(u64::MAX)
+        .saturating_add(1))
 }
 
 fn newline_delta(old: &str, new: &str) -> i64 {
@@ -424,25 +402,19 @@ fn newline_delta(old: &str, new: &str) -> i64 {
 }
 
 fn newlines(text: &str) -> i64 {
-    let mut count = 0i64;
-    for byte in text.bytes() {
-        if byte == b'\n' {
-            count += 1;
-        }
-    }
-    count
+    i64::try_from(text.matches('\n').count()).unwrap_or(i64::MAX)
 }
 
-fn map_span(origin: &[usize], start: usize, end: usize) -> (usize, usize) {
-    (at(origin, start), at(origin, end))
+fn map_span(origin: &[usize], start: usize, end: usize) -> Result<(usize, usize), MatchError> {
+    Ok((at(origin, start)?, at(origin, end)?))
 }
 
-fn at(origin: &[usize], index: usize) -> usize {
-    origin.get(index).copied().unwrap_or(0)
+fn at(origin: &[usize], index: usize) -> Result<usize, MatchError> {
+    origin.get(index).copied().ok_or(MatchError::Boundary)
 }
 
-fn slice(text: &str, start: usize, end: usize) -> &str {
-    text.get(start..end).unwrap_or("")
+fn slice(text: &str, start: usize, end: usize) -> Result<&str, MatchError> {
+    text.get(start..end).ok_or(MatchError::Boundary)
 }
 
 #[cfg(test)]
