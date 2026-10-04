@@ -224,8 +224,9 @@ Each kind's table lists the keys of its `payload`. The envelope's fields,
 
 #### `fiber_started`
 
-Durable. The first line a process writes for a session. The schema version is
-the envelope's `schema_version`.
+Durable. The first line a process writes when it resumes a session; in a new
+session it follows `session_started`, which is always the log's first line.
+The schema version is the envelope's `schema_version`.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
