@@ -213,9 +213,35 @@ pub struct OpeningMessage {
     pub environment: Environment,
     /// Each instruction file sent, in order.
     pub instruction_files: Vec<InstructionFileSent>,
-    /// The skills listing; its entries are not yet specified
-    /// (`docs/system-prompt.md`, "Skills listing").
-    pub skills: Vec<Value>,
+    /// The skills listing, one entry per skill the model may load.
+    pub skills: Vec<SkillListed>,
+}
+
+/// One skills listing entry (`docs/system-prompt.md`, "Skills listing").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillListed {
+    /// The skill's name.
+    pub name: String,
+    /// Its description.
+    pub description: String,
+    /// The path of its `SKILL.md`.
+    pub path: String,
+    /// Where it was found.
+    pub source: SkillSource,
+}
+
+/// Where a skill was found (`docs/system-prompt.md`, "Skills").
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SkillSource {
+    /// The repository's `.fiber/skills/` or `.agents/skills/`.
+    Repository,
+    /// Fiber home's `skills/` or `~/.agents/skills/`.
+    Personal,
+    /// An installed extension.
+    Extension,
+    /// Compiled into the binary.
+    Builtin,
 }
 
 /// The environment an opening message describes.
@@ -304,6 +330,33 @@ pub struct InstructionFile {
 pub struct DateChanged {
     /// The new date, `YYYY-MM-DD`.
     pub date: String,
+}
+
+/// `skills_changed`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillsChanged {
+    /// The skills added since the listing was last given.
+    pub added: Vec<SkillListed>,
+    /// The names of the skills removed.
+    pub removed: Vec<String>,
+}
+
+/// `skills_resent`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillsResent {
+    /// Each skill sent again, in the order it was first loaded.
+    pub skills: Vec<SkillSent>,
+}
+
+/// One skill sent again after a handoff.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SkillSent {
+    /// The skill's name.
+    pub name: String,
+    /// The path of its `SKILL.md`.
+    pub path: String,
+    /// The body sent, read from disk at the handoff.
+    pub content: String,
 }
 
 /// What started a handoff.

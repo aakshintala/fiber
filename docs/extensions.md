@@ -66,13 +66,23 @@ Beside the manifest it may hold:
   extension's own directory
 - a process extension's program and its dependencies
 - a TUI extension's Lua scripts
-- skills, prompt templates and themes
+- skills, prompt templates and themes, each kind in its own directory
 - a prompt file, whose text goes in the system prompt (`docs/system-prompt.md`,
   "Extension texts")
 
-A theme sets the terminal's colours and nothing else (`docs/tui.md`,
-"Themes"). What a skill and a prompt template are to Fiber is not yet
-specified. This page covers only how they arrive.
+These live in fixed directories at the top of the package, so an author lists
+nothing in the manifest and an install finds them by looking:
+
+| Directory | Holds |
+|---|---|
+| `skills/` | one directory per skill, each with a `SKILL.md` |
+| `prompts/` | one directory per prompt template, in the same format; every skill here is one only a person runs, as if its header set `disable-model-invocation: true` |
+| `themes/` | one file per theme |
+| `tui/` | the TUI extension's Lua scripts |
+
+What a skill and a prompt template are, and where Fiber finds them besides
+packages, is `docs/system-prompt.md`, "Skills". A theme sets the terminal's
+colours and nothing else (`docs/tui.md`, "Themes").
 
 A script loads another script with `require`. `require` finds files inside the
 extension's own directory and nowhere else, so one extension cannot load

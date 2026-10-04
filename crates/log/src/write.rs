@@ -406,6 +406,8 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::OpeningMessage(_)
         | Event::InstructionFile(_)
         | Event::DateChanged(_)
+        | Event::SkillsChanged(_)
+        | Event::SkillsResent(_)
         | Event::HandoffStarted(_)
         | Event::HandoffCompleted(_)
         | Event::ContextNudged(_)

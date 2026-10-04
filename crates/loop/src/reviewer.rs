@@ -178,6 +178,7 @@ pub(crate) fn render_reviewed(
         Event::UsageRecorded(_) | Event::QuotaNoticed(_) | Event::RetryScheduled(_) => {}
         Event::Notice(_) | Event::PreambleBuilt(_) | Event::ModelChanged(_) => {}
         Event::OpeningMessage(_) | Event::InstructionFile(_) | Event::DateChanged(_) => {}
+        Event::SkillsChanged(_) | Event::SkillsResent(_) => {}
         Event::HandoffStarted(_) | Event::HandoffCompleted(_) | Event::ContextNudged(_) => {}
         Event::McpServerFailed(_) | Event::McpServerReady(_) | Event::Reloaded(_) => {}
         Event::ExtensionsLoaded(_)

@@ -195,6 +195,21 @@ project or a person writes for the model. It applies to its directory and
 everything below it.
 _Avoid_: context file, project doc, memory file
 
+### Skill
+
+A directory holding a `SKILL.md`: a name and description the model sees in the
+skills listing, then instructions it loads with the `skill` tool only when a
+task needs them. A person runs one by typing `/name`. See
+`docs/system-prompt.md`, "Skills".
+_Avoid_: plugin, recipe, command
+
+### Prompt template
+
+A skill only a person runs, by typing `/name`: one whose header sets
+`disable-model-invocation: true`, one in a package's `prompts/` directory, or
+an MCP server's prompt. It is left out of the skills listing.
+_Avoid_: slash command, macro
+
 ### Role
 
 A configured name for a delegate's model reference, and optionally its

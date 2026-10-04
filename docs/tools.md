@@ -1080,12 +1080,37 @@ no work, and a person returning to the terminal gets a fresh figure on focus.
 A fetch times out after 8 seconds. A failure is reported as `unreachable`,
 never as an error.
 
+## Skills
+
+`skill` loads one skill for the model: the name goes in, and the skill's
+`SKILL.md` body comes out, read from disk at that moment. What a skill is, where
+Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
+"Skills".
+
+- Arguments: `name` (required), a name from the skills listing.
+- The result is the body after the header, under the skill's path, so files the
+  skill refers to can be read with `read`. A name that is not in the listing,
+  or a skill with `disable-model-invocation: true`, fails with
+  `invalid_arguments`.
+- Its definition never lists skill names. The names are in the listing, so
+  adding or removing a skill never changes the tool set and the cached prefix
+  holds (`docs/prompt-cache.md`).
+- Fiber records each load, so it knows which skills the current context is
+  working under. A handoff sends them again after the note
+  (`docs/handoff.md`, "What the model sees after a handoff"), and the terminal
+  shows each load as a skill, not as a file read.
+- The tool declares `reads` on the skill's file and is never reviewed. It is
+  declared in every session, in full, and counts toward the built-in budget
+  ("Size budget in CI").
+- Claude Code has a `Skill` tool and codex `skills.read`. pi has the model
+  `read` the file, so pi cannot tell a skill load from any other read.
+
 ## Built in or extension
 
 A first-party tool is compiled in unless its behaviour depends on a vendor or
 on the person's environment. Read, write, edit, shell, background jobs, the
 Fiber delegate harness, asking the person, web fetch, the `web_search` tool
-`handoff` (`docs/handoff.md`), `name_session` and `session_search` behave the same for everyone and are compiled in, as is
+`handoff` (`docs/handoff.md`), `name_session`, `session_search` and `skill` behave the same for everyone and are compiled in, as is
 the search behind the shell's `grep` and `find` ("Search").
 The default tool set therefore never needs a Lua VM, and a headless run never
 fails with `extension_missing` for one of them.

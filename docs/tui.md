@@ -245,10 +245,9 @@ the conversation. The views are:
   `fiber config set`, and says when a change needs a reload and what that
   costs. Ctrl+G opens the file.
 - **`/skills`:** one row per skill with its name, one-line description, where
-  it comes from (global, this project, or an extension by name) and whether
-  the model can see it. Enter shows the skill's text, Ctrl+G opens its file.
-  Which fields a skill has, and whether one can be switched off here, is the
-  Skills item of [Map: designing Fiber](https://github.com/aakshintala/fiber/issues/1).
+  it comes from (the repository, personal, an extension by name, or built in),
+  whether the model can see it, and any skill it shadows. Enter shows the
+  skill's text, Ctrl+G opens its file (`docs/system-prompt.md`, "Skills").
 - **`/rewind`** ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
   what a repository ships").
@@ -561,9 +560,12 @@ marked with OSC 8 or handled on click.
 - **Esc closes whatever is on top,** and interrupts the turn only when nothing
   is open. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
-  box. Commands and skills share one list, filtered as the person types. Each
-  row is a name, a one-line description and a tag: command, skill, or the
-  extension's name. Tab completes and Enter runs.
+  box. Commands, skills, prompt templates and MCP prompts share one list,
+  filtered as the person types. Each row is a name, a one-line description, a
+  skill's `argument-hint` when it has one, and a tag: command, skill, the
+  extension's name, or the MCP server's name. Tab completes and Enter runs. A
+  skill the model has loaded shows in the transcript as a skill, not as a file
+  read.
 - **File search.** Typing `@` opens a file search panel, and choosing a file
   inserts its path as text. The model reads the file itself if it needs it.
   The search runs on demand, each keystroke cancels the last, and it covers
@@ -1091,8 +1093,7 @@ The tools view writes an MCP server's or an extension's `tools.enabled` and
   [Contract: the command envelope, reply, approvals and cancel](https://github.com/aakshintala/fiber/issues/181)
 - Key tables for every event payload:
   [Contract: key tables for every event payload](https://github.com/aakshintala/fiber/issues/182)
-- What a skill is to Fiber: the Skills item of
-  [Map: designing Fiber](https://github.com/aakshintala/fiber/issues/1)
+- Whether `/skills` can switch a skill off for a project
 
 ## Evidence
 

@@ -112,6 +112,10 @@ In order:
 4. The handoff note.
 5. A line Fiber writes listing the jobs still running, with each job's id and
    description, as the rewind note does (`docs/events.md`, "Rewind").
+6. The skills loaded in the previous context, each sent again as its current
+   text, in the order they were first loaded, once each
+   (`docs/tools.md`, "Skills"). An agent working under a skill keeps it across
+   a handoff without having to notice it was lost.
 
 When a tool set `control.handoff`, the other calls in that step and their
 results follow the note verbatim, because the model had not seen them. They go

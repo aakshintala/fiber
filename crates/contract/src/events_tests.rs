@@ -458,7 +458,8 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"environment": {"date": "2026-09-29", "os": "linux",
             "arch": "x86_64", "shell": "bash", "workspace": "/w", "git": {"branch": null},
             "session_log": "/l"}, "instruction_files": [{"path": "/a", "content": "c"}],
-            "skills": []}),
+            "skills": [{"name": "s", "description": "d", "path": "/s/SKILL.md",
+            "source": "repository"}]}),
         ),
         (
             "instruction_file",
@@ -466,6 +467,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "sent": "none"}),
         ),
         ("date_changed", json!({"date": "2026-09-30"})),
+        (
+            "skills_changed",
+            json!({"added": [{"name": "s", "description": "d", "path": "/s/SKILL.md",
+            "source": "builtin"}], "removed": ["r"]}),
+        ),
         ("handoff_started", json!({"trigger": "overflow"})),
         (
             "handoff_completed",
@@ -480,6 +486,10 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "handoff_completed",
             json!({"outcome": "failed", "error": error, "tokens_before": 9}),
+        ),
+        (
+            "skills_resent",
+            json!({"skills": [{"name": "s", "path": "/s/SKILL.md", "content": "c"}]}),
         ),
         ("context_nudged", json!({"tokens": 100, "trigger_at": 140})),
         (

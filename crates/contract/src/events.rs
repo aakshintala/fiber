@@ -23,8 +23,8 @@ pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,
     HandoffTrigger, InstructionFile, InstructionFileSent, InstructionReason, InstructionSent,
     ModelChanged, ModelSettings, Note, Notice, OpeningMessage, Outcome, PreambleBuilt,
-    PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SwitchSource, ToolReplaced,
-    UsageRecorded,
+    PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SkillListed, SkillSent, SkillSource,
+    SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
 };
 pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
@@ -150,8 +150,10 @@ kinds! {
     OpeningMessage(OpeningMessage) = "opening_message", Durable;
     InstructionFile(InstructionFile) = "instruction_file", Durable;
     DateChanged(DateChanged) = "date_changed", Durable;
+    SkillsChanged(SkillsChanged) = "skills_changed", Durable;
     HandoffStarted(HandoffStarted) = "handoff_started", Durable;
     HandoffCompleted(HandoffCompleted) = "handoff_completed", Durable;
+    SkillsResent(SkillsResent) = "skills_resent", Durable;
     ContextNudged(ContextNudged) = "context_nudged", Durable;
     McpServerFailed(McpServerFailed) = "mcp_server_failed", Durable;
     McpServerReady(McpServerReady) = "mcp_server_ready", Durable;

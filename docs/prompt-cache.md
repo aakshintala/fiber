@@ -48,7 +48,8 @@ point, so its first request matches its parent's byte for byte.
 
 Between builds the preamble does not change. What varies by project or by day,
 such as instruction files, the environment and the skills listing, is in the
-opening message, which is logged once. A change to any of it reaches the model
+opening message, which is logged once. The `skill` tool's definition never
+names a skill, so adding or removing one never changes the tool set. A change to any of it reaches the model
 as a message appended at the end, never as an edit (`docs/system-prompt.md`).
 
 ## Bytes

@@ -61,10 +61,8 @@ impl Item {
     /// What it carries, one line each, such as `skills: a, b`: the
     /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file,
     /// the platforms it has binaries for, and a Lua extension's raised memory
-    /// cap when its manifest sets `memory_mib` above 1.
-    // debt: the doc names these kinds and not the directories (#355 item 5,
-    // unruled); skills/, prompts/, themes/ and tui/ stand until #191 settles
-    // where a package keeps them.
+    /// cap when its manifest sets `memory_mib` above 1. The directories are
+    /// `docs/extensions.md`, "What a package holds".
     pub fn carries(&self) -> Vec<String> {
         let mut lines = Vec::new();
         for (dir, label) in [

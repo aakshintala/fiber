@@ -834,7 +834,7 @@ Durable.
 |---|---|---|---|
 | `environment` | object | yes | as below |
 | `instruction_files` | array | yes | each file sent, in order: `path` and `content` (strings) |
-| `skills` | array | yes | the skills listing; its entries are not yet specified (`docs/system-prompt.md`, "Skills listing") |
+| `skills` | array | yes | the skills listing, each entry as below |
 
 | `environment` key | Type | Required | Meaning |
 |---|---|---|---|
@@ -845,6 +845,13 @@ Durable.
 | `workspace` | string | yes | the workspace |
 | `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
 | `session_log` | string | yes | the session log's path |
+
+| `skills` entry key | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string | yes | the skill's name |
+| `description` | string | yes | its description |
+| `path` | string | yes | the path of its `SKILL.md` |
+| `source` | string | yes | `repository`, `personal`, `extension` or `builtin`; a closed set (`docs/system-prompt.md`, "Skills") |
 
 #### `instruction_file`
 
@@ -864,6 +871,25 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `date` | string | yes | the new date, `YYYY-MM-DD` |
+
+#### `skills_changed`
+
+Durable. Skills added or removed since the listing was last given, sent at a
+turn start (`docs/system-prompt.md`, "Added and removed skills").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `added` | array | yes | each skill added, as a `skills` entry of `opening_message` |
+| `removed` | array of strings | yes | the names of the skills removed |
+
+#### `skills_resent`
+
+Durable. Written after `handoff_completed` when the previous context had
+loaded skills (`docs/handoff.md`, "What the model sees after a handoff").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `skills` | array | yes | each skill sent again, in the order it was first loaded: `name`, `path` and `content` (strings), the body read from disk at the handoff |
 
 `opening_message` is written at session start and after each completed
 handoff. `instruction_file` with `own_edit` records the content after the

@@ -72,6 +72,13 @@ A whitespace-only part is dropped. When nothing is left, the usage error is
 a usage error, not a silent drop into the TUI. Checking whether stdin is a
 terminal is not reading it.
 
+A prompt whose first word is `/` followed by a skill's name runs that skill
+or prompt template, as typing it in the terminal does: Fiber sends the skill's
+text, then the rest of the prompt as its arguments, as the person's message
+(`docs/system-prompt.md`, "Skills"). `fiber ask "/review-pr 42"` runs the
+`review-pr` skill on 42. The `prompt` driver command does the same. When the
+first word names no skill, the prompt is sent as written.
+
 A large prompt goes on stdin. Linux caps a single argument at
 `MAX_ARG_STRLEN`, 131072 bytes, so a long brief passed as an argument can
 fail with `E2BIG` on Linux after working on macOS; stdin has no cap.
