@@ -374,6 +374,7 @@ fn the_tool_use_stream_decodes_the_call() {
             arguments: json!({"city": "Paris"}),
             provider_id: Some(ProviderCallId("toolu_01AXa3EtWnvLzfgA63BeZm68".into())),
             repair: None,
+            ran_by: None,
         }
     );
     assert!(deltas.iter().any(
@@ -721,6 +722,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 arguments: json!({"city": "Paris"}),
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
+                ran_by: None,
             },
         },
         Input::ToolResult {
@@ -888,6 +890,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 arguments: json!({"city": "Paris"}),
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
+                ran_by: None,
             },
         },
         Input::ToolResult {
@@ -1335,6 +1338,7 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
                 arguments: json!({"city": "Paris"}),
                 provider_id: Some(ProviderCallId("t1".into())),
                 repair: None,
+                ran_by: None,
             },
         },
         Input::Assistant {

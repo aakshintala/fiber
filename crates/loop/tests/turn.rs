@@ -544,6 +544,7 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
             arguments: json!({"city": "Paris"}),
             provider_id: None,
             repair: None,
+            ran_by: None,
         }),
         part("B"),
     ];

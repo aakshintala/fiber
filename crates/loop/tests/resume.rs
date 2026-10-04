@@ -82,6 +82,7 @@ fn requested(name: &str) -> Event {
         arguments: json!({"city": "Paris"}),
         provider_id: None,
         repair: None,
+        ran_by: None,
     })
 }
 

@@ -12,12 +12,12 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 pub use action::{
-    Answer, ArgumentRepair, AskStep, AssistantMessageCompleted, CallStatus, Control, DecidedBy,
-    Decision, Escalation, FileChange, FormAnswer, Grant, Interaction, InteractionRequested,
-    InteractionResolved, MessageOutcome, PermissionRequested, PermissionResolved, Progress,
-    ReasoningCompleted, Repair, RepairFix, ResolvedBy, ReviewerRef, RuleOffer, RuleScope,
-    StandingRule, TextCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallCompleted,
-    ToolCallRequested, ToolCallStarted,
+    Anchor, Answer, ArgumentRepair, AskStep, AssistantMessageCompleted, CallStatus, Control,
+    DecidedBy, Decision, Escalation, FileChange, FormAnswer, Grant, Interaction,
+    InteractionRequested, InteractionResolved, MessageOutcome, PermissionRequested,
+    PermissionResolved, Progress, RanBy, ReasoningCompleted, Repair, RepairFix, ResolvedBy,
+    ReviewerRef, RuleOffer, RuleScope, StandingRule, TextCompleted, TextDelta,
+    ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
 };
 pub use context::{
     CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,

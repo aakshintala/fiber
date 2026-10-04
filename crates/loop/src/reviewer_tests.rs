@@ -63,6 +63,7 @@ fn call(name: &str) -> ToolCallRequested {
         arguments: json!({"city": "Paris"}),
         provider_id: None,
         repair: None,
+        ran_by: None,
     }
 }
 

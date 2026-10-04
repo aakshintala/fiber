@@ -1332,6 +1332,7 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
                 arguments: json!({"city": "Paris"}),
                 provider_id: None,
                 repair: None,
+                ran_by: None,
             },
         },
     ]);

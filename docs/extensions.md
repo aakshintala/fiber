@@ -173,8 +173,8 @@ in JavaScript. So a timer that polls a slow service does not hold up the
 extension's hooks. Code that reads and writes the extension's own globals must
 expect another callback to have run in between.
 
-**Every callback declares its timeout, with no default.** Hooks, watchers,
-commands and timers alike. A `timeout` is in milliseconds, a whole number above
+**Every callback declares its timeout, with no default.** Tools, hooks,
+watchers, commands and timers alike. A `timeout` is in milliseconds, a whole number above
 0. A hook's clock starts when Fiber asks, so time
 spent waiting behind earlier items in the stream counts against it. A callback
 past its timeout is stopped ("When an extension misbehaves"). When the hook
@@ -202,7 +202,7 @@ extension sends the same calls as messages.
 ### Registering
 
 ```
-fiber.tool(name, { description, input_schema, effects, run })
+fiber.tool(name, { description, input_schema, effects, timeout, run })
 fiber.provider(name, { models, quota, credential, sign })
 fiber.harness(name, { auto, models, command, line, quota })
 fiber.search_backend(name, { timeout, run })
@@ -224,6 +224,7 @@ host.secret(name)                  -- the secret stored at credentials/<name>
 host.http(opts)                    -- one HTTP request; returns { status, body }
 host.model(opts)                   -- one model request; returns { text, usage }
 host.exec(program, args, opts)     -- run a program; returns { exit_code, signal, stdout, stderr }
+host.tool(name, args)              -- run a tool the session can call; returns its outcome
 host.delegate(spec, on_finished)   -- start a delegate job; returns its job_id
 host.fs.read / write / list / stat / mkdir / remove / rename
 host.config.get(key) / host.config.set(key, value, scope)   -- scope: "machine" or "project"
@@ -257,6 +258,8 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   without asking: the person approved the extension, and a process extension
   can start programs unseen anyway. Fiber logs each such run as
   `extension_exec` (`docs/events.md`), so the session shows it happened.
+- **`host.tool`** runs a tool through the same path a model's call takes,
+  judged at the extension's own tool call ("Running a tool").
 - **`host.delegate`** takes the arguments the model's delegate tool takes and
   starts a job the session owns, with the same limits and the same stop
   (`docs/delegates.md`). `job_started` names the extension. The delegate's
@@ -289,6 +292,58 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
   and hex-encodes only the last.
+
+### Running a tool
+
+`host.tool(name, args)` runs any tool the session can call: a built-in, an MCP
+server's tool or another extension's. It returns the call's outcome as the
+model would see it: `status`, `content`, and `reason` or `error` when the call
+did not complete. A call that does not complete is an ordinary return, not a
+Lua error, so the extension decides what to do next. A codemode extension is
+built on it: the model sends one script, and the script calls tools, filters
+their output and returns only what the model needs
+([#445](https://github.com/aakshintala/fiber/issues/445)).
+
+A call `host.tool` makes is an **inner call**. The extension's own tool call
+that is running when it makes one is the **outer call**.
+
+- **Admission is the outer call.** The outer call declares its effects and is
+  judged as every call is (`docs/permissions.md`, "The order a call is judged
+  in"). A tool whose inner calls cannot be known in advance, such as one that
+  runs a script, declares `executes`, so the reviewer sees the script. An inner
+  call is not reviewed, raises no standing ask or approval, and counts toward
+  no block budget.
+- **What still applies to an inner call:** the credential deny, the person's
+  standing denies, and every `before_tool` and `after_tool` hook, in all three
+  phases. A call one of them refuses returns `denied` with the reason, so a
+  `sanitize` hook redacts an inner call's output before the script sees it.
+- **When it may be made:** only while one of the extension's own tool calls
+  is running, or while one of its commands runs ("Commands and screens"),
+  where the command's invocation is the anchor. A person or a driver invoked
+  the command, which is the admission. A watcher, a timer or a hook has no
+  anchor: `host.tool` called from one is an error in the calling code, which
+  fails as any callback error does ("When an extension misbehaves").
+- **A tool cannot run itself.** A chain of inner calls across extensions, in
+  which A's tool runs B's and B's runs A's, is cut at a depth of 8. That is
+  a starting point, not a measurement. Both are errors in the calling code.
+- **Each inner call is logged as a call of its own**, with its own
+  `action_id`: `tool_call_requested`, `tool_call_started` and
+  `tool_call_completed`, the first carrying `ran_by` with the extension and
+  the outer call or command (`docs/events.md`). An inner call is never sent to
+  a provider as one of the model's calls; the model sees only the outer call's
+  result. A later review sees inner calls in its transcript as the agent's
+  actions (`docs/permissions.md`, "What it is shown").
+- **An inner call runs inside its outer call.** It counts against the outer
+  call's or command's timeout, and cancelling the outer call cancels its inner
+  calls.
+
+`host.tool` is not a fence. `host.exec`, `host.fs` and `host.delegate` run
+with no judgement of their own, inside a tool call or outside one: an
+extension has the account's full rights, and a process extension can start
+programs unseen
+([#39](https://github.com/aakshintala/fiber/issues/39)). `host.tool` exists so
+that a well-behaved extension's tool runs get the same denies, hooks and log
+as the model's, not to contain an extension.
 
 ## State
 
@@ -419,6 +474,9 @@ rewrites a message the model has already been sent (`docs/prompt-cache.md`,
 A hook only changes things. Something that only needs to know what happened,
 such as a job that writes a worklog when a session ends, is a watcher: it reads
 the event stream (`docs/events.md`) and has no hook point. How an extension watches is [Watchers](#watchers).
+
+The tool hooks, `before_tool` and `after_tool`, run for an extension's inner
+calls exactly as for the model's ("Running a tool").
 
 ### The hook points
 
@@ -575,6 +633,8 @@ What a `blocking` failure stops, at each point:
 - Approve a tool call, or change a call's `status`.
 - Run during a shutdown. When a signal stops Fiber, no hook runs
   (`docs/invocation.md`, "Shutdown").
+- Run a tool with `host.tool`. A hook has no outer call to anchor one
+  ("Running a tool").
 
 ### Recording a change
 
@@ -684,6 +744,10 @@ plain, as in pi and Claude Code: `/databricks-models`, not
 `/databricks:models`. When two extensions register the same name, neither
 gets it, a `notice` names both, and configuration can rename one. An
 extension may replace a built-in command by name, as it may a tool.
+
+A command may run tools with `host.tool`. The person or driver who invoked it
+is the admission, and each inner call names the command's invocation
+("Running a tool").
 
 A command talks to the person through the closed interactions every client
 answers (`docs/architecture.md`, "Asking a human"): confirm, select,

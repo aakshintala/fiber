@@ -83,6 +83,9 @@ reordering a definition misses the whole cache on every provider probed.
 - A list that can change during a session, such as model references, roles or
   quotas, goes in a tool result, never in a tool definition
   (`docs/delegates.md`, "Choosing a model").
+- An extension's inner calls add no tool definitions and change no message
+  the model was sent: the model sees only the outer call's result
+  (`docs/extensions.md`, "Running a tool").
 
 ### Deferred tools
 
@@ -250,10 +253,11 @@ A cache entry also expires after its lifetime with no request.
   hook point changes content before it is logged (`docs/extensions.md`,
   "Hooks").
 - The reviewer has its own cache. Its request is the shared instructions and
-  the person's `reviewer.context`, fixed for the session, then the person's
-  messages and the tool calls in log order, then the call under
-  review with its declared effects, then the stage's instruction. Both stages
-  send byte-identical bytes up to the stage instruction, so every reviewer
+  the person's `reviewer.context`, global then per-project, fixed for the
+  session, then the person's messages and the tool calls in log order, then
+  the call under review with its declared effects, then the stage's
+  instruction. Both stages send byte-identical bytes up to the stage
+  instruction, so every reviewer
   pass of either stage extends one cache chain as the session grows. A call
   must render identically when it later appears in history, because the chain
   depends on it. Where a provider routes by key, its key is the reviewed

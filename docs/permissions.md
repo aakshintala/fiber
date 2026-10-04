@@ -95,6 +95,15 @@ A call to `delegate_spawn`, `delegate_fork` or `delegate_message` skips steps
 The credential deny and a standing deny are both evaluated before everything
 else, because a rule that can be widened by a later layer is not a deny.
 
+An extension's **inner call**, a tool it runs with `host.tool` while its own
+tool call or command runs, is admitted by that outer call
+(`docs/extensions.md`, "Running a tool"). The outer call goes through this
+order like any other. The inner call passes the `before_tool` hook and steps 1
+and 2 only: the credential deny and the person's standing denies still refuse
+it, since a deny must hold whatever path a call takes. Steps 3 to 7 do not
+apply. An inner call is never reviewed, raises no question, and counts toward
+no block budget.
+
 ### Fast paths
 
 Three classes of call never reach a reviewer or a person:
@@ -186,7 +195,9 @@ A call that reaches step 7 is judged by a model.
 
 ### What it is shown
 
-**Only the human's messages and the agent's tool calls.** The model's own
+**Only the human's messages and the agent's tool calls.** The agent's tool
+calls include its extensions' inner calls, so a review sees what an earlier
+script did. The model's own
 prose and every tool result are stripped before the prompt is built. The
 reviewer also gets the call under review, its declared effects, the
 workspace root, and the person's own notes about their environment ("What the
@@ -233,8 +244,12 @@ The notes cover what the reviewer cannot guess:
 The key is the person's alone: the global file or the per-project file in
 Fiber home (`docs/configuration.md`, "Layers"). A repository cannot set it,
 for the same reason project instruction files are excluded: a repository's
-text in the reviewer's prompt would argue with its verdicts. A layer's value
-replaces the one below it, as every string does.
+text in the reviewer's prompt would argue with its verdicts. Unlike other
+strings, the two layers do not replace each other. The reviewer reads the
+global notes, then the per-project notes, each under its own heading, and its
+instructions say the project's are the more specific and win where the two
+conflict. A project adds what is true of it without repeating what is true
+everywhere.
 
 The notes are fixed for the session. They sit ahead of the person's messages
 and the tool calls, and every reviewer pass extends the cache chain that
@@ -246,8 +261,8 @@ An edit to the notes needs the person to ask for it in their messages; the
 reviewer's instructions say so, and it blocks an edit the person did not ask
 for. An agent that could rewrite the notes would widen its own approvals.
 
-`fiber config get reviewer.context` prints the effective text and the layer it
-came from.
+`fiber config get reviewer.context` prints the notes as the reviewer reads
+them: each layer's text under its heading.
 
 ### How it runs
 
