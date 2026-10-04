@@ -225,6 +225,24 @@ fn an_empty_file_at_offset_1_succeeds() {
 }
 
 #[test]
+fn an_offset_past_an_empty_file_names_zero_lines() {
+    let dir = TempDir::new("fiber-read-empty-past");
+    fs::write(dir.path().join("a.txt"), "").unwrap();
+    let output = run(dir.path(), json!({"path": "a.txt", "offset": 2}));
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(text(&output).contains('0'), "{}", text(&output));
+}
+
+#[test]
+fn a_line_exactly_at_the_cap_is_not_cut_inside() {
+    let dir = TempDir::new("fiber-read-exact-cap");
+    let body = "a".repeat(16_384);
+    fs::write(dir.path().join("a.txt"), &body).unwrap();
+    let output = run(dir.path(), json!({"path": "a.txt"}));
+    assert_eq!(text(&output), body);
+}
+
+#[test]
 fn a_missing_file_is_not_found() {
     let dir = TempDir::new("fiber-read-missing");
     let output = run(dir.path(), json!({"path": "nope.txt"}));

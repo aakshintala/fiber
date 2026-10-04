@@ -1,10 +1,18 @@
 use std::fs;
+use std::io;
 use std::os::unix::fs::{MetadataExt, PermissionsExt};
 use std::process;
+use std::sync::atomic::Ordering;
 
 use fakes::TempDir;
 
-use super::{Ending, ending_of, land, shape_replacement, temporary_name};
+use super::{Ending, TEMP_SEQ, ending_of, land, shape_replacement, temporary_name};
+
+fn set_mode(path: &std::path::Path, mode: u32) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
+}
 
 fn fiber_temps(dir: &std::path::Path) -> Vec<String> {
     let mut names = Vec::new();
@@ -128,6 +136,55 @@ fn line_endings_and_the_byte_order_mark_follow_the_existing_file() {
 fn a_lone_carriage_return_is_kept() {
     assert_eq!(shape_replacement(b"a\nb\n", "x\ry\n"), b"x\ry\n");
     assert_eq!(shape_replacement(b"a\r\nb\r\n", "x\ry\n"), b"x\ry\r\n");
+}
+
+#[test]
+fn a_relative_target_keeps_the_temp_name_relative() {
+    let got = temporary_name(std::path::Path::new("foo.txt"), 3, 7);
+    assert_eq!(got, std::path::PathBuf::from(".foo.txt.fiber-3-7.tmp"));
+}
+
+#[test]
+fn an_unsearchable_directory_takes_no_temp_name() {
+    let dir = TempDir::new("fiber-land-unsearch");
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    set_mode(&locked, 0o000);
+    let before = TEMP_SEQ.load(Ordering::Relaxed);
+    let err = land(&locked.join("a.txt"), b"hi").unwrap_err();
+    let after = TEMP_SEQ.load(Ordering::Relaxed);
+    set_mode(&locked, 0o755);
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(after, before);
+    assert!(fiber_temps(&locked).is_empty());
+}
+
+#[test]
+fn a_read_only_directory_returns_the_permission_error() {
+    let dir = TempDir::new("fiber-land-rodir");
+    let sub = dir.path().join("sub");
+    fs::create_dir(&sub).unwrap();
+    set_mode(&sub, 0o555);
+    let before = TEMP_SEQ.load(Ordering::Relaxed);
+    let err = land(&sub.join("a.txt"), b"hi\n").unwrap_err();
+    let after = TEMP_SEQ.load(Ordering::Relaxed);
+    set_mode(&sub, 0o755);
+    assert_eq!(err.kind(), io::ErrorKind::PermissionDenied);
+    assert_eq!(after, before + 1);
+    assert!(fiber_temps(&sub).is_empty());
+}
+
+#[test]
+fn an_existing_temp_name_is_skipped() {
+    let dir = TempDir::new("fiber-land-collide");
+    let target = dir.path().join("a.txt");
+    let n = TEMP_SEQ.load(Ordering::Relaxed);
+    let blocker = temporary_name(&target, process::id(), n);
+    fs::write(&blocker, b"keep").unwrap();
+    land(&target, b"hi\n").unwrap();
+    assert_eq!(fs::read(&target).unwrap(), b"hi\n");
+    assert_eq!(fs::read(&blocker).unwrap(), b"keep");
+    assert_eq!(fiber_temps(dir.path()).len(), 1);
 }
 
 #[test]

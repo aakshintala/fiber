@@ -190,16 +190,7 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     if let Some((kind, hint)) = kind_of(meta.file_type()) {
         return Ok(unsupported(kind, size, hint));
     }
-    let bytes = match fs::read(path) {
-        Ok(bytes) => bytes,
-        Err(err) if err.kind() == io::ErrorKind::NotFound => return Err(InspectError::NotFound),
-        Err(err) => {
-            return Err(InspectError::Tool(format!(
-                "`{}` could not be read: {err}.",
-                path.display()
-            )));
-        }
-    };
+    let bytes = read_regular(path)?;
     let size = u64::try_from(bytes.len()).map_err(|_| {
         InspectError::Tool(format!(
             "`{}` could not be read: its size does not fit in 64 bits.",
@@ -215,6 +206,19 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
     match String::from_utf8(bytes) {
         Ok(text) => Ok(Inspected::Text { text }),
         Err(_) => Ok(unsupported("not UTF-8 text", size, "")),
+    }
+}
+
+// Stat already classified this as a regular file. NotFound means it disappeared
+// before the read; any other error is reported.
+fn read_regular(path: &Path) -> Result<Vec<u8>, InspectError> {
+    match fs::read(path) {
+        Ok(bytes) => Ok(bytes),
+        Err(err) if err.kind() == io::ErrorKind::NotFound => Err(InspectError::NotFound),
+        Err(err) => Err(InspectError::Tool(format!(
+            "`{}` could not be read: {err}.",
+            path.display()
+        ))),
     }
 }
 

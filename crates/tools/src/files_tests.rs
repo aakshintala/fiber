@@ -6,10 +6,31 @@ use std::process::Command;
 
 use fakes::TempDir;
 
-use super::{InspectError, Inspected, ResolveError, inspect, resolve, unsupported_message};
+use super::{
+    InspectError, Inspected, MAX_SYMLINKS, ResolveError, inspect, read_regular, resolve,
+    unsupported_message,
+};
 
 fn canonical(path: &Path) -> std::path::PathBuf {
     fs::canonicalize(path).unwrap()
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
+}
+
+fn symlink_chain(dir: &Path, links: u32) {
+    fs::write(dir.join("target.txt"), "hi").unwrap();
+    for n in (0..links).rev() {
+        let next = if n + 1 == links {
+            "target.txt".to_owned()
+        } else {
+            format!("link{}", n + 1)
+        };
+        symlink(next, dir.join(format!("link{n}"))).unwrap();
+    }
 }
 
 #[test]
@@ -224,4 +245,102 @@ fn a_missing_path_is_not_found() {
     let dir = TempDir::new("fiber-class-missing");
     let err = inspect(&dir.path().join("nope")).unwrap_err();
     assert!(matches!(err, InspectError::NotFound));
+}
+
+#[test]
+fn dotdot_on_the_root_stays_at_the_root() {
+    let got = resolve(Path::new("/unused"), "/..").unwrap();
+    assert_eq!(got, Path::new("/"));
+}
+
+#[test]
+fn dotdot_from_a_relative_start_is_parent() {
+    let got = resolve(Path::new("."), "..").unwrap();
+    assert_eq!(got, Path::new(".."));
+}
+
+#[test]
+fn an_unsearchable_directory_is_tool_error() {
+    let dir = TempDir::new("fiber-resolve-unsearch");
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    set_mode(&locked, 0o000);
+    let err = resolve(dir.path(), "locked/child").unwrap_err();
+    set_mode(&locked, 0o755);
+    match err {
+        ResolveError::Tool(message) => assert!(message.contains("locked"), "{message}"),
+        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
+    }
+}
+
+#[test]
+fn forty_symlinks_resolve_and_one_more_is_tool_error() {
+    // The temp directory's own path can contain a symlink (`/var` on macOS).
+    // Count only the chain.
+    let dir = TempDir::new("fiber-resolve-chain");
+    let root = canonical(dir.path());
+    symlink_chain(&root, MAX_SYMLINKS);
+    let got = resolve(&root, "link0").unwrap();
+    assert_eq!(got, root.join("target.txt"));
+
+    let over = TempDir::new("fiber-resolve-chain-over");
+    let over_root = canonical(over.path());
+    symlink_chain(&over_root, MAX_SYMLINKS + 1);
+    let err = resolve(&over_root, "link0").unwrap_err();
+    match err {
+        ResolveError::Tool(message) => assert!(message.contains("symbolic link"), "{message}"),
+        ResolveError::Arguments(message) => panic!("expected tool_error, got {message}"),
+    }
+}
+
+#[test]
+fn an_unsearchable_path_is_tool_error_not_missing() {
+    let dir = TempDir::new("fiber-class-unsearch");
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    set_mode(&locked, 0o000);
+    let err = inspect(&locked.join("secret")).unwrap_err();
+    set_mode(&locked, 0o755);
+    match err {
+        InspectError::Tool(message) => assert!(message.contains("secret"), "{message}"),
+        InspectError::NotFound => panic!("expected tool_error"),
+    }
+}
+
+#[test]
+fn a_file_that_vanishes_before_it_is_read_is_not_found() {
+    let dir = TempDir::new("fiber-class-vanished");
+    let err = read_regular(&dir.path().join("gone")).unwrap_err();
+    assert!(matches!(err, InspectError::NotFound));
+}
+
+#[test]
+fn an_unreadable_regular_file_is_tool_error_from_the_read() {
+    let dir = TempDir::new("fiber-class-read-perm");
+    let path = dir.path().join("secret");
+    fs::write(&path, "hi").unwrap();
+    set_mode(&path, 0o000);
+    let err = read_regular(&path).unwrap_err();
+    set_mode(&path, 0o644);
+    match err {
+        InspectError::Tool(message) => assert!(message.contains("secret"), "{message}"),
+        InspectError::NotFound => panic!("expected tool_error"),
+    }
+}
+
+#[test]
+fn riff_without_webp_and_webp_without_riff_are_text() {
+    let dir = TempDir::new("fiber-class-riff");
+    let cases: &[(&str, &[u8])] = &[
+        ("riff.txt", b"RIFF not webp"),
+        ("mark.txt", b"xxxxxxxxWEBP"),
+    ];
+    for (name, bytes) in cases {
+        let path = dir.path().join(name);
+        fs::write(&path, bytes).unwrap();
+        match inspect(&path).unwrap() {
+            Inspected::Text { text } => assert_eq!(text.as_bytes(), *bytes),
+            Inspected::Unsupported { kind, .. } => panic!("{name} was {kind}"),
+        }
+    }
 }

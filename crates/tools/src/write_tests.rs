@@ -13,7 +13,7 @@ use contract::tool::Tool;
 use fakes::{CancelToken, TempDir};
 use serde_json::{Map, Value, json};
 
-use super::{line_changes, line_count};
+use super::{existing, line_changes, line_count, read_present, reversible};
 use crate::Files;
 use crate::files::path_text;
 
@@ -55,6 +55,12 @@ fn canonical(path: &Path) -> std::path::PathBuf {
 
 fn resolved(dir: &Path, name: &str) -> std::path::PathBuf {
     canonical(dir).join(name)
+}
+
+fn set_mode(path: &Path, mode: u32) {
+    let mut perms = fs::metadata(path).unwrap().permissions();
+    perms.set_mode(mode);
+    fs::set_permissions(path, perms).unwrap();
 }
 
 fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
@@ -505,6 +511,67 @@ fn a_parent_that_is_a_file_writes_nothing() {
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert_eq!(fs::read(dir.path().join("f")).unwrap(), b"x");
     assert!(!dir.path().join("f").join("child").exists());
+}
+
+#[test]
+fn a_diff_that_is_not_one_line_each_way_is_counted() {
+    let dir = TempDir::new("fiber-write-diff-two");
+    fs::write(dir.path().join("a.txt"), "a\nb\n").unwrap();
+    let files = Files::new(dir.path().to_path_buf());
+    files
+        .read()
+        .run(&args(json!({"path": "a.txt"})), &CancelToken::new());
+    let output = files.write().run(
+        &args(json!({"path": "a.txt", "content": "z\n"})),
+        &CancelToken::new(),
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    let path = path_text(&resolved(dir.path(), "a.txt"));
+    assert_eq!(
+        output.changes,
+        Some(vec![FileChange {
+            path,
+            added: 1,
+            removed: 2,
+        }])
+    );
+}
+
+#[test]
+fn an_unsearchable_path_is_not_a_reversible_create() {
+    let dir = TempDir::new("fiber-write-unsearch");
+    let locked = dir.path().join("locked");
+    fs::create_dir(&locked).unwrap();
+    set_mode(&locked, 0o000);
+    let child = locked.join("a.txt");
+    assert!(!reversible(&child));
+    let err = existing(&child).unwrap_err();
+    set_mode(&locked, 0o755);
+    assert_eq!(err.0, ErrorCode::ToolError);
+    assert!(err.1.contains("a.txt"), "{}", err.1);
+}
+
+#[test]
+fn a_file_that_vanishes_before_the_write_reads_it_is_a_create() {
+    let dir = TempDir::new("fiber-write-vanished");
+    let got = read_present(&dir.path().join("gone")).unwrap();
+    assert!(got.is_none());
+}
+
+#[test]
+fn an_unreadable_file_is_not_replaced() {
+    let dir = TempDir::new("fiber-write-unreadable");
+    let path = dir.path().join("a.txt");
+    fs::write(&path, "old\n").unwrap();
+    set_mode(&path, 0o000);
+    let files = Files::new(dir.path().to_path_buf());
+    let output = files.write().run(
+        &args(json!({"path": "a.txt", "content": "new\n"})),
+        &CancelToken::new(),
+    );
+    set_mode(&path, 0o644);
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert_eq!(fs::read(&path).unwrap(), b"old\n");
 }
 
 #[test]

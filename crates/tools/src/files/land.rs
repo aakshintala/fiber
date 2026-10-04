@@ -83,9 +83,10 @@ pub(crate) fn temporary_name(target: &Path, pid: u32, n: u64) -> PathBuf {
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "file".to_owned());
     let file_name = format!(".{name}.fiber-{pid}-{n}.tmp");
+    // An empty parent (`foo.txt`) joins as the name alone, same as no parent.
     match target.parent() {
-        Some(parent) if parent != Path::new("") => parent.join(file_name),
-        _ => PathBuf::from(file_name),
+        Some(parent) => parent.join(file_name),
+        None => PathBuf::from(file_name),
     }
 }
 
@@ -146,6 +147,9 @@ impl Drop for TempFile {
         if !self.armed {
             return;
         }
+        // `remove_file` ignores NotFound and every other error, so the guard's
+        // predicate changes nothing.
+        #[cfg_attr(false, mutants::skip)]
         match fs::remove_file(&self.path) {
             Ok(()) => {}
             Err(err) if err.kind() == io::ErrorKind::NotFound => {}

@@ -163,6 +163,12 @@ fn existing(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
             unsupported_message(path, kind, meta.len(), hint),
         ));
     }
+    read_present(path)
+}
+
+// Stat already classified this as a regular file. NotFound means it disappeared
+// before the read, which is the same as creating it.
+fn read_present(path: &Path) -> Result<Option<Vec<u8>>, (ErrorCode, String)> {
     match fs::read(path) {
         Ok(bytes) => Ok(Some(bytes)),
         Err(err) if err.kind() == io::ErrorKind::NotFound => Ok(None),
