@@ -19,10 +19,13 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     config.json                   this project's configuration
     config/<extension>.json       an extension's settings for this project
     worktrees/<id>/               one git worktree per delegate that asked for one
+    approvals/<content-hash>      one file per extension or hook approval or never
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
+  pinned/<content-hash>/          approved copies of code a repository ships
+  pinned.json                     size, modification time and hash of each declared path
   data/<extension>/               an extension's data for this machine
-  approvals/<content-hash>        one file per approved MCP server declaration
+  approvals/<content-hash>        one file per MCP server approval or never
   credentials/<name>/<label>       one file per stored provider credential, mode 0600
   credentials/<name>              one file per extension secret, mode 0600
   run/<session_id>                one local socket per running session
@@ -130,11 +133,24 @@ never touches them ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.
 `fiber extension remove` deletes an extension's data directories too, asking first in a
 terminal.
 
-**Approvals.** One file per approved MCP server declaration from a
-repository, at `approvals/<content-hash>`. The file existing means that
-declaration is approved; deleting it revokes the approval. Recorded per
-machine, so a declaration approved in one repository is not asked about again
-in another (`docs/mcp.md`, "A repository's servers").
+**Pinned copies.** When a person approves code a repository ships, Fiber
+copies it to `pinned/<content-hash>/`: an extension's whole package, with its
+dependencies and what its install step built, or the files a hook or an MCP
+server declaration names. Sessions run the copy, never the repository's files.
+Every approved version is kept until no worktree's files match it, when
+`fiber sessions prune` removes it (`docs/extensions.md`, "Code a repository
+ships"). `pinned.json` records each declared path's size, modification time
+and hash, so a session hashes a file again only when one of the first two
+changed. It is an index: deleting it costs a re-hash and nothing else.
+
+**Approvals.** One file per decision about code a repository ships, named by
+the content's hash; it says whether the decision is approve or never.
+Deleting it withdraws the decision, and the next session offers the code
+again. An extension's or a hook's is per project, at
+`projects/<key>/approvals/<content-hash>`, as its install is. An MCP server's
+is per machine, at `approvals/<content-hash>`, so a declaration approved in one
+repository is not asked about again in another (`docs/mcp.md`, "A repository's
+servers"). A repository can neither write nor read them.
 
 **Credentials.** One file per stored provider credential at
 `credentials/<name>/<label>`, one per credential label, and one file per
@@ -211,8 +227,8 @@ One writer per session via `session.lock` is `docs/events.md`.
 There is no layout version marker. The first change to this layout adds a
 file `layout` at the top of Fiber home containing `2`; a missing file means
 layout 1. `fiber update` changes only the Fiber binary and `extensions/`;
-it never touches sessions, config, rules, approvals, credentials or extension
-data. It replaces the binary by renaming a new file over it, so a running
+it never touches sessions, config, rules, approvals, pinned copies, credentials
+or extension data. It replaces the binary by renaming a new file over it, so a running
 session keeps the file it launched from. How the binary is fetched and
 replaced is `docs/releasing.md`.
 

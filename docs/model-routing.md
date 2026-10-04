@@ -460,7 +460,9 @@ A repository's configuration may choose the default model from providers already
 It cannot declare a provider or change a provider's base URL. If it could, a
 cloned repository could point `openrouter` at its own server, and Fiber would
 send it your OpenRouter key. A repository that needs a provider ships an
-extension, which a person approves before it loads.
+extension, whose manifest names the provider and its base URLs. The extension
+loads only after a person approves it, and the offer shows each base URL
+(`docs/extensions.md`, "Code a repository ships").
 
 ## Credentials
 

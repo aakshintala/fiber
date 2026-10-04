@@ -27,6 +27,10 @@ extension the session uses and the compiled-in tools. It runs no MCP server,
 no process extension, no TUI extension and no other child process. An extension a person adds
 costs what it costs (about 150 KiB and one thread for a Lua extension,
 `research/extension-runtime/pass2/RESULTS.md`); that cost is its author's.
+A session in a repository that declares code also checks each declared path
+against `pinned.json` before its first request, hashing only a file whose size
+or modification time changed (`docs/extensions.md`, "Code a repository
+ships"). That cost is not yet measured.
 
 Memory follows the context window, not the transcript. After a handoff the
 session holds the handoff note and what came after it, and a resumed session

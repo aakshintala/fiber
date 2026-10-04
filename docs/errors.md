@@ -86,7 +86,9 @@ asked for the session.
 | `protocol_unsupported` | the session model's protocol is one this Fiber does not speak yet | 1 |
 | `extension_required_failed` | an extension marked `required` failed to start | 1 |
 | `mcp_required_server_failed` | an MCP server marked `required` failed to start | 1 |
-| `mcp_server_unapproved` | the repository declares an MCP server nobody approved | 1 |
+| `extension_unapproved` | the repository declares a `required` extension nobody approved, and nobody could be asked (`docs/extensions.md`, "Code a repository ships") | 1 |
+| `hook_unapproved` | the repository declares a `required` hook nobody approved, and nobody could be asked | 1 |
+| `mcp_server_unapproved` | the repository declares a `required` MCP server nobody approved, and nobody could be asked | 1 |
 
 Only `usage` exits 2, following the Unix convention (and clap's default) that
 separates "called it wrong" from "ran and failed".
@@ -215,10 +217,12 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `extension_missing` | exit | the provider of a `provider/model` is not installed |
 | `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
 | `extension_required_failed` | exit | a required extension failed to start |
+| `extension_unapproved` | exit | a repository's required extension is not approved; run `fiber approve` in the repository |
 | `extension_unavailable` | tool call | the extension providing the tool died twice |
 | `fetch_failed` | exit | an install or update could not fetch: git or the network failed; try again later. Not retried automatically (`docs/extensions.md`, "Installing") |
 | `flooded` | job | a monitor was suppressed for 30 seconds (`docs/tools.md`) |
 | `hook_failed` | tool call, turn, handoff, notice | an extension hook errored or ran out of time |
+| `hook_unapproved` | exit | a repository's required hook is not approved; run `fiber approve` in the repository |
 | `http_error` | tool call | `web_fetch` got a status other than 2xx |
 | `indeterminate` | tool call, job | Fiber cannot tell whether the call completed |
 | `invalid_arguments` | tool call, driver command | the arguments failed the tool's schema or checks, or a driver command's `args` (`docs/invocation.md`, "Driver commands") |
@@ -227,7 +231,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `log_corrupt` | exit | a log line that cannot be encoded, or one read back that does not parse |
 | `mcp_cancel_requested` | tool call | a cancelled call the server may still act on |
 | `mcp_required_server_failed` | exit | a required MCP server failed to start |
-| `mcp_server_unapproved` | exit | a repository's MCP server is not approved |
+| `mcp_server_unapproved` | exit | a repository's required MCP server is not approved; run `fiber approve` in the repository |
 | `mcp_server_unavailable` | tool call, MCP server | the server failed to start or died |
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call | the target session's `before_message` refused a session message |
@@ -247,6 +251,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `quota_exceeded` | model call, turn | a quota, billing or subscription limit |
 | `rate_limited` | model call, turn | the provider rate-limited the request |
 | `refused` | model call, turn | the provider declined on policy grounds |
+| `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `session_has_dependents` | exit | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
 | `session_held` | exit | another process holds the session |
 | `session_not_found` | exit | a resume names no session |
@@ -277,6 +282,7 @@ Notices, for a failure outside any action:
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
+| `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,

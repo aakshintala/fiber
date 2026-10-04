@@ -226,7 +226,11 @@ final message, any questions, usage totals and worktree state. Their keys are
   "Shutdown"). A dropped socket connection is only a client leaving: the
   parent reconnects and the delegate carries on.
 - A Fiber delegate starts its own MCP servers and process extensions, as
-  every session does (`docs/mcp.md`, "Where servers run").
+  every session does (`docs/mcp.md`, "Where servers run"). It never raises a
+  repository's offer: code its repository declares loads only if a person
+  already approved that content, and is otherwise skipped, or fails the
+  delegate when marked `required` (`docs/extensions.md`, "Code a repository
+  ships").
 - Stopping a Fiber delegate is a signal to its process group, as for any job
   (`docs/tools.md`, "Shell").
 - If a parent's process dies without a shutdown, each Fiber delegate sees

@@ -126,7 +126,8 @@ credential a session uses"). A new session takes its label from
 
 | Command | What it does |
 |---|---|
-| `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. |
+| `update` | Updates the Fiber binary and every installed extension together (`docs/releasing.md`, "Updating"). `upgrade` runs the same command. A repository's extensions are not updated: each changes only through a new offer. |
+| `approve [--yes]` | Run in a repository: shows every extension, hook and MCP server the repository declares, as one offer would, and approves them for this person (`docs/extensions.md`, "Code a repository ships"). `--yes` approves without asking, for a script or a machine image. It prints each approval on stderr. |
 | `login [<provider>] [--as <label>]` | Stores a provider's key under a credential label (`docs/model-routing.md`, "Logging in"). Without `--as`, the label is the account's email when the login reveals one, otherwise `default`; a label already stored is refused. With no provider, a terminal offers the installed providers; without a terminal, it is a usage error. |
 | `logout <provider> [--as <label> \| --all]` | Deletes a provider's stored key. With several labels it needs `--as` or `--all`. A key from an environment variable, a file outside Fiber home or a command is named, not removed, and the exit is non-zero. |
 | `doctor` | Says whether a session can start, and how to fix it when it cannot. |
@@ -152,9 +153,9 @@ check that a key is valid.
 | Command | What it does |
 |---|---|
 | `extension install [--project] <name or path>` | Installs an extension and its dependencies. `--project` installs it for the current project only. |
-| `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag. |
-| `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. |
-| `extension list` | Lists installed extensions: name, version and commit. |
+| `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag. It never touches a repository's extension. |
+| `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. Run in a project on a repository's extension, it removes that and records never for its content. |
+| `extension list` | Lists installed extensions: name, version and commit; and each repository extension with its project, its path in the repository and the content it loads. |
 
 **MCP servers.** `fiber mcp` manages MCP servers (`docs/mcp.md`).
 
@@ -166,7 +167,6 @@ check that a key is valid.
 | `mcp list` | Lists every declared server, the layer that declares it, and whether a repository's server is approved. |
 | `mcp login <server>` | Logs in to a server that needs OAuth. |
 | `mcp logout <server>` | Deletes a server's stored token. |
-| `mcp approve` | Records approval of the current repository's servers. Run it in the repository from a terminal. |
 | `mcp serve` | The stdio MCP server a delegate on another harness uses to send session messages (`docs/delegates.md`). |
 
 **Configuration.** `fiber config` reads and writes configuration

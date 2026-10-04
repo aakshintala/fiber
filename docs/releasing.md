@@ -145,7 +145,7 @@ There is no Homebrew formula and no `cargo install`.
 `fiber update` updates the binary and every installed extension together
 (`docs/extensions.md`, "Staying current"). It changes only the binary and
 `extensions/` in Fiber home, and never touches configuration, credentials,
-sessions, rules, approvals or extension data (`docs/state.md`).
+sessions, rules, approvals, pinned copies or extension data (`docs/state.md`).
 
 It:
 
