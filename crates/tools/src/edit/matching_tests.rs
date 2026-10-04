@@ -1,4 +1,4 @@
-use super::{Applied, Block, MatchError, apply, at, slice};
+use super::{Applied, Block, MatchError, apply, at, line_bounds, slice};
 
 fn edited(text: &str, blocks: &[(&str, &str)]) -> Result<Applied, MatchError> {
     let owned: Vec<Block> = blocks
@@ -616,4 +616,14 @@ fn folded_around(place: &str, mark: &str) -> (String, String) {
         "end" => (format!("it{curly}s{mark}"), format!("it's{mark}")),
         _ => panic!("place"),
     }
+}
+
+#[test]
+fn line_bounds_rejects_each_bad_span_and_accepts_one_ending_at_the_text_end() {
+    assert_eq!(line_bounds("ab\ncd", 0, 7), Err(MatchError::Boundary));
+    assert_eq!(line_bounds("ab\ncd", 2, 2), Err(MatchError::Boundary));
+    assert_eq!(line_bounds("ab\ncd", 3, 2), Err(MatchError::Boundary));
+    assert_eq!(line_bounds("ab\ncd", 0, 0), Err(MatchError::Boundary));
+    assert_eq!(line_bounds("ab\ncd", 3, 5), Ok((3, 5)));
+    assert_eq!(line_bounds("ab\ncd", 0, 2), Ok((0, 3)));
 }

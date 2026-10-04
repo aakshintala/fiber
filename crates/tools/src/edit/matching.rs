@@ -290,7 +290,8 @@ fn fold_char(ch: char) -> char {
 /// so the search is over bytes.
 fn line_bounds(text: &str, start: usize, end: usize) -> Result<(usize, usize), MatchError> {
     let bytes = text.as_bytes();
-    if end == 0 || end > bytes.len() || start > bytes.len() || start >= end {
+    // `start < end` already rules out `end == 0` and `start > len` once `end <= len`.
+    if end > bytes.len() || start >= end {
         return Err(MatchError::Boundary);
     }
     let line_start = match bytes.get(..start) {
