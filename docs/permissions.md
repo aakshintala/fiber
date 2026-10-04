@@ -188,8 +188,9 @@ A call that reaches step 7 is judged by a model.
 
 **Only the human's messages and the agent's tool calls.** The model's own
 prose and every tool result are stripped before the prompt is built. The
-reviewer also gets the call under review, its declared effects, and the
-workspace root.
+reviewer also gets the call under review, its declared effects, the
+workspace root, and the person's own notes about their environment ("What the
+person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains
 no text the agent wrote and no text a repository file produced, so there is
@@ -210,6 +211,43 @@ hole that stripping tool output was meant to close.
 A session message from another session is excluded too (`docs/tools.md`,
 "Messaging other sessions"). Another model wrote it, so including it would let
 one session approve calls in another by messaging it.
+
+### What the person tells it
+
+`reviewer.context` is the person's notes about their environment, in prose,
+written as they would brief a new colleague. The reviewer reads them right
+after its fixed instructions, as the person's own words. They add to those
+instructions and never replace them, so no setting can remove what the
+reviewer guards against.
+
+The notes cover what the reviewer cannot guess:
+
+- source control: which accounts, organisations and repositories are the
+  person's own or their organisation's
+- internal hosts, registries and services that count as inside
+- internal tools and what running them does
+- routine actions, such as squash-merging their own pull requests once CI
+  passes
+- what must never happen, such as touching `infra/prod`
+
+The key is the person's alone: the global file or the per-project file in
+Fiber home (`docs/configuration.md`, "Layers"). A repository cannot set it,
+for the same reason project instruction files are excluded: a repository's
+text in the reviewer's prompt would argue with its verdicts. A layer's value
+replaces the one below it, as every string does.
+
+The notes are fixed for the session. They sit ahead of the person's messages
+and the tool calls, and every reviewer pass extends the cache chain that
+follows them, so they change only on `reload` or in the next session
+(`docs/prompt-cache.md`, "Rules for other areas"). A delegate's reviewer reads
+the same layers, so it gets the same notes.
+
+An edit to the notes needs the person to ask for it in their messages; the
+reviewer's instructions say so, and it blocks an edit the person did not ask
+for. An agent that could rewrite the notes would widen its own approvals.
+
+`fiber config get reviewer.context` prints the effective text and the layer it
+came from.
 
 ### How it runs
 

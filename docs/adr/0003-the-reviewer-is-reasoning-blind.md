@@ -45,8 +45,9 @@ tool is added.
 
 **The reviewer is shown the human's messages and the agent's tool calls, and
 nothing else.** Model prose, tool results, and project instruction files are
-excluded. It also receives the call under review, its declared effects, and
-the workspace root.
+excluded. It also receives the call under review, its declared effects, the
+workspace root, and the person's own notes about their environment, which only
+the person can set.
 
 **Each tool classifies each of its own calls** in a closed vocabulary — reads,
 writes, executes, network, plus reversible and the paths touched — and the
