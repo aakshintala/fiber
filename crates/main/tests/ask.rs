@@ -764,7 +764,7 @@ const MENU: &str = r#"Fiber, a coding agent.
 Usage: fiber <command> [arguments]
 
 Sessions:
-  ask [--model <model>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
 Fiber itself:
   help [<command>]  Print this menu, or a command's help

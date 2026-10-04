@@ -33,12 +33,14 @@ mod conversation;
 mod inbox;
 mod permission;
 mod process;
+mod resume;
 mod reviewer;
 mod schema;
 mod usage;
 
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
+pub use resume::{Resumed, resumed};
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 
 /// What stops the loop.
@@ -50,6 +52,9 @@ pub enum Error {
     /// A durable line's payload does not read as its kind.
     #[error("a log line does not read as its kind: {0}")]
     Unreadable(serde_json::Error),
+    /// The log has no `session_started`.
+    #[error("the log has no session_started")]
+    NoSessionStarted,
 }
 
 impl Error {
@@ -58,7 +63,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Log(e) => e.code(),
-            Self::Unreadable(_) => ErrorCode::LogCorrupt,
+            Self::Unreadable(_) | Self::NoSessionStarted => ErrorCode::LogCorrupt,
         }
     }
 }

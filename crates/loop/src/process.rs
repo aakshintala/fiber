@@ -15,12 +15,13 @@ use log::Log;
 use crate::Error;
 use crate::usage::Ledger;
 
-/// Writes `fiber_started` for a new session, the first line this process
-/// writes for it, naming the running Fiber's `version`.
-pub fn fiber_started(log: &Log, version: &str) -> Result<(), Error> {
+/// Writes `fiber_started`, the first line this process writes for the
+/// session, naming the running Fiber's `version`. `resumed` is whether the
+/// session already existed (`docs/invocation.md`, "Lifecycle").
+pub fn fiber_started(log: &Log, version: &str, resumed: bool) -> Result<(), Error> {
     let started = Event::FiberStarted(FiberStarted {
         version: version.to_owned(),
-        resumed: false,
+        resumed,
     });
     log.append(&started, None, None)?;
     Ok(())
@@ -75,6 +76,14 @@ fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
     let mut text = String::new();
     for line in lines {
         let event = Event::from_envelope(line)?;
+        // Each process reports its own lines only: the fold restarts at
+        // the latest `fiber_started` (`docs/events.md`, `fiber_exited`:
+        // `usage` is "this process's model calls for the session").
+        if matches!(&event, Some(Event::FiberStarted(_))) {
+            fold = Fold::default();
+            text.clear();
+            continue;
+        }
         if let Some(Event::TurnStarted(_)) = &event {
             fold.final_message = None;
             fold.error = None;

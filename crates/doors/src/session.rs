@@ -96,6 +96,21 @@ impl Session {
         opened
     }
 
+    /// Opens the door side of the session whose directory, from an earlier
+    /// run, is `dir`: as [`Session::open`], but a failure never deletes
+    /// `dir`. A resume names a session that already holds turns, so whatever
+    /// stops the resume leaves it for the next one.
+    pub fn resume(
+        home: &Path,
+        dir: &Path,
+        log: &Arc<Log>,
+        clock: Arc<dyn Clock>,
+        tools: Vec<ToolInfo>,
+        out: Box<dyn Write + Send>,
+    ) -> Result<Self, Failure> {
+        open_in(home, dir, log, clock, tools, out)
+    }
+
     /// Sends `first` on the inbox, then serves clients until `run` returns.
     /// `first` is queued before any client's command.
     pub fn run(

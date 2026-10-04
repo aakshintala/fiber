@@ -129,11 +129,13 @@ fn turn_completed(outcome: TurnOutcome, error: Option<Failure>) -> Event {
 fn fiber_started_is_the_first_line_and_names_the_version() {
     let session = Session::new();
 
-    fiber_started(&session.log, "1.2.3").unwrap();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
 
     let lines = log::read(&session.dir).unwrap();
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].kind, "fiber_started");
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["fiber_started"]
+    );
     assert_eq!(lines[0].payload["version"], "1.2.3");
     assert_eq!(lines[0].payload["resumed"], false);
 }
@@ -254,4 +256,63 @@ fn a_later_line_with_the_same_generation_replaces_the_earlier() {
     // g1's 0.5 was replaced by null and does not remain in the sum.
     assert_eq!(usage["cost"], 1.5);
     assert_eq!(usage["subscription_cost"], 0.1);
+}
+
+#[test]
+fn a_resumed_fiber_started_marks_the_session_resumed() {
+    let session = Session::new();
+
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+
+    let lines = log::read(&session.dir).unwrap();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["fiber_started"]
+    );
+    assert_eq!(lines[0].payload["resumed"], true);
+}
+
+#[test]
+fn fiber_exited_after_a_resume_reports_only_the_resumed_process_lines() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&turn_started(), None);
+    session.append(&usage("g1", 3, Some(0.5), None), Some("a_1"));
+    session.append(&text_part("First."), Some("a_1"));
+    session.append(&message(), Some("a_1"));
+    session.append(&turn_completed(TurnOutcome::Completed, None), None);
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    session.append(&turn_started(), None);
+    session.append(&usage("g2", 5, Some(0.25), None), Some("a_2"));
+    session.append(&text_part("Second."), Some("a_2"));
+    session.append(&message(), Some("a_2"));
+    session.append(&turn_completed(TurnOutcome::Completed, None), None);
+
+    let (code, exited) = session.exit(Ok(()));
+
+    assert_eq!(code, 0);
+    let lines = log::read(&session.dir).unwrap();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        [
+            "fiber_started",
+            "turn_started",
+            "usage_recorded",
+            "text_completed",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_started",
+            "turn_started",
+            "usage_recorded",
+            "text_completed",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(exited["text"], "Second.");
+    assert_eq!(exited["final_action_id"], "a_2");
+    // Only the resumed process's usage: g2, not g1.
+    assert_eq!(exited["usage"]["tokens"]["output"], 5);
+    assert_eq!(exited["usage"]["cost"], 0.25);
 }

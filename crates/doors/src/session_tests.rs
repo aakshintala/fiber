@@ -871,3 +871,120 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
     rx.recv_timeout(DEADLINE)
         .expect("the writer ends once the log is dropped");
 }
+
+/// A home whose `run/<id>` socket path fits no platform: longer than either
+/// `SOCKET_PATH_MAX`.
+fn overlong_home(temp: &fakes::TempDir) -> std::path::PathBuf {
+    temp.path().join("h".repeat(200))
+}
+
+#[test]
+fn resume_keeps_the_session_directory_when_the_socket_cannot_bind() {
+    let temp = fakes::TempDir::new("fd");
+    let home = overlong_home(&temp);
+    let sessions = home.join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::resume(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a socket path past the limit binds"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(dir.join("events.jsonl").is_file());
+    // Nothing was written: the log holds no lines.
+    assert!(log::read(&dir).unwrap().is_empty());
+}
+
+#[test]
+fn open_deletes_a_new_session_directory_when_the_socket_cannot_bind() {
+    let temp = fakes::TempDir::new("fd");
+    let home = overlong_home(&temp);
+    let sessions = home.join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a socket path past the limit binds"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::Usage);
+    assert!(!dir.exists());
+}
+
+#[test]
+fn resume_replaces_a_stale_socket_file() {
+    let temp = fakes::TempDir::new("fd");
+    let home = temp.path().join("h");
+    let sessions = home.join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+    let socket = home.join("run").join(&id.0);
+    fs::create_dir_all(socket.parent().unwrap()).unwrap();
+    fs::write(&socket, "stale").unwrap();
+
+    let timed: Arc<dyn Clock> = clock;
+    let session =
+        Session::resume(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())).unwrap();
+
+    UnixStream::connect(&socket).unwrap();
+    close_within(session, log);
+}
+
+#[test]
+fn close_after_resume_keeps_a_session_that_has_turns() {
+    use contract::events::{InputItem, TurnStarted};
+    use contract::shapes::{ContentPart, Origin, Sender};
+
+    let temp = fakes::TempDir::new("fd");
+    let home = temp.path().join("h");
+    let sessions = home.join("projects/p/sessions");
+    let id = contract::SessionId(crate::mint("s_"));
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: "one".into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: CommandId("c_1".into()),
+                },
+                changed_by: None,
+            }],
+        }),
+        Some(contract::TurnId("t_1".into())),
+        None,
+    )
+    .unwrap();
+
+    let timed: Arc<dyn Clock> = clock;
+    let session =
+        Session::resume(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())).unwrap();
+    close_within(session, log);
+
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["turn_started"]
+    );
+}

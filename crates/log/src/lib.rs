@@ -8,6 +8,7 @@
 //! (`docs/architecture.md`, "The call rules").
 
 mod read;
+mod resolve;
 mod write;
 
 use std::io;
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 use contract::{ErrorCode, SessionId};
 
 pub use read::{Injector, Watcher, read};
+pub use resolve::resolve;
 pub use write::Log;
 
 /// The log's name in a session directory.
@@ -59,6 +61,14 @@ pub enum Error {
     /// The session directory, or its log, does not exist.
     #[error("no session at {0}")]
     NotFound(PathBuf),
+    /// A `--resume` selector matching more than one session.
+    #[error("\"{selector}\" matches more than one session: {}", matches.join(", "))]
+    Ambiguous {
+        /// The selector.
+        selector: String,
+        /// The matching ids, sorted.
+        matches: Vec<String>,
+    },
     /// A complete line in the log is not an event line.
     #[error("{path}, line {line}: {source}")]
     Unreadable {
@@ -89,6 +99,7 @@ impl Error {
         match self {
             Self::Held { .. } => ErrorCode::SessionHeld,
             Self::NotFound(_) => ErrorCode::SessionNotFound,
+            Self::Ambiguous { .. } => ErrorCode::Usage,
             // Only a failed write or fsync stops a log.
             Self::Poisoned { .. } | Self::Io { .. } => ErrorCode::IoFailed,
             Self::Unreadable { .. } | Self::Encode(_) => ErrorCode::LogCorrupt,

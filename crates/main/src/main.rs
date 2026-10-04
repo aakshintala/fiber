@@ -10,6 +10,7 @@
 
 mod cli;
 mod clock;
+mod resume;
 
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -23,8 +24,10 @@ use std::io::{self, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
+use std::sync::mpsc::Receiver;
 
 use config::{Config, Protocol, Sources};
+use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use contract::{ErrorCode, SessionId};
@@ -99,7 +102,7 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Ask(args))) => {
             match cli::ask_parts(&args.prompt) {
-                Ok((prompt, dash)) => ask(args.model, prompt, dash, clock),
+                Ok((prompt, dash)) => ask(args.model, args.resume, prompt, dash, clock),
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
@@ -304,6 +307,7 @@ fn fail(e: Failure) -> i32 {
 /// `fiber ask`: one session, one turn, its events on stdout.
 fn ask(
     model: Option<String>,
+    resume: Option<String>,
     arg: Option<String>,
     dash: bool,
     clock: Arc<dyn contract::clock::Clock>,
@@ -314,68 +318,148 @@ fn ask(
         Ok(prompt) => prompt,
         Err(e) => return ask_failed(e),
     };
-    let parts = match parts(model) {
+    match resume {
+        Some(selector) => resume::ask_resume(selector, model, prompt, clock),
+        None => ask_new(model, prompt, clock),
+    }
+}
+
+/// `fiber ask` on a new session.
+fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+    let parts = match parts_with(model, None) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
+    let Parts {
+        provider,
+        model,
+        reviewer,
+        limits,
+        budget,
+        home,
+        project,
+        workspace,
+        sessions,
+    } = parts;
     let id = SessionId(doors::mint("s_"));
-    let dir = parts.sessions.join(&id.0);
-    let rules = config::RulesFiles::new(parts.home.clone(), parts.project.clone(), clock.clone());
-    let log = match Log::create(&parts.sessions, id, Arc::clone(&clock)) {
+    let dir = sessions.join(&id.0);
+    let permissions = ask_permissions(
+        &home,
+        &project,
+        workspace.to_string_lossy().into_owned(),
+        &clock,
+    );
+    let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let session = match Session::open(
-        &parts.home,
+        &home,
         &dir,
         &log,
-        clock,
+        Arc::clone(&clock),
         Vec::new(),
         Box::new(io::stdout()),
     ) {
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
-    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION")) {
+    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false) {
         session.close(log);
         return ask_failed(failed(e.code(), e));
     }
-    let ran = session.ask(prompt, |inbox| {
-        Loop::start(
-            Arc::clone(&log),
-            parts.provider,
-            parts.model,
-            // debt: weakens docs/system-prompt.md, "Two parts"; fixed by
-            // #304. The system prompt is empty.
-            String::new(),
-            inbox,
-            Vec::new(),
-            r#loop::Permissions {
-                workspace: parts.workspace.to_string_lossy().into_owned(),
-                credentials: parts.home.join("credentials"),
-                rules: Arc::new(rules),
-            },
+    let code = run_turn(&session, &log, &dir, prompt, |inbox| {
+        finish(
+            Loop::start(
+                Arc::clone(&log),
+                provider,
+                model,
+                SYSTEM_PROMPT.to_owned(),
+                inbox,
+                Vec::new(),
+                permissions,
+            ),
+            budget,
+            reviewer,
+            limits,
         )
-        .map(|looped| {
-            looped
-                .budget(parts.budget)
-                .answerable(false)
-                .reviewer(parts.reviewer, parts.limits)
-        })
-        .and_then(Loop::run)
-        .map_err(|e| failed(e.code(), e))
     });
-    // A `fiber_exited` that cannot be written leaves a log that reads as a
-    // process that died, which it then is.
-    let code = r#loop::fiber_exited(&log, &dir, ran).unwrap_or(1);
     session.close(log);
     code
 }
 
+/// The system prompt every `ask` session gets.
+// debt: weakens docs/system-prompt.md, "Two parts"; fixed by #304. The
+// system prompt is empty.
+const SYSTEM_PROMPT: &str = "";
+
+/// What an `ask` loop judges with: the workspace the session keeps, the
+/// credentials beside it, and the standing rules.
+fn ask_permissions(
+    home: &Path,
+    project: &config::ProjectKey,
+    workspace: String,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> r#loop::Permissions {
+    r#loop::Permissions {
+        workspace,
+        credentials: home.join("credentials"),
+        rules: Arc::new(config::RulesFiles::new(
+            home.to_path_buf(),
+            project.clone(),
+            Arc::clone(clock),
+        )),
+    }
+}
+
+/// Finishes an `ask` loop, however it started: the budget, the headless
+/// answers and the reviewer every session gets, so a change to the chain is
+/// made once.
+fn finish(
+    looped: Result<Loop, r#loop::Error>,
+    budget: Option<f64>,
+    reviewer: Result<r#loop::Reviewer, Failure>,
+    limits: r#loop::BlockLimits,
+) -> Result<(), Failure> {
+    looped
+        .map(|looped| {
+            looped
+                .budget(budget)
+                .answerable(false)
+                .reviewer(reviewer, limits)
+        })
+        .and_then(Loop::run)
+        .map_err(|e| failed(e.code(), e))
+}
+
+/// Runs one turn of the session `session` writes to `log`, once its log,
+/// model and prompt are known, shared by new and resumed sessions: sends
+/// the prompt, closes, and writes `fiber_exited` for what ran.
+fn run_turn(
+    session: &Session,
+    log: &Arc<Log>,
+    dir: &Path,
+    prompt: String,
+    run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
+) -> i32 {
+    let ran = session.ask(prompt, run);
+    // A `fiber_exited` that cannot be written leaves a log that reads as a
+    // process that died, which it then is.
+    r#loop::fiber_exited(log, dir, ran).unwrap_or(1)
+}
+
 /// Fiber home, configuration, the chosen model, its credential and its
 /// provider: everything a failure of which leaves no session. `model` is
-/// `--model`, which sets configuration's `model` for this run.
-fn parts(model: Option<String>) -> Result<Parts, Failure> {
+/// `--model`, which sets configuration's `model` for this run. `recorded` is
+/// the resumed session's model: the model the
+/// log's last `usage_recorded` names, beats `--model`
+/// (`docs/model-routing.md`, "Choosing the model"). A log with no
+/// `usage_recorded` uses `--model`, then the configured default as a new
+/// session does. A recorded model that no longer resolves fails with the
+/// resolver's own failure, before any session line is written.
+/// debt: weakens docs/model-routing.md "Choosing the model" only until
+/// #304 writes preamble_built; fixed by #304.
+fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
@@ -401,8 +485,10 @@ fn parts(model: Option<String>) -> Result<Parts, Failure> {
     // and docs/extensions.md, "The extension API version"; fixed by #382.
     // Notices from configuration and loading are dropped.
     let (providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    // `recorded` first, then `--model` and configuration's `model`
+    // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
-        .choose(None, &config)
+        .choose(recorded, &config)
         .map_err(|e| failed(e.code(), e))?;
     let key = config
         .credential(model.provider)
