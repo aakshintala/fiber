@@ -18,7 +18,6 @@ use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -679,7 +678,7 @@ struct Running {
     group: u32,
     guard: KillGroup,
     stdout: mpsc::Receiver<String>,
-    stderr: Arc<Mutex<String>>,
+    stderr: mpsc::Receiver<String>,
 }
 
 /// Starts `fiber` with `args` in its own process group, as [`Setup::fiber`]
@@ -702,15 +701,16 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
     let guard = KillGroup(group);
     let stdout = child.stdout.take().unwrap();
     let stderr = child.stderr.take().unwrap();
-    let stderr_text = Arc::new(Mutex::new(String::new()));
-    let stderr_copy = Arc::clone(&stderr_text);
+    let (err_tx, err_rx) = mpsc::channel();
     thread::spawn(move || {
         let mut reader = BufReader::new(stderr);
         let mut buf = String::new();
         match std::io::Read::read_to_string(&mut reader, &mut buf) {
             Ok(_) | Err(_) => {}
         }
-        *stderr_copy.lock().unwrap() = buf;
+        match err_tx.send(buf) {
+            Ok(()) | Err(_) => {}
+        }
     });
     let (tx, stdout_rx) = mpsc::channel();
     thread::spawn(move || {
@@ -727,7 +727,7 @@ fn start(setup: &Setup, args: &[&str]) -> Running {
         group,
         guard,
         stdout: stdout_rx,
-        stderr: stderr_text,
+        stderr: err_rx,
     }
 }
 
@@ -770,7 +770,10 @@ fn finish(running: Running) {
         .recv_timeout(DEADLINE)
         .expect("waited for fiber to exit")
         .unwrap();
-    assert!(status.success(), "stderr: {}", stderr.lock().unwrap());
+    let stderr = stderr
+        .recv_timeout(DEADLINE)
+        .expect("waited for stderr to close");
+    assert!(status.success(), "stderr: {stderr}");
     assert!(!group_alive(group), "fiber left a process in its group");
     // The group is empty. Skip the drop, which would kill it again.
     std::mem::forget(guard);
@@ -814,14 +817,23 @@ fn finish_output(running: Running) -> Finished {
     );
     std::mem::forget(guard);
     watchdog.stand_down(DEADLINE);
-    let lines = stdout
-        .into_iter()
-        .map(|line| serde_json::from_str(&line).unwrap())
-        .collect();
+    let stderr = stderr
+        .recv_timeout(DEADLINE)
+        .expect("waited for stderr to close");
+    let mut lines = Vec::new();
+    loop {
+        match stdout.recv_timeout(DEADLINE) {
+            Ok(line) => lines.push(serde_json::from_str(&line).unwrap()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for stdout to close");
+            }
+        }
+    }
     Finished {
         code: status.code(),
         lines,
-        stderr: stderr.lock().unwrap().clone(),
+        stderr,
     }
 }
 

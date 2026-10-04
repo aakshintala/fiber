@@ -528,15 +528,14 @@ fn stand_in(
     (handle, finished)
 }
 
-/// The stand-in thread's received lines, waited for within [`DEADLINE`],
-/// then joined: the thread already sent, so the join does not block.
+/// The stand-in thread's received lines, waited for within [`DEADLINE`].
+/// The thread sends its lines as its last act; the handle is dropped,
+/// never joined, so only the deadline bounds its end.
 fn stood_in(server: (JoinHandle<()>, Receiver<Vec<String>>), operation: &str) -> Vec<String> {
-    let (handle, finished) = server;
-    let received = finished.recv_timeout(DEADLINE).unwrap_or_else(|_| {
+    let (_handle, finished) = server;
+    finished.recv_timeout(DEADLINE).unwrap_or_else(|_| {
         panic!("waited {DEADLINE:?} for {operation}");
-    });
-    handle.join().expect("the stand-in finished");
-    received
+    })
 }
 
 fn accepted(command: &Value, schema_version: u32, session: &SessionId) -> String {
