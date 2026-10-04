@@ -1,0 +1,230 @@
+//! Binary-level tests of the hidden `grep` and `find` subcommands
+//! (`docs/tools.md`, "Search"): the built `fiber` answers, and the shell
+//! tool's functions reach it.
+
+#![allow(
+    clippy::unwrap_used,
+    clippy::expect_used,
+    clippy::panic,
+    reason = "test helpers; a failure is the test's"
+)]
+
+use std::fs;
+use std::io::Write;
+use std::os::unix::process::CommandExt;
+use std::path::PathBuf;
+use std::process::{Child, Command, Output, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use contract::shapes::ContentPart;
+use contract::tool::Tool;
+use fakes::clock::FakeClock;
+use fakes::{CancelToken, Watchdog};
+use serde_json::{Map, Value};
+
+/// How long one `fiber` run may take.
+const DEADLINE: Duration = Duration::from_secs(20);
+
+/// A temporary workspace, removed on drop.
+struct Setup {
+    root: fakes::TempDir,
+}
+
+impl Setup {
+    fn new() -> Self {
+        let setup = Self {
+            root: fakes::TempDir::new("fa"),
+        };
+        fs::create_dir_all(setup.workspace()).unwrap();
+        setup
+    }
+
+    fn workspace(&self) -> PathBuf {
+        self.root.path().join("w")
+    }
+
+    fn write(&self, path: &str, contents: &str) {
+        let full = self.workspace().join(path);
+        fs::create_dir_all(full.parent().unwrap()).unwrap();
+        fs::write(&full, contents).unwrap();
+    }
+
+    /// Runs `fiber` with `args` in the workspace, `stdin` piped in, waiting
+    /// under [`DEADLINE`] in its own process group with a watchdog beside
+    /// it, and asserts that nothing it started is left behind.
+    fn fiber(&self, args: &[&str], stdin: Option<&str>) -> Run {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.workspace())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let guard = KillGroup(group);
+        if let Some(mut pipe) = child.stdin.take()
+            && let Some(text) = stdin
+        {
+            pipe.write_all(text.as_bytes()).unwrap();
+        }
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+        let output = match finished.recv_timeout(DEADLINE) {
+            Ok(output) => output.unwrap(),
+            Err(_) => {
+                fakes::kill_group(group, "KILL").unwrap();
+                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                assert!(
+                    !group_alive(group),
+                    "`fiber` left a process in its group behind"
+                );
+                panic!(
+                    "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
+                    args.join(" ")
+                );
+            }
+        };
+        assert!(
+            !group_alive(group),
+            "`fiber` left a process in its group behind"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(DEADLINE);
+        Run::from(output)
+    }
+}
+
+/// Spawns `command` in a new process group, then a watchdog in its own
+/// group.
+fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
+    let child = command.process_group(0).spawn().unwrap();
+    let group = child.id();
+    let guard = KillGroup(group);
+    let watchdog = Watchdog::group(group);
+    std::mem::forget(guard);
+    (child, watchdog)
+}
+
+/// Kills process group `group` on drop.
+struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        match fakes::kill_group(self.0, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+fn group_alive(group: u32) -> bool {
+    fakes::kill_group(group, "0").unwrap()
+}
+
+/// What one `fiber` run wrote.
+struct Run {
+    code: Option<i32>,
+    stdout: String,
+    stderr: String,
+}
+
+impl From<Output> for Run {
+    fn from(output: Output) -> Self {
+        Self {
+            code: output.status.code(),
+            stdout: String::from_utf8(output.stdout).unwrap(),
+            stderr: String::from_utf8(output.stderr).unwrap(),
+        }
+    }
+}
+
+#[test]
+fn help_hides_the_search_subcommands() {
+    let setup = Setup::new();
+    for args in [&["--help"][..], &["help"]] {
+        let run = setup.fiber(args, None);
+        assert_eq!(run.code, Some(0), "{args:?}");
+        assert!(!run.stdout.contains("grep"), "{args:?}:\n{}", run.stdout);
+        assert!(!run.stdout.contains("find"), "{args:?}:\n{}", run.stdout);
+    }
+}
+
+#[test]
+fn grep_searches_a_file() {
+    let setup = Setup::new();
+    setup.write("a.txt", "needle\nhay\n");
+    let run = setup.fiber(&["grep", "needle", "a.txt"], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stdout, "needle\n");
+    assert_eq!(run.stderr, "");
+    let missing = setup.fiber(&["grep", "absent", "a.txt"], None);
+    assert_eq!(missing.code, Some(1));
+    assert_eq!(missing.stdout, "");
+}
+
+#[test]
+fn grep_filters_standard_input() {
+    let setup = Setup::new();
+    let run = setup.fiber(&["grep", "b"], Some("a\nb\nc\n"));
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stdout, "b\n");
+}
+
+#[test]
+fn grep_falls_back_for_unhandled_calls() {
+    let setup = Setup::new();
+    setup.write("a.txt", "needle\n");
+    // Provisional ruling 20 on #298: `-o` runs the system grep.
+    let run = setup.fiber(&["grep", "-o", "needle", "a.txt"], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stdout, "needle\n");
+}
+
+#[test]
+fn find_lists_the_tree() {
+    let setup = Setup::new();
+    setup.write("a.txt", "a\n");
+    setup.write("sub/b.txt", "b\n");
+    let run = setup.fiber(&["find", "."], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stdout, ".\n./a.txt\n./sub\n./sub/b.txt\n");
+    assert_eq!(run.stderr, "");
+    let filtered = setup.fiber(&["find", ".", "-name", "*.txt"], None);
+    assert_eq!(filtered.code, Some(0));
+    assert_eq!(filtered.stdout, "./a.txt\n./sub/b.txt\n");
+}
+
+#[test]
+fn shell_functions_reach_the_built_binary() {
+    let setup = Setup::new();
+    setup.write(".gitignore", "target/\n");
+    setup.write("target/needle.txt", "needle\n");
+    setup.write("kept_needle.txt", "needle\n");
+    let fiber = PathBuf::from(env!("CARGO_BIN_EXE_fiber"));
+    let shell = tools::Shell::new(setup.workspace(), FakeClock::new()).with_search(fiber);
+    let run = |command: &str| {
+        let mut arguments = Map::new();
+        arguments.insert("command".into(), Value::String(command.into()));
+        shell.run(&arguments, &CancelToken::new())
+    };
+    let text = |output: &contract::tool::Output| match output.content.first() {
+        Some(ContentPart::Text { text }) => text.clone(),
+        _ => String::new(),
+    };
+    // A pipe filter, as `cargo test | fiber grep FAILED` runs one.
+    let filtered = run("printf 'a\\nb\\n' | grep b");
+    assert!(text(&filtered).contains("b\n"), "{}", text(&filtered));
+    // A recursive search skips the ignored `target/`.
+    let recursive = run("grep -r needle .");
+    assert!(
+        text(&recursive).contains("./kept_needle.txt:needle\n"),
+        "{}",
+        text(&recursive)
+    );
+    assert!(!text(&recursive).contains("target"), "{}", text(&recursive));
+}

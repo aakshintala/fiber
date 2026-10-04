@@ -84,6 +84,28 @@ pub(crate) enum Commands {
         #[arg(value_name = "command")]
         command: Option<String>,
     },
+    /// The search behind the shell's `grep`: hidden and free to change.
+    #[command(hide = true, disable_help_flag = true)]
+    Grep {
+        /// Everything after `grep`, passed through untouched.
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "args"
+        )]
+        args: Vec<OsString>,
+    },
+    /// The search behind the shell's `find`: hidden and free to change.
+    #[command(hide = true, disable_help_flag = true)]
+    Find {
+        /// Everything after `find`, passed through untouched.
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "args"
+        )]
+        args: Vec<OsString>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
