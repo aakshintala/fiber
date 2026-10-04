@@ -323,8 +323,8 @@ fn a_later_text_does_not_flush_a_pending_call() {
     log.append(reasoning("Hmm."), Some("a_0"));
     log.append(requested("read"), Some("a_1"));
     log.append(requested("search"), Some("a_2"));
-    log.append(completed("Paris."), Some("a_1"));
     log.append(assistant("One down."), Some("a_0"));
+    log.append(completed("Paris."), Some("a_1"));
 
     let lines = log.lines();
     assert_eq!(
@@ -334,8 +334,8 @@ fn a_later_text_does_not_flush_a_pending_call() {
             "reasoning_completed",
             "tool_call_requested",
             "tool_call_requested",
-            "tool_call_completed",
             "text_completed",
+            "tool_call_completed",
         ]
     );
     let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
@@ -343,14 +343,54 @@ fn a_later_text_does_not_flush_a_pending_call() {
     // The real result stays where the log put it; the text ends no batch.
     assert_eq!(conversation.len(), 7);
     assert!(matches!(&conversation[1], Input::Reasoning { .. }));
-    let (_, text, is_error) = result_of(&conversation[4]);
+    assert!(matches!(&conversation[4], Input::Assistant { .. }));
+    let (_, text, is_error) = result_of(&conversation[5]);
     assert_eq!(text, "Paris.");
     assert!(!is_error);
-    assert!(matches!(&conversation[5], Input::Assistant { .. }));
     let (id, text, is_error) = result_of(&conversation[6]);
     assert_eq!(id.0, "a_2");
     assert_eq!(text, "It never ran.");
     assert!(is_error);
+}
+
+#[test]
+fn a_completion_after_a_flush_leaves_exactly_one_result() {
+    // The completion sits after a `turn_started` that already flushed the
+    // batch. The pre-scan sees it, so the call gets no fixed result: the
+    // real one stays where the log put it, the only result the call has.
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(requested("read"), Some("a_1"));
+    log.append(user_turn("two"), None);
+    log.append(completed("Paris."), Some("a_1"));
+
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "tool_call_requested",
+            "turn_started",
+            "tool_call_completed",
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
+
+    assert_eq!(conversation.len(), 4);
+    assert!(matches!(&conversation[1], Input::ToolCall { .. }));
+    assert!(matches!(&conversation[2], Input::User { .. }));
+    let (id, text, is_error) = result_of(&conversation[3]);
+    assert_eq!(id.0, "a_1");
+    assert_eq!(text, "Paris.");
+    assert!(!is_error);
+    for input in &conversation {
+        if let Input::ToolResult { text, .. } = input {
+            assert!(
+                !text.contains("never ran") && !text.contains("unknown"),
+                "{text}"
+            );
+        }
+    }
 }
 
 #[test]
@@ -403,10 +443,14 @@ fn steering_starts_a_new_batch() {
 
 #[test]
 fn an_assistant_message_start_starts_a_new_batch() {
+    // The log continues after the flush point: without the
+    // `assistant_message_started` flush, the fixed result would sit after
+    // the text at the end of the log.
     let log = LogLines::new();
     log.append(user_turn("one"), None);
     log.append(requested("read"), Some("a_1"));
     log.append(message_started(), Some("a_9"));
+    log.append(assistant("On it."), Some("a_9"));
 
     let lines = log.lines();
     assert_eq!(
@@ -415,14 +459,16 @@ fn an_assistant_message_start_starts_a_new_batch() {
             "turn_started",
             "tool_call_requested",
             "assistant_message_started",
+            "text_completed",
         ]
     );
     let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
-    assert_eq!(conversation.len(), 3);
+    assert_eq!(conversation.len(), 4);
     let (id, text, _) = result_of(&conversation[2]);
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
+    assert!(matches!(&conversation[3], Input::Assistant { .. }));
 }
 
 #[test]
@@ -620,6 +666,14 @@ impl History {
         outcome
     }
 
+    /// The history's kinds, in order: the lines the resume folds.
+    fn history_kinds(&self) -> Vec<String> {
+        self.lines()[..self.history_len]
+            .iter()
+            .map(|l| l.kind.clone())
+            .collect()
+    }
+
     /// The lines written since [`History::freeze`], and their kinds.
     fn new_lines(&self) -> Vec<Envelope> {
         self.lines()[self.history_len..].to_vec()
@@ -655,6 +709,15 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     history.write(Event::AssistantMessageStarted(Empty {}), Some("a_0"));
     history.write(requested("read"), Some("a_1"));
     history.freeze();
+    assert_eq!(
+        history.history_kinds(),
+        [
+            "session_started",
+            "turn_started",
+            "assistant_message_started",
+            "tool_call_requested",
+        ]
+    );
 
     let looped = history.resume(Vec::new());
     let outcome = history.run(looped, "two");
@@ -763,6 +826,17 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
     history.write(started(), Some("a_1"));
     history.write(completed("done"), Some("a_1"));
     history.freeze();
+    assert_eq!(
+        history.history_kinds(),
+        [
+            "session_started",
+            "turn_started",
+            "tool_call_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+        ]
+    );
 
     let looped = history.resume(vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)]);
     let outcome = history.run(looped, "two");
@@ -815,6 +889,10 @@ fn budget_counts_spend_from_before_the_resume() {
     history.write(user_turn("one"), None);
     history.write(History::usage("g1", support::MODEL, Some(5.0)), Some("a_1"));
     history.freeze();
+    assert_eq!(
+        history.history_kinds(),
+        ["session_started", "turn_started", "usage_recorded"]
+    );
 
     let looped = history.resume(Vec::new()).budget(Some(1.0));
     let outcome = history.run(looped, "two");
@@ -864,6 +942,9 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         );
     }
     history.freeze();
+    let mut expected = vec!["session_started".to_owned()];
+    expected.extend(vec!["permission_resolved".to_owned(); 20]);
+    assert_eq!(history.history_kinds(), expected);
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
@@ -961,6 +1042,9 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         );
     }
     history.freeze();
+    let mut expected = vec!["session_started".to_owned()];
+    expected.extend(vec!["permission_resolved".to_owned(); 20]);
+    assert_eq!(history.history_kinds(), expected);
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![
         Scripted::text("check"),
@@ -1042,6 +1126,15 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     history.write(requested("read"), Some("a_1"));
     history.write(completed("Paris."), Some("a_1"));
     history.freeze();
+    assert_eq!(
+        history.history_kinds(),
+        [
+            "session_started",
+            "turn_started",
+            "tool_call_requested",
+            "tool_call_completed",
+        ]
+    );
 
     let reviewer = Arc::new(ScriptedProvider::new(vec![Scripted::text("allow")]));
     let reviewer_provider = Arc::clone(&reviewer);
@@ -1112,10 +1205,56 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
 }
 
 #[test]
+fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
+    // a1 is requested and never completed; the dead process's second
+    // `assistant_message_started` flushes its fixed result into the rebuilt
+    // conversation, so `sent` counts it.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(requested("read"), Some("a_1"));
+    history.write(message_started(), Some("a_0"));
+    history.freeze();
+    assert_eq!(
+        history.history_kinds(),
+        [
+            "session_started",
+            "turn_started",
+            "tool_call_requested",
+            "assistant_message_started",
+        ]
+    );
+
+    let looped = history.resume(Vec::new());
+    history.run(looped, "two");
+
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let conversation = &requests[0].conversation;
+    assert_eq!(conversation.len(), 4);
+    let (id, text, _) = result_of(&conversation[2]);
+    assert_eq!(id.0, "a_1");
+    assert_eq!(text, "It never ran.");
+    assert_eq!(requests[0].previous_end, Some(3));
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
 fn no_request_before_the_resume_leaves_previous_end_absent() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.freeze();
+    assert_eq!(history.history_kinds(), ["session_started", "turn_started"]);
 
     let looped = history.resume(Vec::new());
     history.run(looped, "two");

@@ -45,7 +45,9 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
 
 /// The conversation `lines` render, with its length at the last
 /// `assistant_message_started`: the previous request's end, for the cache
-/// markers (`docs/prompt-cache.md`). `None` when the log holds none.
+/// markers (`docs/prompt-cache.md`). `None` when the log holds none. The
+/// length is read after the line renders, so the fixed results its flush
+/// just added count.
 pub(crate) fn rebuild_and_sent(
     lines: &[Envelope],
     model: &str,
@@ -55,10 +57,10 @@ pub(crate) fn rebuild_and_sent(
     let mut sent = None;
     for line in lines.iter().filter(|l| l.is_durable()) {
         if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
+            rendered.push(&event, line.action_id.as_ref(), model, &completed);
             if matches!(event, Event::AssistantMessageStarted(_)) {
                 sent = Some(rendered.conversation.len());
             }
-            rendered.push(&event, line.action_id.as_ref(), model, &completed);
         }
     }
     Ok((rendered.finish(), sent))

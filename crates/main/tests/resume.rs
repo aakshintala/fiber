@@ -350,6 +350,23 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
 
     let first = setup.fiber(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(
+        first.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let id = first.session_id().to_owned();
     let prefix = &id[..8];
 
@@ -448,8 +465,34 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
     // The resumed run re-runs nothing: the log's only `tool_call_started`
     // is the crash's own.
     let log = fs::read_to_string(setup.sessions().join("s_fixed1").join("events.jsonl")).unwrap();
-    assert_eq!(log.matches("tool_call_started").count(), 1);
-    assert_eq!(log.matches("tool_call_requested").count(), 2);
+    let kinds: Vec<String> = log
+        .lines()
+        .map(|l| {
+            serde_json::from_str::<Value>(l).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            "session_started",
+            "turn_started",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_requested",
+            "fiber_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -551,6 +594,23 @@ fn a_held_session_fails_session_held() {
     setup.provider(&server);
     let first = setup.fiber(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(
+        first.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let id = first.session_id().to_owned();
     assert_eq!(server.requests().len(), 1);
 
@@ -575,6 +635,23 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
     setup.provider(&server);
     let first = setup.fiber(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(
+        first.kinds(),
+        [
+            "fiber_started",
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let id = first.session_id().to_owned();
     let events = setup.sessions().join(&id).join("events.jsonl");
     let before = fs::read(&events).unwrap();

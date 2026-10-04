@@ -132,8 +132,10 @@ fn fiber_started_is_the_first_line_and_names_the_version() {
     fiber_started(&session.log, "1.2.3", false).unwrap();
 
     let lines = log::read(&session.dir).unwrap();
-    assert_eq!(lines.len(), 1);
-    assert_eq!(lines[0].kind, "fiber_started");
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["fiber_started"]
+    );
     assert_eq!(lines[0].payload["version"], "1.2.3");
     assert_eq!(lines[0].payload["resumed"], false);
 }
