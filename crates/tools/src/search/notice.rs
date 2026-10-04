@@ -72,7 +72,6 @@ pub(crate) fn skipped(cwd: &Path, fs_dir: &Path) -> Vec<String> {
 
 /// The `grep` notice: names `skipped`, or nothing when none was skipped.
 /// `pattern` is the search pattern as given.
-#[allow(dead_code, reason = "the grep search reports skips with task 4")]
 pub(crate) fn grep_line(pattern: &str, skipped: &[String]) -> Option<String> {
     let [first, ..] = skipped else {
         return None;

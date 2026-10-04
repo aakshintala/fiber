@@ -8,10 +8,13 @@
 mod bre;
 mod fallback;
 mod find;
+mod grep;
+mod grep_args;
 mod notice;
 mod walk;
 
 pub use find::find_main;
+pub use grep::grep_main;
 
 use std::io::Write;
 
@@ -66,6 +69,21 @@ impl<'a> Out<'a> {
     pub(crate) fn broken(&self) -> bool {
         self.broken
     }
+}
+
+/// Parses ASCII digits into a number: nothing for an empty value,
+/// anything but digits, or an overflow.
+pub(crate) fn decimal(value: &[u8]) -> Option<usize> {
+    if value.is_empty() || !value.iter().all(|byte| byte.is_ascii_digit()) {
+        return None;
+    }
+    let mut number = 0usize;
+    for byte in value {
+        number = number
+            .checked_mul(10)
+            .and_then(|shifted| shifted.checked_add(usize::from(*byte - b'0')))?;
+    }
+    Some(number)
 }
 
 #[cfg(test)]

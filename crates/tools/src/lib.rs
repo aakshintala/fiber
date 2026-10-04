@@ -12,6 +12,6 @@ mod write;
 pub use edit::Edit;
 pub use files::{Files, PathGuard, PathLocks};
 pub use read::Read;
-pub use search::find_main;
+pub use search::{find_main, grep_main};
 pub use shell::Shell;
 pub use write::Write;

@@ -36,7 +36,7 @@ pub(crate) struct FileRoot {
 
 /// A directory to walk: `walk` is read, paths print below `show`. The two
 /// differ only when the path as given is a link.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub(crate) struct DirRoot {
     /// The directory read.
     pub walk: PathBuf,
@@ -77,10 +77,6 @@ pub(crate) struct Found {
     /// relative path.
     pub display: PathBuf,
     /// The entry's type. A link the walk finds is reported as a link.
-    #[allow(
-        dead_code,
-        reason = "the grep search skips links and directories with task 4"
-    )]
     pub file_type: std::fs::FileType,
     /// How far below the search root the entry sits; the root is 0.
     pub depth: usize,

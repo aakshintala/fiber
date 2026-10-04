@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use super::Out;
+use super::{Out, decimal};
 
 /// A writer that fails every write and counts them.
 struct Fail {
@@ -60,4 +60,15 @@ fn a_failed_flush_reads_as_a_failed_pipe() {
     assert!(!out.broken());
     out.flush();
     assert!(out.broken());
+}
+
+#[test]
+fn decimal_reads_digits_only() {
+    assert_eq!(decimal(b"0"), Some(0));
+    assert_eq!(decimal(b"007"), Some(7));
+    assert_eq!(decimal(b""), None);
+    assert_eq!(decimal(b"x"), None);
+    assert_eq!(decimal(b"-1"), None);
+    assert_eq!(decimal(b"1.5"), None);
+    assert_eq!(decimal(b"99999999999999999999999"), None);
 }

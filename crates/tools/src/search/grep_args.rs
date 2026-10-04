@@ -1,0 +1,250 @@
+//! The `grep` command line: flags, pattern and paths
+//! (`docs/tools.md`, "Search", "Flags").
+
+use std::ffi::OsString;
+use std::path::PathBuf;
+
+/// How the pattern reads: basic, extended (`-E`) or fixed (`-F`), last wins.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+pub(crate) enum Mode {
+    /// A basic regular expression.
+    #[default]
+    Basic,
+    /// An extended regular expression.
+    Extended,
+    /// A fixed string.
+    Fixed,
+}
+
+/// What `grep` was asked to search.
+#[derive(Default)]
+pub(crate) struct Options {
+    /// The pattern as given.
+    pub pattern: Vec<u8>,
+    /// The paths as given.
+    pub paths: Vec<PathBuf>,
+    /// Whether `-r` was given.
+    pub recursive: bool,
+    /// Whether `-n` was given.
+    pub line_numbers: bool,
+    /// Whether `-i` was given.
+    pub ignore_case: bool,
+    /// Whether `-v` was given.
+    pub invert: bool,
+    /// The last of `-E` and `-F`, or basic.
+    pub mode: Mode,
+    /// Whether `-l` was given.
+    pub files_with_matches: bool,
+    /// Whether `-c` was given.
+    pub count: bool,
+    /// Whether `-w` was given.
+    pub word: bool,
+    /// Whether `-o` was given: provisional ruling 20 on #298 hands every
+    /// such call to the system grep, so this only rides along until then.
+    pub only_matching: bool,
+    /// The `-B` context lines.
+    pub before: usize,
+    /// The `-A` context lines.
+    pub after: usize,
+    /// The `--include` globs, matched against the base name.
+    pub includes: Vec<Vec<u8>>,
+    /// The `--exclude` globs, matched against the base name.
+    pub excludes: Vec<Vec<u8>>,
+}
+
+/// Why parsing declined.
+pub(crate) enum Parsed {
+    /// The search to run.
+    Run(Options),
+    /// A flag the built-in does not handle.
+    Fallback,
+    /// A bad invocation: the message, already a full line.
+    Error(String),
+}
+
+/// Splits flags from the pattern and paths. Short flags combine, `--` ends
+/// flags, and a flag-like operand after the pattern hands the call over, as
+/// the system permutes what the built-in reads in order.
+pub(crate) fn parse(args: &[OsString]) -> Parsed {
+    let mut options = Options::default();
+    let mut operands: Vec<PathBuf> = Vec::new();
+    let mut index = 0;
+    let mut flags = true;
+    let mut dashes = false;
+    while let Some(arg) = args.get(index) {
+        let bytes = arg.as_encoded_bytes();
+        if !flags {
+            // The system permutes a flag-like operand into the flags; the
+            // built-in reads in order, so it hands the call over instead.
+            // Past `--` all is operands, and a lone `-` is standard input.
+            if !dashes && bytes.len() > 1 && bytes.first() == Some(&b'-') {
+                return Parsed::Fallback;
+            }
+            operands.push(PathBuf::from(arg));
+            index += 1;
+            continue;
+        }
+        if bytes == b"--" {
+            flags = false;
+            dashes = true;
+            index += 1;
+            continue;
+        }
+        if bytes.len() > 1 && bytes.first() == Some(&b'-') && bytes.get(1) != Some(&b'-') {
+            let cluster = bytes.to_vec();
+            if let Err(decision) = short(&mut options, &cluster, args, &mut index) {
+                return decision.parsed();
+            }
+            continue;
+        }
+        if bytes.len() > 2 && bytes.starts_with(b"--") {
+            let body = bytes.get(2..).unwrap_or_default().to_vec();
+            if let Err(decision) = long(&mut options, &body, args, &mut index) {
+                return decision.parsed();
+            }
+            continue;
+        }
+        flags = false;
+        operands.push(PathBuf::from(arg));
+        index += 1;
+    }
+    let mut paths = operands.into_iter();
+    let Some(pattern) = paths.next() else {
+        // No pattern: the system prints its usage.
+        return Parsed::Fallback;
+    };
+    options.pattern = pattern.as_os_str().as_encoded_bytes().to_vec();
+    options.paths = paths.collect();
+    Parsed::Run(options)
+}
+
+/// Parses one short-flag cluster, advancing past it and any value it takes
+/// from the next argument.
+/// Why a flag parser declined.
+enum Decision {
+    /// A flag the built-in does not handle.
+    Fallback,
+    /// A bad invocation: the message, already a full line.
+    Error(String),
+}
+
+impl Decision {
+    /// Lifts the decision into what parsing reports.
+    fn parsed(self) -> Parsed {
+        match self {
+            Decision::Fallback => Parsed::Fallback,
+            Decision::Error(message) => Parsed::Error(message),
+        }
+    }
+}
+
+fn short(
+    options: &mut Options,
+    cluster: &[u8],
+    args: &[OsString],
+    index: &mut usize,
+) -> Result<(), Decision> {
+    let mut rest = cluster.get(1..).unwrap_or_default();
+    while let Some((flag, tail)) = rest.split_first() {
+        rest = tail;
+        match flag {
+            b'n' => options.line_numbers = true,
+            b'r' => options.recursive = true,
+            b'i' => options.ignore_case = true,
+            b'v' => options.invert = true,
+            b'E' => options.mode = Mode::Extended,
+            b'F' => options.mode = Mode::Fixed,
+            b'l' => options.files_with_matches = true,
+            b'c' => options.count = true,
+            b'w' => options.word = true,
+            b'o' => options.only_matching = true,
+            b'A' | b'B' | b'C' => {
+                let value = attached(rest, args, index, *flag)?;
+                rest = &[];
+                let count = super::decimal(&value).ok_or_else(|| {
+                    Decision::Error(format!(
+                        "grep: '{}': invalid context length argument",
+                        String::from_utf8_lossy(&value)
+                    ))
+                })?;
+                // `-C` sets both; a later `-A` or `-B` wins its own side.
+                if *flag == b'A' || *flag == b'C' {
+                    options.after = count;
+                }
+                if *flag == b'B' || *flag == b'C' {
+                    options.before = count;
+                }
+            }
+            _ => return Err(Decision::Fallback),
+        }
+    }
+    *index += 1;
+    Ok(())
+}
+
+/// The value of a context flag: what the cluster holds after it, or the
+/// next argument.
+fn attached(
+    rest: &[u8],
+    args: &[OsString],
+    index: &mut usize,
+    flag: u8,
+) -> Result<Vec<u8>, Decision> {
+    if !rest.is_empty() {
+        return Ok(rest.to_vec());
+    }
+    *index += 1;
+    match args.get(*index) {
+        Some(value) => Ok(value.as_encoded_bytes().to_vec()),
+        None => Err(Decision::Error(format!(
+            "grep: option '-{}' requires an argument",
+            flag as char
+        ))),
+    }
+}
+
+/// Parses one long flag, `body` past the `--`, advancing past it and any
+/// value it takes from the next argument.
+fn long(
+    options: &mut Options,
+    body: &[u8],
+    args: &[OsString],
+    index: &mut usize,
+) -> Result<(), Decision> {
+    let (name, inline) = match body.iter().position(|byte| *byte == b'=') {
+        Some(found) => {
+            let (name, rest) = body.split_at(found);
+            (name, Some(rest.get(1..).unwrap_or_default().to_vec()))
+        }
+        None => (body, None),
+    };
+    let name = String::from_utf8_lossy(name).into_owned();
+    if name != "include" && name != "exclude" {
+        return Err(Decision::Fallback);
+    }
+    let value = match inline {
+        Some(value) => value,
+        None => {
+            *index += 1;
+            match args.get(*index) {
+                Some(value) => value.as_encoded_bytes().to_vec(),
+                None => {
+                    return Err(Decision::Error(format!(
+                        "grep: option '--{name}' requires an argument"
+                    )));
+                }
+            }
+        }
+    };
+    if name == "include" {
+        options.includes.push(value);
+    } else {
+        options.excludes.push(value);
+    }
+    *index += 1;
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "grep_args_tests.rs"]
+mod tests;

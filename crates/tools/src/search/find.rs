@@ -209,17 +209,7 @@ fn take(args: &[OsString], index: &mut usize, flag: &str) -> Result<Vec<u8>, Dec
 
 /// Parses a depth limit: ASCII digits only.
 fn depth(value: &[u8], flag: &str) -> Result<usize, Decision> {
-    if value.is_empty() || !value.iter().all(|byte| byte.is_ascii_digit()) {
-        return Err(Decision::Error(invalid(flag, value)));
-    }
-    let mut depth = 0usize;
-    for byte in value {
-        depth = depth
-            .checked_mul(10)
-            .and_then(|shifted| shifted.checked_add(usize::from(*byte - b'0')))
-            .ok_or_else(|| Decision::Error(invalid(flag, value)))?;
-    }
-    Ok(depth)
+    super::decimal(value).ok_or_else(|| Decision::Error(invalid(flag, value)))
 }
 
 /// The bad-depth message.
@@ -435,7 +425,7 @@ fn modified(fs: &Path) -> io::Result<SystemTime> {
 }
 
 /// The base name as bytes: the file name, or the whole path for `.`.
-fn basename(path: &Path) -> &[u8] {
+pub(crate) fn basename(path: &Path) -> &[u8] {
     path.file_name()
         .map(|name| name.as_encoded_bytes())
         .unwrap_or_else(|| path.as_os_str().as_encoded_bytes())

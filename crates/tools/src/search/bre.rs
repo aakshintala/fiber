@@ -10,7 +10,6 @@
 /// when the system grep must run instead: a back-reference, a `*` after a
 /// zero-width assertion, a non-ASCII or control escape, or a trailing
 /// backslash.
-#[allow(dead_code, reason = "the grep search translates patterns with task 4")]
 pub(crate) fn translate_bre(pattern: &str) -> Option<String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::new();
@@ -239,7 +238,6 @@ fn class_end(chars: &[char], colon: usize) -> Option<usize> {
 ///
 /// `` \` `` and `\'` pass through untouched: ripgrep reads them as literal
 /// characters where GNU anchors, a corner too rare to hand over.
-#[allow(dead_code, reason = "the grep search translates patterns with task 4")]
 pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
     let chars: Vec<char> = pattern.chars().collect();
     let mut out = String::new();
