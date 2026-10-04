@@ -5,6 +5,7 @@
 //! built-in does not handle replaces the process with the system tool
 //! before anything is read or written.
 
+mod bre;
 mod fallback;
 mod find;
 mod notice;

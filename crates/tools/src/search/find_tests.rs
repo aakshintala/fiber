@@ -312,7 +312,8 @@ fn newer_compares_modification_times_strictly() {
         ("new_hay.txt", "new"),
         ("mark_ref.txt", "ref"),
     ]));
-    let moment = SystemTime::now() - Duration::from_secs(3600);
+    // Fixed stamps, not the clock: the order is what the test needs.
+    let moment = SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000);
     let stamp = |path: &std::path::Path, at: SystemTime| {
         fs::OpenOptions::new()
             .read(true)

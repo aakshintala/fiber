@@ -489,7 +489,7 @@ fn match_here(pattern: &[u8], text: &[u8], ignore_case: bool) -> bool {
 /// Matches a `[...]` class against `text`'s first byte, then the rest.
 /// A `[` without a closer matches itself.
 fn match_bracket(after: &[u8], text: &[u8], ignore_case: bool) -> bool {
-    let Some((negated, members, rest)) = parse_class(after) else {
+    let Some(class) = parse_class(after) else {
         return match text.split_first() {
             Some((byte, tail)) if *byte == b'[' => match_here(after, tail, ignore_case),
             _ => false,
@@ -497,12 +497,12 @@ fn match_bracket(after: &[u8], text: &[u8], ignore_case: bool) -> bool {
     };
     match text.split_first() {
         Some((byte, tail)) => {
-            let hit = members.iter().any(|(low, high)| {
+            let hit = class.members.iter().any(|(low, high)| {
                 fold(*low, ignore_case) <= fold(*byte, ignore_case)
                     && fold(*byte, ignore_case) <= fold(*high, ignore_case)
             });
-            if hit != negated {
-                match_here(rest, tail, ignore_case)
+            if hit != class.negated {
+                match_here(class.rest, tail, ignore_case)
             } else {
                 false
             }
@@ -511,9 +511,19 @@ fn match_bracket(after: &[u8], text: &[u8], ignore_case: bool) -> bool {
     }
 }
 
+/// A `[...]` class: negation, member ranges and what follows the closer.
+struct Class<'a> {
+    /// Whether the class is negated.
+    negated: bool,
+    /// The member ranges, singles as equal ends.
+    members: Vec<(u8, u8)>,
+    /// What follows the closer.
+    rest: &'a [u8],
+}
+
 /// Reads a `[...]` class: negation, member ranges and what follows the
 /// closer. Returns nothing when no closer follows.
-fn parse_class(after: &[u8]) -> Option<(bool, Vec<(u8, u8)>, &[u8])> {
+fn parse_class(after: &[u8]) -> Option<Class<'_>> {
     let (negated, mut body) = match after.split_first() {
         Some((b'!' | b'^', rest)) => (true, rest),
         _ => (false, after),
@@ -528,7 +538,11 @@ fn parse_class(after: &[u8]) -> Option<(bool, Vec<(u8, u8)>, &[u8])> {
         let (byte, rest) = body.split_first()?;
         body = rest;
         if *byte == b']' {
-            return Some((negated, members, body));
+            return Some(Class {
+                negated,
+                members,
+                rest: body,
+            });
         }
         if *byte == b'\\' {
             let (escaped, rest) = body.split_first()?;
