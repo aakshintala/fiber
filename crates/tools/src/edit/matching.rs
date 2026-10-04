@@ -252,21 +252,13 @@ fn fold_view(text: &str) -> (String, Vec<usize>) {
         };
         let mut folded = String::with_capacity(line.len());
         let mut folded_origin = Vec::with_capacity(line.len());
-        let mut byte = 0usize;
-        for ch in line.chars() {
+        for (byte, ch) in line.char_indices() {
             let start = input + byte;
             let mapped = fold_char(ch);
             for _ in 0..mapped.len_utf8() {
                 folded_origin.push(start);
             }
             folded.push(mapped);
-            // `byte` starts at 0. A folded span reads the line start (still 0)
-            // and the newline sentinel, never a later character's origin, so
-            // `*=` would leave `byte` at 0 and change nothing a caller sees.
-            #[cfg_attr(false, mutants::skip)]
-            {
-                byte += ch.len_utf8();
-            }
         }
         let kept = folded.trim_end_matches([' ', '\t']);
         out.push_str(kept);
