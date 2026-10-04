@@ -160,12 +160,7 @@ fn line_argument(
 }
 
 fn slice_text(text: &str, offset: usize, limit: usize) -> Result<String, String> {
-    // `split_inclusive` yields one empty slice for an empty file, which has no lines.
-    let lines: Vec<&str> = if text.is_empty() {
-        Vec::new()
-    } else {
-        text.split_inclusive('\n').collect()
-    };
+    let lines: Vec<&str> = text.split_inclusive('\n').collect();
     let total = lines.len();
     if offset > total && !(total == 0 && offset == 1) {
         return Err(format!(
