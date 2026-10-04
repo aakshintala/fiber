@@ -344,14 +344,14 @@ fn the_signal_check_fails_a_signal_outside_the_allowlist() {
         (0, "signal-sites: ok\n".to_owned())
     );
     // Built from parts so this file holds no signal pattern itself; the
-    // file is untracked, which the check still scans.
+    // file is an untracked test file, which the check still scans.
     let pattern = ["kill", "pg"].concat();
-    dir.write("crates/b/src/evil.rs", &format!("call {pattern}(1);\n"));
+    dir.write("crates/b/tests/evil.rs", &format!("call {pattern}(1);\n"));
     let (code, out) = xtask(&dir, &["signal-sites"], &[], "");
     assert_eq!(code, 1);
     assert_eq!(
         out,
-        format!("signal-sites: crates/b/src/evil.rs:1: {pattern}\n")
+        format!("signal-sites: crates/b/tests/evil.rs:1: {pattern}\n")
     );
 }
 
