@@ -28,6 +28,8 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   approvals/<content-hash>        one file per MCP server approval or never
   credentials/<name>/<label>       one file per stored provider credential, mode 0600
   credentials/<name>              one file per extension secret, mode 0600
+  credentials/hubs/<name>         one device token per hub this client paired with, mode 0600
+  hub/devices/<device>            one record per device paired with this hub: name, when, token hash
   run/<session_id>                one local socket per running session
   run/hub                         the hub's local socket
   recent.jsonl                    recently exited sessions, a rebuildable index
@@ -194,6 +196,14 @@ because macOS limits a socket's path to 103 bytes (`sun_path[104]` in
 `projects/<key>/sessions/<id>/` exceeds that. Linux allows 107 (`unix(7)`, not
 measured here). A `FIBER_HOME` long enough to break the limit is a startup
 error naming the variable.
+
+**Paired devices.** `hub/devices/<device>` holds one record per device
+paired with this machine's hub: its name, when it was paired, when it last
+connected, and a SHA-256 hash of its device token, never the token
+(`docs/invocation.md`, "Remote clients"). Revoking a device deletes its
+record. On a client, `credentials/hubs/<name>` holds the device token for
+each hub it paired with, mode 0600, under the same credential deny as every
+other file in `credentials/` (`docs/permissions.md`, "Credentials").
 
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it

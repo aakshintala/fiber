@@ -213,6 +213,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
 | `depth_exceeded` | tool call | a delegate tool at depth 2 (`docs/delegates.md`) |
+| `duplicate_command` | driver command | a command repeats the id of one the session already accepted, so it was not applied again (`docs/invocation.md`, "The command line") |
 | `extension_incompatible` | exit, notice | an extension needs a newer `fiber` or a different extension API version; `fiber extension install` refuses it and loading skips it (`docs/extensions.md`, "The extension API version") |
 | `extension_missing` | exit | the provider of a `provider/model` is not installed |
 | `extension_not_found` | exit | an install names a repository or tag that does not exist; fix the name. Not retried automatically (`docs/extensions.md`, "Names") |
@@ -241,10 +242,11 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
 | `nonzero_exit` | tool call, job | a process exited nonzero |
-| `not_found` | tool call | the path `read` or `edit` names does not exist |
+| `not_found` | tool call, hub command | the path `read` or `edit` names does not exist, or `read_file` names no file (`docs/invocation.md`, "A session's files") |
 | `orphaned` | job | the process that ran the job died |
 | `output_cap` | job | a job's output file passed 5 GB |
 | `output_truncated` | tool call, turn | a reply was cut off by the output-token limit, so its calls did not run |
+| `pairing_failed` | hub connection | a pairing code was wrong, already used or more than 10 minutes old (`docs/invocation.md`, "Remote clients") |
 | `path_changed` | tool call | a symbolic link changed between the permission decision and the read or write |
 | `protocol_unsupported` | exit | the model's protocol is one this Fiber does not speak yet; pick another model |
 | `provider_unavailable` | model call, turn | a provider server error or overload |
@@ -261,12 +263,13 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
 | `timeout` | tool call, job | a deadline passed |
-| `too_large` | tool call | a `web_fetch` download larger than 10 MiB |
+| `too_large` | tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
-| `unreachable` | tool call | `session_message` named an id no running session has |
-| `unreadable_reply` | permission request | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
+| `unauthenticated` | hub connection | a remote connection's first message presented no valid device token; the hub closes the connection (`docs/invocation.md`, "Remote clients") |
 | `unknown_stop_reason` | model call, turn | the reply ended with a stop or finish reason Fiber does not map |
 | `unknown_tool` | tool call | the model named a tool that does not exist |
+| `unreachable` | tool call | `session_message` named an id no running session has |
+| `unreadable_reply` | permission request | a model replied, but not in the format Fiber asked for, such as a reviewer verdict that could not be read on the second ask (`docs/permissions.md`, "What happens on a block") |
 | `unsupported_file` | tool call | a file tool was given a directory, device or file it cannot handle |
 | `usage` | exit | the invocation or its environment is wrong; exits 2 |
 | `version_conflict` | exit | an install needs two majors of one dependency, no tag meets a minimum, or the versions cannot be settled; pick compatible versions. Not retried automatically (`docs/extensions.md`, "Versions") |
@@ -287,7 +290,7 @@ Notices, for a failure outside any action:
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
-`closing`)
+`closing`, `duplicate_command`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

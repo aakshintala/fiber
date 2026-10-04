@@ -14,9 +14,12 @@ commands".
 
 ## What the terminal is
 
-- **The terminal is Fiber's only first-party client.** A GUI is a separate
-  project that is a client of the hub, as the terminal is. Fiber serves no
-  web UI.
+- **The terminal ships in the `fiber` binary, and the hub serves no UI.** It
+  ships in the binary so that a fresh machine or an SSH box has a door with
+  nothing installed, not because it has powers another client lacks. A GUI, a
+  phone app or a web page is a client of the hub with exactly the terminal's
+  powers (`docs/invocation.md`, "The hub"). Which of them are first-party is
+  decided by the application that needs them, not here.
 - **It is a control center over many sessions.** It shows every live session
   through the hub, from any project, and one of them on screen at a time. It
   runs from any directory.

@@ -56,7 +56,7 @@ ephemeral event where it is display-only.
 | `extensions` | Loads extension code, hosts the runtime, and wires what extensions register into the three seams. |
 | `tui` | Draws the terminal, in its own process, as a client of the hub. Watches events, sends commands, knows nothing else. |
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
-| `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket (`docs/invocation.md`, "The hub"). Holds no session. |
+| `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 

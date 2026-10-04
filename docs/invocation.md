@@ -21,8 +21,12 @@ Every session is headless. A person or a program reaches one through a door.
 | `fiber ask` | A one-shot session for a caller outside Fiber. Its prompt is its argument or stdin, its stdout is the event stream, and it accepts no further prompts. |
 
 The hub is not a door. It is the one process every client talks to, the
-terminal included ("The hub"). A GUI, a phone or a web page is a client of the
-hub, exactly as the terminal is.
+terminal included ("The hub"). A GUI, a phone, a web page or a bot is a client
+of the hub, exactly as the terminal is. The terminal ships in the `fiber`
+binary because a fresh machine or an SSH box needs a door that works with
+nothing installed, not because it has a power another client lacks. The hub
+serves no UI, and which other clients are first-party is decided by the
+application that needs them, not by the hub.
 
 A session started by the hub and a session started by `fiber ask` are the same
 program. Both run the internal session command; `ask` runs it with its prompt
@@ -184,9 +188,23 @@ per-project file in Fiber home. `--repo` writes the repository's
 exact declaration for the person who ran it (`docs/mcp.md`, "A repository's
 servers").
 
-**The hub.** `fiber hub install` registers the hub as a login service ("The
-hub"). The other `hub` commands are left to
-[Remote access: what the hub speaks](https://github.com/aakshintala/fiber/issues/86).
+**The hub.** The first seven run on the machine whose hub they manage; `add`
+and `remove` run on a client ("The hub"):
+
+| Command | What it does |
+|---|---|
+| `hub install [--port <port>]` | Registers the hub as a login service. Without `--port` it listens on its local socket only. With `--port` it also listens on `127.0.0.1:<port>`, where every connection presents a device token, and writes `hub.port`. |
+| `hub uninstall` | Removes the login service. Running sessions carry on. |
+| `hub status` | Prints whether the hub is running, its version, its port, the connected clients and the paired devices. It takes `--json`. |
+| `hub pair <device>` | Prints a pairing code for a device of that name, and in a terminal draws it as a QR code with the hub's address. The code works once, within 10 minutes. |
+| `hub token list` | Lists paired devices: name, when paired, last connection. |
+| `hub token revoke <device>` | Revokes a device's token and closes its live connections. |
+| `hub refresh` | Rebuilds the hub's environment for the sessions it starts from now on ("A session's environment"). |
+| `hub add [--default] <name> <address>` | Adds a hub to this client's list, asks for its pairing code, and stores the device token it gets. The address is `ws://`, `wss://` or `unix:` followed by a socket path. `--default` makes it the hub this client uses without `--hub`. |
+| `hub remove <name>` | Removes a hub from this client's list and deletes its device token. |
+
+Every command that talks to the hub takes `--hub <name>` to use a hub from
+the client's list instead of the default.
 
 **Internal commands.** Fiber starts its own processes with two internal
 commands: the session command and the hub. Neither is in the menu, and no
@@ -268,6 +286,7 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 |---|---|---|---|
 | `id` | string | yes | minted by the client from random bytes, as Fiber mints its own ids (`docs/events.md`, "Identity and ordering"). Acknowledgements and events name the command by it, as `command_id` |
 | `command` | string | yes | the command's name, from the table below |
+| `session_id` | string | no | on a connection to the hub, the session the command is for; the hub passes the line to that session without this key. Absent there, the command is for the hub itself ("The hub"). A session's own socket never receives it |
 | `args` | object | no | the command's own keys, below; absent when it takes none |
 
 ```json
@@ -279,6 +298,12 @@ A line that is not a JSON object, has no string `id` or `command`, has
 `malformed`. `args` with a missing key, a key of the wrong type or a
 key the command does not take is rejected `invalid_arguments`, so an older
 Fiber says no to a newer client's key instead of ignoring it.
+
+A session remembers the id of every command it accepted for as long as its
+process runs, and rejects a second command with the same id
+`duplicate_command`. A client that lost its connection resends every
+command it had no answer for, with the same id, so a command that had
+already arrived is never applied twice.
 
 `content` is content parts (`docs/events.md`, "Content parts"). A client sends
 an image part as `type`, `data`, the image's bytes in base64, and `mime_type`,
@@ -315,7 +340,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 
 | Command | What it does |
 |---|---|
-| `subscribe` | The first command on every connection. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command before it is rejected `not_subscribed`, and a second `subscribe` is rejected `invalid_arguments`. |
+| `subscribe` | The first command on every connection to a session, and on a connection to the hub the first command for each session. `full` receives the session's whole stream, folded from the log first; `summary` receives only the latest `session_status` and `extensions_loaded` (`docs/events.md`) and reads no log. Only a `full` connection counts in `clients`. Any other command for that session before it is rejected `not_subscribed`, and a second `subscribe` for it is rejected `invalid_arguments`. |
 | `prompt` | Starts a turn. Rejected `busy` if a turn is running. |
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
@@ -338,7 +363,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `closing`.
+`session_held`, `delegate_session`, `closing`, `duplicate_command`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
@@ -679,6 +704,12 @@ and writes any `usage_recorded` lines it is missing (`docs/loop.md`,
 and each session follows "Lifecycle". Stopping the hub ends its relays, and
 each session sees its clients leave. Neither stops a session.
 
+On SIGTERM, SIGINT or SIGHUP the hub sends each websocket a close message
+saying it is stopping, closes its local connections and exits. It does not
+drain, because it holds no session. A client reconnects and resends, with the
+same id, every command it had no answer for; a session that already accepted
+one rejects the copy `duplicate_command` ("The command line").
+
 ## The hub
 
 Every client reaches sessions through the hub, the local terminal included.
@@ -696,23 +727,145 @@ Every client reaches sessions through the hub, the local terminal included.
   delegate when the person opens its parent.
 - **It starts sessions with the internal session command**, in the workspace
   the client names.
-- **A client starts it** when none is running. That hub never listens
-  remotely, and exits once no client has been connected for a while.
+- **A client starts it** when none is running. That hub listens on its local
+  socket only, and exits once no client has been connected for a while.
 - **`fiber hub install` registers it as a login service** (launchd on macOS,
-  systemd on Linux) that listens on the address the person chose and never
-  exits for being idle. `fiber update` restarts it through the service
-  manager (`docs/releasing.md`).
+  systemd on Linux) that never exits for being idle. With `--port`, it also
+  listens on that port of `127.0.0.1`, and on no other address. `fiber update`
+  restarts it through the service manager (`docs/releasing.md`).
 - **The hub runs as the account that owns Fiber home** and is trusted as a
-  session is. Locally, being that account is the authentication. Every remote
-  connection presents a token.
-- **Fiber ships no relay service.** The person makes an installed hub
-  reachable: tailscale, WireGuard, a LAN or `ssh -L`.
+  session is. On its local socket, being that account is the authentication.
+  Every connection to its port presents a device token, because any process
+  on the machine can reach `127.0.0.1`, a proxy included.
+- **Fiber does no TLS and ships no relay service.** The person wraps the port
+  the way they choose: `tailscale serve`, which gives it an HTTPS name on the
+  tailnet; a reverse proxy; or `ssh -L`.
 - **A remote client has exactly the terminal's powers.** It receives the same
   event stream and sends the same driver commands.
+- **Hubs never talk to each other.** A client may hold connections to several
+  hubs ("Several hubs").
 
-What the hub speaks, how a client gets and revokes its token, and who builds
-web and mobile clients are
+Settled by
 [Remote access: what the hub speaks](https://github.com/aakshintala/fiber/issues/86).
+
+### What the hub speaks
+
+The hub speaks the same lines as a session's socket: one JSON object per line,
+with the event envelope of `docs/events.md` and the command line of "Driver
+commands". Locally the lines travel over `run/hub` (`docs/state.md`). On the
+port each line is one websocket text message, and a client holds one
+websocket for everything it does.
+
+- **The hub speaks first.** Every connection opens with a `hub_hello` line
+  carrying the hub's `schema_version` and Fiber version (`docs/events.md`,
+  "The envelope"). A client that cannot
+  read that version says which one the hub runs and disconnects, as it does
+  for a session ("Processes").
+- **A command with a `session_id` is for that session.** The hub passes it to
+  the session's socket and passes back what the session sends, starting the
+  session first when it has exited, as "Lifecycle" describes. A session never
+  knows whether a line came over a websocket. Events already name their
+  session, so one connection carries several sessions' streams.
+- **A command without one is for the hub.** These are the hub's commands:
+
+| Hub command | `args` | What it does |
+|---|---|---|
+| `authenticate` | `token` (string) | On the port, the first command: presents a device token ("Remote clients"). |
+| `pair` | `code` (string) | On the port, instead of `authenticate`: exchanges a pairing code for a device token, returned in the acknowledgement. |
+| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it. |
+| `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first (`docs/state.md`). |
+| `start` | `workspace` (string), `model` (string, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `content`, its first prompt. |
+| `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
+| `prompt_history` | `project` (string), `before` (integer, optional) | Answers with a page of the project's prompt history, newest first (`docs/state.md`). |
+| `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
+| `status` | none | Answers with what `fiber hub status` prints. |
+| `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
+| `pairing_code` | `device` (string) | Local socket only: answers with a new pairing code for that device, as `fiber hub pair` prints. |
+| `devices` | none | Local socket only: answers with the paired devices. |
+| `revoke` | `device` (string) | Local socket only: revokes the device's token and closes its live connections. |
+
+Each is answered with one `command_accepted` or `command_rejected`, as a
+session's commands are. A client offers the workspaces of recent sessions
+first when it asks where to start one; a way to browse directories is left to
+clients.
+
+### Remote clients
+
+- **Pairing gives each client its own device token.** `fiber hub pair
+  <device>`, run on the hub's machine, prints a short code, and in a terminal
+  a QR code with the hub's address. A client sends the code with `pair`
+  within 10 minutes and receives a device token named after the device. The
+  code then stops working. A wrong, used or old code is rejected
+  `pairing_failed`.
+- **A device token is presented, never placed in a URL.** A remote
+  connection's first command is `authenticate` or `pair`. Anything else, or
+  a token the hub does not hold, is answered `unauthenticated` and the
+  connection is closed. A URL ends up in logs and history; a first message
+  does not.
+- **The hub keeps only a hash of each token,** in `hub/devices/<device>`
+  (`docs/state.md`), so a copy of Fiber home holds no usable token.
+  `fiber hub token revoke <device>` deletes the record and closes every live
+  connection that presented that token.
+- **A browser is held to an origin list.** A websocket opened by a web page
+  carries the page's origin, and the hub accepts it only when the origin is in
+  `hub.allowed_origins` (`docs/configuration.md`). Without the list, any page
+  the person visits could reach a hub on their tailnet. A connection with no
+  origin, from a program rather than a page, is not affected.
+- **A forwarded local socket needs no token.** A person who reaches the hub's
+  machine over SSH can forward `run/hub` to their own machine
+  (`ssh -L /tmp/fiber-hub.sock:/home/me/.fiber/run/hub host`) and add it as a
+  `unix:` address. Only their account can open either end, so being that
+  account stays the authentication.
+- **Pairing codes are minted and tokens revoked only on the hub's machine.**
+  `pairing_code`, `devices` and `revoke` are answered only on the local
+  socket, so a stolen device token cannot mint another or keep itself alive.
+
+### Several hubs
+
+A client keeps its own list of hubs: a name and an address each, in
+`hubs."<name>".address` (`docs/configuration.md`), with the device token in
+`credentials/hubs/<name>` (`docs/state.md`). `fiber hub add` and
+`fiber hub remove` change the list, `hub.default` names the one used without
+`--hub`, and with no default a client uses the local hub, starting it when
+none is running.
+
+Hubs never talk to each other, and nothing is shared between them. A client
+may hold a connection to several hubs at once. A session id is unique only
+within its hub, so a client always keeps a session's id together with the hub
+it came from. How a client shows several hubs is that client's design.
+
+### A session's files
+
+`read_file` reads one file under the session's `artifacts/`, such as an HTML
+page or an image the agent wrote, so a client renders it over the connection
+it already authenticated, and nothing is ever public. The answer carries the
+file's bytes in base64 and its media type.
+
+- **`artifacts/` is the only root.** The path is resolved, symbolic links
+  included, and must stay inside the session's `artifacts/`; otherwise the
+  command is rejected `invalid_arguments`. A missing file is `not_found`, and
+  a file over 10 MiB is `too_large`.
+- **Rendering an agent's HTML safely is the client's job.** The page was
+  written by the model, so its scripts deserve the model's trust, no more. A
+  web client puts the bytes in a frame with `sandbox="allow-scripts"` and
+  without `allow-same-origin`, so the page has an opaque origin and cannot
+  read the client's token or storage, and gives it a content security policy
+  that blocks network requests (`connect-src 'none'`, no external scripts or
+  images). Scripts, such as a chart's, still run.
+
+### Attention
+
+The hub tells every authenticated client when a session needs the person. It
+sends an `attention` line (`docs/events.md`, "The envelope") naming the
+top-level session, with a `reason` of `waiting` or `finished` and, when it
+waits, the one-line summary from `session_status`. It sends one when a
+session's `session_status` turns to `waiting`, and when a turn ends and the
+session turns `idle`.
+
+Delivering it to a device that is not connected, through Apple's or Google's
+push service, Web Push, ntfy or anything else, happens outside the hub: a
+client or an extension that holds a connection does it. The hub holds no push
+credential.
 
 ### A session's environment
 
@@ -736,10 +889,8 @@ bare one, and a hub a terminal started inherits that terminal's.
   every session started from it says so when it starts.
 - **A session's environment is fixed when the session starts.** A tool
   installed into a directory already on `PATH` is found without a rebuild.
-  A changed `PATH` in a startup file reaches new sessions after a refresh
-  command rebuilds the hub's environment; that command is one of the `hub`
-  commands left to
-  [#86](https://github.com/aakshintala/fiber/issues/86).
+  A changed `PATH` in a startup file reaches new sessions after
+  `fiber hub refresh` rebuilds the hub's environment.
 - **A delegate gets its parent's environment**, and a session started by
   `fiber ask` gets its caller's.
 - **Fiber reads no per-directory environment**, such as direnv's `.envrc`.
