@@ -101,6 +101,7 @@ set the key.
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"`, or an object with `model`, the reference, and `credential`, the credential label the delegate uses (`docs/delegates.md`). A repository's role cannot name a credential: its `credential` is ignored with a `notice`. |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
+| `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions (`docs/permissions.md`, "What the person tells it"). |
 | `reviewer.block_limits.consecutive` | 3 | no | Consecutive blocks before a person is asked. |
 | `reviewer.block_limits.session` | 20 | no | Blocks in a session before a person is asked. |
 | `handoff.enabled` | true | yes | Whether automatic handoff runs (`docs/handoff.md`). |

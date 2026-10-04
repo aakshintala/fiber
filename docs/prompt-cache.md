@@ -249,8 +249,9 @@ A cache entry also expires after its lifetime with no request.
 - Hooks: no hook rewrites a message the model has already been sent. Every
   hook point changes content before it is logged (`docs/extensions.md`,
   "Hooks").
-- The reviewer has its own cache. Its request is the shared instructions, then
-  the person's messages and the tool calls in log order, then the call under
+- The reviewer has its own cache. Its request is the shared instructions and
+  the person's `reviewer.context`, fixed for the session, then the person's
+  messages and the tool calls in log order, then the call under
   review with its declared effects, then the stage's instruction. Both stages
   send byte-identical bytes up to the stage instruction, so every reviewer
   pass of either stage extends one cache chain as the session grows. A call
