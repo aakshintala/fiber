@@ -160,6 +160,12 @@ codes! {
     SessionNotFound,
     /// A process killed by a signal Fiber did not send.
     Signal,
+    /// A skill's header does not parse or lacks `name` or `description`.
+    SkillInvalid,
+    /// Two skills share a name.
+    SkillShadowed,
+    /// The skills listing passes 10% of the context window.
+    SkillsLarge,
     /// A write would replace a file the session has not seen in its current
     /// state.
     StaleFile,

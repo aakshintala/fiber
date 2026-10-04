@@ -191,8 +191,60 @@ way. Codex instead tells the model to look for them itself.
 
 ### Skills listing
 
-The listing sits last in the opening message. What an entry holds, and what a
-skill is, waits on the map's Skills item.
+The listing sits last in the opening message. It has one entry per skill the
+model may load: the skill's name, its description and the path of its
+`SKILL.md`. Every name and every description is sent in full. The model loads a
+skill with the `skill` tool (`docs/tools.md`, "Skills").
+
+### Skills
+
+A skill is a directory holding a `SKILL.md` file: a header, then instructions
+the model reads only when a task needs them. Fiber reads the
+[Agent Skills](https://agentskills.io/specification) format:
+
+- `name` and `description` are required.
+- `license`, `compatibility`, `metadata` and `allowed-tools` are optional.
+- `disable-model-invocation` and `argument-hint` are also read, the only fields
+  outside the standard. pi and Claude Code both honour them, so a skill written
+  for either works unchanged.
+- Any other field is ignored.
+
+A skill missing `name` or `description`, or whose header does not parse, is
+left out, and a `notice` with code `skill_invalid` names its path.
+
+Both the model and the person run skills. The model loads one from the
+listing. The person types `/name`, optionally followed by arguments, and the
+skill's text is expanded into their message. A skill with
+`disable-model-invocation: true` is left out of the listing but keeps its
+`/name`. `argument-hint` is shown beside the name in the terminal's `/` list.
+
+A prompt template is what a person runs by `/name`: a skill with
+`disable-model-invocation: true`, in the same format and the same directories
+as every other skill. An MCP server's prompts appear in the same `/` list,
+tagged with the server's name (`docs/mcp.md`).
+
+Fiber finds skills in these places, read once at session start:
+
+| Source | Where |
+|---|---|
+| Repository | `.fiber/skills/` and `.agents/skills/` at the top of the git repository, or in the workspace outside git |
+| Personal | `skills/` in Fiber home, and `~/.agents/skills/` |
+| Extension | each installed extension's `skills/` and `prompts/` directories (`docs/extensions.md`, "What a package holds") |
+| Built-in | skills compiled into the binary, such as the recipe that recommends `cache.warm_cap` from the person's own sessions (`docs/prompt-cache.md`) |
+
+Each place holds one directory per skill, at a fixed depth. Fiber never walks
+the tree below it, so the cost does not grow with the repository.
+`~/.agents/skills/` is the directory pi reads, so skills shared with pi and
+Claude Code need no copy.
+
+When two skills share a name, the more specific source wins: the repository,
+then personal, then an extension, then built-in. A `notice` with code
+`skill_shadowed` names both paths.
+
+A repository's skills load without asking, including in a fresh clone, like its
+instruction files. They are text the model reads, and a repository can already
+give the model instructions through `AGENTS.md`. What guards the machine is the
+permission decision on every call (`docs/permissions.md`).
 
 ### Size
 
@@ -205,6 +257,14 @@ The 10% matches `tool_definitions_large` (`docs/tools.md`).
 Nothing is cut. A rules file with its end cut off breaks rules its author
 thought were in force. Codex cuts at 32 KiB across all files and only logs a
 warning.
+
+The skills listing follows the same rule. When it passes 10% of the context
+window, the build is followed by a `notice` with code `skills_large`, naming
+the sources that add the most to it. The listing is never cut. Claude Code
+caps its listing at 1% of the window and codex at 2%, shortening descriptions
+when over. Measured on the owner's 36 skills, the listing is about 2,500
+tokens, more than 1% of a 200,000-token window, so a cap would cut the
+person's own skills on every such model.
 
 ## When something changes
 
@@ -235,6 +295,18 @@ message from the current files, so the next context starts from full text.
 
 The check runs only at turn start. An outside edit made during a turn reaches
 the model at the next one.
+
+### Added and removed skills
+
+At each turn start, Fiber also checks the skill directories for skills added
+or removed since the listing was last given. Each change is appended as one
+line: an added skill's name and description, or a removed skill's name. The
+opening message is never rebuilt for it.
+
+An edit to a skill's body needs nothing: the `skill` tool reads the file when
+the skill is loaded. An edit to a description is not checked at turn start. It
+reaches the model on `reload`, which sends each changed skill again as an added
+line with its new description, or in the next opening message after a handoff.
 
 ### The date
 
@@ -291,13 +363,16 @@ other text is copied from pi, codex, Claude Code, maki or the Zig tree.
 The kinds are in `docs/events.md`, "Preamble":
 
 - `opening_message` holds the environment, each instruction file's path and
-  content, and the skills listing. The text is rendered from these fields.
+  content, and the skills listing, each entry with its name, description, path
+  and source. The text is rendered from these fields.
+- `skills_changed` records the skills added or removed at a turn start, as
+  sent.
 - `instruction_file` records one appended change: the path, the reason, the
   file's content now, and what was sent. The diff is rendered from this content
   and the content the model last had, both in the log.
 - `date_changed` holds the date.
 
-All three are durable, because the model saw them.
+All four are durable, because the model saw them.
 
 ## Evidence
 

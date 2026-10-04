@@ -104,9 +104,10 @@ recognize.
 
 ## Prompts and resources
 
-A server's prompts become prompt templates. How a person invokes a prompt
-template is not yet specified: `docs/extensions.md` says "What a skill, a prompt
-template and a theme are to Fiber is not yet specified."
+A server's prompts become prompt templates. They appear in the terminal's `/`
+list beside skills, tagged with the server's name, and a person runs one by
+typing its `/name` with arguments. Fiber asks the server for the prompt's text
+and sends it as the person's message (`docs/system-prompt.md`, "Skills").
 
 A server's resources are reached through one tool, `mcp_resources`, with two
 actions:
@@ -348,7 +349,6 @@ shared between sessions.
 
 ## Not settled here
 
-- How a person invokes a prompt template
 - Where a server's OAuth token is stored
 - How MCP content other than text and images, such as audio and resource
   links, reaches the model
