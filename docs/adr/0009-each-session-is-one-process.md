@@ -60,8 +60,9 @@ assumes the heavy end.
   every live session's status.
 - A client starts the hub when none is running; that hub never listens
   remotely and exits once no client has been connected for a while.
-  `fiber hub install` registers it as a login service that listens on an
-  address the person chose.
+  `fiber hub install` registers it as a login service that can also listen
+  on a port of `127.0.0.1`, where every connection presents a device token;
+  the person wraps that port to reach it from elsewhere.
 - The terminal UI is its own process, a client of the hub.
 - Fiber ships no hosted relay service. The person brings the network.
 

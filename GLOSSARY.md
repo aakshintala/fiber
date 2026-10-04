@@ -131,6 +131,19 @@ session's socket, and serves one feed of every live session's status. It
 holds no session.
 _Avoid_: daemon, server, gateway, broker, host (host is the Lua `host.*` calls)
 
+### Device token
+
+The secret one client presents to a hub's port, minted by pairing and named
+after the device. The hub keeps only its hash; revoking it closes the device's
+live connections.
+_Avoid_: API key, bearer token, session token
+
+### Pairing code
+
+A short code `fiber hub pair` prints on the hub's machine, which a client
+exchanges once, within 10 minutes, for a device token.
+_Avoid_: invite, one-time password
+
 ### Fork
 
 A Fiber delegate whose history begins as its parent's conversation up to a

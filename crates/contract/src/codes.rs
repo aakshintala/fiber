@@ -59,6 +59,8 @@ codes! {
     DelegateSession,
     /// A delegate tool at depth 2.
     DepthExceeded,
+    /// A command repeats the id of one the session already accepted.
+    DuplicateCommand,
     /// An extension failed to start or missed its deadline.
     ExtensionFailed,
     /// An extension needs a newer `fiber` or a different extension API version.
@@ -133,6 +135,8 @@ codes! {
     OutputCap,
     /// A reply was cut off by the output-token limit.
     OutputTruncated,
+    /// A pairing code was wrong, already used or too old.
+    PairingFailed,
     /// A symbolic link changed between the permission decision and the write.
     PathChanged,
     /// The model's protocol is one this Fiber does not speak yet.
@@ -173,6 +177,8 @@ codes! {
     ToolDefinitionsLarge,
     /// The tool itself failed, or its effects function errored.
     ToolError,
+    /// A remote hub connection presented no valid device token.
+    Unauthenticated,
     /// A command name no extension registered.
     UnknownCommand,
     /// A stop or finish reason Fiber does not map.

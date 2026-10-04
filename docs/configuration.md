@@ -102,6 +102,10 @@ set the key.
 | `thinking` | the model's own default | yes | The thinking level for a new session (`docs/model-routing.md`, "Thinking"). |
 | `scoped_models` | none | yes | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"`, or an object with `model`, the reference, and `credential`, the credential label the delegate uses (`docs/delegates.md`). A repository's role cannot name a credential: its `credential` is ignored with a `notice`. |
+| `hub.port` | none | no | The port of `127.0.0.1` an installed hub listens on, as well as its local socket; unset, it listens on its local socket only. `fiber hub install --port` writes it (`docs/invocation.md`, "The hub"). |
+| `hub.allowed_origins` | `[]` | no | The web page origins, such as `"https://fiber.example.ts.net"`, whose websockets the hub accepts (`docs/invocation.md`, "Remote clients"). |
+| `hub.default` | none | no | On a client, the name of the hub in `hubs` it uses without `--hub`; unset, it uses the local hub. |
+| `hubs."<name>".address` | none | no | On a client, a hub's address: `ws://`, `wss://`, or `unix:` and a socket path (`docs/invocation.md`, "Several hubs"). The device token is in `credentials/hubs/<name>`, never here. |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |
 | `reviewer.model` | the session's provider's reviewer model | no | The reviewer's model (`docs/permissions.md`, "The reviewer"). |
 | `reviewer.context` | none | no | The person's notes about their environment, in prose, which the reviewer reads after its fixed instructions; the global and per-project values are both read, the project's winning where they conflict (`docs/permissions.md`, "What the person tells it"). |
@@ -309,6 +313,9 @@ Fiber writes configuration in these places:
   `--repo`
 - `fiber mcp add` and `fiber mcp remove` write an entry under `mcp.servers`,
   in the same three files (`docs/mcp.md`, "Configuration")
+- `fiber hub install --port` writes the global `hub.port`, and `fiber hub add`
+  and `fiber hub remove` write the global `hubs` entry and, with `--default`,
+  `hub.default` (`docs/invocation.md`, "The hub")
 
 Each write takes the lock, reads the file, changes one key and writes the whole
 file back by renaming a temporary file over it (`docs/state.md`, "Concurrent

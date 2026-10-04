@@ -59,14 +59,26 @@ it fails before any session exists (`docs/errors.md`, "Before a session
 exists"). It is not written to any log. It carries `kind`, `schema_version`
 and a `payload` holding `exit_code` and `error`, as `fiber_exited` does. It has no
 `session_id`, `ts` or `seq`. A caller reads `.payload.exit_code` and
-`.payload.error` on the last line whatever happened. Only
-this line may lack a session, and its own type says so, so no other kind can
-drift into having none. It keeps `kind` so that `fiber ask … | tail -1` reads the
+`.payload.error` on the last line whatever happened. Apart from the hub's own
+lines below, only this line may lack a session, and its own type says so, so no
+other kind can drift into having none. It keeps `kind` so that `fiber ask … | tail -1` reads the
 verdict whatever happened.
 
 ```json
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
+
+The hub sends two lines of its own, only on a connection to the hub and
+never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
+`schema_version` and `payload`, and no `session_id` in the envelope, since it
+is about the hub or names its session in the payload:
+
+- `hub_hello`, the first line on every connection: `payload` holds
+  `fiber_version` (string). The envelope's `schema_version` is the hub's.
+- `attention`, when a top-level session needs the person: `payload` holds
+  `session_id`, `name` and `workspace` (strings), `reason` (`waiting` or
+  `finished`, a closed set) and, with `waiting`, `summary` (string), the line
+  from `session_status`.
 
 ## Durable and ephemeral
 
