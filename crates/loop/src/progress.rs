@@ -96,43 +96,41 @@ impl Pacer {
     }
 }
 
-/// Wakes the loop thread waiting in `run_calls`: one sequence bumped under
-/// one mutex by every emit, every call returning and every clock move, and
-/// checked under that mutex across the wait, so a bump between the check
-/// and the wait is seen (`docs/tools.md`, "Progress"; Ruling 17).
+/// Wakes the loop thread waiting in `run_calls`: one flag under one mutex,
+/// set by every emit, every call returning and every clock move, and
+/// checked across the wait, so a bump between the check and the wait is
+/// seen (`docs/tools.md`, "Progress"; Ruling 17). The flag only ever asks
+/// for another pass, so clearing it on waking loses nothing.
 #[derive(Debug, Default)]
 pub(crate) struct SharedWake {
-    inner: Mutex<u64>,
+    inner: Mutex<bool>,
     cv: Condvar,
 }
 
 impl SharedWake {
-    /// The current sequence: read at a pass's start and handed back to
-    /// [`SharedWake::park`], which skips waiting when it moved.
-    pub(crate) fn seq(&self) -> u64 {
-        *lock(&self.inner)
-    }
-
     /// Parks until `until` on `clock`, an emit, a call returning or a clock
-    /// move. The sequence is read and waited on under one mutex, which the
-    /// condvar wait releases, so a bump that lands before the wait is still
-    /// visible when the waiter checks (`crates/tools/src/shell/command.rs`
-    /// `park` does the same).
-    pub(crate) fn park(&self, clock: &dyn Clock, until: Option<Instant>, seen: u64) {
+    /// move. When the flag is set, a bump landed since the last pass and
+    /// the wait returns at once, clearing it; otherwise the flag is
+    /// checked under the same mutex the condvar wait releases, so a bump
+    /// that lands before the wait still returns at once, and the flag is
+    /// cleared on waking (`crates/tools/src/shell/command.rs` `park` does
+    /// the same).
+    pub(crate) fn park(&self, clock: &dyn Clock, until: Option<Instant>) {
         // Taken before `wait_until`, and held until the condvar wait, so a
         // bump blocks on this lock instead of notifying nobody. `FnMut`
         // cannot move the guard out and back; the slot holds it across the
         // one call.
         let mut slot = Some(lock(&self.inner));
         clock.wait_until(until, &mut |bound| {
-            let Some(guard) = slot.take() else {
+            let Some(mut guard) = slot.take() else {
                 return;
             };
-            if *guard != seen {
+            if *guard {
+                *guard = false;
                 slot = Some(guard);
                 return;
             }
-            slot = Some(match bound {
+            guard = match bound {
                 Some(timeout) => {
                     self.cv
                         .wait_timeout(guard, timeout)
@@ -140,15 +138,15 @@ impl SharedWake {
                         .0
                 }
                 None => self.cv.wait(guard).unwrap_or_else(PoisonError::into_inner),
-            });
+            };
+            *guard = false;
+            slot = Some(guard);
         });
     }
 
-    /// Bumps the sequence and wakes whoever parks on it.
+    /// Sets the flag and wakes whoever parks on it.
     fn bump(&self) {
-        let mut seq = lock(&self.inner);
-        *seq = seq.wrapping_add(1);
-        drop(seq);
+        *lock(&self.inner) = true;
         self.cv.notify_all();
     }
 }
@@ -204,6 +202,16 @@ impl Stream {
     /// When the held change is next due, if it waits on the clock.
     pub(crate) fn deadline(&self) -> Option<Instant> {
         lock(&self.inner).pacer.deadline()
+    }
+
+    /// Takes the held change if (and only if) the call has returned: the
+    /// final flush, written the moment its tool returns whatever the
+    /// interval (`docs/tools.md`, "Progress"). `None` while the call runs
+    /// or when nothing is held.
+    pub(crate) fn take_flush(&self) -> Option<Progress> {
+        let mut inner = lock(&self.inner);
+        inner.done.as_ref()?;
+        inner.pacer.take_final()
     }
 
     /// Takes the returned output together with whatever is held, if the call

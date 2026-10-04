@@ -12,6 +12,7 @@
 )]
 
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
@@ -29,7 +30,7 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, RequestId, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{Scripted, ScriptedProvider, reply};
-use log::Log;
+use log::{Injector, Log};
 use r#loop::{BlockLimits, Loop, Model, Reviewer};
 use serde_json::{Map, Value, json};
 
@@ -337,24 +338,39 @@ pub(crate) enum Script {
 pub(crate) struct Gate {
     open: Mutex<bool>,
     changed: Condvar,
+    expired: AtomicBool,
 }
 
 impl Gate {
     /// Blocks until [`Gate::open`] or [`DEADLINE`]; true when opened. Either
-    /// way the caller proceeds, so the turn always ends.
+    /// way the caller proceeds, so the turn always ends. A missed release
+    /// is recorded for [`Gate::check`].
     pub(crate) fn wait(&self) -> bool {
         let open = self.open.lock().unwrap();
         let (open, _) = self
             .changed
             .wait_timeout_while(open, DEADLINE, |open| !*open)
             .unwrap();
-        *open
+        let opened = *open;
+        if !opened {
+            self.expired.store(true, Ordering::SeqCst);
+        }
+        opened
     }
 
     /// Releases whoever waits in [`Gate::wait`].
     pub(crate) fn open(&self) {
         *self.open.lock().unwrap() = true;
         self.changed.notify_all();
+    }
+
+    /// Asserts the gate opened before its deadline, naming it on expiry.
+    /// Called after the turn, so cleanup finishes first.
+    pub(crate) fn check(&self, name: &str) {
+        assert!(
+            !self.expired.load(Ordering::SeqCst),
+            "gate {name} expired at its deadline"
+        );
     }
 }
 
@@ -671,18 +687,28 @@ pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
 /// A live tap on a session's log: its own watcher, readable mid-turn with
 /// a deadline, alongside `Session::lines`, which drains after the turn.
 /// Lines read here stay in the session's own queue: each watcher has one.
+/// Dropping the tap ends its forwarder even with no traffic, through a
+/// shutdown line the forwarder strips before forwarding.
 pub(crate) struct Tap {
     lines: mpsc::Receiver<Envelope>,
     buffered: Mutex<Vec<Envelope>>,
+    injector: Injector,
 }
+
+/// The tap's own shutdown line, never forwarded.
+const TAP_CLOSED: &str = "tap_closed";
 
 impl Tap {
     /// Taps `log` from now on.
     pub(crate) fn new(log: &Arc<Log>) -> Self {
         let mut watcher = log.watch();
+        let injector = watcher.injector();
         let (forward, lines) = mpsc::channel();
         thread::spawn(move || {
             while let Ok(Some(line)) = watcher.recv() {
+                if line.kind == TAP_CLOSED {
+                    break;
+                }
                 if forward.send(line).is_err() {
                     break;
                 }
@@ -691,6 +717,7 @@ impl Tap {
         Self {
             lines,
             buffered: Mutex::default(),
+            injector,
         }
     }
 
@@ -729,6 +756,30 @@ impl Tap {
         let mut lines = std::mem::take(&mut *self.buffered.lock().unwrap());
         lines.extend(self.lines.try_iter());
         lines
+    }
+}
+
+impl Drop for Tap {
+    fn drop(&mut self) {
+        // Best effort: wakes a forwarder blocked with no traffic, so its
+        // thread ends with the tap instead of the log. A push after the
+        // watcher is dropped is ignored. The line never reaches the test:
+        // the forwarder strips it before forwarding.
+        self.injector.push_kept(tap_closed());
+    }
+}
+
+/// The tap's shutdown line: queue-only, never in the log.
+fn tap_closed() -> Envelope {
+    Envelope {
+        kind: TAP_CLOSED.into(),
+        session_id: SessionId("s_tap".into()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: Map::new(),
     }
 }
 

@@ -178,7 +178,6 @@ impl Loop {
             }
             loop {
                 let now = clock.now();
-                let seen = wake.seq();
                 // Every delta due now, in request order. A held change the
                 // interval still covers stays held for the flush in
                 // `complete_next` below.
@@ -194,11 +193,21 @@ impl Loop {
                         stream.wrote(bytes, clock.now());
                     }
                 }
+                // Every returned call's final flush, the moment its tool
+                // returns: only calls that returned give up what they hold,
+                // so a later call's flush never waits for an earlier call.
+                for call in running.iter() {
+                    let State::Running { stream, .. } = &call.state else {
+                        continue;
+                    };
+                    if let Some(delta) = stream.take_flush() {
+                        self.write_delta(&delta, turn, &call.id);
+                    }
+                }
                 // The next completion in request order, if its prefix is done.
-                // A returned call's final flush rides with its output under
-                // one lock and is written before its completion, whatever
-                // the interval: a later call's flush may precede an earlier
-                // call's completion, while completions stay in request order.
+                // A returned call's flush already went out in the pass above;
+                // what `take_finished` still holds is only the safety net,
+                // written before its completion all the same.
                 if self.complete_next(&mut running, turn)? {
                     continue;
                 }
@@ -215,7 +224,7 @@ impl Loop {
                         State::Ready(_) | State::Done => None,
                     })
                     .min();
-                wake.park(clock.as_ref(), earliest, seen);
+                wake.park(clock.as_ref(), earliest);
             }
         })
     }

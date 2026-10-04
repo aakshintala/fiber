@@ -198,25 +198,18 @@ fn bump(inner: &mut Inner) {
 /// The longest prefix of `chunk` that ends on a complete UTF-8 sequence:
 /// an incomplete sequence at the end waits for the next chunk, while an
 /// invalid one is consumed, decoding as U+FFFD as `String::from_utf8_lossy`
-/// does. Splits fall where the decoder is clean, so the emitted texts
-/// concatenate to the lossy whole.
+/// does. The held tail is the last chunk's invalid bytes when they are an
+/// incomplete sequence, else nothing; splits fall where the decoder is
+/// clean, so the emitted texts concatenate to the lossy whole.
 fn complete_prefix(chunk: &[u8]) -> usize {
-    let mut rest = chunk;
-    while !rest.is_empty() {
-        match str::from_utf8(rest) {
-            Ok(_) => return chunk.len(),
-            Err(err) => match err.error_len() {
-                // An incomplete sequence at the end waits for more bytes.
-                None => return chunk.len() - rest.len() + err.valid_up_to(),
-                // An invalid sequence decodes as U+FFFD; what follows may
-                // still end mid-sequence, so keep looking past it.
-                Some(len) => {
-                    rest = rest.get(err.valid_up_to() + len..).unwrap_or(&[]);
-                }
-            },
-        }
-    }
-    chunk.len() - rest.len()
+    let tail = match chunk.utf8_chunks().last() {
+        Some(last) => match str::from_utf8(last.invalid()) {
+            Err(err) if err.error_len().is_none() => last.invalid().len(),
+            Ok(_) | Err(_) => 0,
+        },
+        None => 0,
+    };
+    chunk.len() - tail
 }
 
 /// Emits `text` as one text-only `tool_call_delta`. Empty texts carry

@@ -212,3 +212,22 @@ fn take_finished_returns_the_output_with_whatever_is_held() {
     );
     assert_eq!(stream.take_finished(), None);
 }
+
+#[test]
+fn take_flush_returns_the_held_change_only_once_the_call_returns() {
+    let stream = Stream::new(Arc::new(SharedWake::default()));
+    stream.emit(&Event::ToolCallDelta(Progress {
+        text: Some("held".into()),
+        details: None,
+    }));
+    assert_eq!(stream.take_flush(), None);
+    stream.finish(Output::default());
+    assert_eq!(
+        stream.take_flush(),
+        Some(Progress {
+            text: Some("held".into()),
+            details: None,
+        })
+    );
+    assert_eq!(stream.take_flush(), None);
+}

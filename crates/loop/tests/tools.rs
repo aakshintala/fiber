@@ -721,6 +721,8 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
         gate2.open();
         tap.wait_for("tool_call_completed");
     });
+    gate1.check("first emit's gate");
+    gate2.check("second emit's gate");
     let lines = session.lines();
     assert_eq!(
         tool_kinds(&lines),
@@ -759,6 +761,7 @@ fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving
         gate.open();
         tap.wait_for("tool_call_completed");
     });
+    gate.check("first delta's gate");
     // The clock never moved, so "b" reached the log only as the final flush,
     // written just before the completion.
     let lines = session.lines();
@@ -792,6 +795,7 @@ fn back_to_back_deltas_collapse_to_one_with_both_texts_in_order() {
         gate.open();
         tap.wait_for("tool_call_completed");
     });
+    gate.check("first delta's gate");
     // The clock never moved and "a" was already written, so the interval
     // held "b" and "c" for the final flush: one collapsed delta.
     let lines = session.lines();
@@ -856,6 +860,7 @@ fn two_calls_complete_in_request_order_with_their_own_deltas() {
         assert_ne!(ds.action_id, df.action_id);
         drop((done_first, done_last));
     });
+    gate.check("slow call's gate");
     let lines = session.lines();
     let requested: Vec<(String, _)> = lines
         .iter()
@@ -945,6 +950,8 @@ fn a_large_write_paces_the_next_delta_past_100_ms() {
         gate2.open();
         tap.wait_for("tool_call_completed");
     });
+    gate1.check("large emit's gate");
+    gate2.check("second emit's gate");
     let lines = session.lines();
     assert_eq!(
         tool_kinds(&lines),
@@ -957,4 +964,73 @@ fn a_large_write_paces_the_next_delta_past_100_ms() {
         ]
     );
     assert_eq!(delta_texts(&lines), [big.as_str(), "small"]);
+}
+
+#[test]
+fn a_returned_call_flushes_while_an_earlier_call_still_runs() {
+    let gate_a = Arc::new(Gate::default());
+    let gate_b = Arc::new(Gate::default());
+    let mut slow = TestTool::reads("a", "first");
+    slow.script = vec![Script::Wait(Arc::clone(&gate_a))];
+    let mut fast = TestTool::reads("b", "second");
+    fast.script = vec![
+        emit(delta("x")),
+        Script::Wait(Arc::clone(&gate_b)),
+        emit(delta("y")),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(slow), Arc::new(fast)];
+    let (mut session, tap, _clock) = streaming_turn(tools, &[("a", paris()), ("b", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        // "x" goes out at once; opening the gate lets the call emit "y" and
+        // return while "a" is still blocked.
+        tap.wait_for_delta("x");
+        gate_b.open();
+        // "y" is held by the interval, so only the flush on return writes
+        // it: seeing it proves the call returned, still before "a" is
+        // released and before any completion.
+        tap.wait_for_delta("y");
+        assert!(
+            tap.pending()
+                .iter()
+                .all(|l| l.kind != "tool_call_completed"),
+            "a completion preceded the earlier call's release"
+        );
+        gate_a.open();
+        tap.wait_for("tool_call_completed");
+        tap.wait_for("tool_call_completed");
+    });
+    gate_a.check("call a's release");
+    gate_b.check("call b's second emit");
+    let lines = session.lines();
+    assert_eq!(delta_texts(&lines), ["x", "y"]);
+    let completed: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.payload["status"].clone())
+        .collect();
+    assert_eq!(completed.len(), 2);
+    let done: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.action_id.clone())
+        .collect();
+    let requested: Vec<_> = lines
+        .iter()
+        .filter(|l| l.kind == "tool_call_requested")
+        .map(|l| l.action_id.clone())
+        .collect();
+    assert_eq!(done, requested);
+    let first_completed = lines
+        .iter()
+        .position(|l| l.kind == "tool_call_completed")
+        .unwrap();
+    let flushed = lines
+        .iter()
+        .position(|l| l.kind == "tool_call_delta" && l.payload["text"] == "y")
+        .unwrap();
+    assert!(
+        flushed < first_completed,
+        "the flush did not precede every completion"
+    );
 }

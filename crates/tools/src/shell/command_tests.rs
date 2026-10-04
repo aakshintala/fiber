@@ -337,6 +337,10 @@ fn a_complete_prefix_ends_on_a_character_boundary() {
     // An invalid byte is consumed as U+FFFD at once, not held.
     assert_eq!(complete_prefix(b"\xFF"), 1);
     assert_eq!(complete_prefix(b"\xFFx"), 2);
+    // An invalid byte in the middle is consumed; the length counts it.
+    assert_eq!(complete_prefix(b"a\xFFb"), 3);
+    // An invalid byte followed by an incomplete tail holds only the tail.
+    assert_eq!(complete_prefix(b"\xFF\xE2"), 1);
 }
 
 #[test]
