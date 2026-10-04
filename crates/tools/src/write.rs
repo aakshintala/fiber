@@ -15,7 +15,7 @@ use similar::{ChangeTag, TextDiff};
 
 use crate::files::land::{land, shape_replacement};
 use crate::files::{
-    ResolveError, Shared, declare, effects_error, failed, hash_bytes, kind_of, path_text, resolve,
+    Shared, declare, effects_error, failed, hash_bytes, kind_of, path_text, resolve, resolved,
     string_argument, text_output, unsupported_message,
 };
 
@@ -80,24 +80,18 @@ impl Tool for Write {
                 Ok(content) => content,
                 Err(message) => return failed(ErrorCode::InvalidArguments, message),
             };
-        let key = match resolve(self.shared.workspace(), &raw) {
+        let key = match resolved(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(ResolveError::Arguments(message)) => {
-                return failed(ErrorCode::InvalidArguments, message);
-            }
-            Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
+            Err(output) => return output,
         };
         // Taken before the wait, so two replaces that both saw the same read
         // cannot both land: the second finds the first's bytes.
         let captured = self.shared.seen(&key);
         let locks = self.shared.locks();
         let _guard = locks.lock(&key);
-        let path = match resolve(self.shared.workspace(), &raw) {
+        let path = match resolved(self.shared.workspace(), &raw) {
             Ok(path) => path,
-            Err(ResolveError::Arguments(message)) => {
-                return failed(ErrorCode::InvalidArguments, message);
-            }
-            Err(ResolveError::Tool(message)) => return failed(ErrorCode::ToolError, message),
+            Err(output) => return output,
         };
         if path != key
             || self

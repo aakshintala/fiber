@@ -3,8 +3,8 @@
 //!
 //! `cargo run -p tools --example call -- shell '{"command":"echo hi"}'`
 //!
-//! `read` and `write` use a fresh session, so a replacing `write` is refused
-//! with `stale_file`.
+//! `read`, `write` and `edit` use a fresh session, so a replacing `write` is
+//! refused with `stale_file`.
 
 #![allow(
     clippy::print_stdout,
@@ -36,7 +36,7 @@ fn main() -> ExitCode {
         usage();
         return ExitCode::from(2);
     };
-    if !matches!(name.as_str(), "read" | "write" | "shell") {
+    if !matches!(name.as_str(), "read" | "write" | "edit" | "shell") {
         usage();
         return ExitCode::from(2);
     }
@@ -63,6 +63,7 @@ fn main() -> ExitCode {
         "shell" => Shell::new(workspace, Arc::new(ProcessClock)).run(&arguments, &cancel),
         "read" => Files::new(workspace).read().run(&arguments, &cancel),
         "write" => Files::new(workspace).write().run(&arguments, &cancel),
+        "edit" => Files::new(workspace).edit().run(&arguments, &cancel),
         _ => {
             usage();
             return ExitCode::from(2);
@@ -81,7 +82,7 @@ fn main() -> ExitCode {
 }
 
 fn usage() {
-    eprintln!("usage: call <read|write|shell> '{{...}}'");
+    eprintln!("usage: call <read|write|edit|shell> '{{...}}'");
     eprintln!("A replacing write is refused with stale_file: each run is a fresh session.");
 }
 
