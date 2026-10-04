@@ -128,6 +128,30 @@ fn signal_sites_reports_a_shell_kill_split_across_lines() {
     );
 }
 
+#[test]
+fn signal_sites_ignores_a_kill_the_fragment_does_not_continue() {
+    // A kill two lines up, with an unbroken line between, is another
+    // command: the operand's line is not joined to it.
+    let dash = ["--", " -"].concat();
+    let source = format!("kill -TERM 5\nlet x = 1;\nrun {dash}l");
+    let files = [file("log", "src/lib.rs", source)];
+    assert_eq!(signal_sites(&files), Vec::<String>::new());
+}
+
+#[test]
+fn signal_sites_follows_a_chain_of_continued_lines() {
+    let first = ["kill -TERM ", "\\"].concat();
+    let middle = ["  -s KILL ", "\\"].concat();
+    let last = ["  --", " -1"].concat();
+    let source = format!("{first}\n{middle}\n{last}");
+    let files = [file("log", "src/lib.rs", source)];
+    let dash = ["--", " -"].concat();
+    assert_eq!(
+        signal_sites(&files),
+        [format!("crates/log/src/lib.rs:3: {dash}")]
+    );
+}
+
 fn file(krate: &str, rel: &str, source: String) -> RustFile {
     let dir = if krate == "xtask" {
         "xtask".to_owned()

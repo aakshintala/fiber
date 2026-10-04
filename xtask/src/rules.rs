@@ -192,28 +192,16 @@ fn continues(line: &str) -> bool {
     trimmed.ends_with('\\')
 }
 
-/// Whether the word kill is on the fragment's own line or anywhere in the
-/// backslash-linked lines around it.
+/// Whether the word kill is on the fragment's own line or on an earlier line
+/// the fragment continues through backslashes. A command names `kill` before
+/// its arguments, so only earlier lines count.
 fn chain_has_kill(lines: &[&str], index: usize) -> bool {
-    let has_kill = |i: usize| lines.get(i).is_some_and(|line| line.contains("kill"));
-    if has_kill(index) {
-        return true;
-    }
-    let mut back = index;
-    while back > 0 && lines.get(back - 1).is_some_and(|line| continues(line)) {
-        back -= 1;
-        if has_kill(back) {
-            return true;
-        }
-    }
-    let mut next = index;
-    while lines.get(next).is_some_and(|line| continues(line)) {
-        next += 1;
-        if has_kill(next) {
-            return true;
-        }
-    }
-    false
+    let (earlier, rest) = lines.split_at(index.min(lines.len()));
+    let earlier = earlier.iter().rev().take_while(|line| continues(line));
+    rest.iter()
+        .take(1)
+        .chain(earlier)
+        .any(|line| line.contains("kill"))
 }
 
 /// Crate names in the tables of "Runtime dependencies" and "Tests and
