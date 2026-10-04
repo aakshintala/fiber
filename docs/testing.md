@@ -217,7 +217,17 @@ with a default or flipping a comparison, and runs the mutated crate's tests
 against each one. An edit that no test notices fails CI.
 
 An edit that genuinely changes no behaviour is exempted in the code, with a
-written reason. How many runners share the mutants is CI's to set.
+written reason. The exemption goes on a function: move the code that changes
+nothing into its own function and mark that, since an exemption on a statement
+or block is not reliably honoured. How many runners share the mutants is CI's
+to set.
+
+Code is written so a mutant fails fast. A loop that steps an index by hand can
+spin forever when a mutant breaks the arithmetic, and a hung mutant fails CI as
+a timeout; walk with an iterator instead. A test reaches the code under test
+from outside, through a seam such as a fake writer or the injected clock. A
+`#[cfg(test)]` hook inside a production function is a last resort, and the
+plan that needs one says why.
 
 A bug fix must also show that its test reproduces the bug. For a pull request
 whose ticket is labelled `bug`, CI runs its new and changed tests against the base commit,
