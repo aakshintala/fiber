@@ -326,7 +326,7 @@ fn ask(
 
 /// `fiber ask` on a new session.
 fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock::Clock>) -> i32 {
-    let parts = match parts(model) {
+    let parts = match parts_with(model, None) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
@@ -450,12 +450,8 @@ fn run_turn(
 
 /// Fiber home, configuration, the chosen model, its credential and its
 /// provider: everything a failure of which leaves no session. `model` is
-/// `--model`, which sets configuration's `model` for this run.
-fn parts(model: Option<String>) -> Result<Parts, Failure> {
-    parts_with(model, None)
-}
-
-/// [`parts`], with the resumed session's model: `recorded`, the model the
+/// `--model`, which sets configuration's `model` for this run. `recorded` is
+/// the resumed session's model: the model the
 /// log's last `usage_recorded` names, beats `--model`
 /// (`docs/model-routing.md`, "Choosing the model"). A log with no
 /// `usage_recorded` uses `--model`, then the configured default as a new

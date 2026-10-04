@@ -131,6 +131,8 @@ impl Loop {
         let workspace = workspace.canonicalize().unwrap_or(workspace);
         let credentials =
             calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
+        // debt: copies `Loop::start`'s literal apart from five fields; a
+        // shared constructor once a third constructor needs the same fields.
         Ok(Self {
             log,
             provider,
