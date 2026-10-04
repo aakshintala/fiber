@@ -25,12 +25,13 @@ pub(crate) enum Root {
 
 /// A file to read: `read` is opened, paths print as `show`.
 #[derive(Debug)]
-#[allow(dead_code, reason = "the grep search opens `read` with task 4")]
 pub(crate) struct FileRoot {
     /// The file read.
     pub read: PathBuf,
     /// The path printed.
     pub show: PathBuf,
+    /// The entry's type, without following a link.
+    pub file_type: std::fs::FileType,
 }
 
 /// A directory to walk: `walk` is read, paths print below `show`. The two
@@ -65,6 +66,7 @@ pub(crate) fn root_of(cwd: &Path, root: &Path) -> io::Result<Root> {
     Ok(Root::File(FileRoot {
         read: from,
         show: root.to_path_buf(),
+        file_type: upper.file_type(),
     }))
 }
 

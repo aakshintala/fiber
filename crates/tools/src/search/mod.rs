@@ -7,6 +7,7 @@
 
 mod fallback;
 mod find;
+mod notice;
 mod walk;
 
 pub use find::find_main;

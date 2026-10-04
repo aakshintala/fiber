@@ -1,7 +1,5 @@
-//! Tests beside [`super::run`]: listing what the walk finds.
-//!
-//! Expression primaries arrive with the next task; here any expression
-//! token hands the call to the system tool before anything is written.
+//! Tests beside [`super::run`]: listing what the walk finds, and the
+//! expression that filters it.
 
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -126,12 +124,21 @@ fn an_unreadable_directory_complains_and_the_walk_continues() {
 }
 
 #[test]
-fn an_expression_falls_back_before_anything_is_written() {
+fn an_unknown_primary_falls_back_before_anything_is_written() {
     let dir = tree(&BTreeMap::from([("a_hay.txt", "a")]));
     for args in [
-        &[".", "-name", "x"][..],
-        &["-name", "x"],
+        &[".", "-nousuch"][..],
         &["-exec", "true", ";"],
+        &[".", "-o"],
+        &[".", "!"],
+        &[".", "("],
+        &[".", "-print"],
+        &[".", "-delete"],
+        &[".", "-empty"],
+        &[".", "-a"],
+        &[".", "-not"],
+        &[".", "-type", "x"],
+        &[".", "-name", "x", "extra_path"],
     ] {
         let owned: Vec<OsString> = args.iter().map(OsString::from).collect();
         let mut stdout = Vec::new();
@@ -176,4 +183,328 @@ fn a_closed_pipe_stops_the_run_quietly() {
     // stops the second root before it writes: one write, nothing else.
     assert_eq!(stdout.writes, 1);
     assert!(stderr.is_empty());
+}
+
+fn filtered(dir: &fakes::TempDir, args: &[&str]) -> (i32, Vec<String>, String) {
+    let (code, stdout, stderr) = listing(dir, args);
+    let lines = stdout.lines().map(str::to_owned).collect();
+    (code, lines, stderr)
+}
+
+#[test]
+fn name_matches_base_names() {
+    let dir = tree(&BTreeMap::from([
+        ("a_needle.txt", "a"),
+        ("b_hay.txt", "b"),
+        ("sub/c_needle.txt", "c"),
+    ]));
+    let (code, lines, stderr) = filtered(&dir, &[".", "-name", "*needle*"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["./a_needle.txt", "./sub/c_needle.txt"]);
+    assert_eq!(stderr, "");
+}
+
+#[test]
+fn name_is_case_sensitive_iname_is_not() {
+    let dir = tree(&BTreeMap::from([("a_Needle.txt", "a")]));
+    let (_, sensitive, _) = filtered(&dir, &[".", "-name", "*needle*"]);
+    assert!(sensitive.is_empty());
+    let (code, insensitive, _) = filtered(&dir, &[".", "-iname", "*needle*"]);
+    assert_eq!(code, 0);
+    assert_eq!(insensitive, ["./a_Needle.txt"]);
+}
+
+#[test]
+fn name_supports_question_marks_and_classes() {
+    let dir = tree(&BTreeMap::from([
+        ("a_needle.txt", "a"),
+        ("b_needle.txt", "b"),
+        ("c_hay.txt", "c"),
+    ]));
+    let (_, question, _) = filtered(&dir, &[".", "-name", "?_needle.txt"]);
+    assert_eq!(question, ["./a_needle.txt", "./b_needle.txt"]);
+    let (_, class, _) = filtered(&dir, &[".", "-name", "[ab]_needle.txt"]);
+    assert_eq!(class, ["./a_needle.txt", "./b_needle.txt"]);
+    let (_, negated, _) = filtered(&dir, &[".", "-name", "[!ab]*"]);
+    // The root's own name is `.`, which the class accepts.
+    assert_eq!(negated, [".", "./c_hay.txt"]);
+}
+
+#[test]
+fn path_matches_the_printed_path() {
+    let dir = tree(&BTreeMap::from([
+        ("a_needle.txt", "a"),
+        ("needle_dir/x_hay.txt", "x"),
+        ("sub/c_needle.txt", "c"),
+    ]));
+    let (code, lines, _) = filtered(&dir, &[".", "-path", "*needle*"]);
+    assert_eq!(code, 0);
+    assert_eq!(
+        lines,
+        [
+            "./a_needle.txt",
+            "./needle_dir",
+            "./needle_dir/x_hay.txt",
+            "./sub/c_needle.txt"
+        ]
+    );
+    let (_, scoped, _) = filtered(&dir, &[".", "-path", "./sub/*.txt"]);
+    assert_eq!(scoped, ["./sub/c_needle.txt"]);
+}
+
+#[test]
+fn type_sorts_files_directories_and_links() {
+    let dir = tree(&BTreeMap::from([
+        ("a_hay.txt", "a"),
+        ("sub/b_hay.txt", "b"),
+    ]));
+    std::os::unix::fs::symlink("a_hay.txt", dir.path().join("lnk_hay.txt")).unwrap();
+    let (_, files, _) = filtered(&dir, &[".", "-type", "f"]);
+    assert_eq!(files, ["./a_hay.txt", "./sub/b_hay.txt"]);
+    let (_, dirs, _) = filtered(&dir, &[".", "-type", "d"]);
+    assert_eq!(dirs, [".", "./sub"]);
+    let (_, links, _) = filtered(&dir, &[".", "-type", "l"]);
+    assert_eq!(links, ["./lnk_hay.txt"]);
+    let (_, impossible, _) = filtered(&dir, &[".", "-type", "f", "-type", "d"]);
+    assert!(impossible.is_empty());
+}
+
+#[test]
+fn type_leaves_other_kinds_out() {
+    use std::os::unix::net::UnixListener;
+    let dir = fakes::TempDir::new("fiber-search-socket");
+    let socket = dir.path().join("sock");
+    let _held = UnixListener::bind(&socket).unwrap();
+    let meta = fs::symlink_metadata(&socket).unwrap();
+    assert_eq!(super::kind_of(&meta.file_type()), None);
+}
+
+#[test]
+fn maxdepth_and_mindepth_bound_the_tree() {
+    let dir = tree(&BTreeMap::from([("sub/deep/f_hay.txt", "hay")]));
+    let (_, max_one, _) = filtered(&dir, &[".", "-maxdepth", "1"]);
+    assert_eq!(max_one, [".", "./sub"]);
+    let (_, max_zero, _) = filtered(&dir, &[".", "-maxdepth", "0"]);
+    assert_eq!(max_zero, ["."]);
+    let (_, min_one, _) = filtered(&dir, &[".", "-mindepth", "1"]);
+    assert!(!min_one.contains(&".".to_owned()), "{min_one:?}");
+    assert!(
+        min_one.contains(&"./sub/deep/f_hay.txt".to_owned()),
+        "{min_one:?}"
+    );
+    let (_, min_two, _) = filtered(&dir, &[".", "-mindepth", "2"]);
+    assert_eq!(min_two, ["./sub/deep", "./sub/deep/f_hay.txt"]);
+}
+
+#[test]
+fn a_later_depth_limit_wins() {
+    let dir = tree(&BTreeMap::from([("sub/f_hay.txt", "hay")]));
+    let (_, lines, _) = filtered(&dir, &[".", "-maxdepth", "0", "-maxdepth", "1"]);
+    assert_eq!(lines, [".", "./sub"]);
+}
+
+#[test]
+fn newer_compares_modification_times_strictly() {
+    use std::time::{Duration, SystemTime};
+    let dir = tree(&BTreeMap::from([
+        ("old_hay.txt", "old"),
+        ("same_hay.txt", "same"),
+        ("new_hay.txt", "new"),
+        ("mark_ref.txt", "ref"),
+    ]));
+    let moment = SystemTime::now() - Duration::from_secs(3600);
+    let stamp = |path: &std::path::Path, at: SystemTime| {
+        fs::OpenOptions::new()
+            .read(true)
+            .open(path)
+            .unwrap()
+            .set_modified(at)
+            .unwrap();
+    };
+    stamp(
+        &dir.path().join("old_hay.txt"),
+        moment - Duration::from_secs(60),
+    );
+    stamp(&dir.path().join("same_hay.txt"), moment);
+    stamp(&dir.path().join("mark_ref.txt"), moment);
+    stamp(
+        &dir.path().join("new_hay.txt"),
+        moment + Duration::from_secs(60),
+    );
+    // The directory itself is as old as the reference, so strict newness
+    // leaves it out like the equal file.
+    stamp(dir.path(), moment);
+    let (code, lines, _) = filtered(&dir, &[".", "-newer", "mark_ref.txt"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["./new_hay.txt"]);
+}
+
+#[test]
+fn a_missing_newer_reference_fails_with_no_listing() {
+    let dir = tree(&BTreeMap::from([("a_hay.txt", "a")]));
+    let (code, stdout, stderr) = listing(&dir, &[".", "-newer", "no_such_ref.txt"]);
+    assert_eq!(code, 2);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "find: 'no_such_ref.txt': No such file or directory\n"
+    );
+}
+
+#[test]
+fn adjacent_tests_are_anded() {
+    let dir = tree(&BTreeMap::from([
+        ("needle_dir/x_hay.txt", "x"),
+        ("a_needle.txt", "a"),
+    ]));
+    let (code, lines, _) = filtered(&dir, &[".", "-name", "*needle*", "-type", "d"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["./needle_dir"]);
+}
+
+#[test]
+fn a_missing_argument_is_a_usage_error() {
+    let dir = tree(&BTreeMap::from([("a_hay.txt", "a")]));
+    for (flag, message) in [
+        ("-name", "find: missing argument to '-name'"),
+        ("-iname", "find: missing argument to '-iname'"),
+        ("-path", "find: missing argument to '-path'"),
+        ("-type", "find: missing argument to '-type'"),
+        ("-maxdepth", "find: missing argument to '-maxdepth'"),
+        ("-mindepth", "find: missing argument to '-mindepth'"),
+        ("-newer", "find: missing argument to '-newer'"),
+    ] {
+        let (code, stdout, stderr) = listing(&dir, &[flag]);
+        assert_eq!(code, 2, "{flag}");
+        assert_eq!(stdout, "", "{flag}");
+        assert_eq!(stderr, format!("{message}\n"), "{flag}");
+    }
+}
+
+#[test]
+fn a_bad_depth_is_a_usage_error() {
+    let dir = tree(&BTreeMap::from([("a_hay.txt", "a")]));
+    for (flag, value) in [
+        ("-maxdepth", "x"),
+        ("-maxdepth", "-1"),
+        ("-mindepth", ""),
+        ("-mindepth", "1.5"),
+    ] {
+        let (code, stdout, stderr) = listing(&dir, &[flag, value]);
+        assert_eq!(code, 2, "{flag} {value}");
+        assert_eq!(stdout, "", "{flag} {value}");
+        assert_eq!(
+            stderr,
+            format!("find: invalid argument '{value}' for '{flag}'\n"),
+            "{flag} {value}"
+        );
+    }
+}
+
+#[test]
+fn a_root_file_passes_the_tests_like_any_entry() {
+    let dir = tree(&BTreeMap::from([("a_hay.txt", "a")]));
+    let (code, lines, _) = filtered(&dir, &["a_hay.txt", "-type", "f"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["a_hay.txt"]);
+    let (_, hidden, _) = filtered(&dir, &["a_hay.txt", "-type", "d"]);
+    assert!(hidden.is_empty());
+}
+
+#[test]
+fn a_root_directory_below_mindepth_still_walks() {
+    let dir = tree(&BTreeMap::from([("sub/f_hay.txt", "hay")]));
+    let (code, lines, _) = filtered(&dir, &[".", "-mindepth", "1"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["./sub", "./sub/f_hay.txt"]);
+}
+
+#[test]
+fn nothing_printed_with_skipped_directories_reports_them() {
+    let dir = tree(&BTreeMap::from([
+        (".gitignore", "skipped_dir/\n"),
+        ("skipped_dir/hay.txt", "hay"),
+        ("kept_hay.txt", "hay"),
+    ]));
+    let (code, stdout, stderr) = listing(&dir, &[".", "-name", "no_such_name"]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "");
+    assert_eq!(
+        stderr,
+        "find: no match. Skipped ignored directories: skipped_dir/. Search one by name, such as `find skipped_dir`.\n"
+    );
+}
+
+#[test]
+fn a_match_prints_no_notice_and_an_error_prints_none_either() {
+    let dir = tree(&BTreeMap::from([
+        (".gitignore", "skipped_dir/\n"),
+        ("skipped_dir/hay.txt", "hay"),
+        ("kept_hay.txt", "hay"),
+    ]));
+    let (_, _, matched_stderr) = listing(&dir, &[".", "-name", "kept*"]);
+    assert_eq!(matched_stderr, "");
+    let (code, _, failed_stderr) = listing(&dir, &["no_such_root", "-name", "no_such_name"]);
+    assert_eq!(code, 2);
+    assert_eq!(
+        failed_stderr,
+        "find: 'no_such_root': No such file or directory\n"
+    );
+}
+
+#[test]
+fn globs_match_bytes() {
+    use super::glob_match;
+    let cases: &[(&[u8], &[u8], bool, bool)] = &[
+        (b"", b"", false, true),
+        (b"", b"a", false, false),
+        (b"a", b"a", false, true),
+        (b"a", b"b", false, false),
+        (b"*", b"", false, true),
+        (b"*", b"anything at all", false, true),
+        (b"*.txt", b"a.txt", false, true),
+        (b"*.txt", b"a.txtx", false, false),
+        (b"a*b", b"aXYZb", false, true),
+        (b"a*b", b"ab", false, true),
+        (b"a*b", b"aXbY", false, false),
+        (b"a?b", b"aXb", false, true),
+        (b"a?b", b"ab", false, false),
+        (b"a?b", b"aXYb", false, false),
+        (b"?", b"", false, false),
+        (b"**", b"x", false, true),
+        (b"[abc]", b"b", false, true),
+        (b"[abc]", b"d", false, false),
+        (b"[a-c]", b"b", false, true),
+        (b"[^a-c]", b"d", false, true),
+        (b"[^a-c]", b"b", false, false),
+        (b"[!a-c]", b"d", false, true),
+        (b"[]a]", b"]", false, true),
+        (b"[]a]", b"a", false, true),
+        (b"[^]a]", b"]", false, false),
+        (b"[^]a]", b"b", false, true),
+        (b"[a\\]]", b"a", false, true),
+        (b"[a\\]]", b"]", false, true),
+        (b"[a\\]]", b"\\", false, false),
+        (b"[a-c-e]", b"-", false, true),
+        (b"a\\*b", b"a*b", false, true),
+        (b"a\\*b", b"aXb", false, false),
+        (b"a\\\\b", b"a\\b", false, true),
+        (b"a\\", b"a\\", false, true),
+        (b"[abc", b"[abc", false, true),
+        (b"[abc", b"x", false, false),
+        (b"ABC", b"abc", false, false),
+        (b"ABC", b"abc", true, true),
+        (b"*.TXT", b"a.txt", true, true),
+        (b"[a-z]", b"A", false, false),
+        (b"[a-z]", b"A", true, true),
+    ];
+    for (pattern, text, ignore_case, expected) in cases {
+        assert_eq!(
+            glob_match(pattern, text, *ignore_case),
+            *expected,
+            "{:?} vs {:?} (case: {ignore_case})",
+            String::from_utf8_lossy(pattern),
+            String::from_utf8_lossy(text),
+        );
+    }
 }
