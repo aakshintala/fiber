@@ -7,6 +7,7 @@
 //! `main` builds the session's parts; this crate never sees a provider or
 //! the loop (`docs/architecture.md`, "The call rules").
 
+mod attach;
 mod client;
 mod session;
 
@@ -19,6 +20,7 @@ use std::process::{Command, Stdio};
 use contract::shapes::Failure;
 use contract::{ErrorCode, PreSessionExit};
 
+pub use attach::attach;
 pub use session::Session;
 
 /// A failure with Fiber's own sentence and nothing from a provider.

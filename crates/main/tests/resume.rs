@@ -13,9 +13,10 @@
 )]
 
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output, Stdio};
+use std::process::{Child, Command, Output, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -667,4 +668,250 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
     assert_pre_session(&run, 1, "credential_missing");
     assert_eq!(fs::read(&events).unwrap(), before);
     assert!(setup.sessions().join(&id).is_dir());
+}
+
+/// A `fiber ask` still running, with its stdout kept drained and its stderr
+/// kept for the failure, if any.
+struct Running {
+    child: Child,
+    watchdog: fakes::Watchdog,
+    group: u32,
+    guard: KillGroup,
+    stdout: mpsc::Receiver<String>,
+    stderr: mpsc::Receiver<String>,
+}
+
+/// Starts `fiber` with `args` in its own process group, as [`Setup::fiber`]
+/// runs it, but returns before it exits.
+fn start(setup: &Setup, args: &[&str]) -> Running {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+    command
+        .args(args)
+        .current_dir(setup.workspace())
+        .env_clear()
+        .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+        .env("HOME", setup.root.path())
+        .env("FIBER_HOME", setup.home())
+        .env("FIBER_TEST_FAKE_KEY", "sk-test")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (mut child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let guard = KillGroup(group);
+    let stdout = child.stdout.take().unwrap();
+    let stderr = child.stderr.take().unwrap();
+    let (err_tx, err_rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut reader = BufReader::new(stderr);
+        let mut buf = String::new();
+        match std::io::Read::read_to_string(&mut reader, &mut buf) {
+            Ok(_) | Err(_) => {}
+        }
+        match err_tx.send(buf) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    let (tx, stdout_rx) = mpsc::channel();
+    thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            match tx.send(line.unwrap()) {
+                Ok(()) => {}
+                Err(mpsc::SendError(_)) => break,
+            }
+        }
+    });
+    Running {
+        child,
+        watchdog,
+        group,
+        guard,
+        stdout: stdout_rx,
+        stderr: err_rx,
+    }
+}
+
+/// The first stdout line, waited for within [`DEADLINE`].
+fn first_line(stdout: &mpsc::Receiver<String>) -> Value {
+    serde_json::from_str(
+        &stdout
+            .recv_timeout(DEADLINE)
+            .expect("waited for fiber_started"),
+    )
+    .unwrap()
+}
+
+/// Reads `stdout` until a `clients` line arrives, one [`DEADLINE`] per line.
+fn until_clients(stdout: &mpsc::Receiver<String>) -> Value {
+    loop {
+        let line = stdout
+            .recv_timeout(DEADLINE)
+            .expect("waited for a clients line");
+        let line: Value = serde_json::from_str(&line).unwrap();
+        if line["kind"] == "clients" {
+            return line;
+        }
+    }
+}
+
+/// Waits for `running` to exit successfully within [`DEADLINE`].
+fn finish(running: Running) {
+    let Running {
+        mut child,
+        watchdog,
+        group,
+        guard,
+        stdout,
+        stderr,
+    } = running;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = finished
+        .recv_timeout(DEADLINE)
+        .expect("waited for fiber to exit")
+        .unwrap();
+    let stderr = stderr
+        .recv_timeout(DEADLINE)
+        .expect("waited for stderr to close");
+    assert!(status.success(), "stderr: {stderr}");
+    assert!(!group_alive(group), "fiber left a process in its group");
+    // The group is empty. Skip the drop, which would kill it again.
+    std::mem::forget(guard);
+    drop(stdout);
+    watchdog.stand_down(DEADLINE);
+}
+
+/// One finished background run: its exit code, stdout's lines, and stderr.
+struct Finished {
+    code: Option<i32>,
+    lines: Vec<Value>,
+    stderr: String,
+}
+
+/// Waits for `running` to exit within [`DEADLINE`], killing its group on
+/// expiry like [`Setup::fiber`] does, and returns what it printed. Its
+/// stdout sender is dropped once the process closes stdout, so collecting
+/// the lines ends once the process has exited.
+fn finish_output(running: Running) -> Finished {
+    let Running {
+        mut child,
+        watchdog,
+        group,
+        guard,
+        stdout,
+        stderr,
+    } = running;
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    let status = match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            let reaped = finished.recv_timeout(DEADLINE).is_ok();
+            panic!("waited {DEADLINE:?} for `fiber` to exit (reaped after the kill: {reaped})");
+        }
+    };
+    assert!(
+        !group_alive(group),
+        "`fiber` left a process in its group behind"
+    );
+    std::mem::forget(guard);
+    watchdog.stand_down(DEADLINE);
+    let stderr = stderr
+        .recv_timeout(DEADLINE)
+        .expect("waited for stderr to close");
+    let mut lines = Vec::new();
+    loop {
+        match stdout.recv_timeout(DEADLINE) {
+            Ok(line) => lines.push(serde_json::from_str(&line).unwrap()),
+            Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                panic!("waited {DEADLINE:?} for stdout to close");
+            }
+        }
+    }
+    Finished {
+        code: status.code(),
+        lines,
+        stderr,
+    }
+}
+
+#[test]
+fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    server.hold();
+    let running = start(&setup, &["ask", "hi"]);
+    let started = first_line(&running.stdout);
+    assert_eq!(started["kind"], "fiber_started");
+    let id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held response was requested"
+    );
+
+    // The session is held by the live first run, so the second attaches
+    // instead of opening a second writer. The `clients` line proves it
+    // subscribed before the release below: without it the first run could
+    // exit first and the second would resume as a writer.
+    let second = start(&setup, &["ask", "--resume", &id, "x"]);
+    let attached = until_clients(&running.stdout);
+    assert_eq!(attached["payload"]["count"], 1);
+    // Its prompt queues behind the held provider call, so the rejection
+    // arrives once the loop drains: `closing`, not `busy`. `fiber ask`
+    // queues `close` with its prompt (`Session::ask`), and
+    // docs/invocation.md, "Lifecycle" says "`close` ends the session
+    // whoever else is attached. It accepts no more prompts, finishes the
+    // turn in flight, then any running jobs", so a second prompt to an
+    // `ask` session is rejected `closing` (`loop::inbox`, `admit_running`;
+    // `closing` is a listed driver rejection in docs/invocation.md,
+    // "Driver commands"). `busy` applies to a session that was not sent
+    // `close`, and takes the same attach path, covered at crate level in
+    // `doors/tests/attach.rs`.
+    server.release();
+    let second = finish_output(second);
+    assert_eq!(second.code, Some(1), "stderr: {}", second.stderr);
+    assert_eq!(second.lines.len(), 1, "{:?}", second.lines);
+    let line = &second.lines[0];
+    assert_eq!(line["kind"], "fiber_exited");
+    assert_eq!(line.get("session_id"), None);
+    assert_eq!(line["payload"]["exit_code"], 1);
+    assert_eq!(line["payload"]["error"]["code"], "closing");
+    // Either the loop rejected the queued prompt, or the session exited
+    // before the prompt was sent: both are the `closing` failure of an
+    // attach that started nothing.
+    let message = line["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message == "The session is closing and takes no new turn."
+            || message == format!("session {id} ended before its turn completed"),
+        "{message}"
+    );
+    assert_eq!(second.stderr, format!("fiber: {message}\n"));
+
+    finish(running);
+
+    // The log has one `fiber_started`: the attach opened no second writer.
+    let log = fs::read_to_string(setup.sessions().join(&id).join("events.jsonl")).unwrap();
+    let kinds: Vec<String> = log
+        .lines()
+        .map(|line| {
+            serde_json::from_str::<Value>(line).unwrap()["kind"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        })
+        .collect();
+    assert_eq!(
+        kinds.iter().filter(|kind| *kind == "fiber_started").count(),
+        1,
+        "{kinds:?}"
+    );
+    assert!(
+        !kinds.contains(&"clients".to_owned()),
+        "the attach's `clients` line is ephemeral, never logged: {kinds:?}"
+    );
+    // The attach sent no provider request of its own.
+    assert_eq!(server.requests().len(), 1);
 }

@@ -1,7 +1,8 @@
 //! `fiber ask --resume <id>`: sends the prompt to an existing session
 //! (`docs/invocation.md`, "Lifecycle"). The log's lock is held before the
 //! lines it builds from are read, so no writer adds a line between the read
-//! and the first write.
+//! and the first write. A session another process holds is attached to
+//! instead (`docs/invocation.md`, "Processes").
 
 use std::io;
 use std::sync::Arc;
@@ -14,8 +15,8 @@ use crate::{ask_failed, failed, run_turn};
 
 /// `fiber ask --resume <selector>`: resolves the selector, opens the
 /// session's log, folds what the resume needs, and runs one turn on it. A
-/// held lock fails `session_held`; every failure before `fiber_started` is
-/// written leaves the log byte for byte as it was.
+/// held lock attaches instead of opening a second writer; every failure
+/// before `fiber_started` is written leaves the log byte for byte as it was.
 pub(crate) fn ask_resume(
     selector: String,
     model: Option<String>,
@@ -42,8 +43,17 @@ pub(crate) fn ask_resume(
     };
     let dir = sessions.join(&id.0);
     // `Log::open` takes the lock first; the lines below are read under it.
-    let log = match Log::open(&sessions, id, Arc::clone(&clock)) {
+    // A held lock means a live session: attach to it instead of opening a
+    // second writer (`docs/invocation.md`, "Processes"). Its failure
+    // already names the holder, which attach takes as its refusal.
+    let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
+        Err(e @ log::Error::Held { .. }) => {
+            return match doors::attach(&home, &id, prompt, &mut io::stdout(), failed(e.code(), e)) {
+                Ok(code) => code,
+                Err(e) => ask_failed(e),
+            };
+        }
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let lines = match log::read(&dir) {
