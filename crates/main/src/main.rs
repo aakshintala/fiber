@@ -330,18 +330,34 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
+    let Parts {
+        provider,
+        model,
+        reviewer,
+        limits,
+        budget,
+        home,
+        project,
+        workspace,
+        sessions,
+    } = parts;
     let id = SessionId(doors::mint("s_"));
-    let dir = parts.sessions.join(&id.0);
-    let rules = config::RulesFiles::new(parts.home.clone(), parts.project.clone(), clock.clone());
-    let log = match Log::create(&parts.sessions, id, Arc::clone(&clock)) {
+    let dir = sessions.join(&id.0);
+    let permissions = ask_permissions(
+        &home,
+        &project,
+        workspace.to_string_lossy().into_owned(),
+        &clock,
+    );
+    let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
         Err(e) => return ask_failed(failed(e.code(), e)),
     };
     let session = match Session::open(
-        &parts.home,
+        &home,
         &dir,
         &log,
-        clock,
+        Arc::clone(&clock),
         Vec::new(),
         Box::new(io::stdout()),
     ) {
@@ -353,32 +369,67 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         return ask_failed(failed(e.code(), e));
     }
     let code = run_turn(&session, &log, &dir, prompt, |inbox| {
-        Loop::start(
-            Arc::clone(&log),
-            parts.provider,
-            parts.model,
-            // debt: weakens docs/system-prompt.md, "Two parts"; fixed by
-            // #304. The system prompt is empty.
-            String::new(),
-            inbox,
-            Vec::new(),
-            r#loop::Permissions {
-                workspace: parts.workspace.to_string_lossy().into_owned(),
-                credentials: parts.home.join("credentials"),
-                rules: Arc::new(rules),
-            },
+        finish(
+            Loop::start(
+                Arc::clone(&log),
+                provider,
+                model,
+                SYSTEM_PROMPT.to_owned(),
+                inbox,
+                Vec::new(),
+                permissions,
+            ),
+            budget,
+            reviewer,
+            limits,
         )
-        .map(|looped| {
-            looped
-                .budget(parts.budget)
-                .answerable(false)
-                .reviewer(parts.reviewer, parts.limits)
-        })
-        .and_then(Loop::run)
-        .map_err(|e| failed(e.code(), e))
     });
     session.close(log);
     code
+}
+
+/// The system prompt every `ask` session gets.
+// debt: weakens docs/system-prompt.md, "Two parts"; fixed by #304. The
+// system prompt is empty.
+const SYSTEM_PROMPT: &str = "";
+
+/// What an `ask` loop judges with: the workspace the session keeps, the
+/// credentials beside it, and the standing rules.
+fn ask_permissions(
+    home: &Path,
+    project: &config::ProjectKey,
+    workspace: String,
+    clock: &Arc<dyn contract::clock::Clock>,
+) -> r#loop::Permissions {
+    r#loop::Permissions {
+        workspace,
+        credentials: home.join("credentials"),
+        rules: Arc::new(config::RulesFiles::new(
+            home.to_path_buf(),
+            project.clone(),
+            Arc::clone(clock),
+        )),
+    }
+}
+
+/// Finishes an `ask` loop, however it started: the budget, the headless
+/// answers and the reviewer every session gets, so a change to the chain is
+/// made once.
+fn finish(
+    looped: Result<Loop, r#loop::Error>,
+    budget: Option<f64>,
+    reviewer: Result<r#loop::Reviewer, Failure>,
+    limits: r#loop::BlockLimits,
+) -> Result<(), Failure> {
+    looped
+        .map(|looped| {
+            looped
+                .budget(budget)
+                .answerable(false)
+                .reviewer(reviewer, limits)
+        })
+        .and_then(Loop::run)
+        .map_err(|e| failed(e.code(), e))
 }
 
 /// Runs one turn of the session `session` writes to `log`, once its log,

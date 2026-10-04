@@ -63,51 +63,42 @@ pub(crate) fn ask_resume(
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
-    let rules = config::RulesFiles::new(
-        parts.home.clone(),
-        parts.project.clone(),
-        Arc::clone(&clock),
-    );
-    let session = match Session::resume(
-        &parts.home,
-        &dir,
-        &log,
-        clock,
-        Vec::new(),
-        Box::new(io::stdout()),
-    ) {
-        Ok(session) => session,
-        Err(e) => return ask_failed(e),
-    };
+    let crate::Parts {
+        provider,
+        model,
+        reviewer,
+        limits,
+        budget,
+        home,
+        project,
+        ..
+    } = parts;
+    let permissions = crate::ask_permissions(&home, &project, folded.workspace, &clock);
+    let session =
+        match Session::resume(&home, &dir, &log, clock, Vec::new(), Box::new(io::stdout())) {
+            Ok(session) => session,
+            Err(e) => return ask_failed(e),
+        };
     if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true) {
         session.close(log);
         return ask_failed(failed(e.code(), e));
     }
     let code = run_turn(&session, &log, &dir, prompt, |inbox| {
-        Loop::resume(
-            Arc::clone(&log),
-            &lines,
-            parts.provider,
-            parts.model,
-            // debt: weakens docs/system-prompt.md, "Two parts"; fixed by
-            // #304. The system prompt is empty.
-            String::new(),
-            inbox,
-            Vec::new(),
-            r#loop::Permissions {
-                workspace: folded.workspace,
-                credentials: parts.home.join("credentials"),
-                rules: Arc::new(rules),
-            },
+        crate::finish(
+            Loop::resume(
+                Arc::clone(&log),
+                &lines,
+                provider,
+                model,
+                crate::SYSTEM_PROMPT.to_owned(),
+                inbox,
+                Vec::new(),
+                permissions,
+            ),
+            budget,
+            reviewer,
+            limits,
         )
-        .map(|looped| {
-            looped
-                .budget(parts.budget)
-                .answerable(false)
-                .reviewer(parts.reviewer, parts.limits)
-        })
-        .and_then(Loop::run)
-        .map_err(|e| failed(e.code(), e))
     });
     session.close(log);
     code

@@ -419,6 +419,22 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.session_id(), "s_fixed1");
     assert_eq!(run.lines[0]["payload"]["resumed"], true);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
@@ -475,6 +491,22 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
 
     let run = setup.fiber(&["ask", "--resume", "s_model1", "--model", "fake/m1", "two"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 
     let requests: Vec<Request> = server.requests();
     assert_eq!(requests.len(), 1);

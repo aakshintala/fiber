@@ -14,17 +14,21 @@ use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode, SCHEMA_VERSION, SessionId};
+use contract::{Envelope, ErrorCode};
 use log::Log;
-use serde_json::Map;
 
 use crate::calls;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, render_reviewed};
 use crate::{Error, Loop, Model, Permissions};
 
-/// What a resume folds back: the workspace the first `session_started`
-/// recorded, and the model the last `usage_recorded` names, if any.
+/// What a resume folds back: the session, the workspace the first
+/// `session_started` recorded, and the model the last `usage_recorded`
+/// names, if any.
 pub struct Resumed {
+    /// The session's id, from the first `session_started` line: the cache
+    /// keys are built from it (`docs/prompt-cache.md`, "Rules for other
+    /// areas").
+    pub session: String,
     /// The first `session_started`'s workspace: a resumed session keeps it,
     /// wherever the resume runs (`docs/state.md`, "Sessions and resume").
     pub workspace: String,
@@ -34,59 +38,32 @@ pub struct Resumed {
     pub model: Option<String>,
 }
 
-/// Folds `lines` back to the workspace and the model. A log with no
-/// `session_started` is corrupt.
+/// Folds `lines` back to the session, the workspace and the model. A log
+/// with no `session_started` is corrupt.
 pub fn resumed(lines: &[Envelope]) -> Result<Resumed, Error> {
-    let mut workspace = None;
+    let mut folded: Option<Resumed> = None;
     let mut model = None;
     for line in lines {
         let event = Event::from_envelope(line).map_err(Error::Unreadable)?;
-        if let Some(Event::SessionStarted(started)) = &event {
-            workspace.get_or_insert_with(|| started.workspace.clone());
+        if let Some(Event::SessionStarted(started)) = &event
+            && folded.is_none()
+        {
+            folded = Some(Resumed {
+                session: line.session_id.0.clone(),
+                workspace: started.workspace.clone(),
+                model: None,
+            });
         }
         if let Some(Event::UsageRecorded(recorded)) = &event {
             model = Some(recorded.model.clone());
         }
     }
-    match workspace {
-        Some(workspace) => Ok(Resumed { workspace, model }),
-        None => Err(no_session_started(
-            lines.first().map(|line| &line.session_id),
-        )),
-    }
-}
-
-/// `log_corrupt` for a log with no `session_started`: reading an empty
-/// payload as one names the missing line. `loop` takes no `serde`
-/// dependency for `Error::custom` (`docs/dependencies.md`), so the error
-/// comes from a real parse.
-fn no_session_started(session: Option<&SessionId>) -> Error {
-    let line = Envelope {
-        kind: "session_started".to_owned(),
-        session_id: session.cloned().unwrap_or(SessionId(String::new())),
-        ts: 0,
-        schema_version: SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: Map::new(),
-    };
-    match Event::from_envelope(&line) {
-        Err(error) => Error::Unreadable(error),
-        // An empty payload never reads as `session_started`: `workspace`
-        // and `variables` are required. Without this arm the parse above
-        // would need `serde` for `Error::custom`; with it, the fallback
-        // below never runs.
-        Ok(_) => corrupt(),
-    }
-}
-
-/// A `log_corrupt` failure from a text that never parses. The `Ok` arm
-/// parses it again, so it never returns either.
-fn corrupt() -> Error {
-    match serde_json::from_str("the log has no session_started") {
-        Ok(()) => corrupt(),
-        Err(error) => Error::Unreadable(error),
+    match folded {
+        Some(mut folded) => {
+            folded.model = model;
+            Ok(folded)
+        }
+        None => Err(Error::NoSessionStarted),
     }
 }
 
@@ -113,13 +90,11 @@ impl Loop {
         permissions: Permissions,
     ) -> Result<Self, Error> {
         // Fails `log_corrupt` on a log with no `session_started`.
-        resumed(lines)?;
-        let completed = crate::conversation::completed_actions(lines)?;
+        let folded = resumed(lines)?;
         // The conversation, with the fixed results, and its length at the
         // last `assistant_message_started`: the previous request's end, for
         // the cache markers.
-        let (conversation, sent) =
-            crate::conversation::rebuild_and_sent(lines, &model.reference, &completed)?;
+        let (conversation, sent) = crate::conversation::rebuild_and_sent(lines, &model.reference)?;
         let mut reviewed = Vec::new();
         let mut grants = Vec::new();
         let mut session_blocks = 0;
@@ -156,7 +131,6 @@ impl Loop {
         let workspace = workspace.canonicalize().unwrap_or(workspace);
         let credentials =
             calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
-        let session = folded_session(lines)?;
         Ok(Self {
             log,
             provider,
@@ -166,8 +140,8 @@ impl Loop {
             // The session's own id, as `Loop::start` sets it: no parent or
             // fork exists yet (`docs/prompt-cache.md`, "Rules for other
             // areas").
-            cache_key: session.clone(),
-            reviewer_key: format!("{session}:reviewer"),
+            cache_key: folded.session.clone(),
+            reviewer_key: format!("{}:reviewer", folded.session),
             queued: VecDeque::new(),
             closing: false,
             conversation,
@@ -198,20 +172,4 @@ impl Loop {
             budget: None,
         })
     }
-}
-
-/// The session's id: the first `session_started` line's. `resumed` already
-/// showed one exists.
-fn folded_session(lines: &[Envelope]) -> Result<String, Error> {
-    for line in lines {
-        if matches!(
-            Event::from_envelope(line).map_err(Error::Unreadable)?,
-            Some(Event::SessionStarted(_))
-        ) {
-            return Ok(line.session_id.0.clone());
-        }
-    }
-    Err(no_session_started(
-        lines.first().map(|line| &line.session_id),
-    ))
 }

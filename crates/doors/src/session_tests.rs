@@ -898,6 +898,8 @@ fn resume_keeps_the_session_directory_when_the_socket_cannot_bind() {
 
     assert_eq!(error.code, ErrorCode::Usage);
     assert!(dir.join("events.jsonl").is_file());
+    // Nothing was written: the log holds no lines.
+    assert!(log::read(&dir).unwrap().is_empty());
 }
 
 #[test]

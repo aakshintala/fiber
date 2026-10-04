@@ -12,7 +12,7 @@
 mod support;
 
 use contract::events::{
-    CallStatus, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
+    CallStatus, Empty, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
     ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnStarted,
 };
 use contract::provider::Input;
@@ -126,6 +126,14 @@ fn reasoning(text: &str) -> Event {
     })
 }
 
+fn message_started() -> Event {
+    Event::AssistantMessageStarted(Empty {})
+}
+
+fn kinds_of(lines: &[Envelope]) -> Vec<&str> {
+    lines.iter().map(|l| l.kind.as_str()).collect()
+}
+
 fn steering(text: &str) -> Event {
     Event::SteeringApplied(SteeringApplied {
         content: vec![ContentPart::Text { text: text.into() }],
@@ -157,7 +165,17 @@ fn a_completed_call_is_unchanged() {
     log.append(started(), Some("a_1"));
     log.append(completed("Paris."), Some("a_1"));
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed"
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     assert_eq!(conversation.len(), 3);
     assert!(matches!(conversation[0], Input::User { .. }));
@@ -174,7 +192,9 @@ fn a_requested_only_call_is_sent_as_never_ran() {
     log.append(user_turn("one"), None);
     log.append(requested("read"), Some("a_1"));
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(kinds_of(&lines), ["turn_started", "tool_call_requested"]);
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     assert_eq!(conversation.len(), 3);
     let (id, text, is_error) = result_of(&conversation[2]);
@@ -190,7 +210,12 @@ fn a_started_call_without_a_result_is_sent_as_outcome_unknown() {
     log.append(requested("read"), Some("a_1"));
     log.append(started(), Some("a_1"));
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        ["turn_started", "tool_call_requested", "tool_call_started"]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     assert_eq!(conversation.len(), 3);
     let (id, text, is_error) = result_of(&conversation[2]);
@@ -209,7 +234,19 @@ fn one_completed_and_one_cut_short_call_share_a_batch() {
     log.append(completed("Paris."), Some("a_1"));
     log.append(started(), Some("a_2"));
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed",
+            "tool_call_started",
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     // The real result stays where the log put it; the fixed one follows the
     // batch.
@@ -230,7 +267,12 @@ fn a_fixed_result_sits_before_the_next_user_message() {
     log.append(requested("read"), Some("a_1"));
     log.append(user_turn("two"), None);
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        ["turn_started", "tool_call_requested", "turn_started"]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     assert_eq!(conversation.len(), 4);
     let (id, text, _) = result_of(&conversation[2]);
@@ -240,20 +282,147 @@ fn a_fixed_result_sits_before_the_next_user_message() {
 }
 
 #[test]
-fn a_fixed_result_sits_before_steering_reasoning_and_text() {
-    for following in [steering("wait"), reasoning("Hmm."), assistant("On it.")] {
-        let log = LogLines::new();
-        log.append(user_turn("one"), None);
-        log.append(requested("read"), Some("a_1"));
-        log.append(following, Some("a_9"));
+fn a_text_between_request_and_start_does_not_flush_early() {
+    // The reply's text sits between the request and the start in log
+    // order. The batch is the whole reply plus its result lines, so the
+    // start is still seen before the flush decides.
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(assistant("Looking."), Some("a_0"));
+    log.append(requested("read"), Some("a_1"));
+    log.append(assistant("Found it."), Some("a_0"));
+    log.append(started(), Some("a_1"));
 
-        let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "text_completed",
+            "tool_call_requested",
+            "text_completed",
+            "tool_call_started",
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
-        assert_eq!(conversation.len(), 4);
-        let (id, text, _) = result_of(&conversation[2]);
-        assert_eq!(id.0, "a_1");
-        assert_eq!(text, "It never ran.");
-    }
+    assert_eq!(conversation.len(), 5);
+    assert!(matches!(&conversation[1], Input::Assistant { .. }));
+    assert!(matches!(&conversation[2], Input::ToolCall { .. }));
+    assert!(matches!(&conversation[3], Input::Assistant { .. }));
+    let (id, text, is_error) = result_of(&conversation[4]);
+    assert_eq!(id.0, "a_1");
+    assert_eq!(text, "Its outcome is unknown: it may have run.");
+    assert!(is_error);
+}
+
+#[test]
+fn a_later_text_does_not_flush_a_pending_call() {
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(reasoning("Hmm."), Some("a_0"));
+    log.append(requested("read"), Some("a_1"));
+    log.append(requested("search"), Some("a_2"));
+    log.append(completed("Paris."), Some("a_1"));
+    log.append(assistant("One down."), Some("a_0"));
+
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "reasoning_completed",
+            "tool_call_requested",
+            "tool_call_requested",
+            "tool_call_completed",
+            "text_completed",
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
+
+    // The real result stays where the log put it; the text ends no batch.
+    assert_eq!(conversation.len(), 7);
+    assert!(matches!(&conversation[1], Input::Reasoning { .. }));
+    let (_, text, is_error) = result_of(&conversation[4]);
+    assert_eq!(text, "Paris.");
+    assert!(!is_error);
+    assert!(matches!(&conversation[5], Input::Assistant { .. }));
+    let (id, text, is_error) = result_of(&conversation[6]);
+    assert_eq!(id.0, "a_2");
+    assert_eq!(text, "It never ran.");
+    assert!(is_error);
+}
+
+#[test]
+fn two_pending_calls_get_fixed_results_in_request_order() {
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(requested("read"), Some("a_1"));
+    log.append(assistant("Two calls."), Some("a_0"));
+    log.append(requested("search"), Some("a_2"));
+
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "tool_call_requested",
+            "text_completed",
+            "tool_call_requested",
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
+
+    assert_eq!(conversation.len(), 6);
+    let (first, _, _) = result_of(&conversation[4]);
+    let (second, _, _) = result_of(&conversation[5]);
+    assert_eq!(first.0, "a_1");
+    assert_eq!(second.0, "a_2");
+}
+
+#[test]
+fn steering_starts_a_new_batch() {
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(requested("read"), Some("a_1"));
+    log.append(steering("wait"), Some("a_9"));
+
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        ["turn_started", "tool_call_requested", "steering_applied"]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
+
+    assert_eq!(conversation.len(), 4);
+    let (id, text, _) = result_of(&conversation[2]);
+    assert_eq!(id.0, "a_1");
+    assert_eq!(text, "It never ran.");
+    assert!(matches!(&conversation[3], Input::User { .. }));
+}
+
+#[test]
+fn an_assistant_message_start_starts_a_new_batch() {
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(requested("read"), Some("a_1"));
+    log.append(message_started(), Some("a_9"));
+
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        [
+            "turn_started",
+            "tool_call_requested",
+            "assistant_message_started",
+        ]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
+
+    assert_eq!(conversation.len(), 3);
+    let (id, text, _) = result_of(&conversation[2]);
+    assert_eq!(id.0, "a_1");
+    assert_eq!(text, "It never ran.");
 }
 
 #[test]
@@ -263,7 +432,12 @@ fn a_fixed_result_at_the_end_of_the_log_ends_the_conversation() {
     log.append(assistant("Looking."), Some("a_0"));
     log.append(requested("read"), Some("a_1"));
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        ["turn_started", "text_completed", "tool_call_requested"]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     assert_eq!(conversation.len(), 4);
     let (id, text, _) = result_of(&conversation[3]);
@@ -278,7 +452,12 @@ fn a_call_with_no_action_id_is_skipped() {
     log.append(requested("read"), None);
     log.append(completed("Paris."), None);
 
-    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let lines = log.lines();
+    assert_eq!(
+        kinds_of(&lines),
+        ["turn_started", "tool_call_requested", "tool_call_completed"]
+    );
+    let conversation = r#loop::rebuild(&lines, MODEL).unwrap();
 
     assert_eq!(conversation.len(), 1);
 }
@@ -290,8 +469,8 @@ use std::sync::Arc;
 use std::sync::mpsc;
 
 use contract::events::{
-    DecidedBy, Decision, Empty, Grant, PermissionResolved, ReviewerRef, SessionStarted,
-    UsageRecorded, Variables, VariablesSource,
+    DecidedBy, Decision, Grant, PermissionResolved, ReviewerRef, SessionStarted, UsageRecorded,
+    Variables, VariablesSource,
 };
 use contract::inbox::Delivery;
 use contract::provider::Provider;
@@ -498,6 +677,8 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     // `sent` is the conversation's length at the dead process's last
     // `assistant_message_started`: the previous request ended after "one".
     assert_eq!(requests[0].previous_end, Some(1));
+    // The cache key is the session's own id.
+    assert_eq!(requests[0].cache_key, "s_1");
 
     assert_eq!(
         history.new_kinds(),
@@ -527,6 +708,21 @@ fn resume_writes_no_session_started_and_seq_continues() {
     assert_eq!(
         lines.iter().filter(|l| l.kind == "session_started").count(),
         1
+    );
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        [
+            "session_started",
+            "turn_started",
+            "tool_call_requested",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
     let seqs: Vec<u64> = lines.iter().map(|l| l.seq.unwrap().0).collect();
     assert_eq!(seqs, (0..lines.len() as u64).collect::<Vec<_>>());
@@ -708,6 +904,23 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     // The 21st session block escalates with no person to answer: the turn
     // fails `blocked`.
     assert_eq!(outcome, contract::events::TurnOutcome::Failed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     let completed = history
         .new_lines()
         .into_iter()
@@ -787,6 +1000,28 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
 
     // The first counted block denies the call; the turn completes.
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -842,8 +1077,32 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     let outcome = history.run(looped, "two");
 
     assert_eq!(outcome, contract::events::TurnOutcome::Completed);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "usage_recorded",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let requests = reviewer_provider.requests();
     assert_eq!(requests.len(), 1);
+    // The reviewer's key is the session's id plus `reviewer`.
+    assert_eq!(requests[0].cache_key, "s_1:reviewer");
     let conversation = &requests[0].conversation;
     assert!(matches!(&conversation[0], Input::User { text } if text == "The person: one"));
     assert!(
@@ -864,6 +1123,18 @@ fn no_request_before_the_resume_leaves_previous_end_absent() {
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(requests[0].previous_end, None);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -872,7 +1143,13 @@ fn resumed_returns_the_first_workspace_and_the_last_model() {
     history.write(History::usage("g1", "fake/first", Some(1.0)), Some("a_1"));
     history.write(History::usage("g2", "fake/second", Some(2.0)), Some("a_2"));
 
-    let resumed = r#loop::resumed(&history.lines()).unwrap();
+    let lines = history.lines();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["session_started", "usage_recorded", "usage_recorded"]
+    );
+    let resumed = r#loop::resumed(&lines).unwrap();
+    assert_eq!(resumed.session, "s_1");
     assert_eq!(resumed.workspace, history.workspace);
     assert_eq!(resumed.model.as_deref(), Some("fake/second"));
 }
@@ -882,7 +1159,13 @@ fn resumed_returns_no_model_for_a_log_with_none() {
     let history = History::new(vec![]);
     history.write(user_turn("one"), None);
 
-    let resumed = r#loop::resumed(&history.lines()).unwrap();
+    let lines = history.lines();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["session_started", "turn_started"]
+    );
+    let resumed = r#loop::resumed(&lines).unwrap();
+    assert_eq!(resumed.session, "s_1");
     assert_eq!(resumed.workspace, history.workspace);
     assert_eq!(resumed.model, None);
 }
@@ -903,8 +1186,13 @@ fn resumed_fails_log_corrupt_on_a_log_with_no_session_started() {
     )
     .unwrap();
     let dir = root.path().join("s_9");
+    let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["turn_started"]
+    );
 
-    let error = match r#loop::resumed(&log::read(&dir).unwrap()) {
+    let error = match r#loop::resumed(&lines) {
         Ok(_) => panic!("a log with no session_started resumes"),
         Err(error) => error,
     };
@@ -930,6 +1218,10 @@ fn resume_fails_log_corrupt_on_a_log_with_no_session_started() {
     .unwrap();
     let dir = root.path().join("s_9");
     let lines = log::read(&dir).unwrap();
+    assert_eq!(
+        lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
+        ["turn_started"]
+    );
     let (_tx, rx) = mpsc::channel();
 
     let error = match Loop::resume(

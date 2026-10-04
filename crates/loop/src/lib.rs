@@ -52,6 +52,9 @@ pub enum Error {
     /// A durable line's payload does not read as its kind.
     #[error("a log line does not read as its kind: {0}")]
     Unreadable(serde_json::Error),
+    /// The log has no `session_started`.
+    #[error("the log has no session_started")]
+    NoSessionStarted,
 }
 
 impl Error {
@@ -60,7 +63,7 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Log(e) => e.code(),
-            Self::Unreadable(_) => ErrorCode::LogCorrupt,
+            Self::Unreadable(_) | Self::NoSessionStarted => ErrorCode::LogCorrupt,
         }
     }
 }

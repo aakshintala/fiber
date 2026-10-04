@@ -12,13 +12,10 @@ use crate::{EVENTS, Error};
 /// equals it, or the one name it prefixes. A directory is a session only
 /// when it holds `events.jsonl`. The selector is only compared with names
 /// listed in `sessions`, never joined into a path, so nothing outside
-/// `sessions` is read or returned.
+/// `sessions` is read or returned, whatever the selector holds. An empty
+/// selector would prefix every name, so it matches nothing.
 pub fn resolve(sessions: &Path, selector: &str) -> Result<SessionId, Error> {
-    if selector.is_empty()
-        || selector.contains('/')
-        || selector.contains('\\')
-        || selector.contains("..")
-    {
+    if selector.is_empty() {
         return Err(Error::NotFound(sessions.to_owned()));
     }
     let mut names: Vec<String> = Vec::new();

@@ -95,20 +95,14 @@ fn a_directory_without_events_jsonl_is_ignored() {
 fn empty_and_path_selectors_match_nothing() {
     let (_root, sessions) = setup();
     session(&sessions, "s_abc");
-    // A directory outside the sessions directory that a traversal could reach.
+    // A directory outside the sessions directory that a traversal could
+    // reach. The selector is only compared with listed names, never joined
+    // into a path, so these match nothing and read nothing outside.
     let outside = sessions.parent().unwrap().join("s_abc");
     fs::create_dir_all(&outside).unwrap();
     fs::write(outside.join("events.jsonl"), "").unwrap();
 
-    for selector in ["", "s_a/b", "../s_abc", "..", "s_abc/..", "s_..x"] {
-        if selector == "s_..x" {
-            // Contains ".." so refused even though nothing matches anyway.
-            assert!(matches!(
-                log::resolve(&sessions, selector),
-                Err(log::Error::NotFound(_))
-            ));
-            continue;
-        }
+    for selector in ["", "s_a/b", "../s_abc", "..", "s_abc/..", "s_..x", "\\"] {
         assert!(
             matches!(
                 log::resolve(&sessions, selector),
