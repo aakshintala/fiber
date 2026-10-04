@@ -848,10 +848,16 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     let attached = until_clients(&running.stdout);
     assert_eq!(attached["payload"]["count"], 1);
     // Its prompt queues behind the held provider call, so the rejection
-    // arrives once the loop drains: `closing`, because `ask` sent `close`
-    // with its prompt (`loop::inbox`, `admit_running`). The `busy`
-    // rejection for the same command takes the same attach path, covered
-    // at crate level in `doors/tests/attach.rs`.
+    // arrives once the loop drains: `closing`, not `busy`. `fiber ask`
+    // queues `close` with its prompt (`Session::ask`), and
+    // docs/invocation.md, "Lifecycle" says "`close` ends the session
+    // whoever else is attached. It accepts no more prompts, finishes the
+    // turn in flight, then any running jobs", so a second prompt to an
+    // `ask` session is rejected `closing` (`loop::inbox`, `admit_running`;
+    // `closing` is a listed driver rejection in docs/invocation.md,
+    // "Driver commands"). `busy` applies to a session that was not sent
+    // `close`, and takes the same attach path, covered at crate level in
+    // `doors/tests/attach.rs`.
     server.release();
     let second = finish_output(second);
     assert_eq!(second.code, Some(1), "stderr: {}", second.stderr);

@@ -1,5 +1,10 @@
 //! `doors::attach` through its public API (`docs/testing.md`, "Levels"): a
 //! client on a running session's socket that prints only its own turn.
+//!
+//! Every wait in this file has a named deadline: `attach` runs on a helper
+//! thread and its result is awaited with `recv_timeout(DEADLINE)`, so a hung
+//! attach fails the test instead of hanging it, and the session's inbox
+//! thread and close are bounded the same way.
 
 #![allow(
     clippy::unwrap_used,
@@ -13,18 +18,18 @@ use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::sync::{Arc, mpsc};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use contract::events::{
     Clients, Empty, Event, FiberExited, InputItem, TurnCompleted, TurnOutcome, TurnStarted,
 };
-use contract::inbox::{Delivery, Rejection};
+use contract::inbox::{Ack, Delivery, Rejection};
 use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens, Usage};
 use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId, TurnId};
-use doors::{Session, attach, mint};
+use doors::{Session, attach, failure, mint};
 use log::Log;
 use serde_json::Value;
 
@@ -85,26 +90,86 @@ impl Opened {
     }
 
     /// Runs the session with `behave` on its inbox, on a thread, while the
-    /// test attaches. Returns the inbox thread.
+    /// test attaches. Returns what the inbox thread sends back, bounded by
+    /// [`DEADLINE`]: a hung loop fails the test instead of hanging it.
     fn run(
         &mut self,
         behave: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure> + Send + 'static,
-    ) -> JoinHandle<(Result<(), Failure>, Session)> {
+    ) -> Receiver<(Result<(), Failure>, Session)> {
         let session = self.session.take().unwrap();
+        let (done, finished) = mpsc::channel();
         thread::spawn(move || {
             let ran = session.run(Vec::new(), behave);
-            (ran, session)
-        })
+            match done.send((ran, session)) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        finished
     }
 
-    /// Closes the session the inbox thread returned, consuming the
-    /// fixture so the log is dropped: [`Session::close`] joins the
-    /// printer, which wakes only once the log is gone.
-    fn close(self, thread: JoinHandle<(Result<(), Failure>, Session)>) -> Result<(), Failure> {
-        let (ran, session) = thread.join().expect("the inbox thread finished");
-        session.close(self.log);
+    /// Takes the inbox thread's result within [`DEADLINE`], then closes the
+    /// session on a thread, bounded the same way. Consumes the fixture so
+    /// the log is dropped: [`Session::close`] joins the printer, which wakes
+    /// only once the log is gone.
+    fn close(self, inbox: Receiver<(Result<(), Failure>, Session)>) -> Result<(), Failure> {
+        let (ran, session) = inbox
+            .recv_timeout(DEADLINE)
+            .expect("waited for the inbox thread to finish");
+        let log = self.log;
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            session.close(log);
+            match done.send(()) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        finished
+            .recv_timeout(DEADLINE)
+            .expect("waited for the session to close");
         ran
     }
+}
+
+/// Runs `attach` on a helper thread: a hung attach fails the test at the
+/// `recv_timeout` below instead of hanging it.
+fn attach_on_thread<W: Write + Send + 'static>(
+    home: PathBuf,
+    id: SessionId,
+    prompt: String,
+    out: W,
+    refused: Failure,
+) -> Receiver<(Result<i32, Failure>, W)> {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        let mut out = out;
+        let code = attach(&home, &id, prompt, &mut out, refused);
+        match done.send((code, out)) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    finished
+}
+
+/// The helper thread's result, waited for within [`DEADLINE`].
+fn attached<T>(
+    finished: Receiver<(Result<i32, Failure>, T)>,
+    operation: &str,
+) -> (Result<i32, Failure>, T) {
+    finished.recv_timeout(DEADLINE).unwrap_or_else(|_| {
+        panic!("waited {DEADLINE:?} for {operation}");
+    })
+}
+
+/// The refusal `attach` returns when nothing accepts: the holder names it,
+/// which attach never reads.
+fn refused(id: &SessionId) -> Failure {
+    failure(
+        ErrorCode::SessionHeld,
+        format!(
+            "session {} is held by process 42; only one Fiber process may write a session",
+            id.0
+        ),
+    )
 }
 
 fn usage() -> Usage {
@@ -131,13 +196,12 @@ fn turn_input(text: &str, command: &CommandId) -> Vec<InputItem> {
     }]
 }
 
-/// The prompt's command id, as the loop's inbox delivered it.
-fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId) {
+/// The prompt's delivery, with its acknowledgement for the test to answer
+/// once the turn it starts is written, as the loop does: `turn_started`
+/// first, then the accept (`loop`, `turn`).
+fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
     match inbox.recv_timeout(DEADLINE).expect("the prompt arrives") {
-        Delivery::Prompt(message, ack) => {
-            ack.0(Ok(None));
-            (message.content, message.sender.command_id)
-        }
+        Delivery::Prompt(message, ack) => (message.content, message.sender.command_id, ack),
         Delivery::Close(_)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
@@ -207,7 +271,7 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
         .unwrap();
     let log = Arc::clone(&opened.log);
     let inbox = opened.run(move |inbox| {
-        let (_, command) = prompt_of(&inbox);
+        let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
             &Event::TurnStarted(TurnStarted {
@@ -215,6 +279,9 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
             }),
             "t_new",
         );
+        // The loop accepts the prompt once its `turn_started` is written:
+        // the acknowledgement arrives mid-turn and is never printed.
+        ack.0(Ok(None));
         // A `clients` line inside the turn's range is part of what `ask`
         // prints, so attach prints it too.
         append(&log, &Event::Clients(Clients { count: 2 }), "t_new");
@@ -227,8 +294,15 @@ fn attach_prints_only_its_turn_and_leaves_the_session_up() {
         Ok(())
     });
 
-    let mut out = Vec::new();
-    let code = attach(&opened.home, &opened.id, "during".into(), &mut out).unwrap();
+    let finished = attach_on_thread(
+        opened.home.clone(),
+        opened.id.clone(),
+        "during".into(),
+        Vec::new(),
+        refused(&opened.id),
+    );
+    let (code, out) = attached(finished, "attach to return");
+    let code = code.unwrap();
 
     assert_eq!(code, 0);
     let text = String::from_utf8(out).unwrap();
@@ -269,7 +343,7 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
     let mut opened = Opened::open();
     let log = Arc::clone(&opened.log);
     let inbox = opened.run(move |inbox| {
-        let (_, command) = prompt_of(&inbox);
+        let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
             &Event::TurnStarted(TurnStarted {
@@ -277,6 +351,7 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
             }),
             "t_1",
         );
+        ack.0(Ok(None));
         append(
             &log,
             &Event::TurnCompleted(TurnCompleted {
@@ -294,8 +369,15 @@ fn a_failed_turn_prints_its_lines_and_returns_1() {
         Ok(())
     });
 
-    let mut out = Vec::new();
-    let code = attach(&opened.home, &opened.id, "doomed".into(), &mut out).unwrap();
+    let finished = attach_on_thread(
+        opened.home.clone(),
+        opened.id.clone(),
+        "doomed".into(),
+        Vec::new(),
+        refused(&opened.id),
+    );
+    let (code, out) = attached(finished, "attach to return");
+    let code = code.unwrap();
 
     assert_eq!(code, 1);
     assert_eq!(
@@ -322,8 +404,15 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
         Ok(())
     });
 
-    let mut out = Vec::new();
-    let failed = attach(&opened.home, &opened.id, "late".into(), &mut out).unwrap_err();
+    let finished = attach_on_thread(
+        opened.home.clone(),
+        opened.id.clone(),
+        "late".into(),
+        Vec::new(),
+        refused(&opened.id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
 
     assert_eq!(failed.code, ErrorCode::Busy);
     assert_eq!(
@@ -339,7 +428,7 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
     let mut opened = Opened::open();
     let log = Arc::clone(&opened.log);
     let inbox = opened.run(move |inbox| {
-        let (_, command) = prompt_of(&inbox);
+        let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
             &Event::TurnStarted(TurnStarted {
@@ -347,6 +436,7 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
             }),
             "t_1",
         );
+        ack.0(Ok(None));
         log.append(
             &Event::FiberExited(FiberExited {
                 exit_code: 0,
@@ -363,27 +453,34 @@ fn the_session_ending_before_the_turn_completes_is_a_failure_not_a_hang() {
         Ok(())
     });
 
-    let mut out = Vec::new();
-    let failed = attach(&opened.home, &opened.id, "cut".into(), &mut out).unwrap_err();
+    let finished = attach_on_thread(
+        opened.home.clone(),
+        opened.id.clone(),
+        "cut".into(),
+        Vec::new(),
+        refused(&opened.id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
 
     assert_eq!(failed.code, ErrorCode::Closing);
-    assert!(
-        out.is_empty()
-            || kinds(&String::from_utf8(out.clone()).unwrap())
-                == ["turn_started"].map(String::from)
-    );
+    let text = String::from_utf8(out).unwrap();
+    assert!(text.is_empty() || kinds(&text) == ["turn_started"].map(String::from));
     assert_eq!(opened.close(inbox), Ok(()));
 }
 
 /// A stand-in session socket: answers `subscribe`, then `prompt`, then
-/// `behave` writes the rest before `drop` closes the connection.
+/// `behave` writes the rest before `drop` closes the connection. Returns
+/// the thread with the lines it received, through a channel bounded by
+/// [`DEADLINE`] at the join below.
 fn stand_in(
     socket: &Path,
     schema_version: u32,
     behave: impl FnOnce(BufReader<UnixStream>, Value, Value) + Send + 'static,
-) -> JoinHandle<Vec<String>> {
+) -> (JoinHandle<()>, Receiver<Vec<String>>) {
     let listener = UnixListener::bind(socket).unwrap();
-    thread::spawn(move || {
+    let (done, finished) = mpsc::channel();
+    let handle = thread::spawn(move || {
         let (stream, _) = listener.accept().expect("attach connected");
         stream
             .set_read_timeout(Some(DEADLINE))
@@ -402,9 +499,19 @@ fn stand_in(
         );
         line.clear();
         match reader.read_line(&mut line) {
-            Ok(0) => return received,
+            Ok(0) => {
+                match done.send(received) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
             Ok(_) => received.push(line.clone()),
-            Err(_) => return received,
+            Err(_) => {
+                match done.send(received) {
+                    Ok(()) | Err(_) => {}
+                }
+                return;
+            }
         }
         let prompted: Value = serde_json::from_str(line.trim_end()).unwrap();
         if prompted["command"] == "prompt" {
@@ -414,8 +521,22 @@ fn stand_in(
             );
         }
         behave(reader, sub, prompted);
-        received
-    })
+        match done.send(received) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    (handle, finished)
+}
+
+/// The stand-in thread's received lines, waited for within [`DEADLINE`],
+/// then joined: the thread already sent, so the join does not block.
+fn stood_in(server: (JoinHandle<()>, Receiver<Vec<String>>), operation: &str) -> Vec<String> {
+    let (handle, finished) = server;
+    let received = finished.recv_timeout(DEADLINE).unwrap_or_else(|_| {
+        panic!("waited {DEADLINE:?} for {operation}");
+    });
+    handle.join().expect("the stand-in finished");
+    received
 }
 
 fn accepted(command: &Value, schema_version: u32, session: &SessionId) -> String {
@@ -445,8 +566,15 @@ fn a_different_schema_version_is_session_held_naming_both_versions() {
     let socket = run.join(&id.0);
     let server = stand_in(&socket, SCHEMA_VERSION + 1, |_, _, _| {});
 
-    let mut out = Vec::new();
-    let failed = attach(&home, &id, "hi".into(), &mut out).unwrap_err();
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
 
     assert_eq!(failed.code, ErrorCode::SessionHeld);
     assert!(
@@ -467,7 +595,7 @@ fn a_different_schema_version_is_session_held_naming_both_versions() {
     assert!(out.is_empty());
     // Attach sent no prompt after the version check: the stand-in saw the
     // subscribe alone, then the connection's end.
-    let received = server.join().expect("the stand-in finished");
+    let received = stood_in(server, "the stand-in to see the connection end");
     assert_eq!(received.len(), 1);
     assert!(received[0].contains("subscribe"));
 }
@@ -484,16 +612,23 @@ fn a_connection_closed_before_the_turn_completes_is_a_failure() {
     // turn and no `fiber_exited`.
     let server = stand_in(&socket, SCHEMA_VERSION, |_, _, _| {});
 
-    let mut out = Vec::new();
-    let failed = attach(&home, &id, "hi".into(), &mut out).unwrap_err();
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        "hi".into(),
+        Vec::new(),
+        refused(&id),
+    );
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
 
     assert_eq!(failed.code, ErrorCode::Closing);
     assert!(out.is_empty());
-    server.join().expect("the stand-in finished");
+    stood_in(server, "the stand-in to see the connection end");
 }
 
 #[test]
-fn a_socket_that_refuses_is_session_held_naming_the_holder() {
+fn a_socket_that_refuses_returns_the_refusal() {
     let temp = Temp::new();
     let home = temp.0.join("h");
     let sessions = home.join("projects/p/sessions");
@@ -502,41 +637,18 @@ fn a_socket_that_refuses_is_session_held_naming_the_holder() {
     // accepts on the socket.
     let _log = Log::create(&sessions, id.clone(), fakes::clock::FakeClock::new()).unwrap();
 
-    let mut out = Vec::new();
-    let failed = attach(&home, &id, "hi".into(), &mut out).unwrap_err();
-
-    assert_eq!(failed.code, ErrorCode::SessionHeld);
-    assert!(
-        failed.message.contains(&id.0),
-        "the message names the session: {}",
-        failed.message
+    let expected = refused(&id);
+    let finished = attach_on_thread(
+        home.clone(),
+        id.clone(),
+        "hi".into(),
+        Vec::new(),
+        expected.clone(),
     );
-    assert!(
-        failed.message.contains("process "),
-        "the message names the holder as `Log::open` does: {}",
-        failed.message
-    );
-    assert!(out.is_empty());
-}
+    let (failed, out) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
 
-#[test]
-fn a_home_with_no_session_dir_is_session_held_without_a_holder() {
-    let temp = Temp::new();
-    let home = temp.0.join("h");
-    std::fs::create_dir_all(home.join("run")).unwrap();
-    let id = SessionId(mint("s_"));
-
-    let mut out = Vec::new();
-    let failed = attach(&home, &id, "hi".into(), &mut out).unwrap_err();
-
-    assert_eq!(failed.code, ErrorCode::SessionHeld);
-    assert!(
-        failed
-            .message
-            .contains("a process whose pid is not yet recorded"),
-        "no lock file names no holder: {}",
-        failed.message
-    );
+    assert_eq!(failed, expected);
     assert!(out.is_empty());
 }
 
@@ -558,7 +670,7 @@ fn an_unwritable_stdout_is_an_io_failure() {
     let mut opened = Opened::open();
     let log = Arc::clone(&opened.log);
     let inbox = opened.run(move |inbox| {
-        let (_, command) = prompt_of(&inbox);
+        let (_, command, ack) = prompt_of(&inbox);
         append(
             &log,
             &Event::TurnStarted(TurnStarted {
@@ -566,11 +678,20 @@ fn an_unwritable_stdout_is_an_io_failure() {
             }),
             "t_1",
         );
+        ack.0(Ok(None));
         append(&log, &completed(), "t_1");
         Ok(())
     });
 
-    let failed = attach(&opened.home, &opened.id, "lost".into(), &mut Broken).unwrap_err();
+    let finished = attach_on_thread(
+        opened.home.clone(),
+        opened.id.clone(),
+        "lost".into(),
+        Broken,
+        refused(&opened.id),
+    );
+    let (failed, _) = attached(finished, "attach to return");
+    let failed = failed.unwrap_err();
 
     assert_eq!(failed.code, ErrorCode::IoFailed);
     assert_eq!(opened.close(inbox), Ok(()));

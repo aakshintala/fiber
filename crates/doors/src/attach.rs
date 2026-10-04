@@ -4,7 +4,6 @@
 //! `close` and never opens the log: the holder keeps the only writer, and a
 //! disconnect only ends the client.
 
-use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
@@ -19,18 +18,28 @@ use crate::{failure, mint};
 /// lines from the `turn_started` carrying this prompt's command id through
 /// that turn's `turn_completed`, and nothing before it, and returns 0 for a
 /// `completed` turn and 1 for any other outcome. A `command_rejected` for
-/// the prompt is the rejection's code and message, printing nothing. A
-/// closed connection or a `fiber_exited` before the turn completes is a
-/// failure, not a hang.
+/// the prompt is the rejection's code and message, printing nothing.
+/// `command_accepted` and `command_rejected` lines are never printed: the
+/// prompt's own `command_accepted` arrives after its `turn_started`,
+/// because the loop writes the turn before it accepts the prompt. A closed
+/// connection or a `fiber_exited` before the turn completes is a failure,
+/// not a hang. `refused` is returned when nothing accepts on the socket:
+/// the caller names the holder, which attach never reads, as it never opens
+/// the log.
 pub fn attach(
     home: &Path,
     id: &SessionId,
     prompt: String,
     out: &mut dyn Write,
+    refused: Failure,
 ) -> Result<i32, Failure> {
     let socket = home.join("run").join(&id.0);
-    let stream = UnixStream::connect(&socket).map_err(|_| held(home, id))?;
-    let mut reader = BufReader::new(stream.try_clone().map_err(|e| io_failed(&socket, &e))?);
+    let stream = UnixStream::connect(&socket).map_err(|_| refused)?;
+    let mut reader = BufReader::new(
+        stream
+            .try_clone()
+            .map_err(|e| failure(ErrorCode::IoFailed, format!("{}: {e}", socket.display())))?,
+    );
     let mut writer = stream;
 
     let sub = mint("c_");
@@ -71,6 +80,9 @@ pub fn attach(
         };
         if is_answer(&line, "command_rejected", &command) {
             return Err(rejection(&line));
+        }
+        if kind(&line) == "command_accepted" || kind(&line) == "command_rejected" {
+            continue;
         }
         if starts_own_turn(&line, &command) {
             printing = true;
@@ -177,21 +189,17 @@ fn emit(out: &mut dyn Write, raw: &[u8]) -> Result<(), Failure> {
 }
 
 fn rejection(line: &Value) -> Failure {
-    failure(rejection_code(line), rejection_message(line))
-}
-
-fn rejection_code(line: &Value) -> ErrorCode {
-    line.pointer("/payload/code")
+    let code = line
+        .pointer("/payload/code")
         .cloned()
         .and_then(|code| serde_json::from_value(code).ok())
-        .unwrap_or(ErrorCode::Other("unknown".to_owned()))
-}
-
-fn rejection_message(line: &Value) -> String {
-    line.pointer("/payload/message")
+        .unwrap_or(ErrorCode::Other("unknown".to_owned()));
+    let message = line
+        .pointer("/payload/message")
         .and_then(Value::as_str)
         .unwrap_or("")
-        .to_owned()
+        .to_owned();
+    failure(code, message)
 }
 
 /// Declines on a `schema_version` different from this build's
@@ -224,43 +232,4 @@ fn ended(id: &SessionId) -> Failure {
         ErrorCode::Closing,
         format!("session {} ended before its turn completed", id.0),
     )
-}
-
-/// The lock is held but nothing accepts: `session_held`, naming the holder
-/// as [`log::Log::open`] does.
-fn held(home: &Path, id: &SessionId) -> Failure {
-    failure(
-        ErrorCode::SessionHeld,
-        format!(
-            "session {} is held by {}; only one Fiber process may write a session",
-            id.0,
-            holder(home, id),
-        ),
-    )
-}
-
-/// The holder named in the session's lock file, read without taking it, as
-/// [`log::Log::open`] names it. Attach never opens the log.
-fn holder(home: &Path, id: &SessionId) -> String {
-    let projects = home.join("projects");
-    let Ok(keys) = fs::read_dir(&projects) else {
-        return unknown_holder();
-    };
-    for key in keys.flatten() {
-        let lock = key.path().join("sessions").join(&id.0).join("session.lock");
-        if let Ok(pid) = fs::read_to_string(&lock)
-            && !pid.trim().is_empty()
-        {
-            return format!("process {}", pid.trim());
-        }
-    }
-    unknown_holder()
-}
-
-fn unknown_holder() -> String {
-    "a process whose pid is not yet recorded".to_owned()
-}
-
-fn io_failed(path: &Path, e: &std::io::Error) -> Failure {
-    failure(ErrorCode::IoFailed, format!("{}: {e}", path.display()))
 }

@@ -44,11 +44,12 @@ pub(crate) fn ask_resume(
     let dir = sessions.join(&id.0);
     // `Log::open` takes the lock first; the lines below are read under it.
     // A held lock means a live session: attach to it instead of opening a
-    // second writer (`docs/invocation.md`, "Processes").
+    // second writer (`docs/invocation.md`, "Processes"). Its failure
+    // already names the holder, which attach takes as its refusal.
     let log = match Log::open(&sessions, id.clone(), Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
-        Err(log::Error::Held { .. }) => {
-            return match doors::attach(&home, &id, prompt, &mut io::stdout()) {
+        Err(e @ log::Error::Held { .. }) => {
+            return match doors::attach(&home, &id, prompt, &mut io::stdout(), failed(e.code(), e)) {
                 Ok(code) => code,
                 Err(e) => ask_failed(e),
             };
