@@ -29,16 +29,7 @@ impl Recorder {
 
     /// The concatenated `text` of every `tool_call_delta` recorded so far.
     pub fn text(&self) -> String {
-        let inner = lock(&self.inner);
-        let mut out = String::new();
-        for event in &inner.events {
-            if let Event::ToolCallDelta(progress) = event
-                && let Some(text) = &progress.text
-            {
-                out.push_str(text);
-            }
-        }
-        out
+        text_of(&lock(&self.inner))
     }
 
     /// Waits, at most `within` of real time, until the recorded delta text
@@ -48,9 +39,9 @@ impl Recorder {
         let inner = lock(&self.inner);
         let (inner, _) = self
             .changed
-            .wait_timeout_while(inner, within, |inner| !has_text(inner, needle))
+            .wait_timeout_while(inner, within, |inner| !text_of(inner).contains(needle))
             .unwrap_or_else(PoisonError::into_inner);
-        has_text(&inner, needle)
+        text_of(&inner).contains(needle)
     }
 }
 
@@ -64,17 +55,17 @@ impl Emit for Recorder {
     }
 }
 
-fn has_text(inner: &Inner, needle: &str) -> bool {
-    inner.events.iter().any(|event| {
-        if let Event::ToolCallDelta(progress) = event {
-            progress
-                .text
-                .as_deref()
-                .is_some_and(|text| text.contains(needle))
-        } else {
-            false
+/// The concatenated `text` of every `tool_call_delta` in `inner`.
+fn text_of(inner: &Inner) -> String {
+    let mut out = String::new();
+    for event in &inner.events {
+        if let Event::ToolCallDelta(progress) = event
+            && let Some(text) = &progress.text
+        {
+            out.push_str(text);
         }
-    })
+    }
+    out
 }
 
 fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {

@@ -142,7 +142,7 @@ impl Loop {
             decided.push((id, decision));
         }
         thread::scope(|scope| {
-            let wake = Arc::new(SharedWake::new());
+            let wake = Arc::new(SharedWake::default());
             // A clock move wakes the wait below: without it a held change
             // would wait for the call to end instead of its interval, and
             // the timer that flushes it would never fire (`docs/tools.md`,
@@ -180,29 +180,25 @@ impl Loop {
                 let now = clock.now();
                 let seen = wake.seq();
                 // Every delta due now, in request order. A held change the
-                // interval still covers stays held for the flush below.
+                // interval still covers stays held for the flush in
+                // `complete_next` below.
                 for call in running.iter() {
                     let State::Running { stream, .. } = &call.state else {
                         continue;
                     };
                     if let Some(delta) = stream.take_due(now) {
-                        stream.wrote(self.write_delta(&delta, turn, &call.id), now);
-                    }
-                }
-                // Every returned call's final flush, whatever the interval:
-                // a later call's flush may precede an earlier call's
-                // completion, while completions stay in request order.
-                for call in running.iter() {
-                    let State::Running { stream, .. } = &call.state else {
-                        continue;
-                    };
-                    if stream.is_done()
-                        && let Some(delta) = stream.take_final()
-                    {
-                        self.write_delta(&delta, turn, &call.id);
+                        let bytes = self.write_delta(&delta, turn, &call.id);
+                        // Read after the write: the interval starts when the
+                        // delta went out, measured after it
+                        // (`docs/tools.md`, "Progress").
+                        stream.wrote(bytes, clock.now());
                     }
                 }
                 // The next completion in request order, if its prefix is done.
+                // A returned call's final flush rides with its output under
+                // one lock and is written before its completion, whatever
+                // the interval: a later call's flush may precede an earlier
+                // call's completion, while completions stay in request order.
                 if self.complete_next(&mut running, turn)? {
                     continue;
                 }
@@ -617,18 +613,18 @@ impl Loop {
         let Some(call) = running.iter_mut().find(|call| !is_done(call)) else {
             return Ok(false);
         };
-        let next = match &call.state {
-            State::Done => None,
-            State::Ready(completed) => Some(completed.clone()),
-            State::Running { stream, bound, .. } => match stream.take_done() {
-                Some(output) => Some(Box::new(self.finish(output, *bound, &call.id))),
+        let completed = match &call.state {
+            State::Done => return Ok(false),
+            State::Ready(completed) => completed.clone(),
+            State::Running { stream, bound, .. } => match stream.take_finished() {
+                Some((output, flushed)) => {
+                    if let Some(delta) = flushed {
+                        self.write_delta(&delta, turn, &call.id);
+                    }
+                    Box::new(self.finish(output, *bound, &call.id))
+                }
                 None => return Ok(false),
             },
-        };
-        // `find` skipped done calls, so this is always `Some`; `None`
-        // exits without writing either way.
-        let Some(completed) = next else {
-            return Ok(false);
         };
         call.state = State::Done;
         self.append(&Event::ToolCallCompleted(*completed), turn, Some(&call.id))?;

@@ -201,21 +201,33 @@ fn bump(inner: &mut Inner) {
 /// does. Splits fall where the decoder is clean, so the emitted texts
 /// concatenate to the lossy whole.
 fn complete_prefix(chunk: &[u8]) -> usize {
-    let mut at = 0;
-    while at < chunk.len() {
-        let rest = chunk.get(at..).unwrap_or(&[]);
+    let mut rest = chunk;
+    while !rest.is_empty() {
         match str::from_utf8(rest) {
             Ok(_) => return chunk.len(),
             Err(err) => match err.error_len() {
                 // An incomplete sequence at the end waits for more bytes.
-                None => return at.saturating_add(err.valid_up_to()),
+                None => return chunk.len() - rest.len() + err.valid_up_to(),
                 // An invalid sequence decodes as U+FFFD; what follows may
                 // still end mid-sequence, so keep looking past it.
-                Some(len) => at = at.saturating_add(err.valid_up_to()).saturating_add(len),
+                Some(len) => {
+                    rest = rest.get(err.valid_up_to() + len..).unwrap_or(&[]);
+                }
             },
         }
     }
-    at
+    chunk.len() - rest.len()
+}
+
+/// Emits `text` as one text-only `tool_call_delta`. Empty texts carry
+/// nothing and are not written.
+fn emit_delta(emit: &dyn Emit, text: String) {
+    if !text.is_empty() {
+        emit.emit(&Event::ToolCallDelta(Progress {
+            text: Some(text),
+            details: None,
+        }));
+    }
 }
 
 /// Emits the output past `streamed`, holding back an incomplete UTF-8 tail
@@ -230,31 +242,17 @@ fn stream_output(shared: &Shared, emit: &dyn Emit, streamed: usize) -> usize {
             .to_vec()
     };
     let complete = complete_prefix(&chunk);
-    if let Some(prefix) = chunk.get(..complete).filter(|prefix| !prefix.is_empty()) {
-        emit.emit(&Event::ToolCallDelta(Progress {
-            text: Some(String::from_utf8_lossy(prefix).into_owned()),
-            details: None,
-        }));
+    if let Some(prefix) = chunk.get(..complete) {
+        emit_delta(emit, String::from_utf8_lossy(prefix).into_owned());
     }
     streamed.saturating_add(complete)
 }
 
-/// Emits whatever is left, lossily: an incomplete tail goes out as U+FFFD,
-/// so the concatenated delta texts equal the lossy whole output.
-fn stream_rest(shared: &Shared, emit: &dyn Emit, streamed: usize) {
-    let rest = {
-        lock(&shared.inner)
-            .output
-            .get(streamed..)
-            .unwrap_or_default()
-            .to_vec()
-    };
-    if !rest.is_empty() {
-        emit.emit(&Event::ToolCallDelta(Progress {
-            text: Some(String::from_utf8_lossy(&rest).into_owned()),
-            details: None,
-        }));
-    }
+/// Emits `output` past `streamed`, lossily: an incomplete tail goes out as
+/// U+FFFD, so the concatenated delta texts equal the lossy whole output.
+fn stream_tail(output: &[u8], emit: &dyn Emit, streamed: usize) {
+    let rest = output.get(streamed..).unwrap_or_default();
+    emit_delta(emit, String::from_utf8_lossy(rest).into_owned());
 }
 
 struct View {
@@ -356,9 +354,15 @@ fn drive(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && seen_empty;
                 if settled || clock.now() >= until {
-                    // At finish, any remaining bytes go out lossily.
-                    stream_rest(shared, emit, streamed);
-                    return finish(shared, stop, sent_signal, seen_empty, view.eof);
+                    return finish(
+                        shared,
+                        stop,
+                        sent_signal,
+                        seen_empty,
+                        view.eof,
+                        emit,
+                        streamed,
+                    );
                 }
                 park(
                     clock,
@@ -392,6 +396,8 @@ fn finish(
     sent_signal: bool,
     seen_empty: bool,
     eof: bool,
+    emit: &dyn Emit,
+    streamed: usize,
 ) -> Finished {
     let (output, status) = {
         let mut inner = lock(&shared.inner);
@@ -401,6 +407,10 @@ fn finish(
         }
         (std::mem::take(&mut inner.output), inner.status)
     };
+    // Tailed from this exact snapshot: the reader appends from here into a
+    // fresh buffer the result never sees (discarded above while open), so
+    // the concatenated delta texts equal the lossy result.
+    stream_tail(&output, emit, streamed);
     let stopped = stop.is_some();
     Finished {
         output,

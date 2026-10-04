@@ -2,13 +2,16 @@
 //! when it is due, and what a write costs. `Instant`s come from the caller;
 //! the pacer never reads a clock.
 
+use std::sync::Arc;
 use std::time::Duration;
 
-use contract::events::Progress;
+use contract::emit::Emit;
+use contract::events::{Event, Progress};
+use contract::tool::Output;
 use fakes::clock::FakeClock;
 use serde_json::json;
 
-use super::Pacer;
+use super::{Pacer, SharedWake, Stream};
 
 /// One origin; every instant below is built from it, so no clock is read.
 fn origin() -> std::time::Instant {
@@ -25,7 +28,7 @@ fn text(value: &str) -> Progress {
 #[test]
 fn the_first_change_after_idle_is_due_at_once() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&text("half"));
     assert_eq!(pacer.take_due(at), Some(text("half")));
 }
@@ -33,7 +36,7 @@ fn the_first_change_after_idle_is_due_at_once() {
 #[test]
 fn a_second_change_inside_100_ms_is_held_until_written_at_plus_100_ms() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&text("first"));
     assert_eq!(pacer.take_due(at), Some(text("first")));
     pacer.wrote(1, at);
@@ -48,7 +51,7 @@ fn a_second_change_inside_100_ms_is_held_until_written_at_plus_100_ms() {
 #[test]
 fn three_held_changes_collapse_to_concatenated_text_and_the_latest_details() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&text("a"));
     assert_eq!(pacer.take_due(at), Some(text("a")));
     pacer.wrote(1, at);
@@ -78,7 +81,7 @@ fn three_held_changes_collapse_to_concatenated_text_and_the_latest_details() {
 #[test]
 fn a_later_delta_without_details_keeps_the_earlier_held_details() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&Progress {
         text: Some("a".into()),
         details: Some(json!({"done": 1})),
@@ -108,7 +111,7 @@ fn a_later_delta_without_details_keeps_the_earlier_held_details() {
 #[test]
 fn a_20_kib_write_pushes_the_next_due_to_200_ms() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&text("first"));
     assert_eq!(pacer.take_due(at), Some(text("first")));
     pacer.wrote(20 * 1024, at);
@@ -123,7 +126,7 @@ fn a_20_kib_write_pushes_the_next_due_to_200_ms() {
 #[test]
 fn a_1_byte_write_keeps_the_next_due_at_100_ms() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&text("first"));
     assert_eq!(pacer.take_due(at), Some(text("first")));
     pacer.wrote(1, at);
@@ -134,7 +137,7 @@ fn a_1_byte_write_keeps_the_next_due_at_100_ms() {
 #[test]
 fn the_deadline_is_none_when_idle_or_when_nothing_is_held() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     assert_eq!(pacer.deadline(), None);
     pacer.hold(&text("first"));
     // Idle: the held change is due at once, so there is nothing to wait for.
@@ -148,7 +151,7 @@ fn the_deadline_is_none_when_idle_or_when_nothing_is_held() {
 #[test]
 fn the_final_take_returns_the_held_change_before_the_interval() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&text("first"));
     assert_eq!(pacer.take_due(at), Some(text("first")));
     pacer.wrote(20 * 1024, at);
@@ -160,7 +163,7 @@ fn the_final_take_returns_the_held_change_before_the_interval() {
 #[test]
 fn an_empty_delta_is_ignored() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&Progress {
         text: None,
         details: None,
@@ -173,7 +176,7 @@ fn an_empty_delta_is_ignored() {
 #[test]
 fn a_details_only_delta_is_held_and_taken_without_text() {
     let at = origin();
-    let mut pacer = Pacer::new();
+    let mut pacer = Pacer::default();
     pacer.hold(&Progress {
         text: None,
         details: Some(json!({"done": 3})),
@@ -185,4 +188,27 @@ fn a_details_only_delta_is_held_and_taken_without_text() {
             details: Some(json!({"done": 3})),
         })
     );
+}
+
+#[test]
+fn take_finished_returns_the_output_with_whatever_is_held() {
+    let stream = Stream::new(Arc::new(SharedWake::default()));
+    assert_eq!(stream.take_finished(), None);
+    stream.emit(&Event::ToolCallDelta(Progress {
+        text: Some("late".into()),
+        details: None,
+    }));
+    assert_eq!(stream.take_finished(), None);
+    stream.finish(Output::default());
+    assert_eq!(
+        stream.take_finished(),
+        Some((
+            Output::default(),
+            Some(Progress {
+                text: Some("late".into()),
+                details: None,
+            })
+        ))
+    );
+    assert_eq!(stream.take_finished(), None);
 }

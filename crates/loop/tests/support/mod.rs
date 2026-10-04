@@ -296,8 +296,11 @@ impl Tool for TestTool {
         for step in &self.script {
             match step {
                 Script::Emit(event) => emit.emit(event),
-                Script::Wait(barrier) => {
-                    barrier.wait();
+                // On a missed release the wait above expires and the call
+                // proceeds, so the turn ends and the test reports instead
+                // of hanging.
+                Script::Wait(gate) => {
+                    gate.wait();
                 }
             }
         }
@@ -317,12 +320,42 @@ impl Tool for TestTool {
 }
 
 /// One step of a test tool's scripted run: emit an event through the
-/// call's emitter, or rendezvous with the test at a barrier.
+/// call's emitter, or rendezvous with the test at a gate.
 pub(crate) enum Script {
     /// Emits `Event` through the call's emitter.
     Emit(Box<Event>),
-    /// Blocks until the test arrives at the same barrier.
-    Wait(Arc<Barrier>),
+    /// Blocks until the test opens the gate, or [`DEADLINE`] passes.
+    Wait(Arc<Gate>),
+}
+
+/// A test gate: the tool blocks until the test opens it, or a deadline
+/// passes. The deadline keeps a test failure before the release from
+/// hanging scoped-thread cleanup: the tool proceeds either way, the turn
+/// ends, and the test's own assertion reports (`docs/testing.md`, "Waits
+/// and timeouts").
+#[derive(Debug, Default)]
+pub(crate) struct Gate {
+    open: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Gate {
+    /// Blocks until [`Gate::open`] or [`DEADLINE`]; true when opened. Either
+    /// way the caller proceeds, so the turn always ends.
+    pub(crate) fn wait(&self) -> bool {
+        let open = self.open.lock().unwrap();
+        let (open, _) = self
+            .changed
+            .wait_timeout_while(open, DEADLINE, |open| !*open)
+            .unwrap();
+        *open
+    }
+
+    /// Releases whoever waits in [`Gate::wait`].
+    pub(crate) fn open(&self) {
+        *self.open.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
 }
 
 /// The reasoning item a reasoning reply carries, as a provider sent it.

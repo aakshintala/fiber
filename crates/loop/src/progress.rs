@@ -41,11 +41,6 @@ pub(crate) struct Pacer {
 }
 
 impl Pacer {
-    /// An idle pacer: nothing held, nothing written.
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// Merges `delta` into the held change: texts concatenate in order, so
     /// no output is lost, and `details` is the latest one a delta carried.
     /// A delta with neither is ignored: it carries nothing.
@@ -97,10 +92,7 @@ impl Pacer {
     /// when nothing is held, or when the held change is due at once after
     /// idle, so the loop parks until woken instead of waiting on the clock.
     pub(crate) fn deadline(&self) -> Option<Instant> {
-        match (&self.held, self.next_due) {
-            (Some(_), Some(due)) => Some(due),
-            (Some(_), None) | (None, _) => None,
-        }
+        self.held.as_ref().and(self.next_due)
     }
 }
 
@@ -115,11 +107,6 @@ pub(crate) struct SharedWake {
 }
 
 impl SharedWake {
-    /// A wake no thread has bumped yet.
-    pub(crate) fn new() -> Self {
-        Self::default()
-    }
-
     /// The current sequence: read at a pass's start and handed back to
     /// [`SharedWake::park`], which skips waiting when it moved.
     pub(crate) fn seq(&self) -> u64 {
@@ -197,7 +184,7 @@ impl Stream {
     pub(crate) fn new(wake: Arc<SharedWake>) -> Self {
         Self {
             inner: Mutex::new(StreamInner {
-                pacer: Pacer::new(),
+                pacer: Pacer::default(),
                 done: None,
             }),
             wake,
@@ -219,15 +206,13 @@ impl Stream {
         lock(&self.inner).pacer.deadline()
     }
 
-    /// The final flush: whatever is held, whatever the interval. `None`
-    /// when nothing is held.
-    pub(crate) fn take_final(&self) -> Option<Progress> {
-        lock(&self.inner).pacer.take_final()
-    }
-
-    /// Whether the call has returned.
-    pub(crate) fn is_done(&self) -> bool {
-        lock(&self.inner).done.is_some()
+    /// Takes the returned output together with whatever is held, if the call
+    /// has returned: one lock, so the final flush can never slip past the
+    /// completion it precedes (`docs/tools.md`, "Progress").
+    pub(crate) fn take_finished(&self) -> Option<(Output, Option<Progress>)> {
+        let mut inner = lock(&self.inner);
+        let output = inner.done.take()?;
+        Some((output, inner.pacer.take_final()))
     }
 
     /// Marks the call returned with `output`, waking the loop thread. The
@@ -236,11 +221,6 @@ impl Stream {
     pub(crate) fn finish(&self, output: Output) {
         lock(&self.inner).done = Some(output);
         self.wake.bump();
-    }
-
-    /// Takes the returned output, if the call has returned.
-    pub(crate) fn take_done(&self) -> Option<Output> {
-        lock(&self.inner).done.take()
     }
 }
 

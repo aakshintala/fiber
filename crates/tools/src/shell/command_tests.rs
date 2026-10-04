@@ -11,8 +11,7 @@ use fakes::clock::FakeClock;
 
 use super::{
     Inner, Shared, StopKind, already_woken, bump, complete_prefix, finish, group_alive, lock,
-    note_eof, park, poll_while_occupied, read_output, refused_group, stream_output, stream_rest,
-    suppress_term,
+    note_eof, park, poll_while_occupied, read_output, refused_group, stream_output, suppress_term,
 };
 
 #[test]
@@ -57,21 +56,45 @@ fn bump_advances_the_sequence() {
 #[test]
 fn an_open_pipe_is_discarded_once_the_run_returns() {
     let shared = Shared::default();
-    finish(&shared, None, false, true, false);
+    finish(&shared, None, false, true, false, &Recorder::default(), 0);
     assert!(lock(&shared.inner).discard);
 }
 
 #[test]
 fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
-    let held = finish(&Shared::default(), None, false, true, false);
+    let held = finish(
+        &Shared::default(),
+        None,
+        false,
+        true,
+        false,
+        &Recorder::default(),
+        0,
+    );
     assert!(held.held_open);
     assert!(!held.indeterminate);
 
-    let closed = finish(&Shared::default(), None, false, true, true);
+    let closed = finish(
+        &Shared::default(),
+        None,
+        false,
+        true,
+        true,
+        &Recorder::default(),
+        0,
+    );
     assert!(!closed.held_open);
     assert!(!closed.indeterminate);
 
-    let still_occupied = finish(&Shared::default(), None, false, false, false);
+    let still_occupied = finish(
+        &Shared::default(),
+        None,
+        false,
+        false,
+        false,
+        &Recorder::default(),
+        0,
+    );
     assert!(!still_occupied.held_open);
 
     let stopped_open = finish(
@@ -80,6 +103,8 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         true,
         false,
+        &Recorder::default(),
+        0,
     );
     assert!(stopped_open.indeterminate);
     assert!(!stopped_open.held_open);
@@ -90,6 +115,8 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         false,
         true,
+        &Recorder::default(),
+        0,
     );
     assert!(stopped_occupied.indeterminate);
     assert!(!stopped_occupied.held_open);
@@ -100,6 +127,8 @@ fn finish_distinguishes_a_held_pipe_from_an_unfinished_stop() {
         true,
         true,
         true,
+        &Recorder::default(),
+        0,
     );
     assert!(!stopped_clean.indeterminate);
     assert!(!stopped_clean.held_open);
@@ -335,13 +364,16 @@ fn an_invalid_byte_streams_as_the_replacement_character() {
 }
 
 #[test]
-fn trailing_incomplete_bytes_go_out_lossily_at_finish() {
+fn finish_streams_the_tail_from_the_taken_snapshot() {
     let shared = Shared::default();
     let recorder = Recorder::default();
     lock(&shared.inner).output.extend_from_slice(b"a\xE2\x82");
     let streamed = stream_output(&shared, &recorder, 0);
-    assert_eq!(recorder.text(), "a");
-    stream_rest(&shared, &recorder, streamed);
+    assert_eq!(streamed, 1);
+    let finished = finish(&shared, None, false, true, true, &recorder, streamed);
+    assert_eq!(finished.output, b"a\xE2\x82");
+    // The tail streams once, from the snapshot the result took: "a" is not
+    // repeated, and the concatenated texts equal the lossy whole output.
     assert_eq!(
         recorder.text(),
         String::from_utf8_lossy(b"a\xE2\x82").into_owned()

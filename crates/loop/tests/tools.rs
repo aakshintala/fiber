@@ -30,7 +30,7 @@ use fakes::Scripted;
 use fakes::clock::FakeClock;
 use serde_json::{Value, json};
 
-use support::{Script, Session, Tap, TestTool, calls_reply, delivery, kinds};
+use support::{Gate, Script, Session, Tap, TestTool, calls_reply, delivery, kinds};
 
 /// A session whose first reply makes `calls` and whose second says "Done.",
 /// with `tools` registered. Runs one turn and returns its lines.
@@ -688,8 +688,8 @@ fn a_running_call_streams_one_delta_between_started_and_completed() {
 
 #[test]
 fn a_second_delta_within_the_interval_waits_for_the_clock() {
-    let gate1 = Arc::new(Barrier::new(2));
-    let gate2 = Arc::new(Barrier::new(2));
+    let gate1 = Arc::new(Gate::default());
+    let gate2 = Arc::new(Gate::default());
     let mut tool = TestTool::reads("get_weather", "Sunny.");
     tool.script = vec![
         emit(delta("one")),
@@ -705,7 +705,7 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
         let first = tap.wait_for_delta("one");
         // The tool is past its first emit and blocked at its first gate, so
         // "two" is not yet emitted and the loop holds nothing.
-        gate1.wait();
+        gate1.open();
         let due = clock.now() + Duration::from_millis(100);
         assert!(
             clock.await_parked(due, Duration::from_secs(10)),
@@ -718,7 +718,7 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
         clock.advance(Duration::from_millis(100));
         let second = tap.wait_for_delta("two");
         assert_eq!(second.action_id, first.action_id);
-        gate2.wait();
+        gate2.open();
         tap.wait_for("tool_call_completed");
     });
     let lines = session.lines();
@@ -737,7 +737,7 @@ fn a_second_delta_within_the_interval_waits_for_the_clock() {
 
 #[test]
 fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving() {
-    let gate = Arc::new(Barrier::new(2));
+    let gate = Arc::new(Gate::default());
     let mut tool = TestTool::reads("get_weather", "Sunny.");
     tool.script = vec![
         emit(delta("a")),
@@ -756,7 +756,7 @@ fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving
             tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
             "a delta leaked before the gate opened"
         );
-        gate.wait();
+        gate.open();
         tap.wait_for("tool_call_completed");
     });
     // The clock never moved, so "b" reached the log only as the final flush,
@@ -775,7 +775,7 @@ fn a_delta_emitted_just_before_the_call_returns_flushes_without_the_clock_moving
 
 #[test]
 fn back_to_back_deltas_collapse_to_one_with_both_texts_in_order() {
-    let gate = Arc::new(Barrier::new(2));
+    let gate = Arc::new(Gate::default());
     let mut tool = TestTool::reads("get_weather", "Sunny.");
     tool.script = vec![
         emit(delta("a")),
@@ -789,7 +789,7 @@ fn back_to_back_deltas_collapse_to_one_with_both_texts_in_order() {
         s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
         tap.wait_for("tool_call_started");
         tap.wait_for_delta("a");
-        gate.wait();
+        gate.open();
         tap.wait_for("tool_call_completed");
     });
     // The clock never moved and "a" was already written, so the interval
@@ -834,7 +834,7 @@ fn events_that_are_not_deltas_write_nothing_extra() {
 
 #[test]
 fn two_calls_complete_in_request_order_with_their_own_deltas() {
-    let gate = Arc::new(Barrier::new(2));
+    let gate = Arc::new(Gate::default());
     let mut slow = TestTool::reads("slow", "first");
     slow.script = vec![emit(delta("S")), Script::Wait(Arc::clone(&gate))];
     let mut fast = TestTool::reads("fast", "second");
@@ -846,7 +846,7 @@ fn two_calls_complete_in_request_order_with_their_own_deltas() {
         // Either delta may arrive first; each tool is past its emit once its
         // text is seen.
         let (ds, df) = (tap.wait_for_delta("S"), tap.wait_for_delta("F"));
-        gate.wait();
+        gate.open();
         let done_first = tap.wait_for("tool_call_completed");
         let done_last = tap.wait_for("tool_call_completed");
         assert_eq!(
@@ -892,4 +892,69 @@ fn two_calls_complete_in_request_order_with_their_own_deltas() {
         let want = if text == "S" { &slow_id } else { &fast_id };
         assert_eq!(&line.action_id, want, "delta {text} rides the wrong call");
     }
+}
+
+#[test]
+fn a_large_write_paces_the_next_delta_past_100_ms() {
+    let gate1 = Arc::new(Gate::default());
+    let gate2 = Arc::new(Gate::default());
+    // 20 KiB of text: the written payload paces the next delta at
+    // 20 KiB ÷ 100 KiB/s = 200 ms, past the 100 ms floor. The byte count is
+    // the payload serialised as JSON, exactly what the loop measures.
+    let big = "x".repeat(20 * 1024);
+    let bytes = serde_json::to_vec(&Progress {
+        text: Some(big.clone()),
+        details: None,
+    })
+    .unwrap()
+    .len();
+    let interval = Duration::from_nanos(u64::try_from(bytes).unwrap() * 1_000_000_000 / 102_400)
+        .max(Duration::from_millis(100));
+    assert!(
+        interval > Duration::from_millis(100),
+        "the large delta does not pace past the floor"
+    );
+    let mut tool = TestTool::reads("big", "done.");
+    tool.script = vec![
+        emit(delta(&big)),
+        Script::Wait(Arc::clone(&gate1)),
+        emit(delta("small")),
+        Script::Wait(Arc::clone(&gate2)),
+    ];
+    let tools: Vec<Arc<dyn Tool>> = vec![Arc::new(tool)];
+    let (mut session, tap, clock) = streaming_turn(tools, &[("big", paris())]);
+    thread::scope(|s| {
+        s.spawn(|| assert_eq!(session.turn(), Some(TurnOutcome::Completed)));
+        tap.wait_for("tool_call_started");
+        let first = tap.wait_for_delta(&big);
+        // The tool is past its large emit and blocked at its first gate, so
+        // "small" is not yet emitted and the loop holds nothing.
+        gate1.open();
+        let due = clock.now() + interval;
+        assert!(
+            clock.await_parked(due, Duration::from_secs(10)),
+            "the loop did not park until the byte-paced interval ends"
+        );
+        assert!(
+            tap.pending().iter().all(|l| l.kind != "tool_call_delta"),
+            "a delta leaked before the clock moved"
+        );
+        clock.advance(interval);
+        let second = tap.wait_for_delta("small");
+        assert_eq!(second.action_id, first.action_id);
+        gate2.open();
+        tap.wait_for("tool_call_completed");
+    });
+    let lines = session.lines();
+    assert_eq!(
+        tool_kinds(&lines),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_delta",
+            "tool_call_completed"
+        ]
+    );
+    assert_eq!(delta_texts(&lines), [big.as_str(), "small"]);
 }
