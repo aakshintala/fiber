@@ -7,7 +7,6 @@
 //! result prints no notice.
 
 use std::collections::BTreeSet;
-use std::ffi::OsStr;
 use std::path::Path;
 
 /// The top-level directories of `fs_dir` the walk skipped for ignore
@@ -59,7 +58,7 @@ pub(crate) fn skipped(cwd: &Path, fs_dir: &Path) -> Vec<String> {
             continue;
         }
         // The filtered walk prints below the same root, so names compare.
-        if kept.contains(entry.path()) || is_vcs(entry.file_name()) {
+        if kept.contains(entry.path()) || super::walk::is_vcs(entry.file_name()) {
             continue;
         }
         skipped.insert(entry.file_name().to_owned());
@@ -93,12 +92,6 @@ pub(crate) fn find_line(skipped: &[String]) -> Option<String> {
         skipped.join(", "),
         first.trim_end_matches('/')
     ))
-}
-
-/// Whether `name` is a version-control directory, left out of the notice.
-fn is_vcs(name: &OsStr) -> bool {
-    const VCS: [&str; 6] = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
-    name.to_str().is_some_and(|name| VCS.contains(&name))
 }
 
 /// Joins one search's skipped directories: sorted, without repeats.

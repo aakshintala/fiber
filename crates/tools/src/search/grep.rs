@@ -14,7 +14,7 @@ use super::find::{basename, glob_match};
 use super::grep_args::{self, Mode, Options};
 use super::notice;
 use super::walk::{self, DirRoot, Root};
-use super::{Out, Outcome};
+use super::{Out, Outcome, flush_exit};
 
 /// Runs `grep` against the process's working directory and standard streams,
 /// returning the exit code: 0 when something matched, 1 when nothing did, 2
@@ -28,9 +28,9 @@ pub fn grep_main(args: Vec<OsString>) -> i32 {
     let mut buffered = std::io::BufWriter::new(stdout.lock());
     let mut stderr = std::io::stderr().lock();
     let outcome = run(&cwd, &args, &mut input, &mut buffered, &mut stderr);
-    buffered.flush().unwrap_or(());
+    let flushed = buffered.flush();
     match outcome {
-        Outcome::Done(code) => code,
+        Outcome::Done(code) => flush_exit("grep", code, flushed, &mut stderr),
         Outcome::Fallback => fallback::exec("grep", &args, &mut stderr),
     }
 }
@@ -85,6 +85,9 @@ pub(crate) fn run(
     let mut out = Out::new(stdout);
     let mut failed = false;
     let mut matched = false;
+    // Whether an earlier input already printed lines: with context, a
+    // `--` separates this input's lines from those, as GNU does.
+    let mut preceded = false;
     let mut walked = Vec::new();
     for job in jobs(cwd, &paths, &options, show) {
         if out.broken() {
@@ -96,10 +99,14 @@ pub(crate) fn run(
                 failed = true;
             }
             Job::Standard { label } => {
+                let target = Target {
+                    label: label.as_deref(),
+                    preceded,
+                };
                 let searched = search_stream(
                     &mut search,
                     &options,
-                    label.as_deref(),
+                    target,
                     b"(standard input)",
                     stdin,
                     stderr,
@@ -107,35 +114,36 @@ pub(crate) fn run(
                 );
                 failed |= searched.failed;
                 matched |= searched.matched;
+                preceded |= searched.printed;
             }
             Job::File { read, show: shown } => {
                 if !included(&options, &shown) {
                     continue;
                 }
-                match File::open(&read) {
-                    Ok(file) => {
-                        let label = labeled(&options, show, &shown);
-                        let searched = search_stream(
-                            &mut search,
-                            &options,
-                            label.as_deref(),
-                            shown.as_os_str().as_encoded_bytes(),
-                            &mut BufReader::new(file),
-                            stderr,
-                            &mut out,
-                        );
-                        failed |= searched.failed;
-                        matched |= searched.matched;
-                    }
-                    Err(error) => {
-                        complaint(stderr, &shown, &walk::io_message(&error));
-                        failed = true;
-                    }
-                }
+                let label = labeled(&options, show, &shown);
+                let target = Target {
+                    label: label.as_deref(),
+                    preceded,
+                };
+                let searched = search_file(
+                    &mut search,
+                    &options,
+                    &read,
+                    &shown,
+                    target,
+                    stderr,
+                    &mut out,
+                );
+                failed |= searched.failed;
+                matched |= searched.matched;
+                preceded |= searched.printed;
             }
             Job::Dir { walk } => {
                 walked.push(walk.clone());
                 for entry in walk::walk(cwd, &walk, None) {
+                    if out.broken() {
+                        break;
+                    }
                     match entry {
                         Ok(found) => {
                             if found.depth == 0
@@ -148,26 +156,22 @@ pub(crate) fn run(
                                 continue;
                             }
                             let label = labeled(&options, show, &found.display);
-                            let errors = found.display.as_os_str().as_encoded_bytes().to_vec();
-                            match File::open(cwd.join(&found.display)) {
-                                Ok(file) => {
-                                    let searched = search_stream(
-                                        &mut search,
-                                        &options,
-                                        label.as_deref(),
-                                        &errors,
-                                        &mut BufReader::new(file),
-                                        stderr,
-                                        &mut out,
-                                    );
-                                    failed |= searched.failed;
-                                    matched |= searched.matched;
-                                }
-                                Err(error) => {
-                                    complaint(stderr, &found.display, &walk::io_message(&error));
-                                    failed = true;
-                                }
-                            }
+                            let target = Target {
+                                label: label.as_deref(),
+                                preceded,
+                            };
+                            let searched = search_file(
+                                &mut search,
+                                &options,
+                                &cwd.join(&found.display),
+                                &found.display,
+                                target,
+                                stderr,
+                                &mut out,
+                            );
+                            failed |= searched.failed;
+                            matched |= searched.matched;
+                            preceded |= searched.printed;
                         }
                         Err(error) => {
                             complaint(stderr, &error.display, &error.message);
@@ -177,8 +181,13 @@ pub(crate) fn run(
                 }
             }
         }
+        // Each file's output is flushed before the next begins.
+        out.flush();
     }
-    out.flush();
+    if let Some(error) = out.take_error() {
+        writeln!(stderr, "grep: writing output: {error}").unwrap_or(());
+        failed = true;
+    }
     if !matched && !failed {
         // Computed only on no match: the second walk costs nothing
         // otherwise.
@@ -209,20 +218,29 @@ struct Search {
 }
 
 /// Compiles the pattern: nothing when the pattern needs the system grep, as
-/// for a back-reference or a pattern ripgrep cannot compile.
+/// for a back-reference or a pattern ripgrep cannot compile. A pattern
+/// with newlines reads as one alternative per line, as repeated `-e`
+/// would: each line is translated on its own.
 fn compile(options: &Options) -> Result<Search, ()> {
     let source = std::str::from_utf8(&options.pattern).map_err(|_| ())?;
-    let pattern = match options.mode {
-        Mode::Basic => bre::translate_bre(source).ok_or(())?,
-        Mode::Extended => bre::translate_ere(source).ok_or(())?,
-        Mode::Fixed => source.to_owned(),
-    };
+    let mut pattern = String::new();
+    for (index, part) in source.split('\n').enumerate() {
+        if index > 0 {
+            pattern.push('|');
+        }
+        match options.mode {
+            Mode::Basic => pattern.push_str(&bre::translate_bre(part).ok_or(())?),
+            Mode::Extended => pattern.push_str(&bre::translate_ere(part).ok_or(())?),
+            Mode::Fixed => pattern.push_str(&escape_fixed(part)),
+        }
+    }
     let mut matcher = RegexMatcherBuilder::new();
+    // Bytes, as GNU in the C locale: `.` matches any byte but a newline,
+    // and `-i` folds ASCII only. The differential tests run the system
+    // grep under `LC_ALL=C`.
+    matcher.unicode(false);
     matcher.case_insensitive(options.ignore_case);
     matcher.word(options.word);
-    if options.mode == Mode::Fixed {
-        matcher.fixed_strings(true);
-    }
     let matcher = matcher.build(&pattern).map_err(|_| ())?;
     let mut searcher = SearcherBuilder::new();
     searcher.line_number(true);
@@ -235,6 +253,22 @@ fn compile(options: &Options) -> Result<Search, ()> {
         matcher,
         searcher: searcher.build(),
     })
+}
+
+/// Escapes a fixed string as a regular expression: every character that
+/// reads as syntax gets a backslash, everything else passes through.
+fn escape_fixed(pattern: &str) -> String {
+    let mut escaped = String::with_capacity(pattern.len());
+    for current in pattern.chars() {
+        if matches!(
+            current,
+            '.' | '^' | '$' | '*' | '+' | '?' | '(' | ')' | '|' | '[' | ']' | '{' | '}' | '\\'
+        ) {
+            escaped.push('\\');
+        }
+        escaped.push(current);
+    }
+    escaped
 }
 
 /// One thing to search, or one complaint, in the order given.
@@ -337,146 +371,209 @@ struct Found {
     matched: bool,
     /// Whether reading failed.
     failed: bool,
+    /// Whether any line printed, for the `--` between inputs.
+    printed: bool,
+}
+
+/// One input to search: what its lines print under, and whether an
+/// earlier input already printed lines (for the `--` between inputs in
+/// context mode).
+#[derive(Clone, Copy)]
+struct Target<'a> {
+    /// The label lines print under, or nothing unlabelled.
+    label: Option<&'a [u8]>,
+    /// Whether an earlier input already printed lines.
+    preceded: bool,
+}
+
+/// Opens `read` and searches it, printing as `target` says: one helper
+/// for a named file and a walked one. `shown` names the input when
+/// opening or reading it fails.
+fn search_file(
+    search: &mut Search,
+    options: &Options,
+    read: &Path,
+    shown: &Path,
+    target: Target<'_>,
+    stderr: &mut dyn Write,
+    out: &mut Out<'_>,
+) -> Found {
+    match File::open(read) {
+        Ok(file) => {
+            let errors = shown.as_os_str().as_encoded_bytes();
+            search_stream(
+                search,
+                options,
+                target,
+                errors,
+                &mut BufReader::new(file),
+                stderr,
+                out,
+            )
+        }
+        Err(error) => {
+            complaint(stderr, shown, &walk::io_message(&error));
+            Found {
+                matched: false,
+                failed: true,
+                printed: false,
+            }
+        }
+    }
 }
 
 /// Searches one input, printing what the options ask for: the path, the
-/// count, or the lines. `err_label` names the input when reading fails.
+/// count, or each line as it matches, so a filter prints before the input
+/// ends. `err_label` names the input when reading fails. `preceded` is
+/// whether an earlier input already printed lines: with context, a `--`
+/// separates this input's lines from those.
 fn search_stream(
     search: &mut Search,
     options: &Options,
-    label: Option<&[u8]>,
+    target: Target<'_>,
     err_label: &[u8],
     reader: &mut dyn Read,
     stderr: &mut dyn Write,
     out: &mut Out<'_>,
 ) -> Found {
-    let mut lines = Lines { lines: Vec::new() };
+    let mut emit = Emit {
+        options,
+        label: target.label,
+        out,
+        matched: false,
+        count: 0,
+        printed: false,
+        prefix: target.preceded && (options.before > 0 || options.after > 0),
+    };
     if let Err(error) = search
         .searcher
-        .search_reader(&search.matcher, reader, &mut lines)
+        .search_reader(&search.matcher, reader, &mut emit)
     {
         complaint_bytes(stderr, err_label, &walk::io_message(&error));
         return Found {
             matched: false,
             failed: true,
+            printed: false,
         };
     }
     if options.files_with_matches {
-        let matched = lines
-            .lines
-            .iter()
-            .any(|line| matches!(line, Line::Match { .. }));
-        if matched {
-            out.emit(label.unwrap_or_default());
-            out.emit(b"\n");
-        }
         return Found {
-            matched,
+            matched: emit.matched,
             failed: false,
+            printed: false,
         };
     }
     if options.count {
-        let count = lines
-            .lines
-            .iter()
-            .filter(|line| matches!(line, Line::Match { .. }))
-            .count();
-        if let Some(label) = label {
-            out.emit(label);
-            out.emit(b":");
+        if let Some(label) = emit.label {
+            emit.out.emit(label);
+            emit.out.emit(b":");
         }
-        out.emit(count.to_string().as_bytes());
-        out.emit(b"\n");
+        let count = emit.count.to_string();
+        emit.out.emit(count.as_bytes());
+        emit.out.emit(b"\n");
         return Found {
-            matched: count > 0,
+            matched: emit.count > 0,
             failed: false,
+            printed: false,
         };
     }
-    let mut matched = false;
-    for line in &lines.lines {
-        match line {
-            Line::Match { no, text } => {
-                matched = true;
-                if let Some(label) = label {
-                    out.emit(label);
-                    out.emit(b":");
-                }
-                if options.line_numbers {
-                    out.emit(no.to_string().as_bytes());
-                    out.emit(b":");
-                }
-                out.emit(text);
-                out.emit(b"\n");
-            }
-            Line::Context { no, text } => {
-                if let Some(label) = label {
-                    out.emit(label);
-                    out.emit(b"-");
-                }
-                if options.line_numbers {
-                    out.emit(no.to_string().as_bytes());
-                    out.emit(b"-");
-                }
-                out.emit(text);
-                out.emit(b"\n");
-            }
-            Line::Break => out.emit(b"--\n"),
-        }
-    }
     Found {
-        matched,
+        matched: emit.matched,
         failed: false,
+        printed: emit.printed,
     }
 }
 
-/// The lines one search reported, in order.
-struct Lines {
-    /// The matches, context and breaks, in order.
-    lines: Vec<Line>,
+/// What one search prints, line by line as the searcher reports it: the
+/// sink writes through instead of collecting, so a filter prints before
+/// the input ends and a closed pipe stops the search.
+struct Emit<'a, 'w> {
+    /// What was asked for.
+    options: &'a Options,
+    /// The label lines print under, or nothing unlabelled.
+    label: Option<&'a [u8]>,
+    /// Where lines go.
+    out: &'a mut Out<'w>,
+    /// Whether any line matched.
+    matched: bool,
+    /// How many lines matched, for `-c`; doubles as the `-l` printed flag.
+    count: usize,
+    /// Whether any line printed, for the `--` between inputs.
+    printed: bool,
+    /// Whether `--` separates this input's first line from an earlier one.
+    prefix: bool,
 }
 
-/// One reported line.
-enum Line {
-    /// A matching line: its number and bytes without the terminator.
-    Match {
-        /// The one-based line number.
-        no: u64,
-        /// The line without its terminator.
-        text: Vec<u8>,
-    },
-    /// A context line: its number and bytes without the terminator.
-    Context {
-        /// The one-based line number.
-        no: u64,
-        /// The line without its terminator.
-        text: Vec<u8>,
-    },
-    /// A break between context groups.
-    Break,
-}
-
-impl Sink for Lines {
+impl Sink for Emit<'_, '_> {
     type Error = std::io::Error;
 
     fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, std::io::Error> {
-        self.lines.push(Line::Match {
-            no: mat.line_number().unwrap_or_default(),
-            text: stripped(mat.bytes()),
-        });
-        Ok(true)
+        self.matched = true;
+        if self.options.files_with_matches {
+            if self.count == 0 {
+                self.out.emit(self.label.unwrap_or(b"(standard input)"));
+                self.out.emit(b"\n");
+            }
+            self.count += 1;
+            // The label is printed: nothing more to learn.
+            return Ok(false);
+        }
+        if self.options.count {
+            self.count += 1;
+            return Ok(!self.out.broken());
+        }
+        let text = stripped(mat.bytes());
+        let no = mat.line_number().unwrap_or_default();
+        self.line(no, &text, b':');
+        Ok(!self.out.broken())
     }
 
     fn context(&mut self, _: &Searcher, context: &SinkContext<'_>) -> Result<bool, std::io::Error> {
-        self.lines.push(Line::Context {
-            no: context.line_number().unwrap_or_default(),
-            text: stripped(context.bytes()),
-        });
-        Ok(true)
+        if self.options.files_with_matches || self.options.count {
+            return Ok(true);
+        }
+        let text = stripped(context.bytes());
+        let no = context.line_number().unwrap_or_default();
+        self.line(no, &text, b'-');
+        Ok(!self.out.broken())
     }
 
     fn context_break(&mut self, _: &Searcher) -> Result<bool, std::io::Error> {
-        self.lines.push(Line::Break);
-        Ok(true)
+        if self.options.files_with_matches || self.options.count {
+            return Ok(true);
+        }
+        self.prefix = false;
+        self.printed = true;
+        self.out.emit(b"--\n");
+        Ok(!self.out.broken())
+    }
+}
+
+impl Emit<'_, '_> {
+    /// Prints one match or context line: the label, the number and the
+    /// text, joined by `sep` (`:` for a match, `-` for context).
+    fn line(&mut self, no: u64, text: &[u8], sep: u8) {
+        self.separate();
+        if let Some(label) = self.label {
+            self.out.emit(label);
+            self.out.emit(&[sep]);
+        }
+        if self.options.line_numbers {
+            self.out.emit(no.to_string().as_bytes());
+            self.out.emit(&[sep]);
+        }
+        self.out.emit(text);
+        self.out.emit(b"\n");
+    }
+
+    /// Starts this input's lines: the `--` separating them from an earlier
+    /// input's, once, in context mode.
+    fn separate(&mut self) {
+        if self.prefix {
+            self.prefix = false;
+            self.out.emit(b"--\n");
+        }
+        self.printed = true;
     }
 }
 

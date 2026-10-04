@@ -6,7 +6,7 @@
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fs;
-use std::io::Cursor;
+use std::io::{self, Cursor, Read, Write};
 use std::os::unix::ffi::OsStringExt;
 
 use super::{Outcome, run};
@@ -45,6 +45,65 @@ fn search(dir: &fakes::TempDir, args: &[&str], stdin: &[u8]) -> (i32, Vec<u8>, V
         Outcome::Fallback => panic!("{args:?} fell back"),
     };
     (code, stdout, stderr)
+}
+
+/// A bounded generator of matches: `needle` lines up to `limit` bytes,
+/// counting what the search actually read.
+struct Generator {
+    /// Bytes handed out so far.
+    read: usize,
+    /// Bytes handed out in total before the end.
+    limit: usize,
+}
+
+impl Read for Generator {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.read >= self.limit {
+            return Ok(0);
+        }
+        let line = b"needle\n";
+        let mut given = 0;
+        while given + line.len() <= buf.len() && self.read + given + line.len() <= self.limit {
+            buf[given..given + line.len()].copy_from_slice(line);
+            given += line.len();
+        }
+        if given == 0 {
+            let take = buf.len().min(line.len()).min(self.limit - self.read);
+            buf[..take].copy_from_slice(&line[..take]);
+            given = take;
+        }
+        self.read += given;
+        Ok(given)
+    }
+}
+
+/// A closed pipe: every write fails, and counts itself.
+struct Closed {
+    writes: usize,
+}
+
+impl Write for Closed {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        self.writes += 1;
+        Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+/// A failed disk: every write and flush fails with a real error.
+struct Refused;
+
+impl Write for Refused {
+    fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+        Err(io::Error::other("no space"))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::other("no space"))
+    }
 }
 
 fn text(dir: &fakes::TempDir, args: &[&str], stdin: &str) -> (i32, String, String) {
@@ -385,12 +444,109 @@ fn declined_calls_fall_back_before_anything_is_written() {
     }
 }
 
+#[test]
+fn context_breaks_separate_matching_files() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "m1\n"), ("b.txt", "m2\n")]));
+    // With context, GNU separates one input's lines from the next with
+    // `--`, even when both are bare matches.
+    let (_, stdout, _) = text(&dir, &["-C1", "m", "a.txt", "b.txt"], "");
+    assert_eq!(stdout, "a.txt:m1\n--\nb.txt:m2\n");
+    // Without context there is no separator.
+    let (_, plain, _) = text(&dir, &["m", "a.txt", "b.txt"], "");
+    assert_eq!(plain, "a.txt:m1\nb.txt:m2\n");
+    // An input with no match contributes no separator either.
+    let (_, gapped, _) = text(&dir, &["-C1", "m1", "a.txt", "b.txt"], "");
+    assert_eq!(gapped, "a.txt:m1\n");
+}
+
+#[test]
+fn files_with_matches_labels_standard_input() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let (code, stdout, _) = text(&dir, &["-l", "needle"], "needle\n");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "(standard input)\n");
+    // A bare count stays bare.
+    let (code, counts, _) = text(&dir, &["-c", "needle"], "a\nneedle\n");
+    assert_eq!(code, 0);
+    assert_eq!(counts, "1\n");
+}
+
+#[test]
+fn a_dot_matches_invalid_utf8_bytes() {
+    // As GNU in the C locale: `.` matches any byte but a newline.
+    let dir = bytes_tree(&BTreeMap::from([("a.txt", &b"\xff\nplain\n"[..])]));
+    let (code, stdout, _) = search(&dir, &[".", "a.txt"], &[]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"\xff\nplain\n");
+}
+
+#[test]
+fn newline_patterns_read_as_alternatives() {
+    // As repeated `-e`: each line of the pattern matches on its own.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "a\nb\nc\n")]));
+    let (_, fixed, _) = text(&dir, &["-F", "a\nb", "a.txt"], "");
+    assert_eq!(fixed, "a\nb\n");
+    let (_, basic, _) = text(&dir, &["a\nb", "a.txt"], "");
+    assert_eq!(basic, "a\nb\n");
+    let (_, extended, _) = text(&dir, &["-E", "a\nb", "a.txt"], "");
+    assert_eq!(extended, "a\nb\n");
+    // A trailing newline leaves an empty alternative, matching all.
+    let (code, all, _) = text(&dir, &["-F", "z\n", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(all, "a\nb\nc\n");
+}
+
+#[test]
+fn a_closed_pipe_stops_before_the_input_ends() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "x\n")]));
+    let owned: Vec<OsString> = [OsString::from("needle")].to_vec();
+    let mut generator = Generator {
+        read: 0,
+        limit: 1 << 20,
+    };
+    let mut closed = Closed { writes: 0 };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut generator, &mut closed, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    // The first line matched, the pipe closed quietly, and most of the
+    // megabyte was never read: nothing accumulated until end of input.
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(generator.read < generator.limit, "read {}", generator.read);
+    assert!(closed.writes < 16, "writes {}", closed.writes);
+}
+
+#[test]
+fn a_write_failure_is_an_error() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let owned: Vec<OsString> = [OsString::from("needle"), OsString::from("a.txt")].to_vec();
+    let mut input = Cursor::new(Vec::new());
+    let mut refused = Refused;
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut input, &mut refused, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    assert_eq!(code, 2);
+    assert_eq!(stderr, b"grep: writing output: no space\n");
+}
+
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
 fn gnu_grep() -> bool {
-    std::process::Command::new("grep")
+    use std::os::unix::process::CommandExt;
+    let child = std::process::Command::new("grep")
         .arg("--version")
-        .output()
-        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("GNU grep"))
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = super::super::wait_output(child, "grep --version");
+    String::from_utf8_lossy(&output.stdout).contains("GNU grep")
 }
 
 /// Checks the built-in against the system grep on the same corpus: the same
@@ -423,6 +579,7 @@ fn matches_like_grep(
     if let Some(expected) = stderr {
         assert_eq!(errors, expected, "{args:?}");
     }
+    use std::os::unix::process::CommandExt;
     let mut child = std::process::Command::new("grep")
         .args(system)
         .args(args)
@@ -431,13 +588,14 @@ fn matches_like_grep(
         .stdin(std::process::Stdio::piped())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        .process_group(0)
         .spawn()
         .unwrap();
     if let Some(given) = stdin {
         std::io::Write::write_all(child.stdin.as_mut().unwrap(), given).unwrap();
     }
     drop(child.stdin.take());
-    let output = child.wait_with_output().unwrap();
+    let output = super::super::wait_output(child, &format!("system grep {args:?}"));
     if sorted {
         // Lines as a set: the built-in visits files in sorted order where
         // the system's order is unspecified.

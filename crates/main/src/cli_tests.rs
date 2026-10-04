@@ -400,6 +400,19 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
         panic!("bare grep");
     };
     assert!(args.is_empty());
+    let Invocation::Run(Some(Commands::Grep { args })) =
+        parse_from(["fiber", "grep", "--", "-needle", "a.txt"])
+    else {
+        panic!("grep keeps the argv delimiter");
+    };
+    assert_eq!(
+        args,
+        [
+            OsString::from("--"),
+            OsString::from("-needle"),
+            OsString::from("a.txt")
+        ]
+    );
     let Invocation::Run(Some(Commands::Find { args })) =
         parse_from(["fiber", "find", ".", "-name", "*.rs", "-o"])
     else {

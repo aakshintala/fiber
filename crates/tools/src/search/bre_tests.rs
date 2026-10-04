@@ -2,7 +2,8 @@
 //! against the runner's grep on a fixed corpus where that grep is GNU.
 
 use std::fs;
-use std::process::Command;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, Stdio};
 
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{Searcher, SearcherBuilder, Sink, SinkMatch};
@@ -119,10 +120,17 @@ fn ere_keeps_everything_but_the_gnu_extensions() {
 
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
 fn gnu_grep() -> bool {
-    Command::new("grep")
+    let child = Command::new("grep")
         .arg("--version")
-        .output()
-        .is_ok_and(|output| String::from_utf8_lossy(&output.stdout).contains("GNU"))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    // Every wait has a deadline (`docs/testing.md`, "Waits and timeouts").
+    let output = super::super::wait_output(child, "grep --version");
+    String::from_utf8_lossy(&output.stdout).contains("GNU")
 }
 
 /// One line the engine matched.
@@ -189,14 +197,19 @@ fn matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str], case_i
     let dir = fakes::TempDir::new("fiber-search-bre");
     let file = dir.path().join("corpus.txt");
     fs::write(&file, corpus.join("\n") + "\n").unwrap();
-    let output = Command::new("grep")
+    let child = Command::new("grep")
         .env("LC_ALL", "C")
         .args(grep_args)
         .arg("-e")
         .arg(pattern)
         .arg(&file)
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
         .unwrap();
+    let output = super::super::wait_output(child, &format!("grep -e {pattern:?}"));
     let system_text = String::from_utf8(output.stdout).unwrap();
     let system: Vec<&str> = system_text.lines().collect();
     assert_eq!(engine, system, "BRE {pattern:?} as {translated:?}");

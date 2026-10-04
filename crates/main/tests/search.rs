@@ -176,6 +176,17 @@ fn grep_filters_standard_input() {
 }
 
 #[test]
+fn grep_keeps_the_argv_delimiter() {
+    let setup = Setup::new();
+    setup.write("dash.txt", "-needle\nplain\n");
+    // `--` ends flags: the pattern is `-needle`, not `-n` with `eedle`.
+    let run = setup.fiber(&["grep", "--", "-needle", "dash.txt"], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stdout, "-needle\n");
+    assert_eq!(run.stderr, "");
+}
+
+#[test]
 fn grep_falls_back_for_unhandled_calls() {
     let setup = Setup::new();
     setup.write("a.txt", "needle\n");

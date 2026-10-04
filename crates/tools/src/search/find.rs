@@ -10,7 +10,7 @@ use std::time::SystemTime;
 use super::fallback;
 use super::notice;
 use super::walk::{self, Root};
-use super::{Out, Outcome};
+use super::{Out, Outcome, flush_exit};
 
 /// Runs `find` against the process's working directory and standard streams,
 /// returning the exit code: 0 when the walk finished without error, 2 on an
@@ -22,9 +22,9 @@ pub fn find_main(args: Vec<OsString>) -> i32 {
     let mut buffered = std::io::BufWriter::new(stdout.lock());
     let mut stderr = std::io::stderr().lock();
     let outcome = run(&cwd, &args, &mut buffered, &mut stderr);
-    buffered.flush().unwrap_or(());
+    let flushed = buffered.flush();
     match outcome {
-        Outcome::Done(code) => code,
+        Outcome::Done(code) => flush_exit("find", code, flushed, &mut stderr),
         Outcome::Fallback => fallback::exec("find", &args, &mut stderr),
     }
 }
@@ -65,8 +65,12 @@ pub(crate) fn run(
         failed |= visit.failed;
         printed |= visit.printed;
         walked.extend(visit.walked);
+        out.flush();
     }
-    out.flush();
+    if let Some(error) = out.take_error() {
+        writeln!(stderr, "find: writing output: {error}").unwrap_or(());
+        failed = true;
+    }
     if !printed && !failed {
         // Computed only when nothing printed: the second walk costs
         // nothing otherwise.
@@ -288,8 +292,14 @@ fn visit(
         }
         Root::Dir(dir) => {
             visit.walked.push(dir.walk.clone());
+            // A named link reads as a link, as GNU tests the root itself:
+            // a link to a directory matches `-type l`, not `-type d`.
+            let kind = match fs::symlink_metadata(cwd.join(root)) {
+                Ok(meta) if meta.file_type().is_symlink() => Some(Kind::Link),
+                _ => Some(Kind::Dir),
+            };
             apply(
-                check(expr, newers, &dir.show, 0, Some(Kind::Dir), &dir.walk),
+                check(expr, newers, &dir.show, 0, kind, &dir.walk),
                 &mut visit,
                 &dir.show,
                 out,
@@ -540,6 +550,14 @@ fn parse_class(after: &[u8]) -> Option<Class<'_>> {
             body = rest;
             continue;
         }
+        if *byte == b'[' {
+            // A POSIX class such as `[:alpha:]` adds its ranges; any
+            // other `[` is an ordinary member, as below.
+            if let Some(rest) = take_posix(&mut members, body) {
+                body = rest;
+                continue;
+            }
+        }
         let low = *byte;
         match body.split_first() {
             Some((b'-', after_dash)) => match after_dash.split_first() {
@@ -552,6 +570,40 @@ fn parse_class(after: &[u8]) -> Option<Class<'_>> {
             _ => members.push((low, low)),
         }
     }
+}
+
+/// Adds the POSIX class opening `body` (`:name:]...`) to `members`,
+/// returning what follows its closer: nothing when no `:]` follows or the
+/// name is unknown, when the `[` stays an ordinary member.
+fn take_posix<'a>(members: &mut Vec<(u8, u8)>, body: &'a [u8]) -> Option<&'a [u8]> {
+    let (first, body) = body.split_first()?;
+    if *first != b':' {
+        return None;
+    }
+    let end = body.windows(2).position(|pair| pair == *b":]")?;
+    members.extend(posix_ranges(body.get(..end)?)?);
+    body.get(end + 2..)
+}
+
+/// The member ranges of the POSIX class `name` (`alpha` in `[:alpha:]`),
+/// ASCII only: nothing for an unknown name, when the class stays literal.
+fn posix_ranges(name: &[u8]) -> Option<Vec<(u8, u8)>> {
+    let ranges: &[(u8, u8)] = match name {
+        b"alnum" => &[(b'a', b'z'), (b'A', b'Z'), (b'0', b'9')],
+        b"alpha" => &[(b'a', b'z'), (b'A', b'Z')],
+        b"blank" => &[(b' ', b' '), (b'\t', b'\t')],
+        b"cntrl" => &[(0x00, 0x1f), (0x7f, 0x7f)],
+        b"digit" => &[(b'0', b'9')],
+        b"graph" => &[(0x21, 0x7e)],
+        b"lower" => &[(b'a', b'z')],
+        b"print" => &[(0x20, 0x7e)],
+        b"punct" => &[(0x21, 0x2f), (0x3a, 0x40), (0x5b, 0x60), (0x7b, 0x7e)],
+        b"space" => &[(0x09, 0x0d), (b' ', b' ')],
+        b"upper" => &[(b'A', b'Z')],
+        b"xdigit" => &[(b'0', b'9'), (b'a', b'f'), (b'A', b'F')],
+        _ => return None,
+    };
+    Some(ranges.to_vec())
 }
 
 /// Folds one byte for a case-insensitive match: ASCII only, as the class

@@ -280,6 +280,56 @@ fn type_leaves_other_kinds_out() {
 }
 
 #[test]
+fn a_named_directory_link_keeps_its_link_type() {
+    let dir = tree(&BTreeMap::from([("sub/a_hay.txt", "a")]));
+    std::os::unix::fs::symlink("sub", dir.path().join("lnk")).unwrap();
+    // GNU tests the root itself: a link to a directory is a link.
+    let (_, links, _) = filtered(&dir, &["lnk", "-type", "l"]);
+    assert_eq!(links, ["lnk"]);
+    let (_, dirs, _) = filtered(&dir, &["lnk", "-type", "d"]);
+    assert!(dirs.is_empty(), "{dirs:?}");
+    // Without a test the root still lists itself and below.
+    let (code, lines, _) = filtered(&dir, &["lnk"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["lnk", "lnk/a_hay.txt"]);
+}
+
+#[test]
+fn posix_classes_match() {
+    let dir = tree(&BTreeMap::from([
+        ("a_needle.txt", "a"),
+        ("1_needle.txt", "1"),
+    ]));
+    let (code, lines, _) = filtered(&dir, &[".", "-name", "[[:alpha:]]_needle.txt"]);
+    assert_eq!(code, 0);
+    assert_eq!(lines, ["./a_needle.txt"]);
+}
+
+#[test]
+fn a_write_failure_is_an_error() {
+    struct Refused;
+    impl Write for Refused {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::other("no space"))
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::other("no space"))
+        }
+    }
+    let dir = tree(&BTreeMap::from([("a_hay.txt", "a")]));
+    let owned: Vec<OsString> = [OsString::from(".")].to_vec();
+    let mut refused = Refused;
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut refused, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    assert_eq!(code, 2);
+    assert_eq!(stderr, b"find: writing output: no space\n");
+}
+
+#[test]
 fn maxdepth_and_mindepth_bound_the_tree() {
     let dir = tree(&BTreeMap::from([("sub/deep/f_hay.txt", "hay")]));
     let (_, max_one, _) = filtered(&dir, &[".", "-maxdepth", "1"]);
@@ -498,6 +548,22 @@ fn globs_match_bytes() {
         (b"*.TXT", b"a.txt", true, true),
         (b"[a-z]", b"A", false, false),
         (b"[a-z]", b"A", true, true),
+        (b"[[:alpha:]]", b"b", false, true),
+        (b"[[:alpha:]]", b"1", false, false),
+        (b"[[:alpha:]][[:digit:]]", b"a1", false, true),
+        (b"[[:alpha:]][[:digit:]]", b"ab", false, false),
+        (b"[a[:digit:]]", b"5", false, true),
+        (b"[a[:digit:]]", b"b", false, false),
+        (b"[^[:digit:]]", b"a", false, true),
+        (b"[^[:digit:]]", b"5", false, false),
+        (b"[[:xdigit:]]", b"f", false, true),
+        (b"[[:xdigit:]]", b"g", false, false),
+        (b"[[:alpha:]-]", b"-", false, true),
+        // An unknown class leaves the `[` an ordinary member, as in
+        // bash: the class reads `[`, `:`, `f`, `o` with a literal `]`.
+        (b"[[:foo:]]", b"[]", false, true),
+        (b"[[:foo:]]", b"f]", false, true),
+        (b"[[:foo:]]", b"x", false, false),
     ];
     for (pattern, text, ignore_case, expected) in cases {
         assert_eq!(

@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 /// Directories a walk never discovers, however the ignore files read
 /// (`docs/tools.md`, "Search", "What it skips").
-const VCS: [&str; 6] = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
+pub(crate) const VCS: [&str; 6] = [".git", ".svn", ".hg", ".bzr", ".jj", ".sl"];
 
 /// How a named path is visited.
 #[derive(Debug)]
@@ -51,13 +51,9 @@ pub(crate) struct DirRoot {
 pub(crate) fn root_of(cwd: &Path, root: &Path) -> io::Result<Root> {
     let from = cwd.join(root);
     let upper = std::fs::symlink_metadata(&from)?;
-    if upper.is_dir() {
-        return Ok(Root::Dir(DirRoot {
-            walk: from,
-            show: root.to_path_buf(),
-        }));
-    }
-    if upper.is_symlink() && std::fs::metadata(&from).is_ok_and(|lower| lower.is_dir()) {
+    if upper.is_dir()
+        || (upper.is_symlink() && std::fs::metadata(&from).is_ok_and(|lower| lower.is_dir()))
+    {
         return Ok(Root::Dir(DirRoot {
             walk: from,
             show: root.to_path_buf(),
@@ -202,7 +198,7 @@ pub(crate) fn io_message(error: &io::Error) -> String {
 }
 
 /// Whether `name` is a version-control directory the walk never discovers.
-fn is_vcs(name: &OsStr) -> bool {
+pub(crate) fn is_vcs(name: &OsStr) -> bool {
     name.to_str().is_some_and(|name| VCS.contains(&name))
 }
 

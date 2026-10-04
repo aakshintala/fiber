@@ -28,18 +28,10 @@ pub(super) fn define(fiber: Option<&Path>) -> String {
 
 /// Single-quote escapes `path` for the shell: `'` becomes `'\''`.
 fn quoted(path: &Path) -> String {
-    let bytes = path.as_os_str().as_encoded_bytes();
-    let mut out = String::from("'");
-    let mut first = true;
-    for chunk in bytes.split(|byte| *byte == b'\'') {
-        if !first {
-            out.push_str("'\\''");
-        }
-        first = false;
-        out.push_str(&String::from_utf8_lossy(chunk));
-    }
-    out.push('\'');
-    out
+    format!(
+        "'{}'",
+        path.as_os_str().to_string_lossy().replace('\'', "'\\''")
+    )
 }
 
 #[cfg(test)]

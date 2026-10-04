@@ -2,7 +2,7 @@
 
 use std::io::{self, Write};
 
-use super::{Out, decimal};
+use super::{Out, decimal, flush_exit};
 
 /// A writer that fails every write and counts them.
 struct Fail {
@@ -60,6 +60,56 @@ fn a_failed_flush_reads_as_a_failed_pipe() {
     assert!(!out.broken());
     out.flush();
     assert!(out.broken());
+}
+
+#[test]
+fn a_closed_pipe_stays_quiet_but_another_failure_is_kept() {
+    struct Refused;
+    impl Write for Refused {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Err(io::Error::new(io::ErrorKind::PermissionDenied, "denied"))
+        }
+    }
+    let mut refused = Refused;
+    let mut out = Out::new(&mut refused);
+    out.emit(b"a\n");
+    assert!(!out.broken());
+    out.flush();
+    assert!(out.broken());
+    assert_eq!(out.take_error().as_deref(), Some("denied"));
+}
+
+#[test]
+fn the_final_flush_keeps_a_closed_pipe_but_reports_other_failures() {
+    let mut stderr = Vec::new();
+    assert_eq!(flush_exit("grep", 0, Ok(()), &mut stderr), 0);
+    assert!(stderr.is_empty());
+    assert_eq!(
+        flush_exit(
+            "grep",
+            1,
+            Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed")),
+            &mut stderr,
+        ),
+        1
+    );
+    assert!(stderr.is_empty());
+    assert_eq!(
+        flush_exit("grep", 0, Err(io::Error::other("no space")), &mut stderr,),
+        2
+    );
+    assert_eq!(stderr, b"grep: writing output: no space\n");
+    // A run that already failed printed its own line.
+    let mut silent = Vec::new();
+    assert_eq!(
+        flush_exit("grep", 2, Err(io::Error::other("no space")), &mut silent,),
+        2
+    );
+    assert!(silent.is_empty());
 }
 
 #[test]
