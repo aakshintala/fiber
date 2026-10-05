@@ -364,7 +364,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
-    let code = run_turn(&session, &log, &dir, prompt, |inbox| {
+    let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
         finish(
             // `Loop::start` writes `session_started`, which `fiber_started`
             // follows (`docs/events.md`).
@@ -384,6 +384,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
             budget,
             reviewer,
             limits,
+            cancel,
         )
     });
     session.close(log);
@@ -422,6 +423,7 @@ fn finish(
     budget: Option<f64>,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
+    cancel: Arc<r#loop::TurnCancel>,
 ) -> Result<(), Failure> {
     looped
         .map(|looped| {
@@ -429,6 +431,7 @@ fn finish(
                 .budget(budget)
                 .answerable(false)
                 .reviewer(reviewer, limits)
+                .cancelled_by(cancel)
         })
         .and_then(Loop::run)
         .map_err(|e| failed(e.code(), e))
@@ -436,15 +439,21 @@ fn finish(
 
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
-/// the prompt, closes, and writes `fiber_exited` for what ran.
+/// the prompt, closes, and writes `fiber_exited` for what ran. One cancel
+/// signal serves the door and the loop, so a `cancel` ends the turn the
+/// prompt starts.
 fn run_turn(
     session: &Session,
     log: &Arc<Log>,
     dir: &Path,
     prompt: String,
-    run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
+    run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<(), Failure>,
 ) -> i32 {
-    let ran = session.ask(prompt, run);
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let door = Arc::clone(&cancel);
+    let ran = session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
+        run(inbox, cancel)
+    });
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
     r#loop::fiber_exited(log, dir, ran).unwrap_or(1)

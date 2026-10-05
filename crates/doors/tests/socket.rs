@@ -20,8 +20,8 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 use contract::events::{
-    Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice, SessionState,
-    SessionStatus, ToolInfo, ToolSource, ToolState, TurnStarted,
+    Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice, QueuedMessage,
+    SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted,
 };
 use contract::inbox::{Delivery, Message};
 use contract::shapes::{ContentPart, Origin, Sender, Tokens, Usage};
@@ -322,6 +322,7 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             ack.0(Ok(None));
             "close".to_owned()
         }
+        Delivery::Cancelled => panic!("a wake arrives as a delivery"),
     }
 }
 
@@ -331,7 +332,7 @@ fn a_bad_line_is_malformed_and_only_a_string_id_is_echoed() {
     let socket = opened.socket.clone();
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             let cases = [
                 ("not json", None),
@@ -374,7 +375,7 @@ fn a_command_without_a_trailing_newline_is_answered() {
     let socket = opened.socket.clone();
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let mut raw = UnixStream::connect(&socket).unwrap();
             raw.write_all(br#"{"id":"c_nl","command":"tools"}"#)
                 .unwrap();
@@ -398,7 +399,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
     let socket = opened.socket.clone();
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             send(&client, r#"{"id":"c_early","command":"tools"}"#);
             let early = next(&client);
@@ -421,7 +422,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             );
 
             for name in [
-                "message", "cancel", "job_stop", "background", "reload", "model", "credential",
+                "message", "job_stop", "background", "reload", "model", "credential",
                 "name",
                 "handoff", "rewind", "shell", "command",
             ] {
@@ -483,7 +484,7 @@ fn full_folds_the_log_then_live_lines_and_the_latest_status() {
     let log = Arc::clone(&opened.log);
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             let folded = until(&client, |line| kind(line) == "session_status");
@@ -516,7 +517,7 @@ fn two_full_clients_see_the_same_durable_lines() {
     let log = Arc::clone(&opened.log);
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let first = Client::connect(&socket).unwrap();
             let second = Client::connect(&socket).unwrap();
             subscribe(&first, "c_a", "full");
@@ -542,7 +543,7 @@ fn summary_gets_the_latest_status_and_extensions_and_nothing_else() {
     let log = Arc::clone(&opened.log);
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             let ack = subscribe(&client, "c_sub", "summary");
             let status_line = next(&client);
@@ -579,7 +580,7 @@ fn clients_counts_full_connections_on_attach_and_leave() {
     let socket = opened.socket.clone();
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let summary = Client::connect(&socket).unwrap();
             subscribe(&summary, "c_sum", "summary");
             let full = Client::connect(&socket).unwrap();
@@ -623,7 +624,7 @@ fn tools_and_history_answer_while_the_inbox_is_unread() {
     let log = Arc::clone(&opened.log);
     opened
         .session
-        .run(Vec::new(), move |inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(
@@ -725,7 +726,7 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
     let out = opened.out.clone();
     opened
         .session
-        .run(Vec::new(), move |inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let sender = Client::connect(&socket).unwrap();
             let other = Client::connect(&socket).unwrap();
             subscribe(&sender, "c_a", "full");
@@ -787,7 +788,7 @@ fn an_acknowledgement_dropped_uncalled_answers_closing() {
     let socket = opened.socket.clone();
     opened
         .session
-        .run(Vec::new(), move |inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             send(
@@ -819,7 +820,7 @@ fn close_delivers_fiber_exited_to_a_client_that_is_still_reading() {
     let (tx, rx) = mpsc::channel();
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             log.append(&exited(), None, None).unwrap();
@@ -854,4 +855,100 @@ fn close_releases_the_log_lock() {
         Err(error) => panic!("the lock was not released: {error}"),
     }
     drop(kept);
+}
+
+#[test]
+fn cancel_with_no_turn_running_is_rejected_stale() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"cancel"}"#);
+            let rejected = response(&client, "c_1");
+            assert_eq!(
+                rejection(&rejected),
+                ("stale_request", "No turn is running.")
+            );
+            assert_eq!(command_id(&rejected), Some("c_1"));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn cancel_with_a_turn_running_is_accepted_and_wakes_the_inbox() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| true), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"cancel"}"#);
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_1"));
+            // The wake carries no meaning beyond waking the loop.
+            assert!(matches!(
+                inbox.recv_timeout(DEADLINE),
+                Ok(Delivery::Cancelled)
+            ));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn a_full_subscriber_after_a_queued_steer_gets_the_latest_steering_queue() {
+    let opened = Opened::open(vec![]);
+    opened.log.append(&step(), None, None).unwrap();
+    opened
+        .log
+        .append(
+            &Event::SteeringQueue(SteeringQueue {
+                messages: vec![QueuedMessage {
+                    content: vec![ContentPart::Text {
+                        text: "later".into(),
+                    }],
+                    sender: Sender {
+                        origin: Origin::Driver,
+                        command_id: CommandId("c_later".into()),
+                    },
+                }],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            let lines = until(&client, |line| kind(line) == "steering_queue");
+            let at = lines
+                .iter()
+                .position(|line| kind(line) == "steering_queue")
+                .unwrap();
+            // The queue arrives after the fold, which does not have it.
+            assert!(
+                lines[..at]
+                    .iter()
+                    .any(|line| line["seq"].as_u64() == Some(0))
+            );
+            assert_eq!(
+                lines[at]["payload"]["messages"][0]["content"][0]["text"],
+                "later"
+            );
+            assert_eq!(lines[at]["payload"]["messages"][0]["command_id"], "c_later");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }

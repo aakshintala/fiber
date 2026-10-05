@@ -55,6 +55,9 @@ pub(crate) struct Gate {
     pub(crate) dir: PathBuf,
     pub(crate) tools: Vec<ToolInfo>,
     inbox: Mutex<Option<Sender<Delivery>>>,
+    /// What the `cancel` command asks: whether a turn is running. Stored
+    /// by [`Session::run`], so a missing closure is no turn.
+    cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     stop: AtomicBool,
     clients: Mutex<u32>,
     /// Paired with [`Gate::conns`].
@@ -116,6 +119,7 @@ impl Session {
     pub fn run(
         &self,
         first: Vec<Delivery>,
+        cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         let (inbox, waiting) = mpsc::channel();
@@ -127,6 +131,7 @@ impl Session {
             }
         }
         *lock(&self.gate.inbox) = Some(inbox);
+        *lock(&self.gate.cancel) = Some(cancel);
         self.start_accept()?;
         run(waiting)
     }
@@ -137,6 +142,7 @@ impl Session {
     pub fn ask(
         &self,
         prompt: String,
+        cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         let message = Message {
@@ -151,6 +157,7 @@ impl Session {
                 Delivery::Prompt(message, ignore()),
                 Delivery::Close(ignore()),
             ],
+            cancel,
             run,
         )
     }
@@ -250,6 +257,13 @@ impl Gate {
             return;
         };
         log.emit(&Event::Clients(Clients { count }));
+    }
+
+    /// Whether a turn is running, for the `cancel` command: what the
+    /// closure [`Session::run`] stored says. Answered on the command's
+    /// reader thread, never through the loop.
+    pub(crate) fn cancel_turn(&self) -> bool {
+        lock(&self.cancel).as_ref().is_some_and(|cancel| cancel())
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -376,6 +390,7 @@ fn open_in(
         dir: dir.to_owned(),
         tools,
         inbox: Mutex::new(None),
+        cancel: Mutex::new(None),
         stop: AtomicBool::new(false),
         clients: Mutex::new(0),
         writers: Condvar::new(),

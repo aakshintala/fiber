@@ -219,7 +219,7 @@ fn many_connections_leave_nothing_held() {
     let gate = Arc::clone(&opened.session.gate);
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let before = descriptors();
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_live", "full");
@@ -271,7 +271,7 @@ fn close_joins_a_reader_that_is_still_connected() {
     let (tx, rx) = mpsc::channel();
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             let client = Client::connect(&socket).unwrap();
             subscribe(&client, "c_sub", "full");
             let _ack = recv(&client);
@@ -325,7 +325,7 @@ fn a_lagging_connection_does_not_hide_the_latest_from_a_subscriber() {
     let log = Arc::clone(&opened.log);
     opened
         .session
-        .run(Vec::new(), move |_inbox| {
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
             log.append(&status("stale"), None, None).unwrap();
             let watcher = log.watch();
             let held = Held::new(Hold::Wait);
@@ -847,7 +847,7 @@ fn a_full_subscribers_latest_status_survives_a_queue_saturated_after_registratio
         log.append(&notice(), None, None).unwrap();
     }
     log.append(&step(), None, None).unwrap();
-    crate::client::queue_latest(&injector, latest);
+    crate::client::queue_latest(&injector, latest, None);
     let held = Held::new(Hold::Go);
     let write = HeldWrite {
         held: Arc::clone(&held),

@@ -139,6 +139,7 @@ impl Loop {
             model,
             system_prompt,
             inbox,
+            cancel: std::sync::Arc::new(crate::TurnCancel::default()),
             // The session's own id, as `Loop::start` sets it: no parent or
             // fork exists yet (`docs/prompt-cache.md`, "Rules for other
             // areas").

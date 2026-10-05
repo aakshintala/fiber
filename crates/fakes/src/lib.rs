@@ -3,6 +3,7 @@
 //! dependency of the crates that use it; no release binary contains it
 //! (`docs/architecture.md`, "The call rules").
 
+mod blocking;
 mod cancel;
 pub mod children;
 mod client;
@@ -16,6 +17,7 @@ mod watchdog;
 
 use std::path::PathBuf;
 
+pub use blocking::BlockingProvider;
 pub use cancel::CancelToken;
 pub use client::Client;
 pub use emit::Recorder;

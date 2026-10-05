@@ -93,7 +93,7 @@ pub(crate) fn ask_resume(
         session.close(log);
         return ask_failed(failed(e.code(), e));
     }
-    let code = run_turn(&session, &log, &dir, prompt, |inbox| {
+    let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
         crate::finish(
             Loop::resume(
                 Arc::clone(&log),
@@ -108,6 +108,7 @@ pub(crate) fn ask_resume(
             budget,
             reviewer,
             limits,
+            cancel,
         )
     });
     session.close(log);

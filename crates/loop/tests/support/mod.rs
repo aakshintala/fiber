@@ -12,26 +12,29 @@
 )]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use contract::clock::Wake;
 use contract::emit::Emit;
 use contract::events::{
     Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
-use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
+use contract::provider::{
+    CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
+};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, RequestId, SessionId};
 use fakes::clock::FakeClock;
-use fakes::{Scripted, ScriptedProvider, reply};
+use fakes::{BlockingProvider, Scripted, ScriptedProvider, reply};
 use log::{Injector, Log};
-use r#loop::{BlockLimits, Loop, Model, Reviewer};
+use r#loop::{BlockLimits, Loop, Model, Reviewer, TurnCancel};
 use serde_json::{Map, Value, json};
 
 /// How long a turn may take before a test fails instead of hanging.
@@ -303,6 +306,17 @@ impl Tool for TestTool {
                 Script::Wait(gate) => {
                     gate.wait();
                 }
+                Script::WaitCancel => {
+                    let latch: Arc<CancelLatch> = Arc::default();
+                    let shared: Arc<dyn Wake> = latch.clone();
+                    cancel.subscribe(Arc::downgrade(&shared));
+                    // After subscribing: a cancel before the subscription
+                    // never replays, so a set signal skips the wait.
+                    if !cancel.is_cancelled() {
+                        latch.wait();
+                    }
+                    self.cancelled.lock().unwrap().push(cancel.is_cancelled());
+                }
             }
         }
         if let Some(other) = self.after {
@@ -327,11 +341,47 @@ pub(crate) enum Script {
     Emit(Box<Event>),
     /// Blocks until the test opens the gate, or [`DEADLINE`] passes.
     Wait(Arc<Gate>),
+    /// Blocks until the call's [`Cancel`] fires, or [`DEADLINE`] passes,
+    /// then records what [`Cancel::is_cancelled`] says: the flag a tool
+    /// that stops on cancel sees.
+    WaitCancel,
+}
+
+/// What [`Script::WaitCancel`] waits on: set when the call's `Cancel`
+/// fires. The wait carries [`DEADLINE`], so a missed cancel ends the call
+/// instead of hanging the turn.
+#[derive(Default)]
+struct CancelLatch {
+    fired: Mutex<bool>,
+    changed: Condvar,
+}
+
+impl Wake for CancelLatch {
+    fn wake(&self) {
+        *self.fired.lock().unwrap() = true;
+        self.changed.notify_all();
+    }
+}
+
+impl CancelLatch {
+    fn wait(&self) {
+        let fired = self.fired.lock().unwrap();
+        if *fired {
+            return;
+        }
+        let (fired, _) = self
+            .changed
+            .wait_timeout_while(fired, DEADLINE, |fired| !*fired)
+            .unwrap();
+        // A missed cancel ends the call instead of hanging the turn, and
+        // the panic names the wait (`docs/testing.md`, "Waits and
+        // timeouts").
+        assert!(*fired, "timed out waiting for the call's cancel");
+    }
 }
 
 /// A test gate: the tool blocks until the test opens it, or a deadline
-/// passes. The deadline keeps a test failure before the release from
-/// hanging scoped-thread cleanup: the tool proceeds either way, the turn
+/// passes. The deadline keeps a test failure before the release from/// hanging scoped-thread cleanup: the tool proceeds either way, the turn
 /// ends, and the test's own assertion reports (`docs/testing.md`, "Waits
 /// and timeouts").
 #[derive(Debug, Default)]
@@ -446,7 +496,7 @@ impl Rules for FakeRules {
 /// The scripted provider, sending `during` to the inbox as the first call is
 /// made, so it arrives while that reply streams.
 struct Seam {
-    inner: Arc<ScriptedProvider>,
+    inner: Arc<dyn Provider>,
     /// Taken by the first call, so the loop sees the inbox close once the
     /// test drops its own sender.
     during: Mutex<Option<(Vec<Delivery>, Sender<Delivery>)>>,
@@ -460,6 +510,49 @@ impl Provider for Seam {
             }
         }
         self.inner.call(request)
+    }
+}
+
+/// A provider that answers from a scripted provider and fires the
+/// session's cancel once the `fire_at`-th call's reply is in hand. The
+/// fire happens on the loop's own thread, synchronously inside `run`, so
+/// the cancel lands after the reply but before `turn_completed`.
+struct FireCancel {
+    inner: Arc<ScriptedProvider>,
+    cancel: Arc<TurnCancel>,
+    fire_at: usize,
+    calls: AtomicUsize,
+}
+
+impl Provider for FireCancel {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        let call = self.inner.call(request);
+        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.fire_at {
+            Box::new(FireAfterReply {
+                inner: call,
+                cancel: Arc::clone(&self.cancel),
+            })
+        } else {
+            call
+        }
+    }
+}
+
+/// The call that fires the cancel once its reply is in hand.
+struct FireAfterReply {
+    inner: Box<dyn ModelCall>,
+    cancel: Arc<TurnCancel>,
+}
+
+impl ModelCall for FireAfterReply {
+    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let ended = self.inner.run(sink);
+        self.cancel.cancel();
+        ended
+    }
+
+    fn cancel(&self) {
+        self.inner.cancel();
     }
 }
 
@@ -479,6 +572,8 @@ pub(crate) struct Session {
     pub(crate) inbox: Sender<Delivery>,
     lines: mpsc::Receiver<Envelope>,
     pub(crate) looped: Option<Loop>,
+    /// Cancels the session's running turn, as a driver does.
+    pub(crate) cancel: Arc<TurnCancel>,
     _home: TempDir,
 }
 
@@ -519,6 +614,59 @@ impl Session {
         tools: Vec<Arc<dyn Tool>>,
         model: Model,
     ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        Self::assemble(
+            Arc::clone(&scripted) as Arc<dyn Provider>,
+            during,
+            tools,
+            model,
+            scripted,
+            Arc::new(TurnCancel::default()),
+        )
+    }
+
+    /// A session whose `fire_at`-th model call (1-based) fires the session's
+    /// cancel once its reply is in hand, then answers from `script`: the
+    /// cancel lands after the last reply but before `turn_completed`,
+    /// deterministically, on the loop's own thread.
+    pub(crate) fn cancelling_after_reply(script: Vec<Scripted>, fire_at: usize) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        let cancel = Arc::new(TurnCancel::default());
+        let hook = Arc::new(FireCancel {
+            inner: Arc::clone(&scripted),
+            cancel: Arc::clone(&cancel),
+            fire_at,
+            calls: AtomicUsize::new(0),
+        });
+        Self::assemble(hook, Vec::new(), Vec::new(), unpriced(), scripted, cancel)
+    }
+
+    /// A session whose first model call blocks until cancelled, sending
+    /// `during` to the inbox when that call is made. Later calls answer
+    /// "After." at once. Returns the session and the blocking provider,
+    /// which signals when its call starts to block.
+    pub(crate) fn blocking(during: Vec<Delivery>) -> (Self, Arc<BlockingProvider>) {
+        let blocking = Arc::new(BlockingProvider::default());
+        let session = Self::assemble(
+            Arc::clone(&blocking) as Arc<dyn Provider>,
+            during,
+            Vec::new(),
+            unpriced(),
+            // No scripted call is ever made; `requests` stays empty.
+            Arc::new(ScriptedProvider::new(Vec::new())),
+            Arc::new(TurnCancel::default()),
+        );
+        (session, blocking)
+    }
+
+    fn assemble(
+        provider: Arc<dyn Provider>,
+        during: Vec<Delivery>,
+        tools: Vec<Arc<dyn Tool>>,
+        model: Model,
+        scripted: Arc<ScriptedProvider>,
+        cancel: Arc<TurnCancel>,
+    ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
@@ -537,9 +685,8 @@ impl Session {
             }
         });
         let (inbox, rx) = mpsc::channel();
-        let provider = Arc::new(ScriptedProvider::new(script));
         let seam = Seam {
-            inner: Arc::clone(&provider),
+            inner: provider,
             during: Mutex::new((!during.is_empty()).then(|| (during, inbox.clone()))),
         };
         let rules = Arc::new(FakeRules::empty());
@@ -559,9 +706,10 @@ impl Session {
                 rules: rules.clone(),
             },
         )
-        .unwrap();
+        .unwrap()
+        .cancelled_by(Arc::clone(&cancel));
         Self {
-            provider,
+            provider: scripted,
             dir: home.0.join(&id.0),
             workspace,
             credentials,
@@ -571,6 +719,7 @@ impl Session {
             inbox,
             lines,
             looped: Some(looped),
+            cancel,
             _home: home,
         }
     }

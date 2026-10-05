@@ -287,7 +287,7 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
     log.append(&started(), None, None).unwrap();
     let failed = failure(ErrorCode::IoFailed, "disk full");
 
-    let ran = session.ask("hi".into(), |inbox| {
+    let ran = session.ask("hi".into(), Arc::new(|| false), |inbox| {
         let Delivery::Prompt(message, _) =
             inbox.recv_timeout(DEADLINE).expect("the prompt arrives")
         else {
