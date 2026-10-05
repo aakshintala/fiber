@@ -199,7 +199,7 @@ impl Loop {
         // last `assistant_message_started`: the previous request's end, for
         // the cache markers. Notices the log holds behind the open batch
         // are released after its results, as the finishing turn writes them.
-        let (conversation, sent, held) =
+        let (conversation, sent, held, carry) =
             crate::conversation::rebuild_and_sent(lines, &model.reference, &open)?;
         let mut reviewed = Vec::new();
         let mut grants = Vec::new();
@@ -240,7 +240,18 @@ impl Loop {
         // A log that already holds an opening message keeps it: the
         // conversation rebuild renders it from the log, so the first turn
         // writes none. A log with none gets one at its first turn.
-        let opened = lines.iter().any(|line| line.kind == "opening_message");
+        // A completed handoff starts a new context, which needs a new
+        // opening message: one the crash cut off is written at the next turn.
+        let mut opened = false;
+        for line in lines {
+            if line.kind == "opening_message" {
+                opened = true;
+            } else if line.kind == "handoff_completed"
+                && line.payload.get("outcome").and_then(|v| v.as_str()) == Some("completed")
+            {
+                opened = false;
+            }
+        }
         // The tracked state the log's lines describe, when the log holds
         // an opening message; without one the first turn writes it fresh
         // and rebuilds the state from it.
@@ -302,6 +313,7 @@ impl Loop {
             idle_exit: None,
             idle_left: false,
             hooks: None,
+            handoff: crate::handoff::State::new(carry),
         };
         resumed.mark_orphans(lines)?;
         Ok(resumed)

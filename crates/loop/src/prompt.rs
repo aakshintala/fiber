@@ -235,9 +235,13 @@ pub(crate) fn system_prompt(
 /// One preamble build: the system prompt text, the tool definitions in
 /// name order for requests, and the `preamble_built` payload
 /// (`docs/prompt-cache.md`, "The preamble" and `docs/events.md`,
-/// "`preamble_built`"). `effort`, `thinking`, `credential` and
-/// `trigger_at` are absent: no thinking levels, credential labels or
-/// handoff exist.
+/// "`preamble_built`"). `effort`, `thinking` and `credential` are
+/// absent: no thinking levels or credential labels exist. `trigger_at` is
+/// the automatic handoff's trigger, absent when it is off.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the one build takes each preamble input; a struct would only rename them"
+)]
 pub(crate) fn build(
     inputs: &PromptInputs,
     model: &str,
@@ -246,6 +250,7 @@ pub(crate) fn build(
     provider: &dyn contract::provider::Provider,
     reason: contract::events::PreambleReason,
     replaced: Vec<contract::events::ToolReplaced>,
+    trigger_at: Option<u64>,
 ) -> (
     String,
     Vec<contract::provider::ToolDefinition>,
@@ -279,7 +284,7 @@ pub(crate) fn build(
         reason,
         model: model.to_owned(),
         context_window: inputs.context_window.unwrap_or(0),
-        trigger_at: None,
+        trigger_at,
         effort: None,
         thinking: None,
         tool_choice,

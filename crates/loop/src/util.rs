@@ -56,7 +56,7 @@ pub(crate) fn variables() -> Variables {
 /// sent") and the reviewer's transcript its projection
 /// (`docs/permissions.md`, "What it is shown"). `had` is the content the
 /// model last had per instruction file path, updated as instruction lines
-/// render.
+/// render. `carry` is the render state a handoff reads.
 #[allow(
     clippy::too_many_arguments,
     reason = "the one write path takes every sink it renders into"
@@ -70,10 +70,11 @@ pub(crate) fn write(
     turn: Option<&TurnId>,
     action: Option<&ActionId>,
     had: &mut BTreeMap<String, String>,
+    carry: &mut crate::handoff::Carry,
 ) -> Result<(), Error> {
     log.append(event, turn.cloned(), action.cloned())?;
     if event.class() == Class::Durable {
-        crate::conversation::render(conversation, event, action, model, had);
+        crate::conversation::render(conversation, event, action, model, had, carry);
         crate::reviewer::render_reviewed(reviewed, event, action);
     }
     Ok(())

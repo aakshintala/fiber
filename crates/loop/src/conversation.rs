@@ -8,13 +8,14 @@ use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use contract::events::{
-    CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent,
+    CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
 };
 use contract::provider::Input;
 use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope};
 
 use crate::Error;
+use crate::handoff::Carry;
 use crate::prompt::{body, fill};
 
 pub(crate) const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
@@ -32,7 +33,7 @@ const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped.
 pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
-    let (mut conversation, _, mut held) = rebuild_and_sent(lines, model, &HashSet::new())?;
+    let (mut conversation, _, mut held, _) = rebuild_and_sent(lines, model, &HashSet::new())?;
     conversation.append(&mut held);
     Ok(conversation)
 }
@@ -52,8 +53,9 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
 }
 
 /// What [`rebuild_and_sent`] returns: the conversation, the previous
-/// request's end, and the notices held behind the open batch.
-pub(crate) type Rebuilt = (Vec<Input>, Option<usize>, Vec<Input>);
+/// request's end, the notices held behind the open batch, and the render
+/// state a handoff reads.
+pub(crate) type Rebuilt = (Vec<Input>, Option<usize>, Vec<Input>, Carry);
 
 /// The conversation `lines` render, with its length at the last
 /// `assistant_message_started`: the previous request's end, for the cache
@@ -76,10 +78,16 @@ pub(crate) fn rebuild_and_sent(
             if matches!(event, Event::AssistantMessageStarted(_)) {
                 sent = Some(rendered.conversation.len());
             }
+            // The context a completed handoff starts has had no request.
+            if let Event::HandoffCompleted(done) = &event
+                && done.outcome == Outcome::Completed
+            {
+                sent = None;
+            }
         }
     }
-    let (conversation, held) = rendered.finish();
-    Ok((conversation, sent, held))
+    let (conversation, held, carry) = rendered.finish();
+    Ok((conversation, sent, held, carry))
 }
 
 /// `rebuild`'s state: the conversation so far, and the calls requested but
@@ -104,6 +112,9 @@ struct Rendered {
     /// The content the model last had per instruction file path: a diff
     /// renders from this and the line's content, both in the log.
     had: BTreeMap<String, String>,
+    /// What a handoff reads: this turn's input, the jobs running, the
+    /// window a handoff has open.
+    carry: Carry,
 }
 
 struct Pending {
@@ -160,6 +171,14 @@ impl Rendered {
                     }
                 }
             }
+            // A new process: no call the old one left without a result gets
+            // one later, so each gets its fixed one now. A handoff window the
+            // old process left open then closes, and its truncation takes
+            // each call with its result, so no result outlives its call.
+            Event::FiberStarted(_) => {
+                self.flush();
+                self.render(event, action, model);
+            }
             // The next round starts a new batch: every call of the last
             // one still without a result gets its fixed one first, before
             // the round's own input. Each is listed, so a new kind does
@@ -169,9 +188,10 @@ impl Rendered {
             | Event::OpeningMessage(_)
             | Event::InstructionFile(_)
             | Event::DateChanged(_)
+            | Event::HandoffStarted(_)
             | Event::AssistantMessageStarted(_) => {
                 self.flush();
-                render(&mut self.conversation, event, action, model, &mut self.had);
+                self.render(event, action, model);
             }
             // Every other kind either continues the batch or adds nothing.
             // Each is listed, so a new kind does not compile until it is
@@ -179,7 +199,6 @@ impl Rendered {
             Event::ReasoningCompleted(_)
             | Event::TextCompleted(_)
             | Event::AssistantMessageCompleted(_)
-            | Event::FiberStarted(_)
             | Event::FiberExited(_)
             | Event::SessionStarted(_)
             | Event::Rewound(_)
@@ -210,7 +229,6 @@ impl Rendered {
             | Event::ModelChanged(_)
             | Event::SkillsChanged(_)
             | Event::SkillsResent(_)
-            | Event::HandoffStarted(_)
             | Event::HandoffCompleted(_)
             | Event::ContextNudged(_)
             | Event::McpServerFailed(_)
@@ -230,7 +248,7 @@ impl Rendered {
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
-                render(&mut self.conversation, event, action, model, &mut self.had);
+                self.render(event, action, model);
             }
             // A job notice joins at a step boundary, as a steer does: it
             // starts a new batch. A `wait` or `stop` record, under its
@@ -242,14 +260,26 @@ impl Rendered {
                     self.flush();
                 }
                 if action.is_none() && !self.outstanding.is_empty() {
+                    self.carry.fold_jobs(event);
                     self.held.push(Input::User {
                         text: crate::jobs::notice_text(job),
                     });
                 } else {
-                    render(&mut self.conversation, event, action, model, &mut self.had);
+                    self.render(event, action, model);
                 }
             }
         }
+    }
+
+    fn render(&mut self, event: &Event, action: Option<&ActionId>, model: &str) {
+        render(
+            &mut self.conversation,
+            event,
+            action,
+            model,
+            &mut self.had,
+            &mut self.carry,
+        );
     }
 
     fn flush(&mut self) {
@@ -267,11 +297,14 @@ impl Rendered {
         }
     }
 
-    /// The conversation, and the notices still held behind calls with no
-    /// result yet.
-    fn finish(mut self) -> (Vec<Input>, Vec<Input>) {
+    /// The conversation, the notices still held behind calls with no
+    /// result yet, and the render state. A handoff window still open at the
+    /// end is closed: the process died during it, and the handoff did not
+    /// take effect.
+    fn finish(mut self) -> (Vec<Input>, Vec<Input>, Carry) {
         self.flush();
-        (self.conversation, self.held)
+        self.carry.close_window(&mut self.conversation);
+        (self.conversation, self.held, self.carry)
     }
 }
 
@@ -286,12 +319,18 @@ pub(crate) fn render(
     action: Option<&ActionId>,
     model: &str,
     had: &mut BTreeMap<String, String>,
+    carry: &mut Carry,
 ) {
+    carry.fold_jobs(event);
     match event {
         Event::TurnStarted(started) => {
+            carry.input.clear();
             for item in &started.input {
                 match item {
-                    InputItem::Message { content, .. } => conversation.push(user(content)),
+                    InputItem::Message { content, .. } => {
+                        conversation.push(user(content));
+                        carry.input.push(user(content));
+                    }
                     // The jobs' own `job_completed` lines follow at the first
                     // step boundary and render there.
                     InputItem::Jobs { .. } => {}
@@ -303,7 +342,33 @@ pub(crate) fn render(
                 }
             }
         }
-        Event::SteeringApplied(steering) => conversation.push(user(&steering.content)),
+        Event::SteeringApplied(steering) => {
+            conversation.push(user(&steering.content));
+            carry.input.push(user(&steering.content));
+        }
+        // The window opens at the conversation's length; a completed handoff
+        // replaces the conversation, and any other end truncates it back, so
+        // the note request's own lines never stay.
+        Event::HandoffStarted(_) => {
+            carry.window = Some(conversation.len());
+        }
+        Event::HandoffCompleted(done) => {
+            if done.outcome == Outcome::Completed {
+                carry.window = None;
+                *conversation = carry.restart(done);
+            } else {
+                carry.close_window(conversation);
+            }
+        }
+        // A new process, so a window left open was cut short by the death of
+        // the old one.
+        Event::FiberStarted(_) => carry.close_window(conversation),
+        Event::ContextNudged(nudged) => {
+            conversation.push(Input::User {
+                text: carry.nudge_text(nudged),
+            });
+            carry.nudged = true;
+        }
         // A job's end the model was not already given: one message. A
         // `wait` or `stop` record carries its call's action and renders
         // nothing; that call's result already said it.
@@ -314,10 +379,16 @@ pub(crate) fn render(
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").
         // debt: the skills listing is always empty; fixed by #511.
+        // It sits at index 0 of the context it opens: after a handoff the
+        // carried input and the note are already there.
         Event::OpeningMessage(message) => {
-            conversation.push(Input::User {
-                text: crate::opening::render(message),
-            });
+            conversation.insert(
+                0,
+                Input::User {
+                    text: crate::opening::render(message),
+                },
+            );
+            carry.session_log.clone_from(&message.environment.session_log);
             crate::changes::apply(had, event);
         }
         // An instruction file change appends what the model was sent:
@@ -343,11 +414,18 @@ pub(crate) fn render(
             text: reasoning.text.clone(),
             provider_item: reasoning.provider_item.clone(),
         }),
-        Event::TextCompleted(part) => conversation.push(Input::Assistant {
-            model: model.to_owned(),
-            text: part.text.clone(),
-            provider_item: part.provider_item.clone(),
-        }),
+        Event::TextCompleted(part) => {
+            if carry.window.is_some()
+                && let Some(action) = action
+            {
+                carry.texts.push((action.clone(), part.text.clone()));
+            }
+            conversation.push(Input::Assistant {
+                model: model.to_owned(),
+                text: part.text.clone(),
+                provider_item: part.provider_item.clone(),
+            });
+        }
         Event::ToolCallRequested(call) => {
             if let Some(action) = action {
                 conversation.push(Input::ToolCall {
@@ -370,7 +448,6 @@ pub(crate) fn render(
         Event::AssistantMessageCompleted(_)
         // Every other kind adds nothing the model reads. Each is listed, so a
         // new kind does not compile until it is placed.
-        | Event::FiberStarted(_)
         | Event::FiberExited(_)
         | Event::SessionStarted(_)
         | Event::Rewound(_)
@@ -403,9 +480,6 @@ pub(crate) fn render(
         | Event::ModelChanged(_)
         | Event::SkillsChanged(_)
         | Event::SkillsResent(_)
-        | Event::HandoffStarted(_)
-        | Event::HandoffCompleted(_)
-        | Event::ContextNudged(_)
         | Event::McpServerFailed(_)
         | Event::McpServerReady(_)
         | Event::Reloaded(_)

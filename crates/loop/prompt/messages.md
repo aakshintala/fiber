@@ -103,3 +103,9 @@ Reply with the note only, and make no tool calls.
 The person asked that the next stretch of work focus on:
 
 {instructions}
+
+## handoff-jobs
+
+Fiber: these background jobs are still running. Each one's end is reported when it happens.
+
+{jobs}

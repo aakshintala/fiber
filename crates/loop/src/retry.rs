@@ -5,6 +5,7 @@
 //! rules"); `provider` keeps the classification (`x-should-retry`,
 //! `retry-after`).
 
+use std::collections::VecDeque;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use contract::clock::Wake;
 use contract::events::{
     AssistantMessageCompleted, Empty, Event, MessageOutcome, RetryScheduled, TurnOutcome,
 };
-use contract::provider::{CallError, ModelRequest};
+use contract::provider::{CallError, ModelRequest, Reply};
 use contract::shapes::Failure;
 use contract::tool::Cancel as _;
 use contract::{ActionId, ErrorCode, TurnId};
@@ -130,14 +131,48 @@ fn wait_duration(asked: f64) -> Duration {
     Duration::from_millis((asked * 1000.0).ceil().clamp(0.0, u64::MAX as f64) as u64)
 }
 
+/// How the model calls of one request ended.
+pub(crate) enum Attempted {
+    /// A reply came back: the caller writes it.
+    Replied {
+        reply: Reply,
+        reasoning: VecDeque<ActionId>,
+        message: ActionId,
+    },
+    /// The retries ran out, or the failure is not retried.
+    Failed(Failure),
+    /// A person cancelled the turn.
+    Interrupted,
+}
+
 impl crate::Loop {
-    /// One step's model calls with retries (`docs/model-routing.md`, "When
-    /// a model call fails"). Each attempt is a new action with its attempt
-    /// number; each wait is on the log's clock; the step fails with the
-    /// last error once the retries run out. The request, the budget check
-    /// and `sent` are the step's, not per retry: a retry resends the same
-    /// request (`docs/loop.md`, "What the model is sent").
+    /// One step's model calls with retries, written as the step's reply
+    /// (`docs/model-routing.md`, "When a model call fails"). The request,
+    /// the budget check and `sent` are the step's, not per retry: a retry
+    /// resends the same request (`docs/loop.md`, "What the model is sent").
     pub(crate) fn attempt(&mut self, request: &ModelRequest, turn: &TurnId) -> Result<Step, Error> {
+        Ok(match self.call_with_retries(request, turn)? {
+            Attempted::Replied {
+                reply,
+                reasoning,
+                message,
+            } => return self.record(reply, reasoning, turn, &message),
+            Attempted::Failed(failure) => {
+                Step::Ended(crate::ended(TurnOutcome::Failed, Some(failure)))
+            }
+            Attempted::Interrupted => Step::Ended(crate::ended(TurnOutcome::Interrupted, None)),
+        })
+    }
+
+    /// Calls the model with retries. Each attempt is a new action with its
+    /// attempt number; each wait is on the log's clock; the call fails with
+    /// the last error once the retries run out. The reply is the caller's to
+    /// write.
+    pub(crate) fn call_with_retries(
+        &mut self,
+        request: &ModelRequest,
+        turn: &TurnId,
+    ) -> Result<Attempted, Error> {
         let mut retries = 0u32;
         loop {
             let message = ActionId(crate::mint("a_"));
@@ -148,7 +183,13 @@ impl crate::Loop {
             )?;
             let (reply, reasoning) = self.stream(request, turn, &message)?;
             match reply {
-                Ok(reply) => return self.record(reply, reasoning, turn, &message),
+                Ok(reply) => {
+                    return Ok(Attempted::Replied {
+                        reply,
+                        reasoning,
+                        message,
+                    });
+                }
                 Err(CallError::Failed {
                     failure,
                     should_retry,
@@ -174,10 +215,7 @@ impl crate::Loop {
                             // the turn before any wait: no `retry_scheduled`
                             // follows a retry that never starts.
                             if self.turn_cancelled() {
-                                return Ok(Step::Ended(crate::ended(
-                                    TurnOutcome::Interrupted,
-                                    None,
-                                )));
+                                return Ok(Attempted::Interrupted);
                             }
                             self.append(
                                 &Event::RetryScheduled(RetryScheduled {
@@ -192,26 +230,18 @@ impl crate::Loop {
                             // when the failure is handled, so time the call took
                             // never shortens it.
                             if self.wait_retry(delay) {
-                                return Ok(Step::Ended(crate::ended(
-                                    TurnOutcome::Interrupted,
-                                    None,
-                                )));
+                                return Ok(Attempted::Interrupted);
                             }
                             retries = retries.saturating_add(1);
                         }
                         Decision::Fail(final_failure) => {
-                            return Ok(Step::Ended(crate::ended(
-                                TurnOutcome::Failed,
-                                Some(final_failure),
-                            )));
+                            return Ok(Attempted::Failed(final_failure));
                         }
                     }
                 }
                 // An interrupted reply has no `assistant_message_completed`
                 // (`docs/architecture.md`, "Cancellation").
-                Err(CallError::Cancelled) => {
-                    return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
-                }
+                Err(CallError::Cancelled) => return Ok(Attempted::Interrupted),
             }
         }
     }
