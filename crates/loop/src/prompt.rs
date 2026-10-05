@@ -70,7 +70,6 @@ pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
             && name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'/')
-            && !name.contains('{')
         {
             if let Some((_, value)) = values.iter().find(|(k, _)| *k == name) {
                 out.push_str(value);
