@@ -138,7 +138,7 @@ fn percent_decode(text: &str) -> String {
                 let mut ahead = bytes.clone();
                 match (ahead.next().and_then(hex), ahead.next().and_then(hex)) {
                     (Some(high), Some(low)) => {
-                        out.push(high << 4 | low);
+                        out.push(high * 16 + low);
                         bytes = ahead;
                     }
                     _ => out.push(b'%'),

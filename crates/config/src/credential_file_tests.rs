@@ -57,6 +57,14 @@ fn an_existing_directory_keeps_its_mode() {
     assert_eq!(mode(&dir), 0o750);
 }
 
+struct StopOnDrop<'a>(&'a AtomicBool);
+
+impl Drop for StopOnDrop<'_> {
+    fn drop(&mut self) {
+        self.0.store(true, Ordering::Relaxed);
+    }
+}
+
 #[test]
 fn a_writer_never_exposes_a_file_wider_than_0600() {
     let home = TempDir::new("cred-file");
@@ -79,6 +87,8 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
                 }
             }
         });
+        // Stops the writer however the observer exits, a failed assertion included.
+        let _stop = StopOnDrop(&stop);
         running.recv_timeout(Duration::from_secs(5)).unwrap();
         // The observer scans until it has seen a temporary file, or has made
         // `MAX_SCANS` scans: the deadline, in scans rather than time.
@@ -106,7 +116,6 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
                 );
             }
         }
-        stop.store(true, Ordering::Relaxed);
         assert!(temporaries > 0, "no temporary file was observed");
     });
 }
