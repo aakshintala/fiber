@@ -17,7 +17,10 @@ struct Inner {
     started: Vec<JobStarted>,
     stops: Vec<(JobId, Arc<dyn Fn() + Send + Sync>)>,
     /// The terminal input of each job started with `tty`.
-    inputs: Vec<(JobId, Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>)>,
+    inputs: Vec<(
+        JobId,
+        Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>,
+    )>,
     /// Jobs whose end was reported.
     ended: Vec<JobId>,
     /// Jobs whose stop was sent.
