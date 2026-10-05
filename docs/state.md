@@ -30,6 +30,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   credentials/<name>/<label>       one file per stored provider credential, mode 0600
   credentials/<name>              one file per extension secret, mode 0600
   credentials/hubs/<name>         one device token per hub this client paired with, mode 0600
+  credentials/mcp/<url-hash>      one OAuth token per remote MCP server URL, mode 0600
   hub/devices/<device>            one record per device paired with this hub: name, when, token hash
   run/<session_id>                one local socket per running session
   run/hub                         the hub's local socket
@@ -166,8 +167,10 @@ servers"). A repository can neither write nor read them.
 
 **Credentials.** One file per stored provider credential at
 `credentials/<name>/<label>`, one per credential label, and one file per
-extension secret at `credentials/<name>`, each mode 0600, in 0700
-directories. There is no OS keychain. OAuth refresh takes a
+extension secret at `credentials/<name>`, and one file per remote MCP
+server's OAuth token at `credentials/mcp/<url-hash>`, named by a SHA-256 of the
+server's canonical URL and recording that URL (`docs/mcp.md`), each mode 0600,
+in 0700 directories. There is no OS keychain. OAuth refresh takes a
 lock on the credential file (`docs/model-routing.md`). Every tool call
 touching `credentials/` is refused
 ([docs/permissions.md](permissions.md#credentials)).

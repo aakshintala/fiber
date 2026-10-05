@@ -487,7 +487,3 @@ as Ollama is an extension directory holding one provider file, installed from
 its path. A wrong context window is fixed in a local copy of the extension or
 upstream. Configuration has no second source of provider data, so there are no
 merge rules between the two.
-
-## Not settled here
-
-- Where an MCP server's OAuth token is stored (`docs/mcp.md`)
