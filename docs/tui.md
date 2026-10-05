@@ -251,8 +251,11 @@ the conversation. The views are:
   costs. Ctrl+G opens the file.
 - **`/skills`:** one row per skill with its name, one-line description, where
   it comes from (the repository, personal, an extension by name, or built in),
-  whether the model can see it, and any skill it shadows. Enter shows the
-  skill's text, Ctrl+G opens its file (`docs/system-prompt.md`, "Skills").
+  whether the model can see it, any skill it shadows, and whether it is
+  switched off. A switch turns a skill off or on for this project or
+  everywhere, writing `skills.disabled` in that layer; the change reaches the
+  model at the next turn start. Enter shows the skill's text, Ctrl+G opens its
+  file (`docs/system-prompt.md`, "Skills").
 - **`/rewind`** ("Rewind").
 - **A repository's offer**, before a new session's first request ("Approving
   what a repository ships").
@@ -1086,19 +1089,12 @@ The terminal reads these keys (`docs/configuration.md`, "Keys"):
 | `tui.logo_glyph` | ⌇ or ≈ in the logo |
 | `tui.slots."<slot>"` | Which extension fills a slot or key two extensions want ("When two extensions want one slot") |
 
-The tools view writes an MCP server's or an extension's `tools.enabled` and
-`tools.disabled`.
+The skills view writes `skills.disabled`. The tools view writes an MCP
+server's or an extension's `tools.enabled` and `tools.disabled`.
 
 ## Not settled here
 
-- The fields of each slot's input, which follow the payload tables of
-  [Contract: key tables for every event payload](https://github.com/aakshintala/fiber/issues/182)
 - The list of the theme's colour roles
-- The command envelope, `reply`, approvals and cancel:
-  [Contract: the command envelope, reply, approvals and cancel](https://github.com/aakshintala/fiber/issues/181)
-- Key tables for every event payload:
-  [Contract: key tables for every event payload](https://github.com/aakshintala/fiber/issues/182)
-- Whether `/skills` can switch a skill off for a project
 
 ## Evidence
 

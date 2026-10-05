@@ -1110,7 +1110,8 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 - Arguments: `name` (required), a name from the skills listing.
 - The result is the body after the header, under the skill's path, so files the
   skill refers to can be read with `read`. A name that is not in the listing,
-  or a skill with `disable-model-invocation: true`, fails with
+  a skill with `disable-model-invocation: true`, or a skill switched off in
+  `skills.disabled` (`docs/system-prompt.md`, "Skills"), fails with
   `invalid_arguments`.
 - Its definition never lists skill names. The names are in the listing, so
   adding or removing a skill never changes the tool set and the cached prefix
