@@ -10,6 +10,7 @@ base64 = "0.23"
 config = { path = "../config" }
 contract = { path = "../contract" }
 serde_json.workspace = true
+similar.workspace = true
 thiserror.workspace = true
 mlua = { workspace = true, features = ["serde"] }
 # SHA-256 and HMAC-SHA256 for `host.sha256` and `host.hmac_sha256`.
