@@ -21,9 +21,9 @@ use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
-use crate::anthropic_messages::{MAX_MARKERS, MAX_STRICT_TOOLS, cache_control, complex_enum};
+use crate::anthropic_messages::{MAX_MARKERS, cache_control};
 use crate::http::{self, Cancel};
-use crate::{Endpoint, Error, sse, strict};
+use crate::{Endpoint, Error, sse};
 
 /// One model reached over `openai-completions`.
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ impl Provider for Completions {
     }
 
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-        wire_tools(&self.endpoint, tools)
+        crate::openai_completions_tools::wire_tools(&self.endpoint, tools)
     }
 }
 
@@ -119,43 +119,15 @@ impl ModelCall for Call {
     }
 }
 
-/// Each tool in Chat Completions' shape, in name order.
-fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
-    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
-    let mut strict_left = MAX_STRICT_TOOLS;
-    sorted
-        .into_iter()
-        .map(|tool| {
-            let mut strict = strict::fits(&tool.input_schema);
-            if endpoint.compat.anthropic {
-                strict = strict && strict_left > 0 && !complex_enum(&tool.input_schema);
-                strict_left -= usize::from(strict);
-            }
-            json!({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema,
-                    "strict": strict,
-                },
-            })
-            .as_object()
-            .cloned()
-            .unwrap_or_default()
-        })
-        .collect()
-}
-
 /// The request body, and the lifetime its cache writes are counted under.
 /// Its objects serialise with their keys sorted, because serde_json's
 /// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
 fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime) {
-    let tools: Vec<Value> = wire_tools(endpoint, &request.tools)
+    let tools: Vec<Value> = crate::openai_completions_tools::wire_tools(endpoint, &request.tools)
         .into_iter()
         .map(Value::Object)
         .collect();
+    let compat = &endpoint.compat;
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));
     body.insert("messages".into(), Value::Array(messages(endpoint, request)));
@@ -165,7 +137,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
     body.insert("prompt_cache_key".into(), json!(request.cache_key));
     // OpenRouter takes `session_id` as a top-level body field
     // (openrouter.ai/docs/guides/best-practices/prompt-caching).
-    if let Some(field) = &endpoint.compat.cache_key_field {
+    if let Some(field) = &compat.cache_key_field {
         body.insert(field.clone(), json!(request.cache_key));
     }
     // OpenAI sends no usage without it (`docs/model-routing.md`,
@@ -178,19 +150,19 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
         body.insert("tool_choice".into(), tool_choice(&request.tool_choice));
     }
     if let Some(effort) = &request.effort {
-        if endpoint.compat.reasoning_object {
+        if compat.reasoning_object {
             body.insert("reasoning".into(), json!({ "effort": effort }));
         } else {
             body.insert("reasoning_effort".into(), json!(effort));
         }
     }
-    if let Some(store) = endpoint.compat.store {
+    if let Some(store) = compat.store {
         body.insert("store".into(), json!(store));
     }
     body.extend(endpoint.extra_body.clone());
     // The model's limit, or the model data's own when that is lower
     // (`docs/errors.md`, "Output tokens").
-    let field = if endpoint.compat.max_tokens {
+    let field = if compat.max_tokens {
         "max_tokens"
     } else {
         "max_completion_tokens"

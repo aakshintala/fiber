@@ -118,15 +118,16 @@ impl ModelCall for Call {
     }
 }
 
-/// Each tool in Anthropic's shape, in name order. `strict` per tool
-/// (`docs/model-routing.md`, "Protocols and providers"). Anthropic's strict
-/// subset is wider than OpenAI's (it takes optional properties, `anyOf` and
-/// `$ref`), so a schema that fits `strict::fits` fits Anthropic's too, except
-/// an enum with an object or array value, which Anthropic excludes
-/// (platform.claude.com, "JSON Schema limitations": "complex types in enums").
-/// Anthropic refuses a request with more than 20 strict tools (probed 2026-10-01
-/// on `claude-sonnet-5-5`: "The maximum number of strict tools supported is 20"),
-/// so past 20 the rest are sent `strict: false`, in name order.
+/// Each tool in Anthropic's shape, in name order.
+/// `strict` per tool (`docs/model-routing.md`, "Protocols and
+/// providers"). Anthropic's strict subset is wider than OpenAI's (it
+/// takes optional properties, `anyOf` and `$ref`), so a schema that fits
+/// `strict::fits` fits Anthropic's too, except an enum with an object or
+/// array value, which Anthropic excludes (platform.claude.com, "JSON
+/// Schema limitations": "complex types in enums"). Anthropic refuses a request with
+/// more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:
+/// "The maximum number of strict tools supported is 20"), so past 20 the
+/// rest are sent `strict: false`, in name order.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));

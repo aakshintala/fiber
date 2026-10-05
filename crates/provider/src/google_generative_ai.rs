@@ -171,9 +171,10 @@ fn retry_info(error: Error) -> Error {
     }
 }
 
-/// Each tool in Gemini's shape, in name order. `parametersJsonSchema` takes
-/// the schema as written, `$ref` and `anyOf` included; `parameters` rejects
-/// `$ref` (`docs/model-routing.md`, "Google Generative AI wire facts").
+/// Each tool in Gemini's shape, in name order.
+/// `parametersJsonSchema` takes the schema as written, `$ref` and
+/// `anyOf` included; `parameters` rejects `$ref`
+/// (`docs/model-routing.md`, "Google Generative AI wire facts").
 /// Nothing rewrites a schema.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
@@ -198,8 +199,8 @@ fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
 /// "Bytes"). Gemini caches implicitly only, so the body carries no cache
 /// marker or key (`docs/prompt-cache.md`, "Cache markers and keys").
 fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
-    let mut sorted: Vec<&ToolDefinition> = request.tools.iter().collect();
-    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    let mut tools: Vec<_> = request.tools.iter().collect();
+    tools.sort_by(|a, b| a.name.cmp(&b.name));
     let mut body = Map::new();
     if !request.system_prompt.is_empty() {
         // `role` left out: accepted and obeyed (`docs/model-routing.md`,
@@ -210,7 +211,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
         );
     }
     body.insert("contents".into(), Value::Array(contents(endpoint, request)));
-    if !sorted.is_empty() {
+    if !tools.is_empty() {
         let declarations: Vec<Value> = wire_tools(&request.tools)
             .into_iter()
             .map(Value::Object)
@@ -219,7 +220,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
             "tools".into(),
             json!([{ "functionDeclarations": declarations }]),
         );
-        let strict = sorted.iter().all(|tool| strict::fits(&tool.input_schema));
+        let strict = tools.iter().all(|tool| strict::fits(&tool.input_schema));
         body.insert(
             "toolConfig".into(),
             json!({ "functionCallingConfig": function_calling(&request.tool_choice, strict) }),
