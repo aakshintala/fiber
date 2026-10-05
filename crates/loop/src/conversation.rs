@@ -9,6 +9,7 @@ use std::path::Path;
 
 use contract::events::{
     CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
+    ToolCallCompleted,
 };
 use contract::provider::Input;
 use contract::shapes::ContentPart;
@@ -134,10 +135,12 @@ impl Rendered {
         match event {
             Event::ToolCallRequested(call) => {
                 if let Some(action) = action {
-                    self.conversation.push(Input::ToolCall {
+                    let input = Input::ToolCall {
                         action_id: action.clone(),
                         call: call.clone(),
-                    });
+                    };
+                    self.carry.call_requested(action, &input);
+                    self.conversation.push(input);
                     // A call the log completes needs no fixed result, nor
                     // does one the finishing turn completes on resume.
                     if !completed.contains(action) && !open.contains(action) {
@@ -159,11 +162,9 @@ impl Rendered {
             }
             Event::ToolCallCompleted(completed) => {
                 if let Some(action) = action {
-                    self.conversation.push(Input::ToolResult {
-                        action_id: action.clone(),
-                        text: text(&completed.content),
-                        is_error: completed.status == CallStatus::Failed,
-                    });
+                    let result = result_of(action, completed);
+                    self.carry.call_completed(action, &result, noted(completed));
+                    self.conversation.push(result);
                     self.pending.retain(|p| &p.action_id != action);
                     self.outstanding.retain(|id| id != action);
                     if self.outstanding.is_empty() {
@@ -334,11 +335,11 @@ pub(crate) fn render(
                     // The jobs' own `job_completed` lines follow at the first
                     // step boundary and render there.
                     InputItem::Jobs { .. } => {}
-                    // debt: these start a turn only once shell commands and
-                    // handoff exist (#296, #305); each renders then.
-                    InputItem::ShellCommand { .. }
-                    | InputItem::Handoff { .. }
-                    | InputItem::Unknown => {}
+                    // The handoff's own lines render what it does.
+                    InputItem::Handoff { .. } => {}
+                    // debt: a shell command starts a turn only once the
+                    // shell exists (#296); it renders then.
+                    InputItem::ShellCommand { .. } | InputItem::Unknown => {}
                 }
             }
         }
@@ -428,21 +429,23 @@ pub(crate) fn render(
         }
         Event::ToolCallRequested(call) => {
             if let Some(action) = action {
-                conversation.push(Input::ToolCall {
+                let input = Input::ToolCall {
                     action_id: action.clone(),
                     call: call.clone(),
-                });
+                };
+                carry.call_requested(action, &input);
+                conversation.push(input);
             }
         }
         Event::ToolCallCompleted(completed) => {
             if let Some(action) = action {
-                conversation.push(Input::ToolResult {
-                    action_id: action.clone(),
-                    text: text(&completed.content),
-                    is_error: completed.status == CallStatus::Failed,
-                });
+                let result = result_of(action, completed);
+                carry.call_completed(action, &result, noted(completed));
+                conversation.push(result);
             }
         }
+        // A new reply starts a new step's calls.
+        Event::AssistantMessageStarted(_) => carry.step.clear(),
         // A reply's closing line sends nothing: its text parts were already
         // rendered, and a failed call sends nothing. Its retry is a new action.
         Event::AssistantMessageCompleted(_)
@@ -459,7 +462,6 @@ pub(crate) fn render(
         | Event::Clients(_)
         | Event::SessionStatus(_)
         | Event::ContextAdded(_)
-        | Event::AssistantMessageStarted(_)
         | Event::AssistantMessageDelta(_)
         | Event::ToolCallArgumentsDelta(_)
         | Event::ReasoningStarted(_)
@@ -499,6 +501,25 @@ pub(crate) fn render(
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
     }
+}
+
+/// The tool result `completed` renders for `action`.
+fn result_of(action: &ActionId, completed: &ToolCallCompleted) -> Input {
+    Input::ToolResult {
+        action_id: action.clone(),
+        text: text(&completed.content),
+        is_error: completed.status == CallStatus::Failed,
+    }
+}
+
+/// The note a completed call's `control.handoff` carries. The loop acts on
+/// the field, never on the tool that set it (`docs/handoff.md`, "A tool").
+fn noted(completed: &ToolCallCompleted) -> Option<&str> {
+    completed
+        .control
+        .as_ref()
+        .filter(|_| completed.status == CallStatus::Completed)
+        .map(|control| control.handoff.as_str())
 }
 
 /// What an `instruction_file` line appends to the conversation, if

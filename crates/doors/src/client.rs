@@ -235,6 +235,7 @@ fn built(command: &str) -> bool {
             | "shell"
             | "job_stop"
             | "background"
+            | "handoff"
     )
 }
 
@@ -290,6 +291,10 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
         }
+        Command::Handoff(args) => {
+            let ack = inbox_ack(conn, id.clone());
+            conn.gate.deliver(Delivery::Handoff(id, args, ack));
+        }
         Command::JobStop(args) => {
             let stopped = conn.gate.jobs().is_some_and(|jobs| jobs.stop(&args.job_id));
             answer(conn, id, stopped, NO_JOB);
@@ -303,7 +308,6 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         | Command::Model(_)
         | Command::Credential(_)
         | Command::Name(_)
-        | Command::Handoff(_)
         | Command::Rewind(_)
         | Command::Command(_) => unknown(conn, id, name),
     }

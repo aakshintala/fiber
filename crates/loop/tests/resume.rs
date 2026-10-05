@@ -3076,6 +3076,201 @@ fn a_second_opening_message_sits_at_the_front() {
     );
 }
 
+// A person's and a tool's handoff render as every handoff does.
+
+fn handoff_turn(items: Vec<InputItem>) -> Event {
+    Event::TurnStarted(TurnStarted { input: items })
+}
+
+fn message_item(text: &str) -> InputItem {
+    InputItem::Message {
+        content: vec![ContentPart::Text { text: text.into() }],
+        sender: Sender {
+            origin: Origin::Driver,
+            command_id: CommandId("c_1".into()),
+        },
+        changed_by: None,
+    }
+}
+
+fn handoff_item(id: &str) -> InputItem {
+    InputItem::Handoff {
+        command_id: CommandId(id.into()),
+    }
+}
+
+#[test]
+fn a_handoff_item_renders_nothing_and_a_turn_of_only_one_carries_no_input() {
+    let log = LogLines::new();
+    log.append(opening_of("old-os"), None);
+    log.append(
+        handoff_turn(vec![handoff_item("c_h"), message_item("one")]),
+        None,
+    );
+    note_lines(&log);
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+    log.append(handoff_turn(vec![handoff_item("c_h2")]), None);
+    note_lines(&log);
+
+    // The first handoff carries the message beside the command's item.
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    assert_eq!(texts(&conversation)[1..], ["one", "the note"]);
+
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    log.append(opening_of("newer-os"), None);
+
+    // A turn of only the command has no input to carry.
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+    let seen = texts(&conversation);
+    assert!(seen[0].contains("newer-os"), "{seen:?}");
+    assert_eq!(seen[1..], ["the note"]);
+}
+
+fn completed_with_note(text: &str, note: Option<&str>) -> Event {
+    let Event::ToolCallCompleted(mut done) = completed(text) else {
+        panic!("a completion");
+    };
+    done.control = note.map(|handoff| contract::events::Control {
+        handoff: handoff.into(),
+    });
+    Event::ToolCallCompleted(done)
+}
+
+/// A turn whose reply made the calls `a_w1` (`get_weather`), `a_h1`
+/// (`wrapup`, which set `control.handoff`) and `a_w2` (`get_weather`) and
+/// whose results were all written, then the tool handoff and the new
+/// opening message.
+fn tool_handoff(log: &LogLines, notes: &[(&str, &str)]) {
+    log.append(opening_of("old-os"), None);
+    log.append(user_turn("one"), None);
+    log.append(message_started(), Some("a_m"));
+    for (id, name) in [
+        ("a_w1", "get_weather"),
+        ("a_h1", "wrapup"),
+        ("a_w2", "get_weather"),
+    ] {
+        log.append(requested(name), Some(id));
+    }
+    for id in ["a_w1", "a_h1", "a_w2"] {
+        log.append(started(), Some(id));
+    }
+    for id in ["a_w1", "a_h1", "a_w2"] {
+        let note = notes
+            .iter()
+            .find(|(call, _)| *call == id)
+            .map(|(_, note)| *note);
+        log.append(
+            completed_with_note(&format!("result of {id}"), note),
+            Some(id),
+        );
+    }
+    let ids: Vec<&str> = notes.iter().map(|(call, _)| *call).collect();
+    log.append(
+        Event::HandoffCompleted(contract::events::HandoffCompleted {
+            outcome: contract::events::Outcome::Completed,
+            error: None,
+            note: Some(contract::events::Note::Actions {
+                note: ids.iter().map(|id| ActionId((*id).into())).collect(),
+            }),
+            tokens_before: 500,
+            instructions: None,
+        }),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+}
+
+fn call_ids(conversation: &[Input]) -> Vec<(&'static str, String)> {
+    conversation
+        .iter()
+        .map(|input| match input {
+            Input::ToolCall { action_id, .. } => ("call", action_id.0.clone()),
+            Input::ToolResult {
+                action_id, text, ..
+            } => {
+                assert_eq!(*text, format!("result of {}", action_id.0));
+                ("result", action_id.0.clone())
+            }
+            other => ("text", text_of(other).to_owned()),
+        })
+        .collect()
+}
+
+#[test]
+fn a_tool_handoff_renders_the_note_then_the_other_calls_and_their_results() {
+    let log = LogLines::new();
+    tool_handoff(&log, &[("a_h1", "Tool note.")]);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    let seen = call_ids(&conversation);
+    assert!(seen[0].1.contains("new-os"), "{seen:?}");
+    assert_eq!(
+        seen[1..],
+        [
+            ("text", "one".to_owned()),
+            ("text", "Tool note.".to_owned()),
+            ("call", "a_w1".to_owned()),
+            ("call", "a_w2".to_owned()),
+            ("result", "a_w1".to_owned()),
+            ("result", "a_w2".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn two_tool_notes_join_in_the_order_the_line_lists_the_calls() {
+    let log = LogLines::new();
+    tool_handoff(&log, &[("a_w1", "First."), ("a_h1", "Second.")]);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    let seen = call_ids(&conversation);
+    assert_eq!(
+        seen[1..],
+        [
+            ("text", "one".to_owned()),
+            ("text", "First.\n\nSecond.".to_owned()),
+            ("call", "a_w2".to_owned()),
+            ("result", "a_w2".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn a_tool_handoff_survives_a_crash_and_a_second_resume() {
+    let log = LogLines::new();
+    tool_handoff(&log, &[("a_h1", "Tool note.")]);
+    let after_handoff = call_ids(&r#loop::rebuild(&log.lines(), MODEL).unwrap());
+    for _ in 0..2 {
+        log.append(fiber_started(), None);
+        log.append(user_turn("again"), None);
+        log.append(assistant("answer"), Some("a_9"));
+    }
+
+    let seen = call_ids(&r#loop::rebuild(&log.lines(), MODEL).unwrap());
+
+    // The context from the handoff on is intact, with each resumed turn
+    // after it.
+    assert_eq!(seen[..after_handoff.len()], after_handoff[..]);
+    assert_eq!(
+        seen[after_handoff.len()..],
+        [
+            ("text", "again".to_owned()),
+            ("text", "answer".to_owned()),
+            ("text", "again".to_owned()),
+            ("text", "answer".to_owned()),
+        ]
+    );
+}
+
 // Resuming over handoffs (`docs/handoff.md`, "Resume").
 
 /// A history holding an opening, one turn, and the note request's lines.
