@@ -897,6 +897,10 @@ When a signal stops Fiber, no extension code runs, as no hook does. The
 - Keep what must survive a resume in `state`, never in globals.
 - Need npm, a long-lived connection or a language other than Lua? Write a
   process extension.
+- Test with `fiber extension test`: cases that give the built-in `scripted`
+  provider a script and assert on the events, with host calls scripted and a
+  fake clock. Fiber tests its own extensions the same way and no other
+  (`docs/testing.md`, "Testing an extension").
 
 ## The extension API version
 
