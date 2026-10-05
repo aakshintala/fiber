@@ -510,8 +510,8 @@ fn gemini_hello() -> Response {
 
 /// The event kinds of a turn answered by [`hello`].
 const HELLO_KINDS: [&str; 12] = [
-    "fiber_started",
     "session_started",
+    "fiber_started",
     "turn_started",
     "step_started",
     "assistant_message_started",
@@ -546,7 +546,7 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
-    assert_eq!(run.lines[0]["payload"]["resumed"], false);
+    assert_eq!(run.lines[1]["payload"]["resumed"], false);
     assert_eq!(turn_input(&run), "hi");
     let exited = &run.last()["payload"];
     assert_eq!(exited["exit_code"], 0);
@@ -612,8 +612,8 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
     assert_eq!(
         run.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1486,7 +1486,7 @@ fn assert_weather(run: &Run) {
         "assistant_message_started",
         "assistant_message_delta",
     ];
-    let mut kinds = vec!["fiber_started", "session_started", "turn_started"];
+    let mut kinds = vec!["session_started", "fiber_started", "turn_started"];
     kinds.extend(step);
     kinds.extend([
         "tool_call_arguments_delta",
@@ -1581,8 +1581,8 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
     assert_eq!(
         run.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "turn_completed",
@@ -1638,8 +1638,8 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
     assert_eq!(
         run.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1713,8 +1713,8 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let mut kinds = vec![
-        "fiber_started",
         "session_started",
+        "fiber_started",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -1779,8 +1779,8 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
     assert_eq!(
         run.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1848,8 +1848,8 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     assert_eq!(
         run.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",

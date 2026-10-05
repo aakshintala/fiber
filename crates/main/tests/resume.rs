@@ -355,8 +355,8 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
     assert_eq!(
         first.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -599,8 +599,8 @@ fn a_held_session_fails_session_held() {
     assert_eq!(
         first.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -640,8 +640,8 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
     assert_eq!(
         first.kinds(),
         [
-            "fiber_started",
             "session_started",
+            "fiber_started",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -846,7 +846,7 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     server.hold();
     let running = start(&setup, &["ask", "hi"]);
     let started = first_line(&running.stdout);
-    assert_eq!(started["kind"], "fiber_started");
+    assert_eq!(started["kind"], "session_started");
     let id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, DEADLINE),

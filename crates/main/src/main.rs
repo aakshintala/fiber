@@ -364,12 +364,10 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
-    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false) {
-        session.close(log);
-        return ask_failed(failed(e.code(), e));
-    }
     let code = run_turn(&session, &log, &dir, prompt, |inbox| {
         finish(
+            // `Loop::start` writes `session_started`, which `fiber_started`
+            // follows (`docs/events.md`).
             Loop::start(
                 Arc::clone(&log),
                 provider,
@@ -378,7 +376,11 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 inbox,
                 Vec::new(),
                 permissions,
-            ),
+            )
+            .and_then(|looped| {
+                r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
+                Ok(looped)
+            }),
             budget,
             reviewer,
             limits,
