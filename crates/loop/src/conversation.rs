@@ -17,7 +17,7 @@ use contract::{ActionId, Envelope};
 use crate::Error;
 use crate::prompt::{body, fill};
 
-const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
+pub(crate) const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
 
 /// A call with no `tool_call_completed`, which only a crash can leave
 /// (`docs/events.md`, "Resume"), is sent with a fixed result: it never
@@ -78,8 +78,9 @@ pub(crate) fn rebuild_and_sent(
 /// gets its fixed result after the whole batch of calls it belongs to: the
 /// whole reply plus its result lines. The next round, a `TurnStarted`,
 /// `SteeringApplied` or `AssistantMessageStarted`, or the end of the log,
-/// flushes them, so a `tool_call_started` written after the request is
-/// always seen before the flush decides.
+/// flushes them, as does a `job_completed` with no action, so a
+/// `tool_call_started` written after the request is always seen before the
+/// flush decides.
 #[derive(Default)]
 struct Rendered {
     conversation: Vec<Input>,
@@ -204,10 +205,18 @@ impl Rendered {
             | Event::JobDelta(_)
             | Event::JobLine(_)
             | Event::DelegateFinished(_)
-            | Event::JobCompleted(_)
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
+                render(&mut self.conversation, event, action, model, &mut self.had);
+            }
+            // A job notice joins at a step boundary, as a steer does: it
+            // starts a new batch. A `wait` or `stop` record, under its
+            // call's action, continues the batch.
+            Event::JobCompleted(_) => {
+                if action.is_none() {
+                    self.flush();
+                }
                 render(&mut self.conversation, event, action, model, &mut self.had);
             }
         }
@@ -251,16 +260,24 @@ pub(crate) fn render(
             for item in &started.input {
                 match item {
                     InputItem::Message { content, .. } => conversation.push(user(content)),
-                    // debt: these start a turn only once shell commands, jobs
-                    // and handoff exist (#296, #299, #305); each renders then.
+                    // The jobs' own `job_completed` lines follow at the first
+                    // step boundary and render there.
+                    InputItem::Jobs { .. } => {}
+                    // debt: these start a turn only once shell commands and
+                    // handoff exist (#296, #305); each renders then.
                     InputItem::ShellCommand { .. }
-                    | InputItem::Jobs { .. }
                     | InputItem::Handoff { .. }
                     | InputItem::Unknown => {}
                 }
             }
         }
         Event::SteeringApplied(steering) => conversation.push(user(&steering.content)),
+        // A job's end the model was not already given: one message. A
+        // `wait` or `stop` record carries its call's action and renders
+        // nothing; that call's result already said it.
+        Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
+            text: crate::jobs::notice_text(completed),
+        }),
         // The opening message is rendered from its logged fields only, so
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").
