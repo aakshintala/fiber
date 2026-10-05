@@ -431,6 +431,18 @@ fn unreadable_file_is_left_out_with_an_io_failed_notice() {
 }
 
 #[test]
+fn an_unreadable_agents_does_not_fall_through_to_claude() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(workspace.join("AGENTS.md")).unwrap();
+    std::fs::write(workspace.join("CLAUDE.md"), "claude rules").unwrap();
+    let fake = clock();
+    let collected = collected(&home, &workspace, &fake);
+    assert!(collected.message.instruction_files.is_empty());
+    assert_eq!(collected.notices.len(), 1);
+}
+
+#[test]
 fn unreadable_claude_is_a_notice_too() {
     let (home, _held) = dir();
     let workspace = home.join("workspace");
