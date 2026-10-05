@@ -302,6 +302,7 @@ fn read_kinds() -> Vec<&'static str> {
     let mut kinds = vec![
         "session_started",
         "fiber_started",
+        "extensions_loaded",
         "preamble_built",
         "opening_message",
         "turn_started",
@@ -404,6 +405,7 @@ fn a_resumed_session_offers_the_same_tools_in_the_same_order() {
             &[
                 "session_started",
                 "fiber_started",
+                "extensions_loaded",
                 "preamble_built",
                 "opening_message",
                 "turn_started",
@@ -415,7 +417,12 @@ fn a_resumed_session_offers_the_same_tools_in_the_same_order() {
     assert_eq!(
         second.kinds(),
         [
-            &["fiber_started", "preamble_built", "turn_started"][..],
+            &[
+                "fiber_started",
+                "extensions_loaded",
+                "preamble_built",
+                "turn_started"
+            ][..],
             &turn
         ]
         .concat()
@@ -434,6 +441,7 @@ fn denied_kinds(calls: usize) -> Vec<&'static str> {
     let mut kinds = vec![
         "session_started",
         "fiber_started",
+        "extensions_loaded",
         "preamble_built",
         "opening_message",
         "turn_started",

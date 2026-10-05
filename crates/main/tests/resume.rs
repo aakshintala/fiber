@@ -357,6 +357,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -384,6 +385,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
         second.kinds(),
         [
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "turn_started",
             "step_started",
@@ -446,6 +448,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
         run.kinds(),
         [
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -491,6 +494,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
             "tool_call_started",
             "tool_call_requested",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -548,6 +552,7 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
         run.kinds(),
         [
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -611,6 +616,7 @@ fn a_held_session_fails_session_held() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -654,6 +660,7 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1040,6 +1047,7 @@ fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
         run.kinds(),
         [
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "permission_requested",
