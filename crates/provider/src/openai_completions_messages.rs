@@ -13,7 +13,10 @@ use crate::anthropic_messages::cache_control;
 
 /// The conversation as Chat Completions messages, after the system prompt.
 /// An assistant's reasoning, text and tool calls fold into one message; each
-/// tool result is a `tool` message of its own.
+/// tool result is a `tool` message of its own. A tool result's images do
+/// not fit in a tool message, so they go in one user message after the run
+/// of consecutive tool messages that holds them, as rendered PDF pages do
+/// (`docs/tools.md`, "read").
 ///
 /// With [`crate::Compat::anthropic`], it carries the markers Anthropic
 /// takes (`docs/prompt-cache.md`, "Cache markers and keys"): the end of the
@@ -59,9 +62,15 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
     // of them holds that input, or the nearest earlier one when the input
     // added nothing.
     let mut ends: Vec<usize> = Vec::with_capacity(request.conversation.len());
-    for input in &request.conversation {
+    // Images waiting for the user message after the current run of tool
+    // messages, and the run's last tool result, whose `ends` entry moves
+    // to cover that message.
+    let mut pending: Vec<crate::images::Encoded> = Vec::new();
+    let mut last_tool = None;
+    for (index, input) in request.conversation.iter().enumerate() {
         match input {
             Input::User { text } => {
+                flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 out.push(message(json!({"role": "user", "content": text})));
             }
             // The flag is ignored: Chat Completions defines no error field
@@ -69,16 +78,24 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
             // content, tool_call_id`), so a failed result sends the same
             // bytes as a success.
             Input::ToolResult {
-                action_id, text, ..
+                action_id,
+                text,
+                images,
+                ..
             } => {
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
                 out.push(message(json!({
                     "role": "tool",
                     "tool_call_id": call_id(action_id),
-                    "content": text,
+                    "content": prepared.text,
                 })));
+                pending.extend(prepared.images);
+                last_tool = Some(index);
             }
             Input::Assistant { text, .. } if text.is_empty() => {}
             Input::Assistant { text, .. } => {
+                flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 let mut m = take_assistant(&mut out, &["content"]);
                 m.insert("content".into(), json!(text));
                 out.push(m);
@@ -90,6 +107,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
                 provider_item: Some(Value::Object(fields)),
                 ..
             } if *model == reference => {
+                flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 let keys: Vec<&str> = fields.keys().map(String::as_str).collect();
                 let mut m = take_assistant(&mut out, &keys);
                 m.extend(fields.clone());
@@ -97,6 +115,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
             }
             Input::Reasoning { .. } => {}
             Input::ToolCall { action_id, call } => {
+                flush_images(&mut out, &mut ends, &mut pending, last_tool);
                 let mut m = take_assistant(&mut out, &[]);
                 let call = json!({
                     "id": call_id(action_id),
@@ -114,6 +133,7 @@ pub(crate) fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value
         }
         ends.push(out.len());
     }
+    flush_images(&mut out, &mut ends, &mut pending, last_tool);
     // An assistant message with neither text nor tool calls, only reasoning,
     // still needs its `content`.
     for m in &mut out {
@@ -177,11 +197,46 @@ fn take_assistant(out: &mut Vec<Map<String, Value>>, keys: &[&str]) -> Map<Strin
 /// to mark and is left unmarked; mark its last call if a session's cache
 /// shows the gap.
 fn mark(message: &mut Map<String, Value>, lifetime: &CacheLifetime) {
-    let Some(Value::String(text)) = message.get("content") else {
+    if let Some(Value::String(text)) = message.get("content") {
+        let text = text.clone();
+        let part =
+            json!([{"type": "text", "text": text, "cache_control": cache_control(lifetime)}]);
+        message.insert("content".into(), part);
         return;
-    };
-    let part = json!([{"type": "text", "text": text, "cache_control": cache_control(lifetime)}]);
-    message.insert("content".into(), part);
+    }
+    // An array content, such as the image user message's, is marked on its
+    // last part.
+    if let Some(Value::Array(parts)) = message.get_mut("content")
+        && let Some(Value::Object(last)) = parts.last_mut()
+    {
+        last.insert("cache_control".into(), cache_control(lifetime));
+    }
+}
+
+/// Pushes one user message carrying the run's images, each as an `image_url`
+/// part with no text part, after the run's last tool message. The run's
+/// last tool result's `ends` entry moves to cover it, so `previous_end`
+/// lands where the previous request's last marker was. Nothing is pushed
+/// when the run held no image.
+fn flush_images(
+    out: &mut Vec<Map<String, Value>>,
+    ends: &mut [usize],
+    pending: &mut Vec<crate::images::Encoded>,
+    last_tool: Option<usize>,
+) {
+    if pending.is_empty() {
+        return;
+    }
+    let parts: Vec<Value> = pending
+        .drain(..)
+        .map(|image| {
+            json!({"type": "image_url", "image_url": {"url": crate::images::data_url(&image)}})
+        })
+        .collect();
+    out.push(message(json!({"role": "user", "content": parts})));
+    if let Some(end) = last_tool.and_then(|last| ends.get_mut(last)) {
+        *end = out.len();
+    }
 }
 
 /// Arguments as the text Chat Completions carries: a raw string as it was,
