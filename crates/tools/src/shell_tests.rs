@@ -45,7 +45,13 @@ fn the_schema_is_command_workdir_and_timeout() {
     let properties = schema["properties"].as_object().unwrap();
     assert_eq!(
         properties.keys().cloned().collect::<Vec<_>>(),
-        ["command", "run_in_background", "timeout_ms", "workdir"]
+        [
+            "command",
+            "run_in_background",
+            "timeout_ms",
+            "tty",
+            "workdir"
+        ]
     );
     assert_eq!(properties["run_in_background"]["type"], "boolean");
     assert_eq!(properties["command"]["type"], "string");
