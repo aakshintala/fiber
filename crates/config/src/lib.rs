@@ -37,9 +37,10 @@ pub use extension::{
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use rules::RulesFiles;
 pub use secret::{
-    CredentialSource, Secret, read_credential, read_secret, store_credential, store_secret,
+    CredentialSource, Secret, credential_labels, delete_credential, delete_credential_held,
+    read_credential, read_secret, store_credential, store_secret,
 };
-pub use write::{Scope, remove_extension_settings, set_global};
+pub use write::{Scope, remove_extension_settings, set_global, set_global_if_unset};
 
 use home::{parse, plain, read, read_bytes};
 
@@ -340,7 +341,7 @@ impl Config {
         path::set(&mut cached, &key, value.clone());
         // The file on disk may hold other sessions' writes too; this session
         // sees only its own until its next load.
-        write::update(&file, &key, value)?;
+        write::update(&file, &key, value, false)?;
         self.settings_files
             .insert(file, cached.to_string().into_bytes());
         Ok(())

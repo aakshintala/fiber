@@ -783,8 +783,10 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
 Fiber itself:
-  help [<command>]  Print this menu, or a command's help
-  version           Print the version
+  login [<provider>]  Store a provider's key
+  logout <provider>   Delete a provider's stored key
+  help [<command>]    Print this menu, or a command's help
+  version             Print the version
 
 Extensions:
   extension install <name or path>  Install an extension and its dependencies
@@ -802,6 +804,7 @@ Examples:
   fiber ask < brief.md
   git diff | fiber ask "review this diff" -
   fiber extension install openrouter
+  fiber login openrouter
   fiber help ask
 "#;
 

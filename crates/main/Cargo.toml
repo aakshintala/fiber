@@ -20,12 +20,13 @@ log = { path = "../log" }
 loop = { path = "../loop" }
 mcp = { path = "../mcp" }
 provider = { path = "../provider" }
+rustix.workspace = true
 serde_json.workspace = true
+signal-hook = "0.3"
 tools = { path = "../tools" }
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
-rustix.workspace = true
 
 [lints]
 workspace = true

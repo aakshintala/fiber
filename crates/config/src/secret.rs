@@ -6,11 +6,12 @@
 
 use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::credential_file::{credential_path, is_lock_or_tmp};
+use crate::credential_file::{CredentialFile, CredentialLock, credential_path, is_lock_or_tmp};
 use crate::error::ConfigError;
 use crate::home::{one_file_name, plain};
 use crate::write::write_atomic;
@@ -112,10 +113,49 @@ pub fn store_credential(
     write_atomic(&path, secret.0.as_bytes(), 0o600)
 }
 
+/// Deletes `credentials/<name>/<label>` (`fiber logout`) under the label's
+/// [`CredentialFile`] lock, so it never races a login. `true` when a
+/// credential was removed. A lock held elsewhere is an error. The label's
+/// `.lock` file and the provider's directory stay: the lock file's identity
+/// must not change while anyone may hold it. The same name, label and
+/// symbolic link checks as [`store_credential`] apply.
+pub fn delete_credential(home: &Path, name: &str, label: &str) -> Result<bool, ConfigError> {
+    let path = credential_path(home, name, label)?;
+    if !plain(&path, false)? {
+        return Ok(false);
+    }
+    let Some(lock) = CredentialFile::new(home, name, label)?.try_lock()? else {
+        return Err(ConfigError::Io {
+            file: path,
+            source: io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "another login or logout holds its lock",
+            ),
+        });
+    };
+    delete_credential_held(home, name, label, &lock)
+}
+
+/// [`delete_credential`] for a caller that already holds the label's lock,
+/// such as a login undoing its own store.
+pub fn delete_credential_held(
+    home: &Path,
+    name: &str,
+    label: &str,
+    _lock: &CredentialLock,
+) -> Result<bool, ConfigError> {
+    let path = credential_path(home, name, label)?;
+    if !plain(&path, false)? {
+        return Ok(false);
+    }
+    fs::remove_file(&path).map_err(|source| ConfigError::Io { file: path, source })?;
+    Ok(true)
+}
+
 /// The labels stored for `name`, sorted: the regular files in
 /// `credentials/<name>/`, without lock and temporary files. Empty when the
 /// directory is absent or `credentials/<name>` is a file or a link.
-pub(crate) fn credential_labels(home: &Path, name: &str) -> Result<Vec<String>, ConfigError> {
+pub fn credential_labels(home: &Path, name: &str) -> Result<Vec<String>, ConfigError> {
     if !one_file_name(name) {
         return Err(ConfigError::SecretName { name: name.into() });
     }
