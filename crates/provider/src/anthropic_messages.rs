@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read};
+use std::path::Path;
 use std::sync::Arc;
 
 use contract::events::{
@@ -345,7 +346,7 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
     let mut positions: Vec<Option<(usize, usize)>> = Vec::with_capacity(request.conversation.len());
     for input in &request.conversation {
-        let Some(block) = block_of(input, &reference, &call_ids) else {
+        let Some(block) = block_of(input, &reference, &call_ids, &request.session_dir) else {
             positions.push(None);
             continue;
         };
@@ -395,7 +396,12 @@ fn role_of(input: &Input) -> &'static str {
 /// The content block an input renders as, or `None` for an input that adds
 /// nothing to the request: an empty assistant text, or reasoning sent to a
 /// different model reference (`docs/loop.md`, "What the model is sent").
-fn block_of(input: &Input, reference: &str, call_ids: &BTreeMap<&ActionId, &str>) -> Option<Value> {
+fn block_of(
+    input: &Input,
+    reference: &str,
+    call_ids: &BTreeMap<&ActionId, &str>,
+    session_dir: &Path,
+) -> Option<Value> {
     match input {
         Input::User { text } => Some(json!({"type": "text", "text": text})),
         Input::Assistant { text, .. } if text.is_empty() => None,
@@ -418,6 +424,7 @@ fn block_of(input: &Input, reference: &str, call_ids: &BTreeMap<&ActionId, &str>
             action_id,
             text,
             is_error,
+            images,
         } => {
             // A failed tool result sends Anthropic's `is_error` flag; a
             // success sends no such key
@@ -427,7 +434,7 @@ fn block_of(input: &Input, reference: &str, call_ids: &BTreeMap<&ActionId, &str>
             let mut result = json!({
                 "type": "tool_result",
                 "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "content": text,
+                "content": crate::anthropic_images::content(text, images, session_dir),
             });
             if *is_error && let Some(map) = result.as_object_mut() {
                 map.insert("is_error".into(), json!(true));

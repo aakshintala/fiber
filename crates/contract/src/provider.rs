@@ -2,6 +2,8 @@
 //! a model and stream back actions". The loop reaches every protocol through
 //! [`Provider`] and [`ModelCall`], and never names one.
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -81,6 +83,26 @@ pub struct ModelRequest {
     /// (`docs/errors.md`, "Output tokens").
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_output_tokens: Option<u64>,
+    /// The session directory, which an [`ImageRef`]'s path is relative to. A
+    /// protocol reads the stored image from here when it builds a request.
+    /// Empty when no result in the conversation holds an image.
+    #[serde(default)]
+    pub session_dir: PathBuf,
+}
+
+/// An image a tool result carries: the log's `image` part
+/// (`docs/events.md`), without the bytes. The file is what every request
+/// sends (`docs/model-routing.md`, "Image limits").
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageRef {
+    /// The file's path, relative to the session directory.
+    pub path: String,
+    /// Its type, such as `image/png`.
+    pub mime_type: String,
+    /// Its width in pixels.
+    pub width: u32,
+    /// Its height in pixels.
+    pub height: u32,
 }
 
 /// One tool as the model sees it.
@@ -152,6 +174,10 @@ pub enum Input {
         /// carries").
         #[serde(default)]
         is_error: bool,
+        /// The result's image parts, in order. A protocol that carries an
+        /// image inside a tool result sends each after the text.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        images: Vec<ImageRef>,
     },
 }
 

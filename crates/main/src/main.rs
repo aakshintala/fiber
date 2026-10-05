@@ -12,6 +12,7 @@ mod approve;
 mod builtin;
 mod cli;
 mod clock;
+mod cost;
 mod credential;
 mod handoff;
 mod late_emit;
@@ -133,6 +134,9 @@ fn run() -> i32 {
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),
         cli::Invocation::Run(Some(cli::Commands::Find { args })) => tools::find_main(args),
+        // The image child holds no feature logic either: `picture` is the
+        // only crate that links image code.
+        cli::Invocation::Run(Some(cli::Commands::Image { args })) => picture::main(args),
     }
 }
 
@@ -381,11 +385,16 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
-    let (tools, infos, driver, session_servers) =
-        match mcp_servers::session_tools(&workspace, &clock, &jobs, mcp.specs) {
-            Ok(built) => built,
-            Err(e) => return ask_failed(e),
-        };
+    let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+        &workspace,
+        &dir.join("artifacts"),
+        &clock,
+        &jobs,
+        mcp.specs,
+    ) {
+        Ok(built) => built,
+        Err(e) => return ask_failed(e),
+    };
     let forget = Arc::clone(&session_servers.forget);
     let permissions = ask_permissions(
         &home,
@@ -600,7 +609,7 @@ fn parts_with(
         prompt,
         model: Model {
             reference: model.reference(),
-            cost: model.model.cost.clone().map(declared_cost),
+            cost: model.model.cost.clone().map(cost::declared),
             subscription: model.model.subscription,
         },
         reviewer,
@@ -719,7 +728,7 @@ fn choose_reviewer(
         provider,
         model: Model {
             reference: model.reference(),
-            cost: model.model.cost.clone().map(declared_cost),
+            cost: model.model.cost.clone().map(cost::declared),
             subscription: model.model.subscription,
         },
     })
@@ -754,28 +763,6 @@ fn retry_policy(config: &Config) -> r#loop::Retry {
         attempts: u32::try_from(count("retry.attempts", 3)).unwrap_or(u32::MAX),
         initial: Duration::from_millis(count("retry.initial_delay_ms", 2000)),
         max: Duration::from_millis(count("retry.max_delay_ms", 60000)),
-    }
-}
-
-/// Field-by-field copy of a model's declared prices. `loop` cannot depend on
-/// `config`, so the prices it prices with live in `contract`.
-fn declared_cost(cost: config::Cost) -> contract::provider::Cost {
-    contract::provider::Cost {
-        input: cost.input,
-        output: cost.output,
-        cache_read: cost.cache_read,
-        cache_write: cost.cache_write,
-        tiers: cost
-            .tiers
-            .into_iter()
-            .map(|tier| contract::provider::Tier {
-                input_tokens_above: tier.input_tokens_above,
-                input: tier.input,
-                output: tier.output,
-                cache_read: tier.cache_read,
-                cache_write: tier.cache_write,
-            })
-            .collect(),
     }
 }
 

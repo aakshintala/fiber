@@ -1,0 +1,20 @@
+[package]
+name = "picture"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+# The image child (`docs/invocation.md`, "Processes"). Only `main` depends on
+# this crate, so no other crate links image code (`docs/dependencies.md`).
+[dependencies]
+fast_image_resize.workspace = true
+image.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+fakes = { path = "../fakes" }
+image.workspace = true
+
+[lints]
+workspace = true

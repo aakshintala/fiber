@@ -406,6 +406,7 @@ impl Loop {
             conversation,
             previous_end: self.sent,
             max_output_tokens: None,
+            session_dir: self.log.dir().to_path_buf(),
         })
     }
 

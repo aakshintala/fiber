@@ -443,7 +443,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
     assert_eq!(rebuilt.len(), 3);
     assert!(matches!(
         &rebuilt[1],
-        Input::ToolResult { action_id, text, is_error: true } if action_id.0 == "a_1" && text.contains("may have run")
+        Input::ToolResult { action_id, text, is_error: true, .. } if action_id.0 == "a_1" && text.contains("may have run")
     ));
     assert_eq!(
         user_text(&rebuilt[2]),
@@ -608,4 +608,78 @@ fn a_notice_behind_an_open_batch_renders_at_the_end() {
     // Held apart for the finishing turn to release after the results.
     assert_eq!(shape(&rebuilt), ["call a_1"]);
     assert_eq!(shape(&held), ["user"]);
+}
+
+fn image_result() -> Event {
+    Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![
+            contract::shapes::ContentPart::Text {
+                text: "Image: 8x4 image/png.\n".into(),
+            },
+            contract::shapes::ContentPart::Image {
+                path: "artifacts/i_1.png".into(),
+                mime_type: "image/png".into(),
+                width: 8,
+                height: 4,
+            },
+        ],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+    })
+}
+
+fn expected_image_result() -> Input {
+    Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "Image: 8x4 image/png.\n".into(),
+        is_error: false,
+        images: vec![contract::provider::ImageRef {
+            path: "artifacts/i_1.png".into(),
+            mime_type: "image/png".into(),
+            width: 8,
+            height: 4,
+        }],
+    }
+}
+
+#[test]
+fn an_image_part_becomes_an_image_ref_on_the_result() {
+    let lines = vec![
+        line("tool_call_requested", &call("read"), Some("a_1")),
+        line("tool_call_completed", &image_result(), Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 2);
+    assert_eq!(rebuilt[1], expected_image_result());
+}
+
+#[test]
+fn the_free_renderer_carries_image_refs_too() {
+    let mut out = Vec::new();
+    render(
+        &mut out,
+        &image_result(),
+        Some(&ActionId("a_1".into())),
+        "fake/model-1",
+        &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
+    );
+    assert_eq!(out, vec![expected_image_result()]);
+}
+
+#[test]
+fn a_fixed_result_for_a_call_that_never_completed_holds_no_image() {
+    let lines = vec![line("tool_call_requested", &call("read"), Some("a_1"))];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert!(matches!(
+        &rebuilt[1],
+        Input::ToolResult { images, is_error: true, .. } if images.is_empty()
+    ));
 }

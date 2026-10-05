@@ -26,18 +26,36 @@ type SessionTools = (
 
 /// `edit`, `handoff`, `read`, `shell`, `write` and `jobs`, each registered
 /// by `builtin`. `read`, `write` and `edit` share one session's file state,
-/// which a handoff forgets; the model's `shell` moves commands into `jobs`,
-/// which the `jobs` tool lists, waits on and stops. The driver shell runs in
-/// the foreground only. A failure to find the running binary is
-/// `io_failed`, before any session line.
+/// which a handoff forgets, and `read` runs the image child (`fiber image`)
+/// into `artifacts`, the session's `artifacts/` directory; the model's
+/// `shell` moves commands into `jobs`, which the `jobs` tool lists, waits on
+/// and stops. The driver shell runs in the foreground only. A failure to find
+/// the running binary is `io_failed`, before any session line.
 pub(crate) fn builtin(
     workspace: &Path,
+    artifacts: &Path,
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
 ) -> Result<SessionTools, Failure> {
-    let files = Arc::new(tools::Files::new(workspace.to_path_buf()));
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
+    with_binary(fiber, workspace, artifacts, clock, jobs)
+}
+
+/// [`builtin`] with the binary the shell's search and the image child run.
+/// Tests pass a stub, because the test harness would treat `image` as a
+/// test filter and run its suite.
+pub(crate) fn with_binary(
+    fiber: std::path::PathBuf,
+    workspace: &Path,
+    artifacts: &Path,
+    clock: &Arc<dyn Clock>,
+    jobs: &Arc<jobs::Registry>,
+) -> Result<SessionTools, Failure> {
+    let files = Arc::new(
+        tools::Files::new(workspace.to_path_buf())
+            .with_images(fiber.clone(), artifacts.to_path_buf()),
+    );
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
     let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
         .with_search(fiber.clone())

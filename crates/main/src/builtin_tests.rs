@@ -33,7 +33,8 @@ fn the_driver_shell_runs_echo() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (_tools, _infos, driver, _forget) = super::builtin(root.path(), &clock, &jobs).unwrap();
+    let (_tools, _infos, driver, _forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let mut arguments = serde_json::Map::new();
     arguments.insert(
         "command".to_owned(),
@@ -53,6 +54,53 @@ fn the_driver_shell_runs_echo() {
 }
 
 #[test]
+fn read_is_wired_to_the_image_child() {
+    let root = fakes::TempDir::new("fiber-read-wired");
+    std::fs::write(root.path().join("a.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    // A child that prints the one line a stored image has.
+    let fiber = root.path().join("fiber-stub");
+    std::fs::write(
+        &fiber,
+        "#!/bin/sh\nprintf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fiber, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget) = super::with_binary(
+        fiber,
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+    )
+    .unwrap();
+    let (_, read) = tools
+        .iter()
+        .find(|(_, tool)| tool.definition().name == "read")
+        .expect("read is registered");
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "path".to_owned(),
+        serde_json::Value::String("a.png".to_owned()),
+    );
+    let output = read.run(&arguments, &Never, &Quiet);
+    assert_eq!(output.error, None);
+    assert!(
+        matches!(
+            output.content.get(1),
+            Some(contract::shapes::ContentPart::Image { .. })
+        ),
+        "{:?}",
+        output.content
+    );
+}
+
+#[test]
 fn the_forget_callback_clears_what_the_file_tools_have_seen() {
     let root = fakes::TempDir::new("fiber-forget");
     std::fs::write(root.path().join("a.txt"), "old\n").unwrap();
@@ -62,7 +110,8 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, forget) = super::builtin(root.path(), &clock, &jobs).unwrap();
+    let (tools, _infos, _driver, forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let tool = |name: &str| {
         tools
             .iter()
@@ -99,7 +148,8 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) = super::builtin(root.path(), &clock, &jobs).unwrap();
+    let (tools, _infos, _driver, _forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let tool = |name: &str| {
         tools
             .iter()
@@ -136,7 +186,8 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, infos, _driver, _forget) = super::builtin(root.path(), &clock, &jobs).unwrap();
+    let (tools, infos, _driver, _forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let names: Vec<String> = tools
         .iter()
         .map(|(who, tool)| {

@@ -152,6 +152,7 @@ fn result_of(input: &Input) -> (&ActionId, &str, bool) {
         action_id,
         text,
         is_error,
+        ..
     } = input
     else {
         panic!("expected a tool result, got {input:?}");

@@ -9,7 +9,7 @@ use std::hash::{DefaultHasher, Hash, Hasher};
 use std::io;
 use std::os::unix::fs::FileTypeExt;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError};
 
 use contract::ErrorCode;
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
@@ -19,13 +19,15 @@ use serde_json::{Map, Value};
 pub(crate) mod land;
 mod locks;
 
+use crate::image::ImageChild;
+
 pub use locks::{PathGuard, PathLocks};
 
 /// Linux stops at 40 symbolic links. Past that the path is a loop, or a chain
 /// no call needs.
 const MAX_SYMLINKS: u32 = 40;
 
-const IMAGE_HINT: &str = "Images and PDFs are not read yet.";
+const PDF_HINT: &str = "PDFs are not read yet.";
 const DIRECTORY_HINT: &str = "List it through the shell.";
 
 /// Why a path could not be resolved.
@@ -53,6 +55,16 @@ pub(crate) enum Inspected {
         size: u64,
         /// Extra sentence, or empty.
         hint: &'static str,
+    },
+    /// A PNG, JPEG, GIF or WebP file, by its first bytes. The image child
+    /// reads it (`docs/tools.md`, "read").
+    Image {
+        /// Detected type, such as `a PNG image`.
+        kind: &'static str,
+        /// Size in bytes.
+        size: u64,
+        /// The hash of the bytes read, for the stale-file check.
+        hash: u64,
     },
 }
 
@@ -197,8 +209,13 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
             path.display()
         ))
     })?;
-    if let Some(kind) = magic(&bytes) {
-        return Ok(unsupported(kind, size, IMAGE_HINT));
+    match magic(&bytes) {
+        Some(Magic::Image(kind)) => {
+            let hash = hash_bytes(&bytes);
+            return Ok(Inspected::Image { kind, size, hash });
+        }
+        Some(Magic::Pdf) => return Ok(unsupported("a PDF", size, PDF_HINT)),
+        None => {}
     }
     if bytes.contains(&0) {
         return Ok(unsupported("binary data", size, ""));
@@ -272,6 +289,8 @@ pub(crate) struct Shared {
     /// Seen hashes and judged paths. One map, so a replace observes the hash
     /// a read in this session recorded.
     state: Mutex<Session>,
+    /// How to run the image child, set once by [`Files::with_images`].
+    images: OnceLock<ImageChild>,
 }
 
 struct Session {
@@ -291,8 +310,21 @@ impl Files {
                     seen: BTreeMap::new(),
                     judged: BTreeMap::new(),
                 }),
+                images: OnceLock::new(),
             }),
         }
+    }
+
+    /// Lets `read` process images: it runs `fiber image` with `fiber`, the
+    /// running binary, and the child writes the processed file into
+    /// `artifacts`, the session's `artifacts/` directory.
+    #[must_use]
+    pub fn with_images(self, fiber: PathBuf, artifacts: PathBuf) -> Self {
+        self.shared
+            .images
+            .set(ImageChild::new(fiber, artifacts))
+            .unwrap_or(());
+        self
     }
 
     /// A `read` tool sharing this session's state.
@@ -336,6 +368,10 @@ impl Shared {
 
     pub(crate) fn locks(&self) -> Arc<PathLocks> {
         Arc::clone(&self.locks)
+    }
+
+    pub(crate) fn images(&self) -> Option<&ImageChild> {
+        self.images.get()
     }
 
     pub(crate) fn note_judged(&self, raw: &str, resolved: &Path) {
@@ -457,21 +493,27 @@ pub(crate) fn failed(code: ErrorCode, message: String) -> Output {
     }
 }
 
-fn magic(bytes: &[u8]) -> Option<&'static str> {
+/// What a file's first bytes say it is.
+enum Magic {
+    Image(&'static str),
+    Pdf,
+}
+
+fn magic(bytes: &[u8]) -> Option<Magic> {
     if bytes.starts_with(b"\x89PNG\r\n\x1a\n") {
-        return Some("a PNG image");
+        return Some(Magic::Image("a PNG image"));
     }
     if bytes.starts_with(&[0xFF, 0xD8, 0xFF]) {
-        return Some("a JPEG image");
+        return Some(Magic::Image("a JPEG image"));
     }
     if bytes.starts_with(b"GIF87a") || bytes.starts_with(b"GIF89a") {
-        return Some("a GIF image");
+        return Some(Magic::Image("a GIF image"));
     }
     if bytes.starts_with(b"RIFF") && bytes.get(8..12) == Some(b"WEBP".as_slice()) {
-        return Some("a WebP image");
+        return Some(Magic::Image("a WebP image"));
     }
     if bytes.starts_with(b"%PDF") {
-        return Some("a PDF");
+        return Some(Magic::Pdf);
     }
     None
 }

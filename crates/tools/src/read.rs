@@ -5,7 +5,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::shapes::Effect;
+use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
@@ -18,7 +18,7 @@ use crate::files::{
 /// sits above this, so a result is not cut twice and no artifact is written.
 const CAP: usize = 16_384;
 
-/// Reads a text file.
+/// Reads a text file or an image.
 pub struct Read {
     shared: Arc<Shared>,
 }
@@ -33,10 +33,12 @@ impl Tool for Read {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read".to_owned(),
-            description: "Reads a text file. The text is the file's own, with no line numbers and \
-                 no byte order mark. `offset` is the first line, counted from 1. `limit` is how \
-                 many lines. A directory is not listed; use the shell."
-                .to_owned(),
+            description:
+                "Reads a text file, or a PNG, JPEG, GIF or WebP image, which comes back as an \
+                 image. The text is the file's own, with no line numbers and no byte order mark. \
+                 `offset` is the first line, counted from 1. `limit` is how many lines. A \
+                 directory is not listed; use the shell."
+                    .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
@@ -106,6 +108,20 @@ impl Tool for Read {
         // debt: the whole file is read into memory, a measured file that does not fit
         let text = match inspect(&path) {
             Ok(Inspected::Text { text }) => text,
+            // `offset` and `limit` do not apply to an image.
+            Ok(Inspected::Image { hash, .. }) => {
+                let output = crate::image::read(self.shared.images(), &path, cancel);
+                // Seen for a later `write`: the bytes this read took in. A
+                // failed or cancelled read returned no image, so saw nothing.
+                if output
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, ContentPart::Image { .. }))
+                {
+                    self.shared.set_seen(&path, hash);
+                }
+                return output;
+            }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
                 return failed(
                     ErrorCode::UnsupportedFile,

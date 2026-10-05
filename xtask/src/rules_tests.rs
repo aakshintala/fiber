@@ -348,3 +348,56 @@ fn a_file_that_does_not_tokenise_fails_the_check_by_name() {
         "{error}"
     );
 }
+
+fn tree(names: &[&str]) -> String {
+    names
+        .iter()
+        .map(|name| format!("{name} v1.0.0 (/repo/{name}) (*)\n"))
+        .collect()
+}
+
+#[test]
+fn a_member_whose_tree_names_an_image_crate_is_reported_once_per_crate() {
+    let trees = vec![
+        (
+            "tools".to_owned(),
+            tree(&["tools", "serde", "image", "image"]),
+        ),
+        (
+            "provider".to_owned(),
+            tree(&["provider", "fast_image_resize"]),
+        ),
+    ];
+    assert_eq!(
+        image_leaks(&trees),
+        [
+            "provider: its normal dependency tree holds fast_image_resize; only the image child links image code",
+            "tools: its normal dependency tree holds image; only the image child links image code",
+        ]
+    );
+}
+
+#[test]
+fn a_clean_tree_passes_and_picture_and_main_are_exempt() {
+    let trees = vec![
+        (
+            "tools".to_owned(),
+            tree(&["tools", "serde", "image_lookalike", "imagery"]),
+        ),
+        (
+            "picture".to_owned(),
+            tree(&["picture", "image", "fast_image_resize"]),
+        ),
+        ("main".to_owned(), tree(&["main", "picture", "image"])),
+    ];
+    assert!(image_leaks(&trees).is_empty());
+}
+
+#[test]
+fn only_the_crate_name_at_the_start_of_a_line_counts() {
+    let trees = vec![(
+        "tools".to_owned(),
+        "tools v0.0.0 (/path/image)\nserde v1 image\n".to_owned(),
+    )];
+    assert!(image_leaks(&trees).is_empty());
+}

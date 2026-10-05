@@ -5,6 +5,7 @@ mod edit;
 mod files;
 mod guidelines;
 mod handoff;
+mod image;
 mod read;
 mod search;
 mod shell;

@@ -305,6 +305,7 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
             action_id,
             text,
             is_error,
+            ..
         } = &sent[n]
         else {
             panic!("{:?}", sent[n]);
@@ -507,6 +508,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
                 .unwrap()
                 .into(),
             is_error: true,
+            images: Vec::new()
         }
     );
 }

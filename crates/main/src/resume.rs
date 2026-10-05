@@ -112,6 +112,7 @@ pub(crate) fn ask_resume(
     );
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         Path::new(&folded.workspace),
+        &dir.join("artifacts"),
         &clock,
         &jobs,
         mcp.specs,

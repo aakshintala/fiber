@@ -37,6 +37,7 @@ fn request() -> ModelRequest {
         previous_end: None,
         max_output_tokens: None,
         conversation: vec![Input::User { text: "hi".into() }],
+        session_dir: std::path::PathBuf::new(),
     }
 }
 

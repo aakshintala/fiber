@@ -368,6 +368,7 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 action_id,
                 text,
                 is_error,
+                ..
             } => {
                 park(&mut out, &mut signature);
                 let call = calls.get(action_id);

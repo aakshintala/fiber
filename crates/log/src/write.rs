@@ -30,6 +30,8 @@ use crate::{ARTIFACTS, EVENTS, Error, LOCK, io_at, session_path};
 pub struct Log {
     inner: Mutex<Inner>,
     clock: Arc<dyn Clock>,
+    /// The session directory, copied out of `inner` so [`Log::dir`] can lend it.
+    dir: PathBuf,
 }
 
 struct Inner {
@@ -268,6 +270,12 @@ impl Log {
         Ok((format!("{ARTIFACTS}/{name}"), path))
     }
 
+    /// The session directory: what an `image` part's path is relative to
+    /// (`docs/events.md`, "Conventions").
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// How many fsyncs this log has made, counted where they are made
     /// (`docs/performance.md`, "Measuring").
     pub fn fsyncs(&self) -> u64 {
@@ -289,6 +297,7 @@ impl Log {
 impl Log {
     fn from_parts(inner: Inner, clock: Arc<dyn Clock>) -> Self {
         Self {
+            dir: inner.dir.clone(),
             inner: Mutex::new(inner),
             clock,
         }

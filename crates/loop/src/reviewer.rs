@@ -571,6 +571,7 @@ impl Loop {
             conversation,
             previous_end,
             max_output_tokens,
+            session_dir: self.log.dir().to_path_buf(),
         };
         let call = endpoint.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});

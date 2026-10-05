@@ -19,6 +19,7 @@ jobs = { path = "../jobs" }
 log = { path = "../log" }
 loop = { path = "../loop" }
 mcp = { path = "../mcp" }
+picture = { path = "../picture" }
 provider = { path = "../provider" }
 rustix.workspace = true
 serde_json.workspace = true

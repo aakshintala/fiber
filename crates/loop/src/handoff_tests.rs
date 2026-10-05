@@ -122,6 +122,7 @@ fn an_input_estimates_a_quarter_of_its_bytes_rounded_up() {
             action_id: ActionId("a_1".into()),
             text: "abcd".into(),
             is_error: false,
+            images: Vec::new(),
         }),
         1
     );

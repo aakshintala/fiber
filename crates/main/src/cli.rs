@@ -120,6 +120,17 @@ pub(crate) enum Commands {
         )]
         args: Vec<OsString>,
     },
+    /// The image child behind `read`: hidden and free to change.
+    #[command(hide = true, disable_help_flag = true)]
+    Image {
+        /// Everything after `image`, passed through untouched.
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "args"
+        )]
+        args: Vec<OsString>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -232,6 +243,11 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
             Ok(cli) if matches!(cli.command, Some(Commands::Find { .. })) => {
                 Invocation::Run(Some(Commands::Find {
                     args: passthrough(&args, "find"),
+                }))
+            }
+            Ok(cli) if matches!(cli.command, Some(Commands::Image { .. })) => {
+                Invocation::Run(Some(Commands::Image {
+                    args: passthrough(&args, "image"),
                 }))
             }
             // `--resume` with an empty value names no session: a usage
