@@ -439,3 +439,12 @@ fn a_copy_that_another_approval_put_there_first_stays() {
     fs::write(&file, "x").unwrap();
     assert!(settle(&scratch, &file).is_err());
 }
+
+#[test]
+fn scratch_and_temporary_names_never_repeat() {
+    let (a, b) = (super::store::next(), super::store::next());
+    assert_ne!(a, b);
+    let c = super::store::next();
+    assert_ne!(b, c);
+    assert_ne!(a, c);
+}

@@ -383,3 +383,56 @@ fn an_entry_whose_hash_is_not_a_digest_is_not_trusted() {
         );
     }
 }
+
+/// The hash by the documented format, computed here from the pieces.
+fn expected(declaration: &str, rel: &str, exec: bool, content: &str) -> String {
+    use ring::digest::{Context, SHA256, digest};
+    let mut ctx = Context::new(&SHA256);
+    ctx.update(b"mcp_server\0");
+    ctx.update(&(declaration.len() as u64).to_le_bytes());
+    ctx.update(declaration.as_bytes());
+    ctx.update(&(rel.len() as u64).to_le_bytes());
+    ctx.update(rel.as_bytes());
+    ctx.update(&[u8::from(exec)]);
+    ctx.update(digest(&SHA256, content.as_bytes()).as_ref());
+    ctx.finish()
+        .as_ref()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+#[test]
+fn the_hash_is_what_the_documented_format_gives() {
+    let repo = Repo::new();
+    repo.write("scripts/run.sh", "echo");
+    let declaration = r#"{"entry":{"args":[],"command":"scripts/run.sh"},"name":"db"}"#;
+    assert_eq!(
+        hashed(&repo, &[]),
+        expected(declaration, "scripts/run.sh", false, "echo")
+    );
+    repo.executable("scripts/run.sh");
+    assert_eq!(
+        hashed(&repo, &[]),
+        expected(declaration, "scripts/run.sh", true, "echo")
+    );
+}
+
+#[test]
+fn a_file_is_read_in_chunks_of_the_documented_size() {
+    struct Spy(Vec<usize>, usize);
+    impl std::io::Read for Spy {
+        fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+            self.0.push(buf.len());
+            if self.1 == 0 {
+                return Ok(0);
+            }
+            self.1 -= 1;
+            Ok(1)
+        }
+    }
+    let mut spy = Spy(Vec::new(), 2);
+    super::content::digest_file(&mut spy).unwrap();
+    assert_eq!(spy.0, [super::content::CHUNK; 3]);
+    assert_eq!(super::content::CHUNK, 65_536);
+}

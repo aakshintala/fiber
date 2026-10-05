@@ -175,30 +175,23 @@ impl Store {
     /// The newest approved version of this item, other than `hash`, whose
     /// copy is still there.
     pub(crate) fn previous(&self, kind: OfferedKind, name: &str, hash: &str) -> Option<Previous> {
-        let mut found: Vec<(std::time::SystemTime, String, Value)> = Vec::new();
-        for entry in fs::read_dir(self.approvals(kind))
+        let (_, hash, body) = fs::read_dir(self.approvals(kind))
             .ok()?
             .filter_map(Result::ok)
-        {
-            let file = entry.file_name().to_string_lossy().into_owned();
-            if !is_hash(&file) || file == hash || !self.copy_dir(&file).is_dir() {
-                continue;
-            }
-            let Ok(text) = fs::read_to_string(entry.path()) else {
-                continue;
-            };
-            let Ok(body) = serde_json::from_str::<Value>(&text) else {
-                continue;
-            };
-            let same = body.get("decision").and_then(Value::as_str) == Some("approve")
-                && body.get("kind").and_then(Value::as_str) == Some(kind_name(kind))
-                && body.get("name").and_then(Value::as_str) == Some(name);
-            if let (true, Ok(modified)) = (same, entry.metadata().and_then(|m| m.modified())) {
-                found.push((modified, file, body));
-            }
-        }
-        found.sort_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)));
-        let (_, hash, body) = found.pop()?;
+            .filter_map(|entry| {
+                let file = entry.file_name().to_string_lossy().into_owned();
+                if !is_hash(&file) || file == hash || !self.copy_dir(&file).is_dir() {
+                    return None;
+                }
+                let body: Value =
+                    serde_json::from_str(&fs::read_to_string(entry.path()).ok()?).ok()?;
+                let same = body.get("decision").and_then(Value::as_str) == Some("approve")
+                    && body.get("kind").and_then(Value::as_str) == Some(kind_name(kind))
+                    && body.get("name").and_then(Value::as_str) == Some(name);
+                let modified = entry.metadata().and_then(|m| m.modified()).ok()?;
+                same.then_some((modified, file, body))
+            })
+            .max_by(|a, b| (&a.0, &a.1).cmp(&(&b.0, &b.1)))?;
         Some(Previous {
             hash,
             declaration: body.get("declaration").cloned(),
@@ -240,7 +233,7 @@ fn is_hash(text: &str) -> bool {
     text.len() == 64 && text.bytes().all(|b| matches!(b, b'0'..=b'9' | b'a'..=b'f'))
 }
 
-fn next() -> usize {
+pub(super) fn next() -> usize {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     NEXT.fetch_add(1, Ordering::Relaxed)
 }

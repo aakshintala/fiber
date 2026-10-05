@@ -373,3 +373,26 @@ fn only_the_repository_layer_declares_a_server() {
     .unwrap();
     assert!(repo.items().is_empty());
 }
+
+#[test]
+fn an_extension_path_that_cannot_be_resolved_for_another_reason_is_not_reported_missing() {
+    let repo = Repo::new();
+    repo.link("loop", Path::new("loop"));
+    repo.config(&json!({"repository_extensions": [{"path": "loop"}]}));
+    let e = declared_items(&repo.root()).unwrap_err();
+    assert!(matches!(e, Error::Io { .. }), "{e}");
+}
+
+#[test]
+fn a_git_that_cannot_start_is_missing_only_when_it_is_not_found() {
+    use std::io::{Error as IoError, ErrorKind};
+    let dir = Path::new("/x");
+    assert!(matches!(
+        super::declared::spawn_error(dir, IoError::from(ErrorKind::NotFound)),
+        Error::GitMissing
+    ));
+    assert!(matches!(
+        super::declared::spawn_error(dir, IoError::from(ErrorKind::PermissionDenied)),
+        Error::Io { .. }
+    ));
+}

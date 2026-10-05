@@ -18,9 +18,6 @@ use crate::Error;
 use crate::install::io as io_error;
 use crate::manage::carries;
 
-/// The most of a file read to show its diff.
-const MAX_DIFF: u64 = 1 << 20;
-
 /// An item to offer, with its content hash and what the person sees.
 #[derive(Debug)]
 pub struct Pending {
@@ -172,9 +169,8 @@ fn declaration_lines(entry: &Value) -> Vec<String> {
 /// One side of a changed file.
 enum Side {
     Text(String),
-    /// Not UTF-8, or too large to show: its digest, and whether it was the
-    /// size that kept it from showing.
-    Other(Digest, bool),
+    /// Not UTF-8: its digest.
+    Binary(Digest),
 }
 
 impl Side {
@@ -184,11 +180,10 @@ impl Side {
             why: format!("{}: {e}", path.display()),
         };
         let mut file = File::open(path).map_err(fail)?;
-        let large = file.metadata().map_err(fail)?.len() > MAX_DIFF;
-        if !large && let Ok(text) = fs::read_to_string(path) {
+        if let Ok(text) = fs::read_to_string(path) {
             return Ok(Self::Text(text));
         }
-        Ok(Self::Other(digest_file(&mut file).map_err(fail)?, large))
+        Ok(Self::Binary(digest_file(&mut file).map_err(fail)?))
     }
 }
 
@@ -242,13 +237,13 @@ fn file_diff(
                 text
             }
         }
+        (None, Some(Side::Text(b))) if b.is_empty() => format!("{rel}: empty file added\n"),
+        (Some(Side::Text(a)), None) if a.is_empty() => format!("{rel}: empty file removed\n"),
         (None, Some(Side::Text(b))) => text_diff("", &b, "/dev/null", &to),
         (Some(Side::Text(a)), None) => text_diff(&a, "", &from, "/dev/null"),
-        (Some(Side::Other(a, _)), Some(Side::Other(b, _))) if a == b => mode_line(rel, old, new)?,
+        (Some(Side::Binary(a)), Some(Side::Binary(b))) if a == b => mode_line(rel, old, new)?,
         (old_side, new_side) => {
-            let large = matches!(old_side, Some(Side::Other(_, true)))
-                || matches!(new_side, Some(Side::Other(_, true)));
-            let kind = if large { "large file" } else { "binary file" };
+            let kind = "binary file";
             let verb = match (old_side.is_some(), new_side.is_some()) {
                 (false, _) => "added",
                 (_, false) => "removed",

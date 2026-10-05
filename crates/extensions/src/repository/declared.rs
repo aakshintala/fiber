@@ -232,17 +232,25 @@ fn resolve(root: &Path, item: &str, candidate: &Path) -> Result<Found, Error> {
         Err(e) if names_no_file(&e) => return Ok(Found::Nothing),
         Err(e) => return Err(fail(e)),
     };
-    match fs::metadata(&resolved) {
-        Ok(meta) if meta.is_file() => {}
-        Ok(_) => return Ok(Found::Nothing),
-        Err(e) if names_no_file(&e) => return Ok(Found::Nothing),
-        Err(e) => return Err(fail(e)),
+    // A path that resolved but cannot be examined, or is not a regular
+    // file, names no file.
+    if !fs::metadata(&resolved).is_ok_and(|meta| meta.is_file()) {
+        return Ok(Found::Nothing);
     }
     Ok(if resolved.starts_with(root) {
         Found::Inside(resolved)
     } else {
         Found::Outside
     })
+}
+
+/// A failure to start `git`: it is not installed, or something else.
+pub(super) fn spawn_error(dir: &Path, e: io::Error) -> Error {
+    if e.kind() == ErrorKind::NotFound {
+        Error::GitMissing
+    } else {
+        io_error(dir)(e)
+    }
 }
 
 /// The files of a package: tracked, plus untracked and not ignored, as
@@ -264,13 +272,7 @@ fn git_files(name: &str, dir: &Path) -> Result<Vec<String>, Error> {
         ])
         .stdin(Stdio::null())
         .output()
-        .map_err(|e| {
-            if e.kind() == ErrorKind::NotFound {
-                Error::GitMissing
-            } else {
-                io_error(dir)(e)
-            }
-        })?;
+        .map_err(|e| spawn_error(dir, e))?;
     if !out.status.success() {
         return Err(fail(format!(
             "{} is not in a git repository, so its files cannot be listed: {}",

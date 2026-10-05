@@ -262,23 +262,42 @@ fn a_file_that_is_not_text_shows_that_it_changed() {
 }
 
 #[test]
-fn a_file_too_large_to_show_says_so() {
+fn a_large_text_file_shows_its_whole_diff() {
     let repo = Repo::new();
-    let big = "x".repeat((1 << 20) + 1);
+    let big = "x\n".repeat(700_000);
     repo.write("big.txt", &big);
     repo.config(&json!({"mcp": {"servers": {"db": {"command": "./big.txt"}}}}));
     approve_all(&repo);
-    repo.write("big.txt", &format!("y{}", &big[1..]));
+    repo.write("big.txt", &big.replacen("x\n", "z\n", 1));
     let [item] = offered(&repo).try_into().unwrap();
-    assert_eq!(item.diff.as_deref(), Some("big.txt: large file changed\n"));
-    // A text file of exactly the limit still shows.
-    let limit = "x\n".repeat(1 << 19);
-    assert_eq!(limit.len(), 1 << 20);
-    repo.write("big.txt", &limit);
+    let diff = item.diff.unwrap();
+    assert!(
+        diff.contains("-x\n+z\n"),
+        "{}",
+        &diff[..diff.len().min(300)]
+    );
+}
+
+#[test]
+fn an_empty_file_added_or_removed_is_named() {
+    let repo = Repo::new();
+    repo.write("a.sh", "a\n");
+    repo.write("empty", "");
+    repo.config(&json!({"mcp": {"servers": {"db": {"command": "./a.sh"}}}}));
     approve_all(&repo);
-    repo.write("big.txt", &limit.replacen("x\n", "z\n", 1));
+    repo.config(&json!({"mcp": {"servers": {"db": {"command": "./a.sh", "args": ["empty"]}}}}));
     let [item] = offered(&repo).try_into().unwrap();
-    assert!(item.diff.unwrap().contains("-x\n+z\n"));
+    assert!(item.diff.unwrap().contains("empty: empty file added\n"));
+    approve_all(&repo);
+    repo.config(&json!({"mcp": {"servers": {"db": {"command": "./a.sh"}}}}));
+    // Back to the first version, approved: switch the other way instead.
+    repo.write("a.sh", "b\n");
+    repo.config(&json!({"mcp": {"servers": {"db": {"command": "./a.sh", "args": ["empty"]}}}}));
+    approve_all(&repo);
+    repo.write("a.sh", "c\n");
+    repo.config(&json!({"mcp": {"servers": {"db": {"command": "./a.sh"}}}}));
+    let [item] = offered(&repo).try_into().unwrap();
+    assert!(item.diff.unwrap().contains("empty: empty file removed\n"));
 }
 
 #[test]

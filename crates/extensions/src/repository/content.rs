@@ -36,7 +36,7 @@ use crate::install::io as io_error;
 // as when it was hashed is taken as unchanged; fixed when a miss is measured.
 
 /// How much of a file is read at a time.
-const CHUNK: usize = 64 * 1024;
+pub(super) const CHUNK: usize = 64 * 1024;
 
 /// A file's own SHA-256.
 pub(crate) type Digest = [u8; 32];
@@ -231,7 +231,7 @@ fn mtime_ns(meta: &fs::Metadata) -> Option<u64> {
 }
 
 /// A file's SHA-256, read in chunks.
-pub(crate) fn digest_file(file: &mut File) -> io::Result<Digest> {
+pub(crate) fn digest_file(file: &mut impl Read) -> io::Result<Digest> {
     let mut ctx = Context::new(&SHA256);
     let mut buf = vec![0_u8; CHUNK];
     loop {
