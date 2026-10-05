@@ -142,13 +142,7 @@ pub(crate) fn decimal(value: &[u8]) -> Option<usize> {
     if value.is_empty() || !value.iter().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
-    let mut number = 0usize;
-    for byte in value {
-        number = number
-            .checked_mul(10)
-            .and_then(|shifted| shifted.checked_add(usize::from(*byte - b'0')))?;
-    }
-    Some(number)
+    std::str::from_utf8(value).ok()?.parse().ok()
 }
 
 #[cfg(test)]

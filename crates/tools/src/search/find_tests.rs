@@ -185,6 +185,32 @@ fn a_closed_pipe_stops_the_run_quietly() {
     assert!(stderr.is_empty());
 }
 
+#[test]
+fn a_closed_pipe_stops_the_walk_before_a_later_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tree(&BTreeMap::from([
+        ("a_hay.txt", "a"),
+        ("zzz_locked/hay.txt", "hay"),
+    ]));
+    let locked = dir.path().join("zzz_locked");
+    let kept = fs::metadata(&locked).unwrap().permissions();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let owned: Vec<OsString> = vec![OsString::from(".")];
+    let mut stdout = Fail { writes: 0 };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut stdout, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    fs::set_permissions(&locked, kept).unwrap();
+    // The root's write fails, so the walk stops before the locked
+    // directory's error: ruling 13 on #298 keeps the exit it had so far
+    // and stays quiet instead of failing with permission denied.
+    assert_eq!(code, 0);
+    assert_eq!(stdout.writes, 1);
+    assert!(stderr.is_empty());
+}
+
 fn filtered(dir: &fakes::TempDir, args: &[&str]) -> (i32, Vec<String>, String) {
     let (code, stdout, stderr) = listing(dir, args);
     let lines = stdout.lines().map(str::to_owned).collect();

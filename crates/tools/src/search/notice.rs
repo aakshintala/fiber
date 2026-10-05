@@ -75,11 +75,11 @@ pub(crate) fn grep_line(pattern: &str, skipped: &[String]) -> Option<String> {
     let [first, ..] = skipped else {
         return None;
     };
-    Some(format!(
-        "grep: no match. Skipped ignored directories: {}. Search one by name, such as `grep -r {pattern} {}`.",
-        skipped.join(", "),
-        first.trim_end_matches('/')
-    ))
+    line(
+        "grep",
+        &format!("grep -r {pattern} {}", first.trim_end_matches('/')),
+        skipped,
+    )
 }
 
 /// The `find` notice: the same line with `find` in place of `grep`.
@@ -87,10 +87,22 @@ pub(crate) fn find_line(skipped: &[String]) -> Option<String> {
     let [first, ..] = skipped else {
         return None;
     };
+    line(
+        "find",
+        &format!("find {}", first.trim_end_matches('/')),
+        skipped,
+    )
+}
+
+/// The notice line: `program` names the tool, `example` the command to try,
+/// `skipped` the directories named.
+fn line(program: &str, example: &str, skipped: &[String]) -> Option<String> {
+    if skipped.is_empty() {
+        return None;
+    }
     Some(format!(
-        "find: no match. Skipped ignored directories: {}. Search one by name, such as `find {}`.",
+        "{program}: no match. Skipped ignored directories: {}. Search one by name, such as `{example}`.",
         skipped.join(", "),
-        first.trim_end_matches('/')
     ))
 }
 

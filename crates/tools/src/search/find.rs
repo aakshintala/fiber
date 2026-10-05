@@ -315,6 +315,9 @@ fn visit(
                 stderr,
             );
             for entry in walk::walk(cwd, &dir, expr.maxdepth) {
+                if out.broken() {
+                    break;
+                }
                 match entry {
                     Ok(found) => {
                         // The root already had its test.

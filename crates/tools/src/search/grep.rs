@@ -69,8 +69,10 @@ pub(crate) fn run(
         Err(()) => return Outcome::Fallback,
     };
     // `-r` with no path searches `.`; without `-r` and no path the filter
-    // reads standard input.
-    let paths = if options.paths.is_empty() && options.recursive {
+    // reads standard input. An implicit root prints without the walk's
+    // `./` prefix (ruling 9 on #298); an explicit `.` keeps it.
+    let implicit = options.paths.is_empty() && options.recursive;
+    let paths = if implicit {
         vec![PathBuf::from(".")]
     } else {
         options.paths.clone()
@@ -155,7 +157,8 @@ pub(crate) fn run(
                             if !included(&options, &found.display) {
                                 continue;
                             }
-                            let label = labeled(&options, show, &found.display);
+                            let label = labeled(&options, show, &found.display)
+                                .map(|label| strip_implicit(label, implicit));
                             let target = Target {
                                 label: label.as_deref(),
                                 preceded,
@@ -352,6 +355,16 @@ fn labeled(options: &Options, show: bool, display: &Path) -> Option<Vec<u8>> {
     } else {
         None
     }
+}
+
+/// Strips the walk's `./` prefix below an implicit `.` root, so `grep -r`
+/// with no path prints `a.txt` while an explicit `.` keeps `./a.txt`.
+/// Anything without the prefix passes through.
+fn strip_implicit(mut label: Vec<u8>, implicit: bool) -> Vec<u8> {
+    if implicit && let Some(rest) = label.strip_prefix(b"./".as_slice()) {
+        label = rest.to_vec();
+    }
+    label
 }
 
 /// Whether the file passes `--include` and `--exclude`: an exclusion wins,
@@ -595,11 +608,7 @@ fn stripped(bytes: &[u8]) -> Vec<u8> {
 
 /// Complains to standard error, as GNU does: `grep: <path>: <reason>`.
 fn complaint(stderr: &mut dyn Write, path: &Path, message: &str) {
-    stderr.write_all(b"grep: ").unwrap_or(());
-    stderr
-        .write_all(path.as_os_str().as_encoded_bytes())
-        .unwrap_or(());
-    writeln!(stderr, ": {message}").unwrap_or(());
+    complaint_bytes(stderr, path.as_os_str().as_encoded_bytes(), message);
 }
 
 /// Complains with an already built path.

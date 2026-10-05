@@ -676,6 +676,75 @@ fn a_write_failure_is_an_error() {
     assert_eq!(stderr, b"grep: writing output: no space\n");
 }
 
+#[test]
+fn an_implicit_recursive_root_prints_without_the_dot_slash_prefix() {
+    let dir = text_tree(&BTreeMap::from([
+        ("a.txt", "needle\n"),
+        ("sub/c.txt", "needle\n"),
+    ]));
+    // Ruling 9 on #298: `-r` with no path searches `.` but prints
+    // paths without the walk's `./` prefix.
+    let (code, stdout, stderr) = text(&dir, &["-r", "needle"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "a.txt:needle\nsub/c.txt:needle\n");
+    assert_eq!(stderr, "");
+    // An explicit `.` keeps the prefix.
+    let (_, explicit, _) = text(&dir, &["-r", "needle", "."], "");
+    assert_eq!(explicit, "./a.txt:needle\n./sub/c.txt:needle\n");
+}
+
+#[test]
+fn a_closed_pipe_stops_a_recursive_search_before_a_later_error() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = text_tree(&BTreeMap::from([
+        ("a.txt", "needle\n"),
+        ("zzz_locked/hay.txt", "needle\n"),
+    ]));
+    let locked = dir.path().join("zzz_locked");
+    let kept = fs::metadata(&locked).unwrap().permissions();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let owned: Vec<OsString> = [
+        OsString::from("-r"),
+        OsString::from("needle"),
+        OsString::from("."),
+    ]
+    .to_vec();
+    let mut input = Cursor::new(Vec::new());
+    let mut closed = Closed { writes: 0 };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut input, &mut closed, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    fs::set_permissions(&locked, kept).unwrap();
+    // The first match breaks the pipe, so the walk stops before the
+    // locked directory's error instead of failing with permission denied.
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn a_closed_pipe_stops_later_paths_before_their_complaints() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let owned: Vec<OsString> = [
+        OsString::from("needle"),
+        OsString::from("a.txt"),
+        OsString::from("nope.txt"),
+    ]
+    .to_vec();
+    let mut input = Cursor::new(Vec::new());
+    let mut closed = Closed { writes: 0 };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut input, &mut closed, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    // The match in `a.txt` breaks the pipe, so the missing path's
+    // complaint never prints and the exit stays what it had so far.
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+}
+
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
 fn gnu_grep() -> bool {
     use std::os::unix::process::CommandExt;
