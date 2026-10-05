@@ -1183,10 +1183,11 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     let setup = Setup::new();
     let ready = setup.workspace().join("ready");
     // The monitor prints once the test creates `ready`: past the receipt,
-    // the final reply and the ending notice.
+    // the final reply and the ending notice. Both lines go out in one
+    // write, so they are one batch.
     fs::write(
         setup.workspace().join("watch.sh"),
-        "until [ -e ready ]; do sleep 0.01; done\necho one\necho two\n",
+        "until [ -e ready ]; do sleep 0.01; done\nprintf 'one\\ntwo\\n'\n",
     )
     .unwrap();
     // How many turns the lines and the end take depends on when they
@@ -1231,30 +1232,91 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     );
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    let started = of_kind(&run, "job_started");
-    assert_eq!(started.len(), 1);
-    let job_id = started[0]["payload"]["job_id"].as_str().unwrap();
-    let receipt = of_kind(&run, "tool_call_completed")[0]["payload"]["content"][0]["text"]
-        .as_str()
-        .unwrap();
-    assert!(receipt.starts_with("Started a monitor.\n"), "{receipt}");
-    let kinds = run.kinds();
-    let first_line = kinds.iter().position(|kind| *kind == "job_line").unwrap();
-    let completed_at = kinds
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    let opening = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "job_started",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["turn_started", "step_started", "jobs_pending_notified"],
+        &reply,
+    ]
+    .concat();
+    // The batch wakes the model. The end arrives with it, at the turn's
+    // next step boundary, or after the turn, which starts another.
+    let step = &reply[..reply.len() - 1];
+    let schedules = [
+        [
+            &opening[..],
+            &["turn_started", "step_started", "job_line", "job_completed"],
+            &reply,
+            &["fiber_exited"],
+        ]
+        .concat(),
+        [
+            &opening[..],
+            &["turn_started", "step_started", "job_line"],
+            step,
+            &["step_started", "job_completed"],
+            &reply,
+            &["fiber_exited"],
+        ]
+        .concat(),
+        [
+            &opening[..],
+            &["turn_started", "step_started", "job_line"],
+            &reply,
+            &["turn_started", "step_started", "job_completed"],
+            &reply,
+            &["fiber_exited"],
+        ]
+        .concat(),
+    ];
+    // `job_delta` is ephemeral, and where it lands depends on when the
+    // job writes, so the comparison leaves it out.
+    let lines: Vec<&Value> = run
+        .lines
         .iter()
-        .position(|kind| *kind == "job_completed")
-        .unwrap();
-    assert!(first_line < completed_at, "{kinds:?}");
-    let lines = of_kind(&run, "job_line");
-    assert!(lines.iter().all(|line| line["payload"]["job_id"] == job_id
-        && line.get("action_id").is_none_or(Value::is_null)));
-    let printed: Vec<&str> = lines
-        .iter()
-        .map(|line| line["payload"]["lines"].as_str().unwrap())
+        .filter(|line| line["kind"] != "job_delta")
         .collect();
-    assert_eq!(printed.join("\n"), "one\ntwo");
-    let completed = &run.lines[completed_at];
+    let kinds: Vec<&str> = lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert!(schedules.contains(&kinds), "{kinds:?}");
+    let job_id = lines[13]["payload"]["job_id"].as_str().unwrap();
+    let receipt = lines[14]["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(receipt.starts_with("Started a monitor.\n"), "{receipt}");
+    let batch = &lines[kinds.iter().position(|kind| *kind == "job_line").unwrap()];
+    assert_eq!(batch["payload"]["job_id"], job_id);
+    assert_eq!(batch["payload"]["lines"], "one\ntwo");
+    assert!(batch["payload"].get("suppressed").is_none());
+    assert!(batch.get("action_id").is_none_or(Value::is_null));
+    let completed = &lines[kinds.iter().position(|kind| *kind == "job_completed").unwrap()];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
-    assert_eq!(kinds.last(), Some(&"fiber_exited"));
 }
