@@ -89,6 +89,11 @@ fn echo_tools() -> Value {
 }
 
 #[test]
+fn max_line_is_4_mib() {
+    assert_eq!(super::MAX_LINE, 4 * 1024 * 1024);
+}
+
+#[test]
 fn initialize_and_list_succeed() {
     let setup = Setup::tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
@@ -99,6 +104,13 @@ fn initialize_and_list_succeed() {
     assert_eq!(tool.description, "Echoes.");
     assert_eq!(tool.hints.read_only, Some(true));
     assert_eq!(tool.hints.destructive, None);
+    // The start sends `notifications/initialized`: without it the fixture's
+    // log would miss the notification.
+    let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+    assert!(
+        log.contains("notifications/initialized"),
+        "missing initialized notification: {log}"
+    );
     opened.server.stop();
 }
 
@@ -107,16 +119,28 @@ fn a_call_round_trips() {
     let setup = Setup::tools(&echo_tools());
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     let opened = setup.start(Duration::from_secs(5));
-    let answer = opened
-        .server
-        .call(
-            "echo",
-            &json!({"text": "hi"}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        )
-        .expect("the call answers");
-    assert_eq!(answer, json!({"content": [{"type": "text", "text": "hi"}]}));
+    // Threaded with a wall-clock limit: without `send` the call would sit
+    // parked forever, so a bare direct call would hang the test instead of
+    // failing it.
+    let (done, result) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let answer = opened.server.call(
+                "echo",
+                &json!({"text": "hi"}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            );
+            done.send(answer).expect("collected");
+        });
+        let answer = result
+            .recv_timeout(WITHIN)
+            .expect("the call answers within 5s");
+        assert_eq!(
+            answer.expect("the call answers"),
+            json!({"content": [{"type": "text", "text": "hi"}]})
+        );
+    });
     let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
     assert!(log.contains(r#""method":"tools/call""#));
     assert!(log.contains(r#""name":"echo""#));
@@ -221,10 +245,19 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
             "the caller waits on the call deadline within {WITHIN:?}",
         );
         cancel.cancel();
-        assert_eq!(
-            result.recv_timeout(WITHIN).expect("the call ends"),
-            Err(CallError::Cancelled),
-        );
+        // Promptness proves the bridge: without its wake the waiter would
+        // sit parked until the clock moves. On a miss, move the clock so
+        // the scoped join can still finish, then fail naming the wake.
+        match result.recv_timeout(Duration::from_millis(200)) {
+            Ok(answer) => assert_eq!(answer, Err(CallError::Cancelled)),
+            Err(_) => {
+                setup.fake.advance(timeout);
+                match result.recv_timeout(WITHIN) {
+                    Ok(_) | Err(_) => {}
+                }
+                panic!("cancel did not wake the waiter within 200ms without a clock move");
+            }
+        }
         // The waiter sends `notifications/cancelled` before it answers,
         // but the fixture appends it when it reads it: poll the log.
         let (_held, tick) = mpsc::channel::<()>();
@@ -240,6 +273,43 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
         }
         panic!("waited 5s for notifications/cancelled in requests.log");
     });
+}
+
+#[test]
+fn a_non_object_initialize_reply_fails_the_start() {
+    // A `result` that is not an object is not a handshake: the start
+    // fails naming `initialize`, rather than moving on to `tools/list`.
+    let dir = TempDir::new("fiber-mcp-bad-init");
+    let script = dir.path().join("bad-init.sh");
+    std::fs::write(
+        &script,
+        "#!/bin/bash\nIFS= read -r line\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\nprintf '%s\\n' \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":42}\"\n",
+    )
+    .expect("script");
+    #[cfg(unix)]
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+        .expect("executable");
+    let workspace = dir.path().to_path_buf();
+    let fake = FakeClock::new();
+    let clock: std::sync::Arc<dyn Clock> = fake;
+    let error = Server::start(
+        &script.display().to_string(),
+        &[],
+        &BTreeMap::new(),
+        &workspace,
+        &clock,
+        Duration::from_secs(5),
+        "0.0.0",
+    )
+    .err()
+    .expect("a non-object initialize fails");
+    match error {
+        StartError::StartFailed(message) => assert!(
+            message.contains("initialize"),
+            "unexpected message: {message}"
+        ),
+        StartError::Deadline => panic!("a fast non-object reply is not a deadline"),
+    }
 }
 
 #[test]
@@ -320,10 +390,18 @@ fn a_server_killed_mid_call_is_gone() {
     fakes::kill_pid(setup.pid(), "KILL").expect("the server dies");
     // The reader marks the server gone when EOF arrives, which races the
     // kill: retry short calls until one sees it, bounding the retries.
+    // A call made after `gone` is already set answers at once without
+    // parking, so the clock moves only when `await_parked` proves the
+    // caller is waiting on it (`docs/testing.md`, "Waits and timeouts").
     let mut answer = Err(CallError::Timeout);
     for _ in 0..50 {
         let (done, result) = mpsc::channel();
         let server = &opened.server;
+        let deadline = setup
+            .fake
+            .now()
+            .checked_add(Duration::from_secs(1))
+            .expect("deadline");
         thread::scope(|scope| {
             scope.spawn(|| {
                 let call = server.call(
@@ -334,7 +412,12 @@ fn a_server_killed_mid_call_is_gone() {
                 );
                 done.send(call).expect("collected");
             });
-            setup.fake.advance(Duration::from_secs(1));
+            if setup
+                .fake
+                .await_parked(deadline, Duration::from_millis(200))
+            {
+                setup.fake.advance(Duration::from_secs(1));
+            }
             answer = result.recv_timeout(WITHIN).expect("the call ends");
         });
         if answer == Err(CallError::Gone) {
@@ -350,17 +433,142 @@ fn garbage_on_stdout_is_ignored() {
     setup.result("echo", r#"{"content":[{"type":"text","text":"hi"}]}"#);
     write(&setup.dir, "noise", "not json at all\n[1, 2, 3]\n");
     let opened = setup.start(Duration::from_secs(5));
-    let answer = opened
-        .server
-        .call(
-            "echo",
-            &json!({"text": "hi"}),
-            Duration::from_secs(30),
-            &fakes::CancelToken::new(),
-        )
-        .expect("calls work past the garbage");
-    assert_eq!(answer, json!({"content": [{"type": "text", "text": "hi"}]}));
+    let (done, result) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let answer = opened.server.call(
+                "echo",
+                &json!({"text": "hi"}),
+                Duration::from_secs(30),
+                &fakes::CancelToken::new(),
+            );
+            done.send(answer).expect("collected");
+        });
+        let answer = result.recv_timeout(WITHIN).expect("calls answer within 5s");
+        assert_eq!(
+            answer.expect("calls work past the garbage"),
+            json!({"content": [{"type": "text", "text": "hi"}]})
+        );
+    });
     opened.server.stop();
+}
+
+#[test]
+fn closing_stdin_lets_the_server_exit_on_eof() {
+    // The reader holds only a `Weak` sender, so `shutdown` closes stdin
+    // and the fixture's `read` loop sees EOF and exits on its own: the
+    // next call sees `gone` without any kill. With a strong sender in the
+    // reader the channel would stay open and every call would time out.
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let mut opened = setup.start(Duration::from_secs(5));
+    opened.server.shutdown();
+    // As above, `gone` may already be set before a retry's call starts:
+    // the clock moves only after `await_parked` proves the wait.
+    let mut answer = Err(CallError::Timeout);
+    for _ in 0..50 {
+        let (done, result) = mpsc::channel();
+        let server = &opened.server;
+        let deadline = setup
+            .fake
+            .now()
+            .checked_add(Duration::from_secs(1))
+            .expect("deadline");
+        thread::scope(|scope| {
+            scope.spawn(|| {
+                let call = server.call(
+                    "hang",
+                    &json!({}),
+                    Duration::from_secs(1),
+                    &fakes::CancelToken::new(),
+                );
+                done.send(call).expect("collected");
+            });
+            if setup
+                .fake
+                .await_parked(deadline, Duration::from_millis(200))
+            {
+                setup.fake.advance(Duration::from_secs(1));
+            }
+            answer = result.recv_timeout(WITHIN).expect("the call ends");
+        });
+        if answer == Err(CallError::Gone) {
+            break;
+        }
+    }
+    assert_eq!(answer, Err(CallError::Gone));
+}
+
+#[test]
+fn dropping_the_server_reaps_the_child() {
+    // Without `Drop`'s kill and reap the child would stay (as a zombie:
+    // `kill -0` still finds it) after the handles are gone.
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let opened = setup.start(Duration::from_secs(5));
+    let pid = setup.pid();
+    assert!(
+        fakes::kill_pid(pid, "0").expect("probe"),
+        "the server runs before the drop",
+    );
+    drop(opened.server);
+    let (_held, probe) = mpsc::channel::<()>();
+    for _ in 0..100 {
+        if !fakes::kill_pid(pid, "0").expect("probe") {
+            return;
+        }
+        match probe.recv_timeout(POLL) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("waited 5s for pid {pid} to be reaped after the drop");
+}
+
+#[test]
+fn shared_slots_deliver_remove_and_mark_gone() {
+    use super::{Outcome, Shared};
+    let shared = Shared::default();
+    assert_eq!(shared.next_id(), 1);
+    assert_eq!(shared.next_id(), 2);
+    shared.insert(7);
+    shared.deliver(7, Outcome::Result(json!({})));
+    let cancel = fakes::CancelToken::new();
+    let seen = shared.view(7, &cancel);
+    assert_eq!(seen.response, Some(Outcome::Result(json!({}))));
+    assert!(!seen.gone);
+    // A late response to a removed id is discarded, never misrouted.
+    shared.remove(7);
+    shared.deliver(7, Outcome::Result(json!({"late": true})));
+    let missing = shared.view(7, &cancel);
+    assert_eq!(missing.response, None);
+    shared.gone();
+    assert!(shared.view(9, &cancel).gone);
+}
+
+#[test]
+fn server_requests_are_answered_ping_ok_and_unknown_32601() {
+    let setup = Setup::tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    write(&setup.dir, "ping-on-start", "");
+    let opened = setup.start(Duration::from_secs(5));
+    // The fixture's ping answers land in its own log as received lines:
+    // `ping` gets `result {}`, the unknown method gets `-32601`.
+    let (_held, tick) = mpsc::channel::<()>();
+    for _ in 0..100 {
+        let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
+        if log.contains("\"id\":\"probe\"")
+            && log.contains("\"result\":{}")
+            && log.contains("\"id\":\"bogus\"")
+            && log.contains("-32601")
+        {
+            opened.server.stop();
+            return;
+        }
+        match tick.recv_timeout(POLL) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("waited 5s for ping answers in requests.log");
 }
 
 #[test]

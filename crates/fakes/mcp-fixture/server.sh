@@ -25,6 +25,13 @@ printf '%s\n' "$$" > "$dir/pid.txt"
 if [ -f "$dir/noise" ]; then
     cat "$dir/noise"
 fi
+# A `ping-on-start` file makes the server send one `ping` with a string id
+# before reading: the client must answer `{"result":{}}` echoing that id,
+# and any other method gets `-32601`. The answers land in `requests.log`.
+if [ -f "$dir/ping-on-start" ]; then
+    printf '%s\n' '{"jsonrpc":"2.0","id":"probe","method":"ping"}'
+    printf '%s\n' '{"jsonrpc":"2.0","id":"bogus","method":"no-such-method"}'
+fi
 
 pick() {
     # $1: the line, $2: the key. Prints the first string value of the key.

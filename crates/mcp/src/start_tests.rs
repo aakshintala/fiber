@@ -274,3 +274,36 @@ fn no_specs_starts_nothing() {
     assert!(started.failed.is_empty());
     started.servers.stop();
 }
+
+#[test]
+fn stopping_all_servers_leaves_no_running_child() {
+    // Without `Servers::stop` the fixture would stay alive in the test
+    // process: poll its pid until the reap makes `kill -0` fail.
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let started = start(
+        vec![setup.spec("fx")],
+        &setup.workspace(),
+        &setup.clock(),
+        "0.0.0",
+    );
+    assert!(started.failed.is_empty());
+    let pid: u32 = std::fs::read_to_string(setup.dir.path().join("pid.txt"))
+        .expect("pid.txt")
+        .trim()
+        .parse()
+        .expect("a pid");
+    assert!(fakes::kill_pid(pid, "0").expect("probe"));
+    started.servers.stop();
+    let (_held, probe) = std::sync::mpsc::channel::<()>();
+    for _ in 0..100 {
+        if !fakes::kill_pid(pid, "0").expect("probe") {
+            return;
+        }
+        match probe.recv_timeout(Duration::from_millis(50)) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("waited 5s for pid {pid} to exit after the stop");
+}

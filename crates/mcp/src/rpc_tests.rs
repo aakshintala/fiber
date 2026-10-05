@@ -1,9 +1,9 @@
 //! The wire encoding and decoding, pinned byte for byte.
 
-use serde_json::{Value, json};
+use serde_json::json;
 
 use super::{
-    Incoming, Outcome, RequestId, decode_line, encode_error, encode_notification, encode_request,
+    Incoming, Outcome, decode_line, encode_error, encode_notification, encode_request,
     encode_result,
 };
 
@@ -69,9 +69,19 @@ fn a_server_ping_decodes_as_a_request() {
     assert_eq!(
         decode_line(r#"{"jsonrpc":"2.0","id":7,"method":"ping"}"#),
         Incoming::ServerRequest(super::ServerRequest {
-            id: RequestId::Number(7),
+            id: json!(7),
             method: "ping".to_owned(),
-            params: Value::Null,
+        }),
+    );
+}
+
+#[test]
+fn a_server_ping_with_a_string_id_decodes_as_a_request() {
+    assert_eq!(
+        decode_line(r#"{"jsonrpc":"2.0","id":"probe","method":"ping"}"#),
+        Incoming::ServerRequest(super::ServerRequest {
+            id: json!("probe"),
+            method: "ping".to_owned(),
         }),
     );
 }
@@ -99,7 +109,7 @@ fn garbage_is_ignored() {
 
 #[test]
 fn answers_echo_a_numeric_id() {
-    let id = RequestId::Number(9);
+    let id = json!(9);
     assert_eq!(
         encode_result(&id, &json!({})),
         r#"{"id":9,"jsonrpc":"2.0","result":{}}"#,
@@ -107,5 +117,18 @@ fn answers_echo_a_numeric_id() {
     assert_eq!(
         encode_error(&id, -32601, "Method not found"),
         r#"{"error":{"code":-32601,"message":"Method not found"},"id":9,"jsonrpc":"2.0"}"#,
+    );
+}
+
+#[test]
+fn answers_echo_a_string_id_unchanged() {
+    let id = json!("probe");
+    assert_eq!(
+        encode_result(&id, &json!({})),
+        r#"{"id":"probe","jsonrpc":"2.0","result":{}}"#,
+    );
+    assert_eq!(
+        encode_error(&id, -32601, "Method not found"),
+        r#"{"error":{"code":-32601,"message":"Method not found"},"id":"probe","jsonrpc":"2.0"}"#,
     );
 }

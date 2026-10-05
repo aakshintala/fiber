@@ -28,25 +28,14 @@ pub(crate) enum Outcome {
 }
 
 /// A request from the server: `ping`, answered with `{}`, or any other
-/// method, answered with JSON-RPC error `-32601`.
+/// method, answered with JSON-RPC error `-32601`. The id is held as the
+/// wire carried it (a number or a string) and echoed unchanged.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct ServerRequest {
-    /// The request's id.
-    pub id: RequestId,
+    /// The request's id, as the wire carried it.
+    pub id: Value,
     /// The method.
     pub method: String,
-    /// Its params.
-    pub params: Value,
-}
-
-/// A request id, as the wire carries it: a number or a string. Answers echo
-/// it unchanged.
-#[derive(Debug, Clone, PartialEq)]
-pub(crate) enum RequestId {
-    /// A numeric id.
-    Number(u64),
-    /// A string id.
-    Text(String),
 }
 
 /// What one stdout line carried.
@@ -79,29 +68,14 @@ pub(crate) fn encode_notification(method: &str, params: Option<&Value>) -> Strin
 }
 
 /// Encodes a successful answer to a server request, echoing its id.
-pub(crate) fn encode_result(id: &RequestId, result: &Value) -> String {
-    match id {
-        RequestId::Number(number) => {
-            serde_json::json!({"jsonrpc": "2.0", "id": number, "result": result}).to_string()
-        }
-        RequestId::Text(text) => {
-            serde_json::json!({"jsonrpc": "2.0", "id": text, "result": result}).to_string()
-        }
-    }
+pub(crate) fn encode_result(id: &Value, result: &Value) -> String {
+    serde_json::json!({"jsonrpc": "2.0", "id": id, "result": result}).to_string()
 }
 
 /// Encodes an error answer to a server request, echoing its id.
-pub(crate) fn encode_error(id: &RequestId, code: i64, message: &str) -> String {
-    match id {
-        RequestId::Number(number) => {
-            serde_json::json!({"jsonrpc": "2.0", "id": number, "error": {"code": code, "message": message}})
-                .to_string()
-        }
-        RequestId::Text(text) => {
-            serde_json::json!({"jsonrpc": "2.0", "id": text, "error": {"code": code, "message": message}})
-                .to_string()
-        }
-    }
+pub(crate) fn encode_error(id: &Value, code: i64, message: &str) -> String {
+    serde_json::json!({"jsonrpc": "2.0", "id": id, "error": {"code": code, "message": message}})
+        .to_string()
 }
 
 /// Reads one stdout line. A line that is not a JSON object is [`Incoming::Ignored`]:
@@ -116,13 +90,18 @@ pub(crate) fn decode_line(line: &str) -> Incoming {
         None => return Incoming::Ignored,
     };
     if let Some(method) = object.get("method").and_then(Value::as_str) {
-        match read_id(object.get("id")) {
-            Some(id) => Incoming::ServerRequest(ServerRequest {
-                id,
+        match object.get("id") {
+            Some(Value::Number(number)) if number.as_u64().is_some() => {
+                Incoming::ServerRequest(ServerRequest {
+                    id: object.get("id").cloned().unwrap_or(Value::Null),
+                    method: method.to_owned(),
+                })
+            }
+            Some(Value::String(_)) => Incoming::ServerRequest(ServerRequest {
+                id: object.get("id").cloned().unwrap_or(Value::Null),
                 method: method.to_owned(),
-                params: object.get("params").cloned().unwrap_or(Value::Null),
             }),
-            None => Incoming::Ignored,
+            Some(_) | None => Incoming::Ignored,
         }
     } else if let Some(id) = object.get("id").and_then(Value::as_u64) {
         if let Some(result) = object.get("result") {
@@ -146,14 +125,6 @@ pub(crate) fn decode_line(line: &str) -> Incoming {
         }
     } else {
         Incoming::Ignored
-    }
-}
-
-fn read_id(value: Option<&Value>) -> Option<RequestId> {
-    match value {
-        Some(Value::Number(number)) => number.as_u64().map(RequestId::Number),
-        Some(Value::String(text)) => Some(RequestId::Text(text.clone())),
-        Some(_) | None => None,
     }
 }
 

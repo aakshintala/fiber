@@ -108,6 +108,30 @@ fn timeouts_lists_and_overrides_reach_the_spec() {
 }
 
 #[test]
+fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash", "env": {}}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert_eq!(specs.notices.len(), 1);
+    assert_eq!(specs.notices[0].code, ErrorCode::RepositoryCodeSkipped);
+}
+
+#[test]
+fn a_repositorys_entry_wins_over_the_global_one() {
+    // Layers merge lowest first with the repository above the global
+    // file, so the repository's value is the effective one: still skipped.
+    let setup = Setup::new();
+    setup.global(&json!({"mcp": {"servers": {"fx": {"command": "/bin/bash", "env": {"BASH_ENV": "/tmp/safe"}}}}}));
+    setup.repository(&json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": "/tmp/evil"}}}}}));
+    let specs = setup.specs();
+    assert!(specs.specs.is_empty());
+    assert_eq!(specs.notices.len(), 1);
+    assert_eq!(specs.notices[0].code, ErrorCode::RepositoryCodeSkipped);
+}
+
+#[test]
 fn a_repositorys_server_is_skipped_with_a_notice() {
     let setup = Setup::new();
     setup.repository(&json!({"mcp": {"servers": {"repo": {"command": "/bin/bash"}}}}));

@@ -120,12 +120,10 @@ pub fn start(
         }
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
-    let mut pairs = Vec::with_capacity(tools.len());
-    let mut infos = Vec::with_capacity(tools.len());
-    for (registered_by, tool, info) in tools {
-        pairs.push((registered_by, tool));
-        infos.push(info);
-    }
+    let (pairs, infos): (Vec<_>, Vec<_>) = tools
+        .into_iter()
+        .map(|(registered_by, tool, info)| ((registered_by, tool), info))
+        .unzip();
     Started {
         tools: pairs,
         infos,

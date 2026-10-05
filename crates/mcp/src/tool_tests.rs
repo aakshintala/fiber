@@ -80,6 +80,10 @@ fn a_dead_link_is_unavailable() {
         output.error.as_ref().map(|error| &error.code),
         Some(&ErrorCode::McpServerUnavailable)
     );
+    assert_eq!(
+        output.error.as_ref().map(|error| error.message.as_str()),
+        Some("The MCP server `fx` did not start, or it has since exited.")
+    );
 }
 
 struct Live {
@@ -254,6 +258,10 @@ fn a_timed_out_call_is_timeout() {
         let output = result.recv_timeout(WITHIN).expect("the call ends");
         let error = output.error.expect("failed");
         assert_eq!(error.code, ErrorCode::Timeout);
+        assert_eq!(
+            error.message,
+            "The MCP server `fx` did not answer `hang` within 60000 ms."
+        );
     });
 }
 
@@ -281,5 +289,9 @@ fn a_cancelled_call_is_mcp_cancel_requested() {
         let output = result.recv_timeout(WITHIN).expect("the call ends");
         let error = output.error.expect("failed");
         assert_eq!(error.code, ErrorCode::McpCancelRequested);
+        assert_eq!(
+            error.message,
+            "The call to `hang` on the MCP server `fx` was cancelled; the server may still act on it."
+        );
     });
 }

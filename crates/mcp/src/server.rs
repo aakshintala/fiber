@@ -5,7 +5,7 @@
 //! no process group is ever signalled.
 
 use std::collections::BTreeMap;
-use std::io::{BufReader, Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::Path;
 use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak, mpsc};
@@ -87,8 +87,10 @@ pub(crate) struct Server {
 struct Inner {
     shared: Arc<Shared>,
     /// Dropping the sender closes stdin: the writer thread's receive fails
-    /// and it drops the pipe.
-    writer: Mutex<Option<mpsc::Sender<Vec<u8>>>>,
+    /// and it drops the pipe. The reader holds only a [`Weak`] to it, so
+    /// closing here really closes: a strong clone in the reader would keep
+    /// the channel open and EOF would never arrive during the grace.
+    writer: Mutex<Option<std::sync::Arc<mpsc::Sender<Vec<u8>>>>>,
     /// The child, until [`Server::stop`] or [`Drop`] takes, kills and reaps
     /// it exactly once.
     child: Mutex<Option<Child>>,
@@ -136,8 +138,9 @@ impl Server {
         let shared = Arc::new(Shared::default());
         let (writer, incoming) = mpsc::channel();
         thread::spawn(move || write_stdin(stdin, incoming));
+        let writer = Arc::new(writer);
         let reading = Arc::clone(&shared);
-        let answering = writer.clone();
+        let answering = Arc::downgrade(&writer);
         thread::spawn(move || {
             if let Some(stdout) = stdout {
                 read_stdout(stdout, &reading, &answering);
@@ -158,84 +161,78 @@ impl Server {
             .now()
             .checked_add(startup_timeout)
             .unwrap_or(clock.now());
-        let result = server.request(
-            "initialize",
-            &serde_json::json!({
-                "protocolVersion": PROTOCOL_VERSION,
-                "capabilities": {},
-                "clientInfo": {"name": "fiber", "version": client_version},
-            }),
-            deadline,
-            &NoCancel,
-        );
-        match result {
-            Ok(value) if value.is_object() => {}
-            Ok(_) | Err(CallError::JsonRpc { .. }) | Err(CallError::Gone) => {
-                let error = StartError::StartFailed(
-                    "The server's `initialize` reply was not a result.".to_owned(),
-                );
-                server.shutdown();
-                return Err(error);
+        // One shutdown on `Err`: every failure path below returns through
+        // here, so no arm repeats `shutdown`. `NoCancel` never fires, so
+        // `Cancelled` is just another failed start, not a deadline.
+        let handshake = |server: &Server| -> Result<Vec<ListedTool>, StartError> {
+            match server.request(
+                "initialize",
+                &serde_json::json!({
+                    "protocolVersion": PROTOCOL_VERSION,
+                    "capabilities": {},
+                    "clientInfo": {"name": "fiber", "version": client_version},
+                }),
+                deadline,
+                &NoCancel,
+            ) {
+                Ok(value) if value.is_object() => {}
+                Err(CallError::Timeout) => return Err(StartError::Deadline),
+                Ok(_) | Err(_) => {
+                    return Err(StartError::StartFailed(
+                        "The server's `initialize` reply was not a result.".to_owned(),
+                    ));
+                }
             }
-            Err(CallError::Timeout) => {
-                server.shutdown();
-                return Err(StartError::Deadline);
+            server.notify("notifications/initialized", &serde_json::json!({}));
+            let mut tools = Vec::new();
+            let mut cursor: Option<String> = None;
+            loop {
+                let params = match &cursor {
+                    Some(cursor) => serde_json::json!({"cursor": cursor}),
+                    None => serde_json::json!({}),
+                };
+                let page = match server.request("tools/list", &params, deadline, &NoCancel) {
+                    Ok(value) => value,
+                    Err(CallError::Timeout) => return Err(StartError::Deadline),
+                    Err(_) => {
+                        return Err(StartError::StartFailed(
+                            "The server's tool list was not a result.".to_owned(),
+                        ));
+                    }
+                };
+                let object = match page.as_object() {
+                    Some(object) => object,
+                    None => {
+                        return Err(StartError::StartFailed(
+                            "The server's tool list was not a result.".to_owned(),
+                        ));
+                    }
+                };
+                match object.get("tools").and_then(Value::as_array) {
+                    Some(listed) => tools.extend(listed.iter().map(ListedTool::read)),
+                    None => {
+                        return Err(StartError::StartFailed(
+                            "The server's tool list was not a result.".to_owned(),
+                        ));
+                    }
+                }
+                cursor = object
+                    .get("nextCursor")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned);
+                if cursor.is_none() {
+                    break;
+                }
             }
-            Err(CallError::Cancelled) => {
+            Ok(tools)
+        };
+        match handshake(&server) {
+            Ok(tools) => Ok(OpenServer { server, tools }),
+            Err(error) => {
                 server.shutdown();
-                return Err(StartError::StartFailed(
-                    "The server's `initialize` reply was not a result.".to_owned(),
-                ));
+                Err(error)
             }
         }
-        server.notify("notifications/initialized", &serde_json::json!({}));
-        let mut tools = Vec::new();
-        let mut cursor: Option<String> = None;
-        loop {
-            let params = match &cursor {
-                Some(cursor) => serde_json::json!({"cursor": cursor}),
-                None => serde_json::json!({}),
-            };
-            let page = match server.request("tools/list", &params, deadline, &NoCancel) {
-                Ok(value) => value,
-                Err(CallError::Timeout) => {
-                    server.shutdown();
-                    return Err(StartError::Deadline);
-                }
-                Err(_) => {
-                    server.shutdown();
-                    return Err(StartError::StartFailed(
-                        "The server's tool list was not a result.".to_owned(),
-                    ));
-                }
-            };
-            let object = match page.as_object() {
-                Some(object) => object,
-                None => {
-                    server.shutdown();
-                    return Err(StartError::StartFailed(
-                        "The server's tool list was not a result.".to_owned(),
-                    ));
-                }
-            };
-            match object.get("tools").and_then(Value::as_array) {
-                Some(listed) => tools.extend(listed.iter().map(ListedTool::read)),
-                None => {
-                    server.shutdown();
-                    return Err(StartError::StartFailed(
-                        "The server's tool list was not a result.".to_owned(),
-                    ));
-                }
-            }
-            cursor = object
-                .get("nextCursor")
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-            if cursor.is_none() {
-                break;
-            }
-        }
-        Ok(OpenServer { server, tools })
     }
 
     /// Calls `tool` with `arguments`, waiting until `timeout` passes on the
@@ -432,15 +429,10 @@ struct View {
 }
 
 #[derive(Default)]
-struct Slot {
-    response: Option<Outcome>,
-}
-
-#[derive(Default)]
 struct SharedState {
     seq: u64,
     next_id: u64,
-    pending: BTreeMap<u64, Slot>,
+    pending: BTreeMap<u64, Option<Outcome>>,
     gone: bool,
 }
 
@@ -463,18 +455,16 @@ impl Wake for Shared {
 }
 
 impl Shared {
-    /// The next request id. Ids start at 1 and are never reused.
+    /// The next request id. Ids start at 1 and are never reused: a `u64`
+    /// counter a session cannot exhaust.
     fn next_id(&self) -> u64 {
         let mut state = lock(&self.inner);
-        state.next_id = state.next_id.wrapping_add(1);
-        if state.next_id == 0 {
-            state.next_id = 1;
-        }
+        state.next_id += 1;
         state.next_id
     }
 
     fn insert(&self, id: u64) {
-        lock(&self.inner).pending.insert(id, Slot::default());
+        lock(&self.inner).pending.insert(id, None);
     }
 
     fn remove(&self, id: u64) {
@@ -484,10 +474,7 @@ impl Shared {
     fn view(&self, id: u64, cancel: &dyn Cancel) -> View {
         let state = lock(&self.inner);
         View {
-            response: state
-                .pending
-                .get(&id)
-                .and_then(|slot| slot.response.clone()),
+            response: state.pending.get(&id).and_then(|slot| slot.clone()),
             gone: state.gone,
             cancelled: cancel.is_cancelled(),
             seq: state.seq,
@@ -499,7 +486,7 @@ impl Shared {
     fn deliver(&self, id: u64, outcome: Outcome) {
         let mut state = lock(&self.inner);
         if let Some(slot) = state.pending.get_mut(&id) {
-            slot.response = Some(outcome);
+            *slot = Some(outcome);
             state.seq = state.seq.wrapping_add(1);
             drop(state);
             self.cv.notify_all();
@@ -539,7 +526,7 @@ fn write_stdin(stdin: Option<ChildStdin>, incoming: mpsc::Receiver<Vec<u8>>) {
 /// `ping` answered `{}`, any other server method answered `-32601`. A line
 /// that is not a JSON object is ignored. Past [`MAX_LINE`] bytes on one
 /// line, or EOF, the server counts as gone.
-fn read_stdout(stdout: ChildStdout, shared: &Shared, writer: &mpsc::Sender<Vec<u8>>) {
+fn read_stdout(stdout: ChildStdout, shared: &Shared, writer: &Weak<mpsc::Sender<Vec<u8>>>) {
     let mut reader = BufReader::new(stdout);
     loop {
         match read_line(&mut reader) {
@@ -552,8 +539,10 @@ fn read_stdout(stdout: ChildStdout, shared: &Shared, writer: &mpsc::Sender<Vec<u
                         "ping" => encode_result(&request.id, &serde_json::json!({})),
                         _ => encode_error(&request.id, -32601, "Method not found"),
                     };
-                    match writer.send(answer.into_bytes()) {
-                        Ok(()) | Err(_) => {}
+                    if let Some(writer) = writer.upgrade() {
+                        match writer.send(answer.into_bytes()) {
+                            Ok(()) | Err(_) => {}
+                        }
                     }
                 }
                 Incoming::Ignored => {}
@@ -575,29 +564,23 @@ enum ReadLine {
 /// Reads one newline-delimited line, capped at [`MAX_LINE`] bytes: past the
 /// cap the line is abandoned and the reader ends.
 fn read_line(reader: &mut BufReader<ChildStdout>) -> ReadLine {
-    let mut line = Vec::new();
-    loop {
-        let mut byte = [0_u8; 1];
-        match reader.read_exact(&mut byte) {
-            Ok(()) => {
-                if byte[0] == b'\n' {
-                    break;
-                }
-                if line.len() >= MAX_LINE {
-                    return ReadLine::TooLong;
-                }
-                line.push(byte[0]);
-            }
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => {
-                if line.is_empty() {
-                    return ReadLine::Eof;
-                }
-                break;
-            }
+    let mut buf = Vec::new();
+    match reader
+        .by_ref()
+        .take(MAX_LINE as u64 + 1)
+        .read_until(b'\n', &mut buf)
+    {
+        Ok(0) => ReadLine::Eof,
+        Ok(_) if buf.ends_with(b"\n") => {
+            buf.pop();
+            ReadLine::Line(String::from_utf8_lossy(&buf).into_owned())
         }
+        Ok(_) if buf.len() > MAX_LINE => ReadLine::TooLong,
+        Ok(_) if buf.is_empty() => ReadLine::Eof,
+        Ok(_) => ReadLine::Line(String::from_utf8_lossy(&buf).into_owned()),
+        Err(_) if buf.is_empty() => ReadLine::Eof,
+        Err(_) => ReadLine::Line(String::from_utf8_lossy(&buf).into_owned()),
     }
-    ReadLine::Line(String::from_utf8_lossy(&line).into_owned())
 }
 
 /// Blocks until woken or `until` passes on the clock, releasing every lock

@@ -777,6 +777,52 @@ fn a_persons_server_with_repository_args_is_not_started() {
 }
 
 #[test]
+fn a_persons_empty_env_does_not_mask_a_repositorys_entry() {
+    let setup = Setup::new();
+    let dir = setup.fixture(&json!([echo_tool()]), &[]);
+    let marker = setup.root.path().join("pwned");
+    let evil = setup.root.path().join("evil.sh");
+    fs::write(&evil, format!("touch \"{}\"", marker.display())).unwrap();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    setup.configure(&json!({"fx": {
+        "command": "/bin/bash",
+        "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+        "env": {},
+    }}));
+    fs::create_dir_all(setup.workspace().join(".fiber")).unwrap();
+    fs::write(
+        setup.workspace().join(".fiber/config.json"),
+        json!({"mcp": {"servers": {"fx": {"env": {"BASH_ENV": evil.display().to_string()}}}}})
+            .to_string(),
+    )
+    .unwrap();
+
+    let run = setup.run(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), hello_kinds(&["notice"]));
+    let notice = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "notice")
+        .unwrap();
+    assert_eq!(notice["payload"]["code"], "repository_code_skipped");
+    assert!(
+        notice["payload"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("`fx`")
+    );
+    let requests = server.requests();
+    assert_eq!(tool_names(&requests[0].body), TOOL_NAMES);
+    assert!(
+        !marker.exists(),
+        "the repository's BASH_ENV ran despite the skip"
+    );
+}
+
+#[test]
 fn a_server_that_fails_to_start_leaves_the_session_running() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();

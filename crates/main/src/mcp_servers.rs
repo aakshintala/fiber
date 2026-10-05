@@ -63,26 +63,6 @@ pub(crate) struct SessionServers {
     pub servers: mcp::Servers,
 }
 
-/// Starts every spec in `workspace` and appends their tools: pairs after
-/// the caller's, infos re-sorted by name. A server that fails is left out;
-/// its failure is returned for the log, written after `fiber_started`.
-pub(crate) fn start_all(
-    specs: Vec<mcp::ServerSpec>,
-    workspace: &Path,
-    clock: &Arc<dyn contract::clock::Clock>,
-    tools: &mut Vec<(String, Arc<dyn Tool>)>,
-    infos: &mut Vec<ToolInfo>,
-) -> SessionServers {
-    let started = mcp::start(specs, workspace, clock, env!("CARGO_PKG_VERSION"));
-    tools.extend(started.tools);
-    infos.extend(started.infos);
-    infos.sort_by(|left, right| left.name.cmp(&right.name));
-    SessionServers {
-        failed: started.failed,
-        servers: started.servers,
-    }
-}
-
 /// The tools one session registers: the built-ins, every MCP server's
 /// tools after them, and the driver shell, with the failures for the log
 /// and the running servers for the session's end.
@@ -104,7 +84,16 @@ pub(crate) fn session_tools(
     Failure,
 > {
     let (mut tools, mut infos, driver) = crate::builtin::builtin(workspace, clock)?;
-    let servers = start_all(specs, workspace, clock, &mut tools, &mut infos);
+    // Every spec starts with the session; a server that fails is left out
+    // and its failure is returned for the log, written after `fiber_started`.
+    let started = mcp::start(specs, workspace, clock, env!("CARGO_PKG_VERSION"));
+    tools.extend(started.tools);
+    infos.extend(started.infos);
+    infos.sort_by(|left, right| left.name.cmp(&right.name));
+    let servers = SessionServers {
+        failed: started.failed,
+        servers: started.servers,
+    };
     Ok((tools, infos, driver, servers))
 }
 
@@ -121,10 +110,13 @@ fn spec(config: &Config, name: &str) -> Keep {
         return Keep::Skipped(None);
     };
     // debt: approval covers the exact declaration (#599); until it lands, a
-    // repository's `command`, `args` or `env` skips the server.
+    // repository's `command` or `args` skips the server, as does any
+    // effective `env` entry from the repository: `Config::get` names an
+    // object's highest layer, so a person's higher-layer `env: {}` would
+    // otherwise mask a repository's `BASH_ENV`, which stays merged.
     if from_repository(config, name, "command")
         || from_repository(config, name, "args")
-        || from_repository(config, name, "env")
+        || env_from_repository(config, name)
     {
         return Keep::Skipped(Some(Notice {
             code: ErrorCode::RepositoryCodeSkipped,
@@ -166,6 +158,24 @@ fn server_field(config: &Config, server: &str, field: &str) -> Option<(Value, So
 fn from_repository(config: &Config, server: &str, field: &str) -> bool {
     server_field(config, server, field)
         .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
+}
+
+/// Whether any effective `env` entry comes from the repository's layer:
+/// `env` merges key by key, so each entry's provenance is checked
+/// individually. `command` (`Str`) and `args` (`StrList`, which replaces)
+/// are whole values, so [`from_repository`] on the field is exact for them.
+fn env_from_repository(config: &Config, server: &str) -> bool {
+    let Some((Value::Object(env), _)) = server_field(config, server, "env") else {
+        return false;
+    };
+    env.keys().any(|key| {
+        config
+            .get(
+                &format!("mcp.servers.{}.env.{}", quoted(server), quoted(key)),
+                None,
+            )
+            .is_some_and(|(_, source)| matches!(source, Source::Repository(_)))
+    })
 }
 
 /// A dotted-path segment, quoted when it holds a dot.
@@ -221,9 +231,8 @@ fn hints(config: &Config, server: &str) -> BTreeMap<String, mcp::Hints> {
         return overrides;
     };
     for (tool, entry) in tools {
-        if tool == "enabled" || tool == "disabled" {
-            continue;
-        }
+        // `enabled` and `disabled` are lists, so they never hold `hints`:
+        // no guard is needed to skip them here.
         if let Some(hints) = entry.get("hints").and_then(Value::as_object) {
             overrides.insert(tool.clone(), mcp::Hints::from_override(hints));
         }
