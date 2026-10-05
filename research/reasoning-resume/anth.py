@@ -1,8 +1,9 @@
+import os
 # Probe #95/#132: what Anthropic accepts when a turn's signed thinking is resent,
 # dropped, tampered with or sent to another model, and what each does to the cache.
 # Usage: python3 anth.py [explore|main|redacted]
 import json, urllib.request, uuid, copy, sys, time
-KEY=open('/tmp/openrouter-key').read().strip()
+KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
 URL='https://openrouter.ai/api/v1/messages'
 SON,HAI='anthropic/claude-sonnet-5','anthropic/claude-haiku-4.5'
 RAW=[]

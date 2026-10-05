@@ -1,5 +1,6 @@
+import os
 import json, urllib.request, uuid
-KEY=open('/tmp/openrouter-key').read().strip()
+KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
 def call(url, body):
     req=urllib.request.Request(url,data=json.dumps(body).encode(),headers={'Authorization':'Bearer '+KEY,'Content-Type':'application/json','anthropic-version':'2023-06-01'})
     try: return json.load(urllib.request.urlopen(req,timeout=180))

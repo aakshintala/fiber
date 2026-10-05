@@ -1,5 +1,6 @@
+import os
 import json, urllib.request, time, uuid, copy, sys
-KEY=open('/tmp/openrouter-key').read().strip()
+KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
 URL='https://openrouter.ai/api/v1/chat/completions'
 SON,HAI,GPT='anthropic/claude-sonnet-5','anthropic/claude-haiku-4.5','openai/gpt-6-luna'
 def call(body):

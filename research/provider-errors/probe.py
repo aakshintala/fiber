@@ -1,14 +1,14 @@
 """Trigger provider failures on purpose and record status, headers and body.
 
 Usage: python3 probe.py [case-name-substring ...]
-Keys come from /tmp/muse-key and /tmp/openrouter-key. Request headers are
+Keys come from ~/.config/probe-keys/muse-key and ~/.config/probe-keys/openrouter-key. Request headers are
 never recorded. Results land in raw/<case>.json.
 """
 import json, os, re, sys, time, urllib.request, urllib.error
 from concurrent.futures import ThreadPoolExecutor
 
-MUSE = open('/tmp/muse-key').read().strip()
-OR = open('/tmp/openrouter-key').read().strip()
+MUSE = open(os.path.expanduser('~/.config/probe-keys/muse-key')).read().strip()
+OR = open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
 RAW = os.path.join(os.path.dirname(__file__), 'raw')
 
 # endpoint name -> (url, key, model, protocol)

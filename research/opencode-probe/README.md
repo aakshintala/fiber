@@ -9,7 +9,7 @@ the provider tests.
 ## Method
 
 `probe.py` on October 1, 2026, from macOS, with one key read from
-`/tmp/opencode-key` and never written out (each raw file is checked for it).
+`~/.config/probe-keys/opencode-key` and never written out (each raw file is checked for it).
 Steps: `models`, `go_protocols`, `go_stream_tools`, `zen`, `usage`. Raw requests
 and responses are in `raw/<step>.json`; the two tool-exchange streams are
 `raw/go_stream_tools_0.sse` (the tool call) and `raw/go_stream_tools_1.sse` (the

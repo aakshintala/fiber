@@ -6,7 +6,7 @@ shows a cache write on the first send and a cache read on the second.
 """
 import json, os, sys, time, urllib.request, uuid
 
-KEY = open("/tmp/openrouter-key").read().strip()
+KEY = open(os.path.expanduser("~/.config/probe-keys/openrouter-key")).read().strip()
 MODEL = "anthropic/claude-haiku-4.5"
 OUT = sys.argv[1]
 # ~6000 tokens: over Haiku 4.5's minimum cacheable prompt. A nonce per case
