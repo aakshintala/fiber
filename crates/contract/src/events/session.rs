@@ -281,6 +281,8 @@ pub enum SessionState {
         /// The pending approval or question.
         waiting: Waiting,
     },
+    /// No turn is running, and jobs are.
+    Jobs,
     /// Nothing is in flight.
     Idle,
 }
