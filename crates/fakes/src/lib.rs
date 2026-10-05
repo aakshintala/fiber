@@ -10,6 +10,7 @@ mod client;
 pub mod clock;
 mod connect_proxy;
 pub mod emit;
+pub mod jobs;
 mod oauth_server;
 mod process_group;
 mod provider_server;

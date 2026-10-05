@@ -1,7 +1,8 @@
 //! Spawning a command and waiting until its process group is empty, or stopping
 //! it (`docs/tools.md`, "Running a command", "Stopping a command").
 
-use std::io::Read;
+use std::fs::File;
+use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
@@ -13,6 +14,8 @@ use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{Event, Progress};
 use contract::tool::Cancel;
+
+use super::background::{MoveKind, Step, running_step, wait_deadline};
 use rustix::process::{Pid, Signal};
 
 /// How often a group is re-checked while the shell has exited and members
@@ -26,8 +29,12 @@ const GRACE: Duration = Duration::from_millis(800);
 /// (`docs/tools.md`, "Stopping a command").
 const DRAIN: Duration = Duration::from_secs(2);
 
+/// A foreground command moves after this long
+/// (`docs/tools.md`, "Moving to the background").
+const MOVE_AFTER: Duration = Duration::from_secs(30);
+
 /// Why Fiber stopped the command.
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum StopKind {
     /// `timeout_ms` passed.
     Timeout,
@@ -51,11 +58,49 @@ pub(crate) struct Finished {
     pub sent_signal: bool,
 }
 
+/// Whether the drive loop may hand the command to a job.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum MovePolicy {
+    /// Never moves. A shell without jobs, a job's own drive, and a command
+    /// whose open failed.
+    Stay,
+    /// Moves when the shell exits with members left, or after 30 seconds.
+    Foreground,
+    /// Moves on the first pass. A shell exit with members still comes first.
+    Background,
+}
+
+/// Why the command moved.
+#[derive(Clone, PartialEq, Eq)]
+pub(crate) enum MoveReason {
+    /// It had run for 30 seconds.
+    AfterThirtySeconds,
+    /// It was started with `run_in_background`.
+    StartedInBackground,
+    /// The shell exited and left processes in the group.
+    ShellExited {
+        /// The shell's exit code.
+        code: i32,
+    },
+}
+
+/// A finished command, or one handed to a job.
+pub(crate) enum Ran {
+    /// The command ended in this call.
+    Finished(Finished),
+    /// The command is still running and should become a job.
+    Moved(Moved),
+}
+
 /// Runs `command` as `program -c` in `workdir` until the group is empty, the
 /// timeout, or a cancel. `program` is `/bin/bash` or `sh`. Output streams
 /// as `tool_call_delta` through `emit` while the call runs, text only
 /// (`docs/tools.md`, "Shell", "Result and output"): the drive loop below
 /// holds the emitter, so nothing emits after this returns.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "spawn, the deadline, and the move policy are one call"
+)]
 pub(crate) fn execute(
     program: &Path,
     command: &str,
@@ -64,7 +109,8 @@ pub(crate) fn execute(
     clock: &dyn Clock,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
-) -> Result<Finished, std::io::Error> {
+    policy: MovePolicy,
+) -> Result<Ran, std::io::Error> {
     let (read, write) = std::io::pipe()?;
     let write_err = write.try_clone()?;
     let mut cmd = Command::new(program);
@@ -86,7 +132,39 @@ pub(crate) fn execute(
     thread::spawn(move || read_output(read, &reader));
     let waiter = Arc::clone(&shared);
     thread::spawn(move || wait_child(child, &waiter));
-    Ok(drive(pgid, timeout, clock, cancel, &shared, emit))
+
+    // The clock watches the command. The call's cancel watches a bridge, so
+    // dropping the bridge after a move stops that cancel reaching the job.
+    let bridge = CancelBridge::arm(&shared);
+    clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
+    cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
+
+    let start = clock.now();
+    let mut progress = Run {
+        phase: Phase::Running,
+        stop: None,
+        sent_signal: false,
+        seen_empty: false,
+        streamed: 0,
+        timeout_at: start.checked_add(timeout),
+        move_at: match policy {
+            MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
+            MovePolicy::Stay | MovePolicy::Background => None,
+        },
+        pgid,
+        shared,
+    };
+    match pump(&mut progress, policy, clock, cancel, emit) {
+        LoopEnd::Finished(finished) => {
+            drop(bridge);
+            Ok(Ran::Finished(finished))
+        }
+        LoopEnd::Move(reason) => Ok(Ran::Moved(Moved {
+            reason,
+            bridge: Some(bridge),
+            progress,
+        })),
+    }
 }
 
 fn scrub_env(cmd: &mut Command) {
@@ -122,8 +200,10 @@ struct Inner {
     reaped: bool,
     status: Option<ExitStatus>,
     eof: bool,
-    // debt: the whole output is held in memory until the call returns, #299's job output file
+    /// Foreground bytes. Cleared when a move hands the command to its file.
     output: Vec<u8>,
+    /// The job's output file, after a move.
+    file: Option<File>,
     discard: bool,
     seq: u64,
 }
@@ -154,9 +234,16 @@ fn read_output(mut read: impl Read, shared: &Shared) {
                 return;
             }
             Ok(n) => {
+                let bytes = buf.get(..n).unwrap_or(&[]);
                 let mut inner = lock(&shared.inner);
+                // Past the drain bound the bytes are dropped and the read
+                // continues, so the program never blocks on the pipe.
                 if !inner.discard {
-                    inner.output.extend_from_slice(buf.get(..n).unwrap_or(&[]));
+                    if let Some(file) = inner.file.as_mut() {
+                        write_or_drop(file, bytes);
+                    } else {
+                        inner.output.extend_from_slice(bytes);
+                    }
                 }
                 // The drive loop streams every chunk: it wakes on this.
                 bump(&mut inner);
@@ -264,105 +351,250 @@ enum Phase {
     Draining { until: Instant },
 }
 
-fn drive(
+struct Run {
+    phase: Phase,
+    stop: Option<StopKind>,
+    sent_signal: bool,
+    seen_empty: bool,
+    streamed: usize,
+    timeout_at: Option<Instant>,
+    move_at: Option<Instant>,
     pgid: u32,
-    timeout: Duration,
+    shared: Arc<Shared>,
+}
+
+/// The call's cancel reaches the command through this bridge. Silencing it
+/// leaves a moved job running when the turn is cancelled.
+struct CancelBridge {
+    target: Mutex<Option<Weak<Shared>>>,
+}
+
+impl CancelBridge {
+    fn arm(shared: &Arc<Shared>) -> Arc<Self> {
+        Arc::new(Self {
+            target: Mutex::new(Some(Arc::downgrade(shared))),
+        })
+    }
+
+    fn silence(&self) {
+        *lock_bridge(&self.target) = None;
+    }
+}
+
+impl Wake for CancelBridge {
+    fn wake(&self) {
+        let shared = lock_bridge(&self.target).as_ref().and_then(Weak::upgrade);
+        if let Some(shared) = shared {
+            shared.wake();
+        }
+    }
+}
+
+/// A command the drive loop has decided to move. The call thread opens the
+/// job; the job thread continues from [`Moved::drive_job`].
+pub(crate) struct Moved {
+    pub reason: MoveReason,
+    bridge: Option<Arc<CancelBridge>>,
+    progress: Run,
+}
+
+impl Moved {
+    pub(crate) fn pgid(&self) -> u32 {
+        self.progress.pgid
+    }
+
+    /// Copies bytes already read into `file`, then points the reader at it.
+    /// Both happen under the reader lock, so a chunk is not kept twice or lost.
+    pub(crate) fn attach_output(&self, mut file: File) {
+        let mut inner = lock(&self.progress.shared.inner);
+        let bytes = std::mem::take(&mut inner.output);
+        write_or_drop(&mut file, &bytes);
+        inner.file = Some(file);
+    }
+
+    /// Wakes this command when `cancel` fires. The job's stop uses it.
+    pub(crate) fn arm(&self, cancel: &dyn Cancel) {
+        let wake: Arc<dyn Wake> = self.progress.shared.clone();
+        cancel.subscribe(Arc::downgrade(&wake));
+    }
+
+    /// The call's cancel no longer reaches this command.
+    pub(crate) fn detach_call_cancel(&mut self) {
+        if let Some(bridge) = self.bridge.take() {
+            bridge.silence();
+        }
+    }
+
+    /// Runs the command to the end with no further move, on the job's cancel.
+    pub(crate) fn drive_job(mut self, clock: &dyn Clock, cancel: &dyn Cancel) -> Finished {
+        self.detach_call_cancel();
+        self.arm(cancel);
+        // debt: no job_delta while a job runs, part 4 of #299 adds it
+        self.run(MovePolicy::Stay, clock, cancel, &Silent)
+    }
+
+    /// Keeps running in the foreground. Used when the job could not be opened.
+    pub(crate) fn resume(
+        self,
+        clock: &dyn Clock,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+    ) -> Finished {
+        self.run(MovePolicy::Stay, clock, cancel, emit)
+    }
+
+    fn run(
+        self,
+        policy: MovePolicy,
+        clock: &dyn Clock,
+        cancel: &dyn Cancel,
+        emit: &dyn Emit,
+    ) -> Finished {
+        let Moved {
+            bridge,
+            mut progress,
+            ..
+        } = self;
+        let _bridge = bridge;
+        match pump(&mut progress, policy, clock, cancel, emit) {
+            LoopEnd::Finished(finished) => finished,
+            // `Stay` does not move. Finishing here keeps a bug from spinning.
+            LoopEnd::Move(_) => {
+                let view = view(&progress.shared, cancel);
+                finish(
+                    &progress.shared,
+                    progress.stop,
+                    progress.sent_signal,
+                    progress.seen_empty,
+                    view.eof,
+                    emit,
+                    progress.streamed,
+                )
+            }
+        }
+    }
+}
+
+struct Silent;
+
+impl Emit for Silent {
+    fn emit(&self, _event: &Event) {}
+}
+
+enum LoopEnd {
+    Finished(Finished),
+    Move(MoveReason),
+}
+
+fn exit_code_of(status: Option<ExitStatus>) -> i32 {
+    status.and_then(|status| status.code()).unwrap_or(0)
+}
+
+fn pump(
+    progress: &mut Run,
+    policy: MovePolicy,
     clock: &dyn Clock,
     cancel: &dyn Cancel,
-    shared: &Arc<Shared>,
     emit: &dyn Emit,
-) -> Finished {
-    let start = clock.now();
-    let timeout_at = start.checked_add(timeout);
-    let wake: Arc<dyn Wake> = shared.clone();
-    let weak = Arc::downgrade(&wake);
-    clock.subscribe(Weak::clone(&weak));
-    cancel.subscribe(weak);
-
-    let mut phase = Phase::Running;
-    let mut stop = None;
-    let mut sent_signal = false;
-    let mut seen_empty = false;
-    let mut streamed = 0;
-
+) -> LoopEnd {
     loop {
-        let view = view(shared, cancel);
+        let view = view(&progress.shared, cancel);
         // Empty only counts after the shell is reaped, so its zombie is gone.
-        if view.reaped && !group_alive(pgid) {
-            seen_empty = true;
+        if view.reaped && !group_alive(progress.pgid) {
+            progress.seen_empty = true;
         }
         // The drive loop holds the emitter and streams every pass, woken by
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
-        streamed = stream_output(shared, emit, streamed);
-        match phase {
-            Phase::Running => {
-                if timeout_due(clock, timeout_at) {
-                    stop = Some(StopKind::Timeout);
-                    sent_signal = send_term(pgid, sent_signal, seen_empty);
-                    phase = Phase::Stopping {
+        progress.streamed = stream_output(&progress.shared, emit, progress.streamed);
+        match progress.phase {
+            Phase::Running => match running_step(
+                policy,
+                timeout_due(clock, progress.timeout_at),
+                view.cancelled,
+                progress.seen_empty,
+                view.reaped,
+                timeout_due(clock, progress.move_at),
+            ) {
+                Step::Stop(kind) => {
+                    progress.stop = Some(kind);
+                    progress.sent_signal =
+                        send_term(progress.pgid, progress.sent_signal, progress.seen_empty);
+                    progress.phase = Phase::Stopping {
                         kill_at: after(clock, GRACE),
                     };
-                } else if view.cancelled {
-                    stop = Some(StopKind::Cancel);
-                    sent_signal = send_term(pgid, sent_signal, seen_empty);
-                    phase = Phase::Stopping {
-                        kill_at: after(clock, GRACE),
+                }
+                Step::Drain => {
+                    progress.phase = Phase::Draining {
+                        until: after(clock, DRAIN),
                     };
-                } else if seen_empty {
-                    phase = Phase::Draining {
+                }
+                Step::Move(MoveKind::ShellExited) => {
+                    let code = exit_code_of(lock(&progress.shared.inner).status);
+                    return LoopEnd::Move(MoveReason::ShellExited { code });
+                }
+                Step::Move(MoveKind::Background) => {
+                    return LoopEnd::Move(MoveReason::StartedInBackground);
+                }
+                Step::Move(MoveKind::AfterThirtySeconds) => {
+                    return LoopEnd::Move(MoveReason::AfterThirtySeconds);
+                }
+                Step::Park => park(
+                    clock,
+                    &progress.shared,
+                    cancel,
+                    wait_deadline(policy, progress.timeout_at, progress.move_at),
+                    view.reaped,
+                    true,
+                    view.seq,
+                ),
+            },
+            Phase::Stopping { kill_at } => {
+                if progress.seen_empty {
+                    progress.phase = Phase::Draining {
+                        until: after(clock, DRAIN),
+                    };
+                } else if clock.now() >= kill_at {
+                    // One SIGKILL. The next state is the drain, so it is not sent again.
+                    signal_group(progress.pgid, Signal::KILL);
+                    progress.sent_signal = true;
+                    progress.phase = Phase::Draining {
                         until: after(clock, DRAIN),
                     };
                 } else {
                     park(
                         clock,
-                        shared,
+                        &progress.shared,
                         cancel,
-                        timeout_at,
-                        view.reaped,
+                        Some(kill_at),
                         true,
+                        false,
                         view.seq,
                     );
-                }
-            }
-            Phase::Stopping { kill_at } => {
-                if seen_empty {
-                    phase = Phase::Draining {
-                        until: after(clock, DRAIN),
-                    };
-                } else if clock.now() >= kill_at {
-                    // One SIGKILL. The next state is the drain, so it is not sent again.
-                    signal_group(pgid, Signal::KILL);
-                    sent_signal = true;
-                    phase = Phase::Draining {
-                        until: after(clock, DRAIN),
-                    };
-                } else {
-                    park(clock, shared, cancel, Some(kill_at), true, false, view.seq);
                 }
             }
             Phase::Draining { until } => {
                 // End-of-file alone is not the end: the group can still be
                 // alive, and a stop is indeterminate only once the bound
                 // passes with the pipe open or the group occupied.
-                let settled = view.eof && seen_empty;
+                let settled = view.eof && progress.seen_empty;
                 if settled || clock.now() >= until {
-                    return finish(
-                        shared,
-                        stop,
-                        sent_signal,
-                        seen_empty,
+                    return LoopEnd::Finished(finish(
+                        &progress.shared,
+                        progress.stop,
+                        progress.sent_signal,
+                        progress.seen_empty,
                         view.eof,
                         emit,
-                        streamed,
-                    );
+                        progress.streamed,
+                    ));
                 }
                 park(
                     clock,
-                    shared,
+                    &progress.shared,
                     cancel,
                     Some(until),
-                    poll_while_occupied(seen_empty),
+                    poll_while_occupied(progress.seen_empty),
                     false,
                     view.seq,
                 );
@@ -395,7 +627,9 @@ fn finish(
     let (output, status) = {
         let mut inner = lock(&shared.inner);
         if !eof {
-            // debt: the reader stays blocked until the last holder closes the pipe, #299 hands a held pipe to a job's output file
+            // The reader blocks in its read until the last holder closes
+            // the pipe. Discarding drops those bytes so they are not part
+            // of the result.
             inner.discard = true;
         }
         (std::mem::take(&mut inner.output), inner.status)
@@ -527,7 +761,18 @@ fn pid(raw: u32) -> Option<Pid> {
     Pid::from_raw(i32::try_from(raw).ok()?)
 }
 
+fn write_or_drop(file: &mut File, bytes: &[u8]) {
+    // debt: output lost to a failed write is not reported to the model, until docs/errors.md has a code for it
+    if let Err(err) = file.write_all(bytes) {
+        let _lost = err;
+    }
+}
+
 fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
+    inner.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+fn lock_bridge(inner: &Mutex<Option<Weak<Shared>>>) -> MutexGuard<'_, Option<Weak<Shared>>> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

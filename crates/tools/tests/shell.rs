@@ -17,10 +17,13 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
+use contract::events::{JobStarted, Outcome};
+use contract::jobs::JobRecord;
 use contract::shapes::{ContentPart, Process};
 use contract::tool::Tool;
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
+use fakes::jobs::FakeJobs;
 use fakes::{CancelToken, Recorder, Watchdog, kill_group, kill_pid};
 use serde_json::{Map, Value, json};
 use tools::Shell;
@@ -742,4 +745,410 @@ fn a_timed_out_command_streams_what_it_printed_before_the_deadline() {
     assert_eq!(code(&output), Some(ErrorCode::Timeout));
     assert!(text(&output).starts_with("partial\n"), "{}", text(&output));
     assert_eq!(running.recorder.text(), "partial\n");
+}
+
+struct JobRun {
+    clock: Arc<FakeClock>,
+    start: Instant,
+    output: mpsc::Receiver<contract::tool::Output>,
+    jobs: Arc<FakeJobs>,
+    recorder: Arc<Recorder>,
+}
+
+fn start_jobs(
+    dir: PathBuf,
+    command: String,
+    timeout_ms: Option<u64>,
+    background: bool,
+    jobs: Arc<FakeJobs>,
+    cancel: CancelToken,
+) -> JobRun {
+    let clock = FakeClock::new();
+    let start = clock.origin();
+    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+        .with_jobs(jobs.clone());
+    let mut arguments = args(&command);
+    if let Some(timeout_ms) = timeout_ms {
+        arguments.insert("timeout_ms".into(), json!(timeout_ms));
+    }
+    if background {
+        arguments.insert("run_in_background".into(), json!(true));
+    }
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let cancel_for_run = cancel.clone();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(shell.run(&arguments, &cancel_for_run, tapped.as_ref()))
+            .unwrap();
+    });
+    JobRun {
+        clock,
+        start,
+        output: rx,
+        jobs,
+        recorder,
+    }
+}
+
+fn blocking(ready: &Path, before: &str, after: &str) -> String {
+    let block = block_of(ready);
+    format!(
+        "echo {before}\necho $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\necho {after}\n",
+        ready = quote(ready),
+        block = quote(&block),
+    )
+}
+
+fn block_of(ready: &Path) -> PathBuf {
+    ready.with_file_name(format!(
+        "{}.block",
+        ready.file_name().unwrap().to_string_lossy()
+    ))
+}
+
+fn release_block(ready: &Path) {
+    let mut release = std::fs::OpenOptions::new()
+        .write(true)
+        .open(block_of(ready))
+        .unwrap();
+    writeln!(release, "go").unwrap();
+}
+
+fn started(output: &contract::tool::Output) -> JobStarted {
+    match output.jobs.as_slice() {
+        [JobRecord::Started(started)] => started.clone(),
+        other => panic!("expected one started job, got {other:?}"),
+    }
+}
+
+fn job_output(dir: &Path, job: &JobStarted) -> String {
+    std::fs::read_to_string(dir.join(&job.output_path)).unwrap()
+}
+
+#[test]
+fn run_in_background_returns_a_receipt_while_the_command_runs() {
+    let dir = fakes::TempDir::new("fiber-shell-bg");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "a", "b"),
+        None,
+        true,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.process.is_none());
+    assert!(
+        text(&output).starts_with("Started in the background.\n"),
+        "{}",
+        text(&output)
+    );
+    assert!(text(&output).contains(&job.job_id.0), "{}", text(&output));
+    assert!(
+        text(&output).contains(&dir.path().join(&job.output_path).display().to_string()),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(job.description, "echo a");
+    assert_eq!(job.tool.as_deref(), Some("shell"));
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    assert!(group_alive(pgid));
+    let streamed = running.recorder.text();
+    assert!(!streamed.contains('b'), "{streamed}");
+    release_block(ready.path());
+    let ended = jobs.ended(DEADLINE).expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(
+        ended.process.as_ref().and_then(|process| process.exit_code),
+        Some(0)
+    );
+    assert!(ended.output_tail.is_none());
+    assert_eq!(job_output(dir.path(), &job), "a\nb\n");
+    assert_eq!(running.recorder.text(), streamed);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_command_moves_after_thirty_seconds_without_being_restarted() {
+    let dir = fakes::TempDir::new("fiber-shell-thirty");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "BEFORE", "AFTER"),
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let move_at = running.start + Duration::from_secs(30);
+    assert!(
+        running.clock.await_parked(move_at, DEADLINE),
+        "the run did not park at 30 seconds"
+    );
+    assert!(
+        matches!(running.output.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the command moved before 30 seconds"
+    );
+    assert!(group_alive(pgid));
+    running.clock.advance(Duration::from_secs(30));
+    let output = running
+        .output
+        .recv_timeout(DEADLINE)
+        .expect("the 30-second receipt");
+    let job = started(&output);
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.process.is_none());
+    assert!(
+        text(&output)
+            .starts_with("Still running after 30 seconds, so it moved to the background.\n"),
+        "{}",
+        text(&output)
+    );
+    assert!(!text(&output).contains("BEFORE"), "{}", text(&output));
+    assert!(!text(&output).contains("AFTER"), "{}", text(&output));
+    assert_eq!(job.description, "echo BEFORE");
+    assert!(group_alive(pgid), "the move stopped the command");
+    let timeout_at = running.start + Duration::from_millis(600_000);
+    assert!(
+        running.clock.await_parked(timeout_at, DEADLINE),
+        "the job did not keep the timeout from the command's start"
+    );
+    let streamed = running.recorder.text();
+    assert!(!streamed.contains("AFTER"), "{streamed}");
+    release_block(ready.path());
+    let ended = jobs.ended(DEADLINE).expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(job_output(dir.path(), &job), "BEFORE\nAFTER\n");
+    assert_eq!(running.recorder.text(), streamed);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
+    let dir = fakes::TempDir::new("fiber-shell-thirty-timeout");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "BEFORE", "AFTER"),
+        Some(30_000),
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_secs(30), DEADLINE),
+        "the run did not park at the timeout"
+    );
+    assert!(group_alive(pgid), "stopped before the deadline");
+    running.clock.advance(Duration::from_secs(30));
+    let output = running.output.recv_timeout(DEADLINE).expect("the timeout");
+    assert_eq!(code(&output), Some(ErrorCode::Timeout));
+    assert!(output.process.as_ref().unwrap().timed_out);
+    assert!(text(&output).contains("Timed out after 30000 ms and stopped."));
+    assert!(output.jobs.is_empty());
+    assert!(jobs.started().is_empty());
+    assert!(!group_alive(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_shell_that_exits_with_members_moves_and_names_them() {
+    let dir = fakes::TempDir::new("fiber-shell-orphans");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let command = format!(
+        "echo $$ > {ready}; sleep 1000 & exit 3",
+        ready = quote(ready.path()),
+    );
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        command,
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let output = running
+        .output
+        .recv_timeout(DEADLINE)
+        .expect("the shell-exited receipt");
+    let body = text(&output);
+    assert!(output.error.is_none(), "{body}");
+    assert!(output.process.is_none());
+    assert!(body.contains("exited with code 3"), "{body}");
+    assert!(body.contains("sleep ("), "{body}");
+    assert!(body.contains("moved to the background"), "{body}");
+    assert!(group_alive(pgid));
+    assert!(
+        jobs.ended(Duration::from_secs(1)).is_none(),
+        "the job ended while sleep was still in the group"
+    );
+    assert!(kill_group(pgid, "KILL").unwrap());
+    let ended = jobs
+        .ended(DEADLINE)
+        .expect("the job to finish once the group was empty");
+    assert_eq!(ended.status, Outcome::Failed);
+    assert_eq!(
+        ended.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::NonzeroExit)
+    );
+    assert_eq!(
+        ended.process.as_ref().and_then(|process| process.exit_code),
+        Some(3)
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_moved_job_times_out_from_the_commands_start() {
+    let dir = fakes::TempDir::new("fiber-shell-job-timeout");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "partial", "later"),
+        Some(5_000),
+        true,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let _output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let due = running.start + Duration::from_secs(5);
+    assert!(
+        running.clock.await_parked(due, DEADLINE),
+        "the job did not park at its timeout"
+    );
+    assert!(group_alive(pgid), "stopped before the deadline");
+    running.clock.advance(Duration::from_secs(5));
+    let ended = jobs.ended(DEADLINE).expect("the job to time out");
+    assert_eq!(ended.status, Outcome::Failed);
+    assert_eq!(
+        ended.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::Timeout)
+    );
+    assert!(ended.process.as_ref().unwrap().timed_out);
+    let tail = ended.output_tail.unwrap();
+    assert!(tail.contains("partial"), "{tail}");
+    assert!(!group_alive(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
+    let dir = fakes::TempDir::new("fiber-shell-job-stop");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let cancel = CancelToken::new();
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "a", "b"),
+        None,
+        true,
+        Arc::clone(&jobs),
+        cancel.clone(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    let timeout_at = running.start + Duration::from_millis(600_000);
+    assert!(
+        running.clock.await_parked(timeout_at, DEADLINE),
+        "the job did not park"
+    );
+    cancel.cancel();
+    assert!(
+        jobs.ended(Duration::from_secs(1)).is_none(),
+        "the turn cancel stopped the job"
+    );
+    assert!(group_alive(pgid));
+    assert!(
+        running.clock.parked().contains(&Some(timeout_at)),
+        "the turn cancel left the timeout park: {:?}",
+        running.clock.parked()
+    );
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to finish the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    assert!(ended.error.is_none());
+    assert!(ended.output_tail.is_none());
+    assert!(!group_alive(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_failed_open_leaves_the_command_running_in_the_foreground() {
+    let dir = fakes::TempDir::new("fiber-shell-open-fails");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::failing();
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "BEFORE", "AFTER"),
+        None,
+        true,
+        jobs,
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(600_000), DEADLINE),
+        "the command did not stay in the foreground"
+    );
+    assert!(
+        matches!(running.output.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "open failing returned before the command ended"
+    );
+    assert!(group_alive(pgid));
+    assert!(running.jobs.started().is_empty());
+    release_block(ready.path());
+    let output = running
+        .output
+        .recv_timeout(DEADLINE)
+        .expect("the foreground result");
+    let body = text(&output);
+    assert!(body.contains("BEFORE\n"), "{body}");
+    assert!(body.contains("AFTER\n"), "{body}");
+    assert!(body.contains("Exit code 0."), "{body}");
+    assert!(
+        body.trim_end()
+            .ends_with("It could not move to the background: the job's output file jobs/unavailable.log could not be created: background jobs are unavailable."),
+        "{body}"
+    );
+    assert!(output.error.is_none(), "{body}");
+    assert_eq!(
+        output
+            .process
+            .as_ref()
+            .and_then(|process| process.exit_code),
+        Some(0)
+    );
+    watchdog.stand_down(DEADLINE);
 }

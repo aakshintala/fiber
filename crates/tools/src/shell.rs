@@ -10,11 +10,15 @@ use std::time::Duration;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::emit::Emit;
+use contract::jobs::Jobs;
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Process};
 use contract::tool::{Bound, Cancel, Effects, Output, Tool};
 use rustix::process::Signal;
 use serde_json::{Map, Value, json};
+
+#[path = "shell/background.rs"]
+mod background;
 
 #[path = "shell/command.rs"]
 mod command;
@@ -37,6 +41,8 @@ const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const BARE_WAIT: &str = "This command waits with `sleep` for 25 seconds or more. \
      Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop.";
 
+const NO_JOBS: &str = "Background jobs are not available in this session.";
+
 const CANCELLED_BEFORE: &str = "Cancelled before it started.";
 const CANCELLED: &str = "Cancelled and stopped.";
 const INDETERMINATE: &str = "The command was stopped, and Fiber cannot tell whether it completed.";
@@ -49,6 +55,9 @@ pub struct Shell {
     /// The Fiber binary whose hidden search subcommands `grep` and `find`
     /// run in commands; none keeps the system tools.
     search: Option<PathBuf>,
+    /// When set, a long command, `run_in_background`, or a shell that exits
+    /// with members left becomes a job. Without it, nothing moves.
+    jobs: Option<Arc<dyn Jobs>>,
 }
 
 impl Shell {
@@ -58,6 +67,7 @@ impl Shell {
             workspace,
             clock,
             search: None,
+            jobs: None,
         }
     }
 
@@ -66,6 +76,15 @@ impl Shell {
     pub fn with_search(self, fiber: PathBuf) -> Self {
         Self {
             search: Some(fiber),
+            ..self
+        }
+    }
+
+    /// Moves long commands, `run_in_background`, and a shell that exits with
+    /// members left into `jobs` (`docs/tools.md`, "Moving to the background").
+    pub fn with_jobs(self, jobs: Arc<dyn Jobs>) -> Self {
+        Self {
+            jobs: Some(jobs),
             ..self
         }
     }
@@ -94,6 +113,10 @@ impl Tool for Shell {
                         "type": "integer",
                         "minimum": 0,
                         "description": "How long the command may run, in milliseconds. The default is 600000."
+                    },
+                    "run_in_background": {
+                        "type": "boolean",
+                        "description": "Start the command as a job and return its receipt at once."
                     }
                 },
                 "required": ["command"],
@@ -123,28 +146,52 @@ impl Tool for Shell {
             Ok(parsed) => parsed,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        if bare_wait(&parsed.command) {
+        if parsed.run_in_background && self.jobs.is_none() {
+            return failed(ErrorCode::InvalidArguments, NO_JOBS.to_owned());
+        }
+        if !parsed.run_in_background && bare_wait(&parsed.command) {
             return failed(ErrorCode::InvalidArguments, BARE_WAIT.to_owned());
         }
         // The functions reach only the model's own command line: `classify`
         // and `effects` saw the original string above.
         let command = match &self.search {
             Some(fiber) => format!("{}\n{}", prelude::define(Some(fiber)), parsed.command),
-            None => parsed.command,
+            None => parsed.command.clone(),
         };
         let program = shell_program();
-        from_spawn(
-            command::execute(
-                program,
-                &command,
-                &parsed.workdir,
-                Duration::from_millis(parsed.timeout_ms),
-                self.clock.as_ref(),
-                cancel,
-                emit,
-            ),
-            parsed.timeout_ms,
-        )
+        let policy = match (&self.jobs, parsed.run_in_background) {
+            (None, _) => command::MovePolicy::Stay,
+            (Some(_), false) => command::MovePolicy::Foreground,
+            (Some(_), true) => command::MovePolicy::Background,
+        };
+        match command::execute(
+            program,
+            &command,
+            &parsed.workdir,
+            Duration::from_millis(parsed.timeout_ms),
+            self.clock.as_ref(),
+            cancel,
+            emit,
+            policy,
+        ) {
+            Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), parsed.timeout_ms),
+            Ok(command::Ran::Moved(moved)) => match &self.jobs {
+                Some(jobs) => background::take(
+                    moved,
+                    Arc::clone(jobs),
+                    Arc::clone(&self.clock),
+                    &parsed.command,
+                    parsed.timeout_ms,
+                    cancel,
+                    emit,
+                ),
+                None => {
+                    let finished = moved.resume(self.clock.as_ref(), cancel, emit);
+                    from_spawn(Ok(finished), parsed.timeout_ms)
+                }
+            },
+            Err(err) => from_spawn(Err(err), parsed.timeout_ms),
+        }
     }
 
     fn bound(&self) -> Bound {
@@ -163,6 +210,7 @@ struct Parsed {
     command: String,
     workdir: PathBuf,
     timeout_ms: u64,
+    run_in_background: bool,
 }
 
 fn parse(arguments: &Map<String, Value>, workspace: &Path) -> Result<Parsed, String> {
@@ -176,10 +224,16 @@ fn parse(arguments: &Map<String, Value>, workspace: &Path) -> Result<Parsed, Str
         None => DEFAULT_TIMEOUT_MS,
         Some(value) => timeout_ms(value)?,
     };
+    let run_in_background = match arguments.get("run_in_background") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err("`run_in_background` must be a boolean.".to_owned()),
+    };
     Ok(Parsed {
         command,
         workdir,
         timeout_ms,
+        run_in_background,
     })
 }
 

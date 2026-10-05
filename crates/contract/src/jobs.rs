@@ -100,6 +100,14 @@ impl fmt::Debug for End {
     }
 }
 
+/// Opens a running job. `jobs::Registry` and test fakes both implement it,
+/// so `tools` can move a command without depending on `jobs`
+/// (`docs/architecture.md`, "The call rules").
+pub trait Jobs: Send + Sync {
+    /// Opens a running job; see `jobs::Registry::open`.
+    fn open(&self, opening: Opening) -> Result<Opened, OpenError>;
+}
+
 /// The output file could not be created. Nothing was recorded.
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {

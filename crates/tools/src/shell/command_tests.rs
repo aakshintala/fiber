@@ -9,9 +9,11 @@ use fakes::CancelToken;
 use fakes::Recorder;
 use fakes::clock::FakeClock;
 
+use super::super::background::{MoveKind, Step, running_step, wait_deadline};
 use super::{
-    Inner, Shared, StopKind, already_woken, bump, complete_prefix, finish, group_alive, lock,
-    note_eof, park, poll_while_occupied, read_output, refused_group, stream_output, suppress_term,
+    Inner, MovePolicy, MoveReason, Moved, Phase, Run, Shared, StopKind, already_woken, bump,
+    complete_prefix, exit_code_of, finish, group_alive, lock, note_eof, park, poll_while_occupied,
+    read_output, refused_group, stream_output, suppress_term,
 };
 
 #[test]
@@ -46,6 +48,7 @@ fn bump_advances_the_sequence() {
         status: None,
         eof: false,
         output: Vec::new(),
+        file: None,
         discard: false,
         seq: 0,
     };
@@ -387,4 +390,197 @@ fn finish_streams_the_tail_from_the_taken_snapshot() {
         recorder.text(),
         String::from_utf8_lossy(b"a\xE2\x82").into_owned()
     );
+}
+
+fn at(seconds: u64) -> Instant {
+    FakeClock::new()
+        .origin()
+        .checked_add(Duration::from_secs(seconds))
+        .unwrap()
+}
+
+#[test]
+fn a_timeout_wins_over_every_move() {
+    for policy in [
+        MovePolicy::Stay,
+        MovePolicy::Foreground,
+        MovePolicy::Background,
+    ] {
+        assert_eq!(
+            running_step(policy, true, true, true, true, true),
+            Step::Stop(StopKind::Timeout),
+            "{policy:?}"
+        );
+    }
+}
+
+#[test]
+fn a_cancel_wins_over_a_move_and_an_empty_group() {
+    assert_eq!(
+        running_step(MovePolicy::Background, false, true, true, true, true),
+        Step::Stop(StopKind::Cancel)
+    );
+}
+
+#[test]
+fn an_empty_group_finishes_in_the_foreground() {
+    assert_eq!(
+        running_step(MovePolicy::Background, false, false, true, true, true),
+        Step::Drain
+    );
+    assert_eq!(
+        running_step(MovePolicy::Foreground, false, false, true, false, true),
+        Step::Drain
+    );
+}
+
+#[test]
+fn a_reaped_shell_with_members_moves_before_the_other_triggers() {
+    assert_eq!(
+        running_step(MovePolicy::Background, false, false, false, true, true),
+        Step::Move(MoveKind::ShellExited)
+    );
+    assert_eq!(
+        running_step(MovePolicy::Foreground, false, false, false, true, false),
+        Step::Move(MoveKind::ShellExited)
+    );
+}
+
+#[test]
+fn run_in_background_moves_on_the_first_pass() {
+    assert_eq!(
+        running_step(MovePolicy::Background, false, false, false, false, false),
+        Step::Move(MoveKind::Background)
+    );
+    assert_eq!(
+        running_step(MovePolicy::Background, false, false, false, false, true),
+        Step::Move(MoveKind::Background)
+    );
+}
+
+#[test]
+fn thirty_seconds_moves_a_foreground_command_that_is_still_running() {
+    assert_eq!(
+        running_step(MovePolicy::Foreground, false, false, false, false, true),
+        Step::Move(MoveKind::AfterThirtySeconds)
+    );
+    assert_eq!(
+        running_step(MovePolicy::Foreground, false, false, false, false, false),
+        Step::Park
+    );
+}
+
+#[test]
+fn a_shell_without_jobs_never_moves() {
+    assert_eq!(
+        running_step(MovePolicy::Stay, false, false, false, true, true),
+        Step::Park
+    );
+    assert_eq!(
+        running_step(MovePolicy::Stay, false, false, false, false, true),
+        Step::Park
+    );
+}
+
+#[test]
+fn the_park_deadline_is_the_earlier_of_the_timeout_and_thirty_seconds() {
+    let thirty = at(30);
+    let ten_minutes = at(600);
+    assert_eq!(
+        wait_deadline(MovePolicy::Foreground, Some(ten_minutes), Some(thirty)),
+        Some(thirty)
+    );
+    assert_eq!(
+        wait_deadline(MovePolicy::Foreground, Some(thirty), Some(ten_minutes)),
+        Some(thirty)
+    );
+    assert_eq!(
+        wait_deadline(MovePolicy::Foreground, Some(thirty), Some(thirty)),
+        Some(thirty)
+    );
+    assert_eq!(
+        wait_deadline(MovePolicy::Stay, Some(ten_minutes), Some(thirty)),
+        Some(ten_minutes)
+    );
+    assert_eq!(
+        wait_deadline(MovePolicy::Background, Some(ten_minutes), Some(thirty)),
+        Some(ten_minutes)
+    );
+    assert_eq!(
+        wait_deadline(MovePolicy::Foreground, None, Some(thirty)),
+        Some(thirty)
+    );
+    assert_eq!(
+        wait_deadline(MovePolicy::Foreground, Some(thirty), None),
+        Some(thirty)
+    );
+    assert_eq!(wait_deadline(MovePolicy::Foreground, None, None), None);
+}
+
+#[test]
+fn a_missing_exit_code_is_reported_as_zero() {
+    assert_eq!(exit_code_of(None), 0);
+    let killed = Command::new("sh")
+        .args(["-c", "kill -ABRT $$"])
+        .status()
+        .unwrap();
+    assert!(killed.code().is_none());
+    assert_eq!(exit_code_of(Some(killed)), 0);
+    let exited = Command::new("sh").args(["-c", "exit 3"]).status().unwrap();
+    assert_eq!(exit_code_of(Some(exited)), 3);
+}
+
+#[test]
+fn attaching_a_file_keeps_each_byte_once_in_order() {
+    let dir = fakes::TempDir::new("fiber-shell-attach");
+    let path = dir.path().join("out.log");
+    let shared = Arc::new(Shared::default());
+    lock(&shared.inner).output.extend_from_slice(b"ab");
+    let moved = parked(Arc::clone(&shared));
+    moved.attach_output(std::fs::File::create(&path).unwrap());
+    assert!(lock(&shared.inner).output.is_empty());
+    assert_eq!(std::fs::read(&path).unwrap(), b"ab");
+    read_output(
+        Scripted {
+            steps: vec![Ok(b"cd".to_vec())],
+        },
+        &shared,
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"abcd");
+    assert!(lock(&shared.inner).output.is_empty());
+}
+
+#[test]
+fn bytes_after_discard_are_not_written_to_the_file() {
+    let dir = fakes::TempDir::new("fiber-shell-discard");
+    let path = dir.path().join("out.log");
+    let shared = Arc::new(Shared::default());
+    lock(&shared.inner).output.extend_from_slice(b"ab");
+    parked(Arc::clone(&shared)).attach_output(std::fs::File::create(&path).unwrap());
+    lock(&shared.inner).discard = true;
+    read_output(
+        Scripted {
+            steps: vec![Ok(b"no".to_vec())],
+        },
+        &shared,
+    );
+    assert_eq!(std::fs::read(&path).unwrap(), b"ab");
+}
+
+fn parked(shared: Arc<Shared>) -> Moved {
+    Moved {
+        reason: MoveReason::StartedInBackground,
+        bridge: None,
+        progress: Run {
+            phase: Phase::Running,
+            stop: None,
+            sent_signal: false,
+            seen_empty: false,
+            streamed: 0,
+            timeout_at: None,
+            move_at: None,
+            pgid: 2,
+            shared,
+        },
+    }
 }

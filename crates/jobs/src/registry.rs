@@ -5,7 +5,7 @@ use std::collections::hash_map::RandomState;
 use std::fs::File;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use contract::JobId;
@@ -21,6 +21,9 @@ pub struct Registry {
     clock: Arc<dyn Clock>,
     inner: Mutex<Inner>,
     cv: Condvar,
+    /// Upgrades to the `Arc` `new` returned, so `open` can hand that `Arc`
+    /// to the job's [`End`] while taking `&self`.
+    me: Weak<Self>,
 }
 
 struct Inner {
@@ -66,7 +69,7 @@ impl Registry {
     /// Jobs whose output files are created in `artifacts`. `clock` is the
     /// session clock: a `wait` deadline is read from it.
     pub fn new(artifacts: PathBuf, clock: Arc<dyn Clock>) -> Arc<Self> {
-        let registry = Arc::new(Self {
+        let registry = Arc::new_cyclic(|me| Self {
             artifacts,
             clock: Arc::clone(&clock),
             inner: Mutex::new(Inner {
@@ -74,6 +77,7 @@ impl Registry {
                 seq: 0,
             }),
             cv: Condvar::new(),
+            me: Weak::clone(me),
         });
         let wake: Arc<dyn Wake> = registry.clone();
         clock.subscribe(Arc::downgrade(&wake));
@@ -83,7 +87,13 @@ impl Registry {
     /// Mints the id, creates the empty output file, and records the job
     /// running. Does not create `artifacts`: when the file cannot be
     /// created, returns [`OpenError::Io`] and records nothing.
-    pub fn open(self: &Arc<Self>, opening: Opening) -> Result<Opened, OpenError> {
+    pub fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
+        let Some(registry) = self.me.upgrade() else {
+            return Err(OpenError::Io {
+                path: self.artifacts.clone(),
+                source: std::io::Error::other("the registry is gone"),
+            });
+        };
         let mut inner = lock(&self.inner);
         let id = mint_id();
         let path = self.artifacts.join(format!("{id}.log"));
@@ -99,7 +109,6 @@ impl Registry {
             description: opening.description,
             output_path: format!("artifacts/{id}.log"),
         };
-        let registry = Arc::clone(self);
         let expected = job_id.clone();
         let end = End::new(
             job_id,
@@ -445,6 +454,12 @@ fn final_text(path: &Path, completed: &JobCompleted) -> String {
         }
     }
     text
+}
+
+impl contract::jobs::Jobs for Registry {
+    fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
+        Registry::open(self, opening)
+    }
 }
 
 fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {

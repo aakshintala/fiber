@@ -3,8 +3,8 @@
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
 use std::io::Write as _;
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
@@ -56,6 +56,50 @@ fn failure() -> JobCompleted {
         process: None,
         output_tail: None,
     }
+}
+
+#[test]
+fn open_through_the_jobs_trait_mints_an_id_and_a_file() {
+    let (_dir, registry) = world();
+    let jobs: &dyn contract::jobs::Jobs = registry.as_ref();
+    let opened = contract::jobs::Jobs::open(jobs, opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    assert!(is_job_id(&id), "{id}");
+    assert_eq!(opened.started.tool.as_deref(), Some("shell"));
+    assert_eq!(opened.started.description, "npm test");
+    assert_eq!(opened.started.output_path, format!("artifacts/{id}.log"));
+    assert!(opened.path.is_file());
+    assert!(registry.list_text().contains(&id));
+    assert!(registry.list_text().contains("npm test"));
+    drop(opened.end);
+}
+
+#[test]
+fn open_without_the_registry_arc_records_nothing() {
+    let dir = TempDir::new("fiber-jobs-detached");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let registry = Registry {
+        artifacts: artifacts.clone(),
+        clock,
+        inner: Mutex::new(super::Inner {
+            jobs: Vec::new(),
+            seq: 0,
+        }),
+        cv: Condvar::new(),
+        me: Weak::new(),
+    };
+    let Err(error) = registry.open(opening("npm test")) else {
+        panic!("open recorded a job without the registry");
+    };
+    assert!(matches!(error, OpenError::Io { .. }));
+    assert!(error.to_string().contains("registry is gone"), "{error}");
+    assert!(
+        std::fs::read_dir(&artifacts).unwrap().next().is_none(),
+        "open created a file without the registry"
+    );
+    assert_eq!(registry.list_text(), "No jobs.\n");
 }
 
 #[test]
