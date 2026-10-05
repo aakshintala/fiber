@@ -333,9 +333,15 @@ fn two_clients_see_the_log_while_ask_is_held() {
         &first,
         r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"text","text":"more"}]}}"#,
     );
+    // The reader hands a line to the inbox before it reads the next, so the
+    // answer to `tools` proves the prompt and the steer are queued. Released
+    // earlier, the turn can end and drop them: "The session ended before
+    // answering." instead of the loop's answer, or none.
+    send(&first, r#"{"id":"c_queued","command":"tools"}"#);
+    let mut own = until(&first, |line| line["payload"]["command_id"] == "c_queued");
     server.release();
 
-    let own = until(&first, |line| line["kind"] == "fiber_exited");
+    own.extend(until(&first, |line| line["kind"] == "fiber_exited"));
     let other = until(&second, |line| line["kind"] == "fiber_exited");
     let prompt = answered(&own, "c_prompt");
     assert_eq!(prompt["kind"], "command_rejected");
