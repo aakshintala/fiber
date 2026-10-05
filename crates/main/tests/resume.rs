@@ -307,7 +307,7 @@ fn turn_started(text: &str) -> Event {
             content: vec![ContentPart::Text { text: text.into() }],
             sender: Sender {
                 origin: Origin::Driver,
-                command_id: CommandId("c_1".into()),
+                command_id: Some(CommandId("c_1".into())),
             },
             changed_by: None,
         }],

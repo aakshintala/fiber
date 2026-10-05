@@ -26,7 +26,7 @@ use serde_json::{Value, json};
 const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The built-in tool order, when no MCP server declares anything.
-const TOOL_NAMES: [&str; 5] = ["edit", "handoff", "read", "shell", "write"];
+const TOOL_NAMES: [&str; 6] = ["edit", "handoff", "jobs", "read", "shell", "write"];
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -402,7 +402,15 @@ fn a_configured_server_declares_and_runs_its_tools() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         tool_names(&requests[0].body),
-        ["edit", "handoff", "mcp__fx__echo", "read", "shell", "write"],
+        [
+            "edit",
+            "handoff",
+            "jobs",
+            "mcp__fx__echo",
+            "read",
+            "shell",
+            "write"
+        ],
     );
     let preamble = run
         .lines
@@ -617,7 +625,15 @@ fn disabled_hides_a_tool() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         tool_names(&requests[0].body),
-        ["edit", "handoff", "mcp__fx__echo", "read", "shell", "write"]
+        [
+            "edit",
+            "handoff",
+            "jobs",
+            "mcp__fx__echo",
+            "read",
+            "shell",
+            "write"
+        ]
     );
 }
 

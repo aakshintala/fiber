@@ -103,11 +103,22 @@ pub(crate) fn ask_resume(
     // The recorded workspace, not the launch directory. A failure here,
     // such as not finding the running binary, returns before `fiber_started`,
     // so the log stays as it was. Every configured stdio server starts too.
-    let (tools, infos, driver, session_servers) =
-        match crate::mcp_servers::session_tools(Path::new(&folded.workspace), &clock, mcp.specs) {
-            Ok(built) => built,
-            Err(e) => return ask_failed(e),
-        };
+    // Jobs live and die with the process: a resumed session's registry
+    // starts empty (`docs/tools.md`, "Background jobs").
+    let jobs = jobs::Registry::new(
+        dir.join("artifacts"),
+        Arc::clone(&clock),
+        Arc::clone(&log) as _,
+    );
+    let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+        Path::new(&folded.workspace),
+        &clock,
+        &jobs,
+        mcp.specs,
+    ) {
+        Ok(built) => built,
+        Err(e) => return ask_failed(e),
+    };
     let forget = Arc::clone(&session_servers.forget);
     let permissions = crate::ask_permissions(&home, &project, folded.workspace, &clock);
     let session = match Session::resume(&home, &dir, &log, clock, infos, Box::new(io::stdout())) {
@@ -118,6 +129,7 @@ pub(crate) fn ask_resume(
         }
     };
     session.shell(driver);
+    session.jobs(jobs.clone());
     if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
         .and_then(|()| crate::session_extensions::written(&log, &extensions))
         .and_then(|()| r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices))
@@ -139,7 +151,7 @@ pub(crate) fn ask_resume(
                 permissions,
             )
             .map(|looped| {
-                let looped = crate::session_extensions::hooked(looped, &extensions);
+                let looped = crate::session_extensions::hooked(looped.jobs(jobs), &extensions);
                 looped.handoff(handoff).on_handoff(forget)
             }),
             budget,

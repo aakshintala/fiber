@@ -435,7 +435,7 @@ pub(crate) fn message(text: &str) -> Message {
         content: vec![ContentPart::Text { text: text.into() }],
         sender: From {
             origin: Origin::Driver,
-            command_id: CommandId(format!("c_{text}")),
+            command_id: Some(CommandId(format!("c_{text}"))),
         },
     }
 }

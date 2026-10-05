@@ -205,6 +205,7 @@ impl Rendered {
             Event::ReasoningCompleted(_)
             | Event::TextCompleted(_)
             | Event::AssistantMessageCompleted(_)
+            | Event::JobsPendingNotified(_)
             | Event::FiberExited(_)
             | Event::SessionStarted(_)
             | Event::Rewound(_)
@@ -251,7 +252,6 @@ impl Rendered {
             | Event::JobDelta(_)
             | Event::JobLine(_)
             | Event::DelegateFinished(_)
-            | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 self.render(event, action, model);
@@ -455,7 +455,10 @@ pub(crate) fn render(
         // rendered, and a failed call sends nothing. Its retry is a new action.
         Event::AssistantMessageCompleted(_)
         // Every other kind adds nothing the model reads. Each is listed, so a
-        // new kind does not compile until it is placed.
+        // new kind does not compile until it is placed. The ending notice's
+        // text is its turn's `message` item; `jobs_pending_notified` only
+        // records the jobs it named.
+        | Event::JobsPendingNotified(_)
         | Event::FiberExited(_)
         | Event::SessionStarted(_)
         | Event::Rewound(_)
@@ -502,7 +505,6 @@ pub(crate) fn render(
         | Event::JobLine(_)
         | Event::DelegateFinished(_)
         | Event::JobCompleted(_)
-        | Event::JobsPendingNotified(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
     }

@@ -24,16 +24,24 @@ type SessionTools = (
     Arc<dyn Fn() + Send + Sync>,
 );
 
-/// `edit`, `handoff`, `read`, `shell` and `write`, each registered by `builtin`.
-/// `read`, `write` and `edit` share one session's file state, which a
-/// handoff forgets. A failure to
-/// find the running binary is `io_failed`, before any session line.
-pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<SessionTools, Failure> {
+/// `edit`, `handoff`, `read`, `shell`, `write` and `jobs`, each registered
+/// by `builtin`. `read`, `write` and `edit` share one session's file state,
+/// which a handoff forgets; the model's `shell` moves commands into `jobs`,
+/// which the `jobs` tool lists, waits on and stops. The driver shell runs in
+/// the foreground only. A failure to find the running binary is
+/// `io_failed`, before any session line.
+pub(crate) fn builtin(
+    workspace: &Path,
+    clock: &Arc<dyn Clock>,
+    jobs: &Arc<jobs::Registry>,
+) -> Result<SessionTools, Failure> {
     let files = Arc::new(tools::Files::new(workspace.to_path_buf()));
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
-    let shell =
-        tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber.clone());
+    let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
+    let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
+        .with_search(fiber.clone())
+        .with_jobs(moves);
     let driver =
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let built = [
@@ -42,6 +50,7 @@ pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<Sessio
         registered(files.read())?,
         registered(shell)?,
         registered(files.write())?,
+        registered(jobs::JobsTool::new(Arc::clone(jobs)))?,
     ];
     let mut pairs = Vec::new();
     let mut infos = Vec::new();

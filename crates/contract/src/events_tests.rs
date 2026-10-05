@@ -100,7 +100,7 @@ fn the_doc_example_turn_reads_as_its_type() {
         panic!("not one message");
     };
     assert_eq!(sender.origin, crate::shapes::Origin::Driver);
-    assert_eq!(sender.command_id, crate::CommandId("c_7f3a".into()));
+    assert_eq!(sender.command_id, Some(crate::CommandId("c_7f3a".into())));
     assert_eq!(
         content,
         &[crate::shapes::ContentPart::Text {
@@ -819,4 +819,18 @@ fn declined_and_skipped_are_only_ever_true() {
     assert!(read("interaction_resolved", declined).is_err());
     let skipped = json!({"request_id": "r", "by": "person", "answers": [{"skipped": false}]});
     assert!(read("interaction_resolved", skipped).is_err());
+}
+
+#[test]
+fn fibers_own_message_has_source_fiber_and_no_command_id() {
+    let sender = crate::shapes::Sender {
+        origin: crate::shapes::Origin::Fiber,
+        command_id: None,
+    };
+    let value = serde_json::to_value(&sender).unwrap();
+    assert_eq!(value, json!({"source": "fiber"}));
+    assert_eq!(
+        serde_json::from_value::<crate::shapes::Sender>(value).unwrap(),
+        sender
+    );
 }

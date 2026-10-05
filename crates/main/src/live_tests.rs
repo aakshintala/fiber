@@ -232,7 +232,7 @@ fn live_reviewer() {
                 }],
                 sender: Sender {
                     origin: Origin::Driver,
-                    command_id: CommandId("c_live".into()),
+                    command_id: Some(CommandId("c_live".into())),
                 },
             },
             Ack(Box::new(|_| {})),

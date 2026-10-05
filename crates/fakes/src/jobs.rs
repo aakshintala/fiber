@@ -11,6 +11,7 @@ use contract::JobId;
 use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Class, Event, JobCompleted, JobStarted};
+use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, Jobs, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
@@ -27,6 +28,8 @@ struct Inner {
     /// Jobs whose stop was sent.
     stopped: Vec<JobId>,
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
+    /// Where each later end is sent, once [`Jobs::deliver_to`] set it.
+    inbox: Option<Sender<Delivery>>,
 }
 
 /// Jobs a test opens. Files are `{dir}/{job_id}.log`. [`FakeJobs::failing`]
@@ -118,6 +121,7 @@ impl FakeJobs {
                 ended: Vec::new(),
                 stopped: Vec::new(),
                 foreground: Vec::new(),
+                inbox: None,
             })),
             completed_tx,
             completed_rx: Mutex::new(completed_rx),
@@ -197,16 +201,31 @@ impl Jobs for FakeJobs {
         let end = End::new(
             job_id,
             Box::new(move |completed| {
-                let mut book = lock(&book);
-                book.ended.push(expected.clone());
-                // The terminal closes with the job.
-                book.inputs.retain(|(id, _)| *id != expected);
-                drop(book);
                 // The same id the open minted, whatever the payload names.
-                match tx.send(JobCompleted {
-                    job_id: expected,
+                let completed = JobCompleted {
+                    job_id: expected.clone(),
                     ..completed
-                }) {
+                };
+                {
+                    // The notice is sent under the lock that marks the job
+                    // ended, so `running` never drops a job whose notice is
+                    // not yet in the inbox.
+                    let mut inner = lock(&book);
+                    inner.ended.push(expected.clone());
+                    // The terminal closes with the job.
+                    inner.inputs.retain(|(id, _)| *id != expected);
+                    // Nothing else claims a fake job's end, so the claim
+                    // holds.
+                    if let Some(inbox) = &inner.inbox {
+                        match inbox.send(Delivery::Job(JobNotice {
+                            completed: completed.clone(),
+                            claim: Claim(Box::new(|| true)),
+                        })) {
+                            Ok(()) | Err(_) => {}
+                        }
+                    }
+                }
+                match tx.send(completed) {
                     Ok(()) | Err(_) => {}
                 }
             }),
@@ -259,6 +278,23 @@ impl Jobs for FakeJobs {
         let mut inner = lock(&self.inner);
         inner.foreground.retain(|call| call.strong_count() > 0);
         inner.foreground.push(call.0);
+    }
+
+    /// Every job opened whose end was not reported, in open order.
+    fn running(&self) -> Vec<JobId> {
+        let inner = lock(&self.inner);
+        inner
+            .started
+            .iter()
+            .map(|started| started.job_id.clone())
+            .filter(|id| !inner.ended.contains(id))
+            .collect()
+    }
+
+    /// Each later end is also sent to `inbox` as a [`Delivery::Job`], whose
+    /// claim holds.
+    fn deliver_to(&self, inbox: Sender<Delivery>) {
+        lock(&self.inner).inbox = Some(inbox);
     }
 }
 
