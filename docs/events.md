@@ -1277,7 +1277,10 @@ earlier point. A person starts one from the terminal, a driver with the
   the point: the paths of calls that declared `writes`, and the calls that
   declared `executes` (`docs/permissions.md`, "Effects").
 - **A summary is optional.** A rewind may ask the old session's model to
-  summarise the path after the point.
+  summarise the path after the point. A requested summary that fails fails
+  the whole `rewind` with `summary_failed`: no new session is created and the
+  old one is untouched. The client offers to retry, to rewind without a
+  summary, or to cancel, and each of the first two is a new `rewind`.
 - **What the model receives, in order:** the old session's history up to the
   point, then the summary if there is one, then Fiber's note: the files written
   and shell calls since the point, and the jobs adopted or stopped. The first

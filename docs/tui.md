@@ -463,6 +463,8 @@ pins it (`docs/tools.md`, "Naming the session").
   ⟲ line names the new session and says what was not restored and which jobs
   stopped or were adopted. The new session waits for a prompt.
 - `session_held` shows as the error in place of the Rewind button.
+- `summary_failed` shows the reason with three choices: retry, rewind without
+  a summary, or cancel.
 
 ## Approvals and questions
 

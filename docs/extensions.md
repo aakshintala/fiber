@@ -1167,7 +1167,8 @@ project, but each branch can carry its own version of a package. Each session
 loads the version that matches its own worktree's files, so two sessions on
 two branches each run their own, and switching back to a branch finds its
 version still approved. `fiber sessions prune` removes pinned copies that no
-worktree matches any more (`docs/invocation.md`, "Deleting and pruning").
+worktree matches any more, and keeps their approvals (`docs/invocation.md`,
+"Deleting and pruning").
 
 **What an approved extension may do.** Everything an installed one may. Its
 manifest declares the built-ins it replaces and the providers it registers,

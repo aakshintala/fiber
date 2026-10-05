@@ -127,7 +127,9 @@ Before the process aborts, a panic hook:
 1. Restores the terminal, when the process has one.
 2. Writes the message, the thread's name and a backtrace to
    `crashes/<session_id>-<ms>.txt` in Fiber home (`docs/state.md`). The TUI
-   uses the id of the session it is attached to.
+   uses the id of the session it is attached to. A process with no session
+   id yet, such as the hub or a panic before a session starts, uses its
+   process id, as its diagnostic log does.
 3. Prints the same report and the file's path to stderr.
 
 The hook runs on the thread that panicked and needs no other thread, so it

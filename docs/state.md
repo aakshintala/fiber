@@ -37,7 +37,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   recent.jsonl                    recently exited sessions, a rebuildable index
   cache/models/<provider>.json    discovered model list
   cache/mcp/<server>.json         an MCP server's last tool list
-  crashes/<session_id>-<ms>.txt   one report per panic (docs/code-quality.md)
+  crashes/<id>-<ms>.txt           one report per panic (docs/code-quality.md)
   logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
   logs/<kind>-<id>.log            one other process's diagnostic log
 ```
@@ -184,7 +184,8 @@ server's declaration (`docs/mcp.md`, "Starting servers"). A writer replaces
 a file by rename, so two sessions refreshing one list leave one whole file.
 
 **Crash reports.** `crashes/<session_id>-<ms>.txt` holds one panic's
-message, thread name and backtrace, written by the panic hook before the
+message, thread name and backtrace, named by the process id instead when the
+process has no session id, written by the panic hook before the
 process aborts (`docs/code-quality.md`, "Panics"). A report describes a bug
 in Fiber, not a session, so nothing reads one to decide anything, and
 deleting them is always safe. They are pruned with the diagnostic logs.
@@ -274,7 +275,9 @@ sessions is about 2 MB. It is a derived index, rebuildable from the logs, and ne
 truth ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 
 **Prompt history.** Per project, `history.jsonl`: one JSON line per prompt,
-append-only. Up-arrow recalls prompts typed anywhere in that project.
+append-only. The session appends each prompt a person sends it, in a session
+the hub started, so every client shares one history; a `fiber ask` prompt is
+not appended. Up-arrow recalls prompts typed anywhere in that project.
 
 Fiber writes no derived database in v0.0.1. Listing sessions reads the logs
 (`docs/events.md` has the measurement). Any future one is derived from the

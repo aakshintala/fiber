@@ -267,6 +267,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `stale_request` | driver command | the command names a request, steering message, job or turn that is no longer pending, queued or running (`docs/invocation.md`) |
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
+| `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") |
 | `timeout` | tool call, job | a deadline passed |
 | `too_large` | tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
@@ -299,8 +300,8 @@ Notices, for a failure outside any action:
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
-`closing`, `duplicate_command`)
+`session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
+`unknown_command`, `closing`, `duplicate_command`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

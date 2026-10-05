@@ -181,6 +181,8 @@ codes! {
     StateTooLarge,
     /// The stream ended early or carried an unmatched error.
     StreamIncomplete,
+    /// A `rewind` that asked for a summary could not get one.
+    SummaryFailed,
     /// A deadline passed.
     Timeout,
     /// A `web_fetch` download larger than 10 MiB.
