@@ -22,9 +22,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, ExitStatus, Stdio};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use fakes::Watchdog;
 use rustix::pty;
@@ -234,24 +236,38 @@ impl Terminal {
 
     /// Whether the terminal echoes what is typed.
     fn echoes(&self) -> bool {
-        termios::tcgetattr(&self.terminal)
-            .unwrap()
-            .local_modes
-            .contains(LocalModes::ECHO)
+        echoes(&self.terminal)
     }
 
     /// Waits until the terminal stops echoing, which is when `fiber` has
-    /// begun reading the key.
+    /// begun reading the key. A thread polls the flag, so the wait has a
+    /// deadline without this test reading a clock.
     fn wait_for_echo_off(&self) {
-        let start = Instant::now();
-        while self.echoes() {
-            assert!(
-                start.elapsed() < DEADLINE,
-                "waited {DEADLINE:?} for `fiber` to turn echo off"
-            );
-            thread::yield_now();
+        let terminal = self.terminal.try_clone().unwrap();
+        let stop = Arc::new(AtomicBool::new(false));
+        let stopped = Arc::clone(&stop);
+        let (off, is_off) = mpsc::channel();
+        thread::spawn(move || {
+            while !stopped.load(Ordering::Relaxed) {
+                if !echoes(&terminal) {
+                    off.send(()).unwrap_or(());
+                    return;
+                }
+                thread::yield_now();
+            }
+        });
+        if is_off.recv_timeout(DEADLINE).is_err() {
+            stop.store(true, Ordering::Relaxed);
+            panic!("waited {DEADLINE:?} for `fiber` to turn echo off");
         }
     }
+}
+
+fn echoes(terminal: &fs::File) -> bool {
+    termios::tcgetattr(terminal)
+        .unwrap()
+        .local_modes
+        .contains(LocalModes::ECHO)
 }
 
 /// What `fiber` wrote to its terminal, read on a thread so a wait can have a
@@ -292,10 +308,9 @@ impl Screen {
     /// the last wait.
     fn wait_for(&mut self, text: &str) -> String {
         let mark = self.seen.len();
-        let start = Instant::now();
         while !self.seen[mark..].contains(text) {
-            let left = DEADLINE.saturating_sub(start.elapsed());
-            match self.chunks.recv_timeout(left) {
+            // Each chunk has the deadline: a terminal that goes quiet fails.
+            match self.chunks.recv_timeout(DEADLINE) {
                 Ok(Some(chunk)) => self.seen.push_str(&chunk),
                 Ok(None) | Err(mpsc::RecvTimeoutError::Disconnected) => {
                     panic!(
@@ -376,7 +391,7 @@ fn a_key_on_a_pipe_is_stored_then_deleted_and_never_printed() {
     );
     assert_eq!(
         setup.files_holding(KEY),
-        [file.clone()],
+        std::slice::from_ref(&file),
         "the key is in the credential file alone"
     );
     let config: Value =
