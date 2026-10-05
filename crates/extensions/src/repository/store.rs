@@ -144,8 +144,9 @@ impl Store {
             return Err(io_error(&ready)(e));
         }
         match fs::symlink_metadata(copy) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-            Err(e) => return Err(io_error(copy)(e)),
+            // Nothing there, or unreadable: `create_dir` below fails naming
+            // the path when it is the second.
+            Err(_) => {}
             Ok(meta) if meta.file_type().is_dir() => remove(copy)?,
             Ok(_) => fs::remove_file(copy).map_err(io_error(copy))?,
         }
