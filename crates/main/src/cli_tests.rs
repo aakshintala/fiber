@@ -466,7 +466,10 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
 
 #[test]
 fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
-    assert_eq!(visible(), ["ask", "extension", "version", "help"]);
+    assert_eq!(
+        visible(),
+        ["ask", "extension", "approve", "version", "help"]
+    );
     let Invocation::Run(Some(Commands::Image { args })) =
         parse_from(["fiber", "image", "a", "b", "c"])
     else {
