@@ -305,7 +305,7 @@ fn two_clients_see_the_log_while_ask_is_held() {
     setup.provider(&server);
     let running = start(&setup);
     let started = first_line(&running.stdout);
-    assert_eq!(started["kind"], "fiber_started");
+    assert_eq!(started["kind"], "session_started");
     let session_id = started["session_id"].as_str().unwrap().to_owned();
     assert!(
         server.await_requests(1, DEADLINE),
