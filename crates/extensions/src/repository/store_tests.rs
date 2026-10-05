@@ -11,6 +11,7 @@ use contract::events::OfferedKind;
 use serde_json::{Value, json};
 
 use super::declared_tests::Repo;
+use super::store::settle;
 use super::{Decision, Index, RepoItem, Store, hash};
 use crate::Error;
 
@@ -414,4 +415,27 @@ fn a_declaration_is_kept_with_the_previous_version() {
         .previous(OfferedKind::Hook, "fmt", "new")
         .unwrap();
     assert_eq!(previous.declaration, item.declaration);
+}
+
+#[test]
+fn a_copy_that_another_approval_put_there_first_stays() {
+    let repo = Repo::new();
+    let tmp = repo.home();
+    let (scratch, place) = (tmp.join("scratch"), tmp.join("place"));
+    fs::create_dir_all(&scratch).unwrap();
+    fs::write(scratch.join("mine"), "mine").unwrap();
+    // Nothing there: the scratch moves into place.
+    settle(&scratch, &place).unwrap();
+    assert_eq!(fs::read_to_string(place.join("mine")).unwrap(), "mine");
+    assert!(!scratch.exists());
+    // Another copy there, with something in it: it stays, and no error.
+    fs::create_dir_all(&scratch).unwrap();
+    fs::write(scratch.join("late"), "late").unwrap();
+    settle(&scratch, &place).unwrap();
+    assert!(place.join("mine").is_file());
+    assert!(!place.join("late").exists());
+    // Something that is not a copy there is a failure.
+    let file = tmp.join("file");
+    fs::write(&file, "x").unwrap();
+    assert!(settle(&scratch, &file).is_err());
 }

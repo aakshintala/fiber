@@ -349,3 +349,37 @@ fn a_file_that_vanishes_after_listing_is_an_error_naming_the_item() {
     let e = hash(&mut Index::scratch(), &item).unwrap_err();
     assert!(e.to_string().starts_with("`db`:"), "{e}");
 }
+
+#[test]
+fn an_entry_whose_hash_is_not_a_digest_is_not_trusted() {
+    let repo = Repo::new();
+    repo.write("scripts/run.sh", "echo");
+    let mut index = Index::load(&repo.home());
+    let first = hash(&mut index, &server(&repo, &[])).unwrap();
+    index.save().unwrap();
+    let file = repo.home().join("pinned.json");
+    let saved: Value = serde_json::from_slice(&fs::read(&file).unwrap()).unwrap();
+    let good = saved.as_object().unwrap().values().next().unwrap()["hash"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for bad in [
+        "ab".to_owned(),
+        good[..63].to_owned(),
+        format!("{good}0"),
+        "zz".repeat(32),
+        "é".repeat(32),
+    ] {
+        let mut broken = saved.clone();
+        for entry in broken.as_object_mut().unwrap().values_mut() {
+            entry["hash"] = Value::String(bad.clone());
+        }
+        fs::write(&file, broken.to_string()).unwrap();
+        let mut index = Index::load(&repo.home());
+        assert_eq!(
+            hash(&mut index, &server(&repo, &[])).unwrap(),
+            first,
+            "{bad}"
+        );
+    }
+}

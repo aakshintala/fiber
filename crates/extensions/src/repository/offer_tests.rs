@@ -352,3 +352,59 @@ fn a_new_item_with_no_earlier_version_has_no_diff() {
     let [item] = offered(&repo).try_into().unwrap();
     assert!(item.diff.is_none());
 }
+
+#[test]
+fn binary_files_added_removed_or_changed_only_in_mode_say_so() {
+    let repo = Repo::new();
+    fs::write(repo.root().join("kept"), [0xff_u8, 0x00]).unwrap();
+    fs::write(repo.root().join("gone"), [0xfe_u8, 0x00]).unwrap();
+    repo.config(&json!({"mcp": {"servers": {"db": {"command": "./kept", "args": ["gone"]}}}}));
+    approve_all(&repo);
+    fs::remove_file(repo.root().join("gone")).unwrap();
+    fs::write(repo.root().join("new"), [0xfd_u8, 0x00]).unwrap();
+    repo.executable("kept");
+    repo.config(
+        &json!({"mcp": {"servers": {"db": {"command": "./kept", "args": ["gone", "new"]}}}}),
+    );
+    let [item] = offered(&repo).try_into().unwrap();
+    let diff = item.diff.unwrap();
+    assert!(diff.contains("gone: binary file removed\n"), "{diff}");
+    assert!(diff.contains("new: binary file added\n"), "{diff}");
+    assert!(diff.contains("kept: execute bit set\n"), "{diff}");
+    assert!(!diff.contains("kept: binary file"), "{diff}");
+}
+
+#[test]
+fn a_package_file_named_like_something_the_install_step_built_is_added() {
+    let repo = Repo::new();
+    repo.package(
+        "pkg",
+        "fiber.test/p",
+        &json!({"install": ["sh", "-c", "echo built > generated.txt"]}),
+    );
+    repo.config(&json!({"repository_extensions": [{"path": "pkg"}]}));
+    approve_all(&repo);
+    repo.write("pkg/generated.txt", "committed\n");
+    let [item] = offered(&repo).try_into().unwrap();
+    let diff = item.diff.unwrap();
+    assert!(
+        diff.contains("--- /dev/null\n+++ b/generated.txt\n"),
+        "{diff}"
+    );
+    assert!(!diff.contains("-built"), "{diff}");
+}
+
+#[test]
+fn a_watcher_and_a_phase_show_in_a_hook_summary() {
+    let repo = Repo::new();
+    repo.hooks(&json!({"done": {"watch": ["turn_completed", "tool_call_completed"], "phase": "early", "command": "notify"}}));
+    let [item] = offered(&repo).try_into().unwrap();
+    let lines = lines(&item);
+    assert!(
+        lines.contains(&"watch: turn_completed, tool_call_completed"),
+        "{}",
+        item.summary
+    );
+    assert!(lines.contains(&"phase: early"), "{}", item.summary);
+    assert!(lines.contains(&"runs: notify"), "{}", item.summary);
+}

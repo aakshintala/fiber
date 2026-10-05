@@ -144,12 +144,7 @@ impl Store {
             let manifest = config::read_manifest(&scratch.0)?;
             prepare(&scratch.0, &manifest)?;
         }
-        match fs::rename(&scratch.0, copy) {
-            Ok(()) => Ok(()),
-            // Another `fiber approve` put the same content there first.
-            Err(_) if copy.is_dir() => Ok(()),
-            Err(e) => Err(io_error(copy)(e)),
-        }
+        settle(&scratch.0, copy)
     }
 
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
@@ -215,6 +210,17 @@ impl Store {
                 .filter_map(|f| f.as_str().map(str::to_owned))
                 .collect(),
         })
+    }
+}
+
+/// Moves a finished scratch copy to its place. When another `fiber approve`
+/// put the same content there first, the copy already there stays: it is the
+/// same content, and the scratch is removed with its guard.
+pub(super) fn settle(scratch: &Path, copy: &Path) -> Result<(), Error> {
+    match fs::rename(scratch, copy) {
+        Ok(()) => Ok(()),
+        Err(_) if copy.is_dir() => Ok(()),
+        Err(e) => Err(io_error(copy)(e)),
     }
 }
 
