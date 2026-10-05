@@ -71,10 +71,11 @@ ships when its vendor permits use from other harnesses and Fiber can probe it.
 - A vendor with a genuinely new wire format needs a Fiber release. pi lets an
   extension supply its own stream parser. Fiber does not, because that is a
   second, untested implementation of the hardest code.
-- The binary alone has no providers, and installing Fiber installs none. The
-  model picker installs a first-party provider when a person chooses it, and
-  `fiber extension install <name>` installs one on a headless machine. Fixing a vendor
-  quirk or a cloud's sign-in is an extension update, not a release. See
+- The binary alone has no providers. Installing Fiber installs every
+  first-party extension, the eleven providers included, from the release's
+  extensions archive, and `fiber update` updates them with the binary. They
+  stay ordinary extensions: a person may remove any of them, and fixing a
+  vendor quirk or a cloud's sign-in is an extension update, not a release. See
   [Extension distribution](https://github.com/aakshintala/fiber/issues/45).
 - A session that uses a provider with a Lua function creates a Lua VM, about
   120 KiB (`research/extension-runtime/vm-isolation`). A session whose
