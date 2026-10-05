@@ -1,7 +1,9 @@
 //! Staging an extension and putting it in place (`docs/extensions.md`,
 //! "Installing"): the extension's directory is copied whole into `extensions/<name>/` in Fiber
-//! home, and renamed into place only once every check has passed, so a
-//! failed install leaves nothing behind.
+//! home, renamed into place only once every check has passed, and only
+//! then given its manifest's install step, which runs at that final path.
+//! A failed step puts every previous version back, so a failed install
+//! leaves nothing behind.
 
 use std::fs::{self, File};
 use std::io::{self, ErrorKind, Write};

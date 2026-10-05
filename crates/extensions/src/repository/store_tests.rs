@@ -11,7 +11,6 @@ use contract::events::OfferedKind;
 use serde_json::{Value, json};
 
 use super::declared_tests::Repo;
-use super::store::settle;
 use super::{Decision, Index, RepoItem, Store, hash};
 use crate::Error;
 
@@ -48,7 +47,23 @@ fn extension(repo: &Repo, extra: &Value) -> RepoItem {
     repo.item(OfferedKind::Extension, "fiber.test/p")
 }
 
+/// The copy directories in `pinned/`, sorted; the lock file and the
+/// `.ready` markers are not copies.
 fn pinned_names(repo: &Repo) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(repo.home().join("pinned")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Every entry in `pinned/`, files and directories, sorted.
+fn pinned_entries(repo: &Repo) -> Vec<String> {
     let Ok(entries) = fs::read_dir(repo.home().join("pinned")) else {
         return Vec::new();
     };
@@ -226,6 +241,13 @@ fn a_failing_install_step_records_nothing_and_leaves_no_copy() {
         Some(Decision::Approve)
     );
     assert_eq!(pinned_names(&repo), [good_hash]);
+    assert!(
+        !repo
+            .home()
+            .join("pinned")
+            .join(format!("{bad_hash}.ready"))
+            .exists()
+    );
 }
 
 #[test]
@@ -236,6 +258,13 @@ fn an_install_step_that_cannot_start_records_nothing() {
     let e = store(&repo).approve(&item, &hash).unwrap_err();
     assert!(matches!(e, Error::InstallStep { .. }), "{e}");
     assert!(pinned_names(&repo).is_empty());
+    assert!(
+        !repo
+            .home()
+            .join("pinned")
+            .join(format!("{hash}.ready"))
+            .exists()
+    );
     assert!(!approvals_dir(&repo, true).join(&hash).exists());
 }
 
@@ -314,6 +343,13 @@ fn a_file_changed_between_hashing_and_copying_fails_with_the_mismatch() {
         "{e}"
     );
     assert!(pinned_names(&repo).is_empty());
+    assert!(
+        !repo
+            .home()
+            .join("pinned")
+            .join(format!("{hash}.ready"))
+            .exists()
+    );
     assert!(!approvals_dir(&repo, false).join(&hash).exists());
 }
 
@@ -418,26 +454,93 @@ fn a_declaration_is_kept_with_the_previous_version() {
 }
 
 #[test]
-fn a_copy_that_another_approval_put_there_first_stays() {
+fn an_install_step_runs_at_the_pinned_path_and_leaves_a_ready_marker() {
     let repo = Repo::new();
-    let tmp = repo.home();
-    let (scratch, place) = (tmp.join("scratch"), tmp.join("place"));
-    fs::create_dir_all(&scratch).unwrap();
-    fs::write(scratch.join("mine"), "mine").unwrap();
-    // Nothing there: the scratch moves into place.
-    settle(&scratch, &place).unwrap();
-    assert_eq!(fs::read_to_string(place.join("mine")).unwrap(), "mine");
-    assert!(!scratch.exists());
-    // Another copy there, with something in it: it stays, and no error.
-    fs::create_dir_all(&scratch).unwrap();
-    fs::write(scratch.join("late"), "late").unwrap();
-    settle(&scratch, &place).unwrap();
-    assert!(place.join("mine").is_file());
-    assert!(!place.join("late").exists());
-    // Something that is not a copy there is a failure.
-    let file = tmp.join("file");
-    fs::write(&file, "x").unwrap();
-    assert!(settle(&scratch, &file).is_err());
+    let item = extension(&repo, &json!({"install": ["sh", "-c", "pwd > where.txt"]}));
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap();
+    let copy = repo.home().join("pinned").join(&hash);
+    let canonical = fs::canonicalize(&copy).unwrap();
+    assert_eq!(
+        fs::read_to_string(copy.join("where.txt")).unwrap(),
+        format!("{}\n", canonical.display()),
+    );
+    assert!(
+        repo.home()
+            .join("pinned")
+            .join(format!("{hash}.ready"))
+            .is_file()
+    );
+    // The step ran in no scratch directory: the copy, its marker and the
+    // lock are everything in `pinned/`.
+    assert_eq!(
+        pinned_entries(&repo),
+        [".lock", &hash, &format!("{hash}.ready")]
+    );
+}
+
+#[test]
+fn a_copy_without_a_ready_marker_is_cleared_and_built_again() {
+    let repo = Repo::new();
+    let item = extension(
+        &repo,
+        &json!({"install": ["sh", "-c", "echo x >> counter"]}),
+    );
+    let hash = hashed(&item);
+    let dir = repo.home().join("pinned").join(&hash);
+    store(&repo).approve(&item, &hash).unwrap();
+    // A kill before the marker was written: the copy is unfinished, with
+    // junk in it.
+    fs::remove_file(repo.home().join("pinned").join(format!("{hash}.ready"))).unwrap();
+    fs::write(dir.join("junk"), "junk").unwrap();
+    store(&repo).approve(&item, &hash).unwrap();
+    assert!(!dir.join("junk").exists());
+    assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "x\n");
+    assert!(
+        repo.home()
+            .join("pinned")
+            .join(format!("{hash}.ready"))
+            .is_file()
+    );
+}
+
+#[test]
+fn a_copy_with_a_ready_marker_is_kept() {
+    let repo = Repo::new();
+    let item = extension(
+        &repo,
+        &json!({"install": ["sh", "-c", "echo x >> counter"]}),
+    );
+    let hash = hashed(&item);
+    let dir = repo.home().join("pinned").join(&hash);
+    store(&repo).approve(&item, &hash).unwrap();
+    fs::write(dir.join("junk"), "junk").unwrap();
+    store(&repo).approve(&item, &hash).unwrap();
+    // The copy was finished, so it stays untouched: the junk is still
+    // there and the step did not run again.
+    assert_eq!(fs::read_to_string(dir.join("junk")).unwrap(), "junk");
+    assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "x\n");
+}
+
+#[test]
+fn a_failing_install_step_leaves_no_copy_and_no_ready_marker() {
+    let repo = Repo::new();
+    let item = extension(
+        &repo,
+        &json!({"install": ["sh", "-c", "mkdir built; exit 3"]}),
+    );
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap_err();
+    // The step built into the copy before it failed, and all of it went.
+    assert!(!repo.home().join("pinned").join(&hash).exists());
+    assert!(
+        !repo
+            .home()
+            .join("pinned")
+            .join(format!("{hash}.ready"))
+            .exists()
+    );
+    assert!(pinned_names(&repo).is_empty());
 }
 
 #[test]

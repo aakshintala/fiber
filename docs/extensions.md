@@ -1043,6 +1043,9 @@ at its newest version, a path from that path's current files. An extension
 installed from a path keeps its path, so `fiber extension update` on it
 installs again from that path, not from a tag. `fiber extension list` shows
 `local` in place of the commit for an extension installed from a path.
+The step runs at the extension's final path, never in a temporary
+directory, because a step such as creating a Python virtualenv records its
+own location.
 
 Install refuses an extension whose manifest needs a newer Fiber than the one
 running, or a different extension API version, with `extension_incompatible`.

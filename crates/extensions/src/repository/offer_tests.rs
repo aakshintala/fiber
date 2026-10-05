@@ -222,7 +222,12 @@ fn a_changed_hook_carries_the_declaration_diff_and_the_file_diff() {
     );
     assert!(diff.contains("-line two\n+line 2\n"), "{diff}");
     // The old approval and its copy are still there.
-    assert_eq!(fs::read_dir(repo.home().join("pinned")).unwrap().count(), 1);
+    let copies = fs::read_dir(repo.home().join("pinned"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .count();
+    assert_eq!(copies, 1);
 }
 
 #[test]

@@ -1196,7 +1196,7 @@ fn with_step(name: &str, step: &[&str]) -> Value {
 }
 
 #[test]
-fn an_install_step_runs_after_the_plan_in_the_staged_directory_and_again_on_update() {
+fn an_install_step_runs_at_the_final_path_after_the_plan_and_again_on_update() {
     let setup = Setup::new();
     let marker = setup.root().join("ran");
     let step = format!(
@@ -1230,6 +1230,188 @@ fn an_install_step_runs_after_the_plan_in_the_staged_directory_and_again_on_upda
     .commit()
     .unwrap();
     assert_eq!(fs::read_to_string(&marker).unwrap(), "ran\nran\n");
+}
+
+#[test]
+fn an_install_step_sees_its_final_path_on_install_and_on_update() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/x";
+    let stepped = |payload: &str| {
+        let mut m = with_step(
+            name,
+            &["sh", "-c", "pwd > where.txt; cat payload.txt > built.txt"],
+        );
+        m["version"] = json!(payload);
+        m
+    };
+    repos.tag(
+        name,
+        "",
+        "v1.0.0",
+        &stepped("one"),
+        &[("payload.txt", "one")],
+    );
+    install(&setup, &repos, name).unwrap();
+    let dir = setup.home().join("extensions/example.com-acme-x");
+    let canonical = fs::canonicalize(&dir).unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.join("where.txt")).unwrap(),
+        format!("{}\n", canonical.display()),
+    );
+    // The step ran after the new files were in place, not before.
+    assert_eq!(fs::read_to_string(dir.join("built.txt")).unwrap(), "one");
+    repos.tag(
+        name,
+        "",
+        "v1.1.0",
+        &stepped("two"),
+        &[("payload.txt", "two")],
+    );
+    plan(
+        &setup.home(),
+        &Request::Update(name.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.join("where.txt")).unwrap(),
+        format!("{}\n", canonical.display()),
+    );
+    assert_eq!(fs::read_to_string(dir.join("built.txt")).unwrap(), "two");
+}
+
+/// Every entry in `extensions/`, hidden or not, except the lock file,
+/// which every operation leaves behind.
+fn all_dirs(setup: &Setup) -> Vec<String> {
+    let mut found: Vec<String> = fs::read_dir(setup.home().join("extensions"))
+        .map(|d| {
+            d.map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+                .collect()
+        })
+        .unwrap_or_default();
+    found.retain(|n| n != ".lock");
+    found.sort();
+    found
+}
+
+#[test]
+fn a_failing_step_on_update_keeps_the_previous_version_working() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let name = "example.com/acme/x";
+    repos.tag(name, "", "v1.0.0", &manifest(name), &[("v1.txt", "v1")]);
+    install(&setup, &repos, name).unwrap();
+    let first = repos.commit(name, "v1.0.0");
+    let mut bad = with_step(name, &["sh", "-c", "echo broken >&2; exit 3"]);
+    bad["version"] = json!("v1.1.0");
+    repos.tag(name, "", "v1.1.0", &bad, &[("v2.txt", "v2")]);
+    let err = plan(
+        &setup.home(),
+        &Request::Update(name.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap_err();
+    assert!(matches!(err, Error::InstallExited { .. }), "{err}");
+    assert!(err.to_string().contains("broken"), "{err}");
+    let dir = setup.home().join("extensions/example.com-acme-x");
+    assert_eq!(fs::read_to_string(dir.join("v1.txt")).unwrap(), "v1");
+    assert!(!dir.join("v2.txt").exists());
+    assert_eq!(versions(&setup)[name], "v1.0.0");
+    assert!(
+        fs::read_to_string(dir.join(".fiber.json"))
+            .unwrap()
+            .contains(&first),
+        "the record still names the first commit"
+    );
+    assert_eq!(all_dirs(&setup), ["example.com-acme-x"]);
+}
+
+#[test]
+fn a_failing_step_on_a_fresh_install_leaves_nothing() {
+    let setup = Setup::new();
+    let source = setup.source(
+        "local",
+        &with_step(
+            "acme",
+            &["sh", "-c", "mkdir built; echo broken >&2; exit 3"],
+        ),
+        &[],
+    );
+    let err = plan(
+        &setup.home(),
+        &Request::Path(source),
+        FIBER,
+        &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap_err();
+    assert!(matches!(err, Error::InstallExited { .. }), "{err}");
+    // The step wrote into the fresh copy before it failed, and all of it
+    // went with the rollback.
+    assert_eq!(all_dirs(&setup), Vec::<String>::new());
+}
+
+#[test]
+fn a_failing_step_in_one_item_puts_the_other_items_back() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    let top = "example.com/acme/top";
+    repos.tag(dep, "", "v1.0.0", &manifest(dep), &[("v.txt", "dep-one")]);
+    repos.tag(
+        top,
+        "",
+        "v1.0.0",
+        &named(top, &[(dep, "1.0")]),
+        &[("v.txt", "top-one")],
+    );
+    install(&setup, &repos, top).unwrap();
+    // A new top needs a new dep, but the top's own step fails: both stay.
+    let mut dep_two = manifest(dep);
+    dep_two["version"] = json!("v2.0.0");
+    repos.tag(dep, "", "v2.0.0", &dep_two, &[("v.txt", "dep-two")]);
+    let mut bad = with_step(top, &["sh", "-c", "echo broken >&2; exit 3"]);
+    bad["depends"] = json!({ dep: "2.0" });
+    bad["version"] = json!("v1.1.0");
+    repos.tag(top, "", "v1.1.0", &bad, &[("v.txt", "top-two")]);
+    let err = plan(
+        &setup.home(),
+        &Request::Update(top.into()),
+        FIBER,
+        &repos.origin(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap_err();
+    assert!(matches!(err, Error::InstallExited { .. }), "{err}");
+    // The files are read before any listing: a listing would finish a
+    // leftover journal, hiding a commit that did not roll itself back.
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/example.com-acme-dep/v.txt")).unwrap(),
+        "dep-one"
+    );
+    assert_eq!(
+        fs::read_to_string(setup.home().join("extensions/example.com-acme-top/v.txt")).unwrap(),
+        "top-one"
+    );
+    assert_eq!(versions(&setup)[dep], "v1.0.0");
+    assert_eq!(versions(&setup)[top], "v1.0.0");
+    assert_eq!(
+        all_dirs(&setup),
+        ["example.com-acme-dep", "example.com-acme-top"]
+    );
 }
 
 #[test]

@@ -1,6 +1,7 @@
 //! `fiber extension install` and `fiber extension update` (`docs/extensions.md`, "Installing"): a
 //! [`Plan`] fetches, resolves and checks everything first, and its commit
-//! puts everything in place or nothing.
+//! puts everything in place and runs each install step at its final path,
+//! or nothing.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
@@ -124,15 +125,27 @@ impl Plan {
         self.items.values()
     }
 
-    /// Runs each install step and downloads each binary, then puts every
-    /// extension in place, or none. Returns their names, the one asked for
+    /// Puts every extension in place, then runs each install step and
+    /// downloads each binary at its final path, or puts nothing in place.
+    /// Returns their names, the one asked for
     /// first.
     pub fn commit(self) -> Result<Vec<String>, Error> {
-        for item in self.items.values() {
-            prepare(&item.paths.fresh, &item.manifest)?;
-        }
         let paths: Vec<Paths> = self.items.values().map(|i| i.paths.clone()).collect();
-        commit_all(&paths, |from, to| fs::rename(from, to), |_, _| Ok(()))?;
+        let manifests: Vec<&Manifest> = self.items.values().map(|i| &i.manifest).collect();
+        commit_all(
+            &paths,
+            |from, to| fs::rename(from, to),
+            |i, target| {
+                // `commit_all` only calls `run` with an index into `staged`,
+                // which this vector parallels.
+                let Some(manifest) = manifests.get(i) else {
+                    return Err(io(target)(std::io::Error::other(
+                        "a commit step without a staged manifest",
+                    )));
+                };
+                prepare(target, manifest)
+            },
+        )?;
         let mut names: Vec<String> = self.items.keys().cloned().collect();
         names.sort_by_key(|n| *n != self.root);
         Ok(names)

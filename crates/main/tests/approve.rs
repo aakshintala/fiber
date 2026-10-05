@@ -189,9 +189,18 @@ fn declare_all(repo: &Path) {
     );
 }
 
+/// The copy directories under `pinned/`, sorted; the lock file and the
+/// `.ready` markers are not copies.
+fn copies(setup: &Setup) -> Vec<String> {
+    Setup::names(&setup.home().join("pinned"))
+        .into_iter()
+        .filter(|n| setup.home().join("pinned").join(n).is_dir())
+        .collect()
+}
+
 /// The copy under `pinned/` whose name starts with `prefix`.
 fn copy(setup: &Setup, prefix: &str) -> PathBuf {
-    let names = Setup::names(&setup.home().join("pinned"));
+    let names = copies(setup);
     let hits: Vec<_> = names.iter().filter(|n| n.starts_with(prefix)).collect();
     assert_eq!(hits.len(), 1, "{prefix} in {names:?}");
     setup.home().join("pinned").join(hits[0])
@@ -322,7 +331,7 @@ fn a_changed_hook_is_offered_again_with_a_diff_and_the_old_approval_stays() {
     );
     // Both versions are approved and kept.
     assert_eq!(Setup::names(&setup.project_approvals("w")).len(), 3);
-    assert_eq!(Setup::names(&setup.home().join("pinned")).len(), 4);
+    assert_eq!(copies(&setup).len(), 4);
     assert_eq!(
         fs::read_to_string(copy(&setup, &old_hash).join("scripts/fmt.sh")).unwrap(),
         "echo fmt one\n"
@@ -441,7 +450,7 @@ fn a_failing_install_step_exits_nonzero_names_the_item_and_records_nothing() {
     assert!(run.stderr.contains("no good"), "{}", run.stderr);
     assert!(run.approvals().is_empty());
     assert!(Setup::names(&setup.project_approvals("w")).is_empty());
-    assert!(Setup::names(&setup.home().join("pinned")).is_empty());
+    assert!(copies(&setup).is_empty());
 }
 
 #[test]
@@ -463,4 +472,52 @@ fn a_repository_that_declares_nothing_has_nothing_to_approve() {
     let run = setup.approve("w", &["--yes"], None);
     assert_eq!(run.code, Some(0));
     assert_eq!(run.stderr, "nothing to approve\n");
+}
+
+#[test]
+fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
+    let setup = Setup::new();
+    let repo = setup.workspace();
+    write(
+        &repo.join("pkg/extension.json"),
+        &json!({
+            "name": "fiber.test/pkg", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+            "install": ["sh", "-c", r#"pwd > where; printf '#!/bin/sh\ncat "%s/payload.txt"\n' "$(pwd)" > run.sh"#],
+        })
+        .to_string(),
+    );
+    write(&repo.join("pkg/init.lua"), "-- entry\n");
+    write(&repo.join("pkg/payload.txt"), "payload\n");
+    write(
+        &repo.join(".fiber/config.json"),
+        r#"{"repository_extensions": [{"path": "pkg"}]}"#,
+    );
+    let run = setup.approve("w", &["--yes"], None);
+    assert_eq!(run.code, Some(0), "{}", run.stderr);
+    assert_eq!(run.approvals().len(), 1, "{}", run.stderr);
+    let dir = copy(&setup, run.approvals()[0][3]);
+    let canonical = fs::canonicalize(&dir).unwrap();
+    assert_eq!(
+        fs::read_to_string(dir.join("where")).unwrap(),
+        format!("{}\n", canonical.display())
+    );
+    // The script the step left reads the payload through the recorded
+    // directory, so it only works when the step ran where the copy stayed.
+    let out = Command::new("sh").arg(dir.join("run.sh")).output().unwrap();
+    assert!(out.status.success(), "{out:?}");
+    assert_eq!(String::from_utf8(out.stdout).unwrap(), "payload\n");
+    // A kill before the `.ready` marker and the approval: the next approve
+    // clears the unfinished copy and builds it again.
+    let hash = dir.file_name().unwrap().to_string_lossy().into_owned();
+    fs::remove_file(setup.home().join("pinned").join(format!("{hash}.ready"))).unwrap();
+    write(&dir.join("junk"), "junk");
+    fs::remove_file(setup.project_approvals("w").join(&hash)).unwrap();
+    let again = setup.approve("w", &["--yes"], None);
+    assert_eq!(again.code, Some(0), "{}", again.stderr);
+    assert_eq!(again.approvals().len(), 1, "{}", again.stderr);
+    assert!(!dir.join("junk").exists());
+    assert_eq!(
+        fs::read_to_string(dir.join("where")).unwrap(),
+        format!("{}\n", canonical.display())
+    );
 }
