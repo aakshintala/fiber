@@ -15,7 +15,7 @@ use contract::emit::Emit;
 use contract::events::{Event, Progress};
 use contract::tool::Cancel;
 
-use super::background::{MoveKind, Step, running_step, wait_deadline};
+use super::background::{Step, running_step, wait_deadline};
 use rustix::process::{Pid, Signal};
 
 /// How often a group is re-checked while the shell has exited and members
@@ -71,7 +71,7 @@ pub(crate) enum MovePolicy {
 }
 
 /// Why the command moved.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum MoveReason {
     /// It had run for 30 seconds.
     AfterThirtySeconds,
@@ -337,6 +337,8 @@ fn stream_tail(output: &[u8], emit: &dyn Emit, streamed: usize) {
 
 struct View {
     reaped: bool,
+    /// The shell's exit code, once it was reaped.
+    shell_exit: Option<i32>,
     eof: bool,
     seq: u64,
     cancelled: bool,
@@ -363,28 +365,20 @@ struct Run {
     shared: Arc<Shared>,
 }
 
-/// The call's cancel reaches the command through this bridge. Silencing it
-/// leaves a moved job running when the turn is cancelled.
-struct CancelBridge {
-    target: Mutex<Option<Weak<Shared>>>,
-}
+/// The call's cancel reaches the command through this bridge. The cancel
+/// holds it weakly and [`Moved`] holds the only strong reference, so
+/// dropping it at a move stops the call's cancel reaching the job.
+struct CancelBridge(Weak<Shared>);
 
 impl CancelBridge {
     fn arm(shared: &Arc<Shared>) -> Arc<Self> {
-        Arc::new(Self {
-            target: Mutex::new(Some(Arc::downgrade(shared))),
-        })
-    }
-
-    fn silence(&self) {
-        *lock_bridge(&self.target) = None;
+        Arc::new(Self(Arc::downgrade(shared)))
     }
 }
 
 impl Wake for CancelBridge {
     fn wake(&self) {
-        let shared = lock_bridge(&self.target).as_ref().and_then(Weak::upgrade);
-        if let Some(shared) = shared {
+        if let Some(shared) = self.0.upgrade() {
             shared.wake();
         }
     }
@@ -420,15 +414,12 @@ impl Moved {
 
     /// The call's cancel no longer reaches this command.
     pub(crate) fn detach_call_cancel(&mut self) {
-        if let Some(bridge) = self.bridge.take() {
-            bridge.silence();
-        }
+        self.bridge = None;
     }
 
-    /// Runs the command to the end with no further move, on the job's cancel.
-    pub(crate) fn drive_job(mut self, clock: &dyn Clock, cancel: &dyn Cancel) -> Finished {
-        self.detach_call_cancel();
-        self.arm(cancel);
+    /// Runs the command to the end with no further move, on the job's
+    /// cancel, which [`Moved::arm`] has subscribed.
+    pub(crate) fn drive_job(self, clock: &dyn Clock, cancel: &dyn Cancel) -> Finished {
         // debt: no job_delta while a job runs, part 4 of #299 adds it
         self.run(MovePolicy::Stay, clock, cancel, &Silent)
     }
@@ -513,7 +504,7 @@ fn pump(
                 timeout_due(clock, progress.timeout_at),
                 view.cancelled,
                 progress.seen_empty,
-                view.reaped,
+                view.shell_exit,
                 timeout_due(clock, progress.move_at),
             ) {
                 Step::Stop(kind) => {
@@ -529,16 +520,7 @@ fn pump(
                         until: after(clock, DRAIN),
                     };
                 }
-                Step::Move(MoveKind::ShellExited) => {
-                    let code = exit_code_of(lock(&progress.shared.inner).status);
-                    return LoopEnd::Move(MoveReason::ShellExited { code });
-                }
-                Step::Move(MoveKind::Background) => {
-                    return LoopEnd::Move(MoveReason::StartedInBackground);
-                }
-                Step::Move(MoveKind::AfterThirtySeconds) => {
-                    return LoopEnd::Move(MoveReason::AfterThirtySeconds);
-                }
+                Step::Move(reason) => return LoopEnd::Move(reason),
                 Step::Park => park(
                     clock,
                     &progress.shared,
@@ -609,6 +591,7 @@ fn view(shared: &Shared, cancel: &dyn Cancel) -> View {
     // between is visible (the waker takes the same lock before it notifies).
     View {
         reaped: inner.reaped,
+        shell_exit: inner.reaped.then(|| exit_code_of(inner.status)),
         eof: inner.eof,
         seq: inner.seq,
         cancelled: cancel.is_cancelled(),
@@ -769,10 +752,6 @@ fn write_or_drop(file: &mut File, bytes: &[u8]) {
 }
 
 fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
-}
-
-fn lock_bridge(inner: &Mutex<Option<Weak<Shared>>>) -> MutexGuard<'_, Option<Weak<Shared>>> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 

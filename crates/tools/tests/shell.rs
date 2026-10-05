@@ -11,16 +11,17 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::Arc;
 use std::sync::mpsc;
+use std::sync::{Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::ErrorCode;
+use contract::clock::Wake;
 use contract::events::{JobStarted, Outcome};
 use contract::jobs::JobRecord;
 use contract::shapes::{ContentPart, Process};
-use contract::tool::Tool;
+use contract::tool::{Cancel, Tool};
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
 use fakes::clock::FakeClock;
 use fakes::jobs::FakeJobs;
@@ -761,7 +762,7 @@ fn start_jobs(
     timeout_ms: Option<u64>,
     background: bool,
     jobs: Arc<FakeJobs>,
-    cancel: CancelToken,
+    cancel: impl Cancel + Clone + 'static,
 ) -> JobRun {
     let clock = FakeClock::new();
     let start = clock.origin();
@@ -776,7 +777,7 @@ fn start_jobs(
     }
     let recorder = Arc::new(Recorder::default());
     let tapped = Arc::clone(&recorder);
-    let cancel_for_run = cancel.clone();
+    let cancel_for_run = cancel;
     let (tx, rx) = mpsc::channel();
     thread::spawn(move || {
         tx.send(shell.run(&arguments, &cancel_for_run, tapped.as_ref()))
@@ -1056,25 +1057,62 @@ fn a_moved_job_times_out_from_the_commands_start() {
     watchdog.stand_down(DEADLINE);
 }
 
+/// A call's cancel that keeps every waker subscribed to it, to show which
+/// still reach a command.
+#[derive(Clone, Default)]
+struct Watched {
+    token: CancelToken,
+    wakers: Arc<Mutex<Vec<Weak<dyn Wake>>>>,
+}
+
+impl Watched {
+    /// Subscribers that are still alive.
+    fn live(&self) -> usize {
+        self.wakers
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|waker| waker.upgrade().is_some())
+            .count()
+    }
+}
+
+impl Cancel for Watched {
+    fn is_cancelled(&self) -> bool {
+        self.token.is_cancelled()
+    }
+
+    fn subscribe(&self, waker: Weak<dyn Wake>) {
+        self.wakers.lock().unwrap().push(waker.clone());
+        self.token.subscribe(waker);
+    }
+}
+
 #[test]
 fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     let dir = fakes::TempDir::new("fiber-shell-job-stop");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
-    let cancel = CancelToken::new();
+    let watched = Watched::default();
+    let cancel = watched.token.clone();
     let running = start_jobs(
         dir.path().to_path_buf(),
         blocking(ready.path(), "a", "b"),
         None,
         true,
         Arc::clone(&jobs),
-        cancel.clone(),
+        watched.clone(),
     );
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
     let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
     let job = started(&output);
+    assert_eq!(
+        watched.live(),
+        0,
+        "the call's cancel still reaches the moved job"
+    );
     let timeout_at = running.start + Duration::from_millis(600_000);
     assert!(
         running.clock.await_parked(timeout_at, DEADLINE),
@@ -1138,8 +1176,7 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     assert!(body.contains("AFTER\n"), "{body}");
     assert!(body.contains("Exit code 0."), "{body}");
     assert!(
-        body.trim_end()
-            .ends_with("It could not move to the background: the job's output file jobs/unavailable.log could not be created: background jobs are unavailable."),
+        body.ends_with("Exit code 0.\nIt could not move to the background: the job's output file jobs/unavailable.log could not be created: background jobs are unavailable.\n"),
         "{body}"
     );
     assert!(output.error.is_none(), "{body}");

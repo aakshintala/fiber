@@ -9,7 +9,7 @@ use fakes::CancelToken;
 use fakes::Recorder;
 use fakes::clock::FakeClock;
 
-use super::super::background::{MoveKind, Step, running_step, wait_deadline};
+use super::super::background::{Step, running_step, wait_deadline};
 use super::{
     Inner, MovePolicy, MoveReason, Moved, Phase, Run, Shared, StopKind, already_woken, bump,
     complete_prefix, exit_code_of, finish, group_alive, lock, note_eof, park, poll_while_occupied,
@@ -407,7 +407,7 @@ fn a_timeout_wins_over_every_move() {
         MovePolicy::Background,
     ] {
         assert_eq!(
-            running_step(policy, true, true, true, true, true),
+            running_step(policy, true, true, true, Some(3), true),
             Step::Stop(StopKind::Timeout),
             "{policy:?}"
         );
@@ -417,7 +417,7 @@ fn a_timeout_wins_over_every_move() {
 #[test]
 fn a_cancel_wins_over_a_move_and_an_empty_group() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, true, true, true, true),
+        running_step(MovePolicy::Background, false, true, true, Some(3), true),
         Step::Stop(StopKind::Cancel)
     );
 }
@@ -425,11 +425,11 @@ fn a_cancel_wins_over_a_move_and_an_empty_group() {
 #[test]
 fn an_empty_group_finishes_in_the_foreground() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, true, true, true),
+        running_step(MovePolicy::Background, false, false, true, Some(3), true),
         Step::Drain
     );
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, true, false, true),
+        running_step(MovePolicy::Foreground, false, false, true, None, true),
         Step::Drain
     );
 }
@@ -437,35 +437,35 @@ fn an_empty_group_finishes_in_the_foreground() {
 #[test]
 fn a_reaped_shell_with_members_moves_before_the_other_triggers() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, false, true, true),
-        Step::Move(MoveKind::ShellExited)
+        running_step(MovePolicy::Background, false, false, false, Some(3), true),
+        Step::Move(MoveReason::ShellExited { code: 3 })
     );
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, false, true, false),
-        Step::Move(MoveKind::ShellExited)
+        running_step(MovePolicy::Foreground, false, false, false, Some(3), false),
+        Step::Move(MoveReason::ShellExited { code: 3 })
     );
 }
 
 #[test]
 fn run_in_background_moves_on_the_first_pass() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, false, false, false),
-        Step::Move(MoveKind::Background)
+        running_step(MovePolicy::Background, false, false, false, None, false),
+        Step::Move(MoveReason::StartedInBackground)
     );
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, false, false, true),
-        Step::Move(MoveKind::Background)
+        running_step(MovePolicy::Background, false, false, false, None, true),
+        Step::Move(MoveReason::StartedInBackground)
     );
 }
 
 #[test]
 fn thirty_seconds_moves_a_foreground_command_that_is_still_running() {
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, false, false, true),
-        Step::Move(MoveKind::AfterThirtySeconds)
+        running_step(MovePolicy::Foreground, false, false, false, None, true),
+        Step::Move(MoveReason::AfterThirtySeconds)
     );
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, false, false, false),
+        running_step(MovePolicy::Foreground, false, false, false, None, false),
         Step::Park
     );
 }
@@ -473,11 +473,11 @@ fn thirty_seconds_moves_a_foreground_command_that_is_still_running() {
 #[test]
 fn a_shell_without_jobs_never_moves() {
     assert_eq!(
-        running_step(MovePolicy::Stay, false, false, false, true, true),
+        running_step(MovePolicy::Stay, false, false, false, Some(3), true),
         Step::Park
     );
     assert_eq!(
-        running_step(MovePolicy::Stay, false, false, false, false, true),
+        running_step(MovePolicy::Stay, false, false, false, None, true),
         Step::Park
     );
 }

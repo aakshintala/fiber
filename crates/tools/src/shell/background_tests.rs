@@ -2,22 +2,26 @@
 
 #![allow(clippy::unwrap_used, clippy::expect_used, reason = "test code")]
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::process::Command;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, mpsc};
+use std::thread;
+use std::time::Duration;
 
-use contract::clock::Wake;
+use contract::clock::{Clock, Wake};
 use contract::events::{JobStarted, Outcome};
 use contract::jobs::Stop;
 use contract::shapes::ContentPart;
 use contract::tool::Cancel;
 use contract::{ErrorCode, JobId};
+use fakes::clock::FakeClock;
 
 use super::super::command::{Finished, MoveReason, StopKind};
 use super::{
-    JobCancel, classify, description_of, format_rows, output_tail, parse_ps, receipt,
-    shell_sentence, to_completed,
+    JobCancel, PS_BOUND, align_char_boundary, description_of, format_rows, group_members,
+    output_tail, parse_ps, receipt, shell_sentence, to_completed,
 };
 
 fn finished(
@@ -75,7 +79,7 @@ fn the_receipt_names_the_reason_the_job_and_the_file() {
         output_path: "j_1.log".into(),
     };
     let path = Path::new("/tmp/j_1.log");
-    let output = receipt(&started, path, &MoveReason::StartedInBackground, 1);
+    let output = receipt(&started, path, &MoveReason::StartedInBackground, None);
     assert!(output.error.is_none());
     assert!(output.process.is_none());
     assert_eq!(
@@ -89,7 +93,7 @@ fn the_receipt_names_the_reason_the_job_and_the_file() {
         text,
         "Started in the background.\nJob j_1. Output: /tmp/j_1.log. Read it with `read`; `jobs wait` waits for it.\n"
     );
-    let later = receipt(&started, path, &MoveReason::AfterThirtySeconds, 1);
+    let later = receipt(&started, path, &MoveReason::AfterThirtySeconds, None);
     let ContentPart::Text { text } = &later.content[0] else {
         panic!("receipt text");
     };
@@ -133,8 +137,78 @@ fn a_shell_exit_names_members_or_says_the_group_is_still_occupied() {
         "The shell exited with code 3, so it moved to the background. Processes are still running in its group."
     );
     assert!(!unnamed.contains("leaving"), "{unnamed}");
-    let empty = shell_sentence(3, Some(""));
-    assert_eq!(empty, unnamed);
+}
+
+const DEADLINE: Duration = Duration::from_secs(10);
+
+/// A `ps` that prints `rows` and exits, or never exits when `rows` is `None`.
+fn fake_ps(dir: &Path, rows: Option<&str>) -> std::path::PathBuf {
+    let path = dir.join("ps");
+    let body = match rows {
+        Some(rows) => format!("#!/bin/sh\nprintf '{rows}'\n"),
+        None => "#!/bin/sh\nexec sleep 1000\n".to_owned(),
+    };
+    std::fs::write(&path, body).unwrap();
+    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+    path
+}
+
+/// Lists group `pgid` with `ps` on a thread of its own, so a listing that
+/// never returns fails the test at its deadline.
+fn list(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> mpsc::Receiver<Option<String>> {
+    let ps = ps.to_path_buf();
+    let clock = Arc::clone(clock);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(group_members(&ps, pgid, clock.as_ref())).unwrap();
+    });
+    rx
+}
+
+#[test]
+fn the_group_is_listed_from_ps() {
+    let dir = fakes::TempDir::new("fiber-shell-ps");
+    let clock = FakeClock::new();
+    let ps = fake_ps(
+        dir.path(),
+        Some("  12  99 sleep\\n  50   7 other\\n  34  99 my cmd\\n"),
+    );
+    let listed = |pgid| list(&ps, pgid, &clock).recv_timeout(DEADLINE).unwrap();
+    assert_eq!(listed(99).as_deref(), Some("sleep (12), my cmd (34)"));
+    assert_eq!(listed(8), None);
+    let missing = list(&dir.path().join("missing"), 99, &clock);
+    assert_eq!(missing.recv_timeout(DEADLINE).unwrap(), None);
+}
+
+#[test]
+fn a_ps_that_does_not_finish_is_killed_at_the_bound() {
+    let dir = fakes::TempDir::new("fiber-shell-ps-hangs");
+    let clock = FakeClock::new();
+    let ps = fake_ps(dir.path(), None);
+    let bound = clock.now() + PS_BOUND;
+    let rx = list(&ps, 99, &clock);
+    assert!(
+        clock.await_parked(bound, DEADLINE),
+        "the listing did not park at its bound"
+    );
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the listing returned before its bound"
+    );
+    clock.advance(PS_BOUND);
+    assert_eq!(
+        rx.recv_timeout(DEADLINE).expect("the bound to end it"),
+        None
+    );
+}
+
+#[test]
+fn a_cut_inside_a_character_starts_at_the_next_one() {
+    assert_eq!(align_char_boundary(&[0xA9, b'y']), b"y");
+    assert_eq!(align_char_boundary(&[0x9F, 0x98, 0x80, b'y']), b"y");
+    assert_eq!(align_char_boundary("éy".as_bytes()), "éy".as_bytes());
+    assert_eq!(align_char_boundary(&[0xA9, 0xA9]), b"");
+    assert_eq!(align_char_boundary(b""), b"");
 }
 
 #[test]
@@ -188,71 +262,86 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     std::fs::write(&path, "partial\n").unwrap();
     let id = JobId("j_1".into());
 
-    let (status, error, process) = classify(&finished(None, None, false, false, false), 1);
-    assert_eq!(status, Outcome::Failed);
-    assert_eq!(error.unwrap().code, ErrorCode::ToolError);
-    assert!(process.exit_code.is_none());
-    assert!(process.signal.is_none());
+    let end =
+        |finished: Finished, timeout_ms| to_completed(id.clone(), &path, finished, timeout_ms);
 
-    let ok = finished(Some(status_of("exit 0")), None, false, false, true);
-    let (status, error, process) = classify(&ok, 1);
-    assert_eq!(status, Outcome::Completed);
-    assert!(error.is_none());
+    let unreaped = end(finished(None, None, false, false, false), 1);
+    assert_eq!(unreaped.status, Outcome::Failed);
+    assert_eq!(unreaped.error.unwrap().code, ErrorCode::ToolError);
+    assert!(unreaped.process.is_none());
+    assert_eq!(unreaped.output_tail.as_deref(), Some("partial\n"));
+
+    let ok = end(
+        finished(Some(status_of("exit 0")), None, false, false, true),
+        1,
+    );
+    assert_eq!(ok.status, Outcome::Completed);
+    assert!(ok.error.is_none());
+    let process = ok.process.unwrap();
     assert_eq!(process.exit_code, Some(0));
     assert!(!process.timed_out);
-    let completed = to_completed(id.clone(), &path, &ok, 1);
-    assert!(completed.output_tail.is_none());
+    assert!(ok.output_tail.is_none());
 
-    let nonzero = finished(Some(status_of("exit 3")), None, false, false, true);
-    let (status, error, process) = classify(&nonzero, 1);
-    assert_eq!(status, Outcome::Failed);
-    assert_eq!(error.unwrap().code, ErrorCode::NonzeroExit);
-    assert_eq!(process.exit_code, Some(3));
-
-    let signaled = finished(Some(status_of("kill -SEGV $$")), None, false, false, false);
-    let (status, error, process) = classify(&signaled, 1);
-    assert_eq!(status, Outcome::Failed);
-    assert_eq!(error.unwrap().code, ErrorCode::Signal);
-    assert_eq!(process.signal.as_deref(), Some("SIGSEGV"));
-
-    let timeout = finished(None, Some(StopKind::Timeout), false, true, false);
-    let (status, error, process) = classify(&timeout, 5_000);
-    assert_eq!(status, Outcome::Failed);
-    assert_eq!(error.as_ref().unwrap().code, ErrorCode::Timeout);
-    assert!(error.unwrap().message.contains("5000"));
-    assert!(process.timed_out);
-    let failed = to_completed(id.clone(), &path, &timeout, 5_000);
-    assert_eq!(failed.output_tail.as_deref(), Some("partial\n"));
-
-    let stopped = finished(
-        Some(status_of("exit 0")),
-        Some(StopKind::Cancel),
-        false,
-        true,
-        false,
+    let nonzero = end(
+        finished(Some(status_of("exit 3")), None, false, false, true),
+        1,
     );
-    let (status, error, _) = classify(&stopped, 1);
-    assert_eq!(status, Outcome::Cancelled);
-    assert!(error.is_none());
-    let cancelled = to_completed(id, &path, &stopped, 1);
-    assert!(cancelled.output_tail.is_none());
+    assert_eq!(nonzero.status, Outcome::Failed);
+    assert_eq!(nonzero.error.unwrap().code, ErrorCode::NonzeroExit);
+    assert_eq!(nonzero.process.unwrap().exit_code, Some(3));
 
-    let unknown = finished(None, Some(StopKind::Cancel), true, true, false);
-    let (status, error, process) = classify(&unknown, 1);
-    assert_eq!(status, Outcome::Failed);
-    assert_eq!(error.unwrap().code, ErrorCode::Indeterminate);
-    assert!(!process.timed_out);
+    let signaled = end(
+        finished(Some(status_of("kill -SEGV $$")), None, false, false, false),
+        1,
+    );
+    assert_eq!(signaled.status, Outcome::Failed);
+    assert_eq!(signaled.error.unwrap().code, ErrorCode::Signal);
+    assert_eq!(signaled.process.unwrap().signal.as_deref(), Some("SIGSEGV"));
 
-    let ours = finished(Some(status_of("kill -TERM $$")), None, false, true, false);
-    let (status, error, _) = classify(&ours, 1);
-    assert_eq!(status, Outcome::Completed);
-    assert!(error.is_none());
+    let timeout = end(
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        5_000,
+    );
+    assert_eq!(timeout.status, Outcome::Failed);
+    let error = timeout.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert!(error.message.contains("5000"));
+    assert!(timeout.process.unwrap().timed_out);
+    assert_eq!(timeout.output_tail.as_deref(), Some("partial\n"));
 
-    let timed_unknown = finished(None, Some(StopKind::Timeout), true, true, false);
-    let (status, error, process) = classify(&timed_unknown, 1);
-    assert_eq!(status, Outcome::Failed);
-    assert_eq!(error.unwrap().code, ErrorCode::Indeterminate);
-    assert!(process.timed_out);
+    let stopped = end(
+        finished(
+            Some(status_of("exit 0")),
+            Some(StopKind::Cancel),
+            false,
+            true,
+            false,
+        ),
+        1,
+    );
+    assert_eq!(stopped.status, Outcome::Cancelled);
+    assert!(stopped.error.is_none());
+    assert!(stopped.output_tail.is_none());
+
+    let unknown = end(finished(None, Some(StopKind::Cancel), true, true, false), 1);
+    assert_eq!(unknown.status, Outcome::Failed);
+    assert_eq!(unknown.error.unwrap().code, ErrorCode::Indeterminate);
+    assert!(!unknown.process.unwrap().timed_out);
+
+    let ours = end(
+        finished(Some(status_of("kill -TERM $$")), None, false, true, false),
+        1,
+    );
+    assert_eq!(ours.status, Outcome::Completed);
+    assert!(ours.error.is_none());
+
+    let timed_unknown = end(
+        finished(None, Some(StopKind::Timeout), true, true, false),
+        1,
+    );
+    assert_eq!(timed_unknown.status, Outcome::Failed);
+    assert_eq!(timed_unknown.error.unwrap().code, ErrorCode::Indeterminate);
+    assert!(timed_unknown.process.unwrap().timed_out);
 }
 
 #[test]
