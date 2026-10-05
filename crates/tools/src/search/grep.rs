@@ -276,27 +276,38 @@ fn compile(options: &Options) -> Result<Search, ()> {
 /// Whether the translated pattern holds an alternation: a bare `|`
 /// outside a bracket expression, where the pipe reads as syntax. Escaped
 /// pipes and pipes inside `[...]` read as literals, so only a bare one
-/// outside brackets counts.
+/// outside brackets counts. A leading `]` is a member, not the closer —
+/// even after a leading `^`, which only negates — while a second `^` is
+/// a member itself, as [`bre::translate_ere`] reads them.
 fn has_alternation(pattern: &str) -> bool {
     let mut escaped = false;
     let mut bracket = false;
     let mut fresh = false;
+    let mut first = false;
     for current in pattern.bytes() {
         if escaped {
             escaped = false;
             fresh = false;
+            first = false;
         } else if current == b'\\' {
             escaped = true;
             fresh = false;
+            first = false;
         } else if bracket {
             // A leading `]` is a member, not the closer.
             if current == b']' && !fresh {
                 bracket = false;
             }
-            fresh = false;
+            // Only the first caret negates: a later one is a member,
+            // ending the lead a `]` still belongs to.
+            if current != b'^' || !first {
+                fresh = false;
+            }
+            first = false;
         } else if current == b'[' {
             bracket = true;
             fresh = true;
+            first = true;
         } else if current == b'|' {
             return true;
         }

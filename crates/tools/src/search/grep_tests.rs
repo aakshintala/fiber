@@ -913,6 +913,37 @@ fn only_matching_with_context_falls_back() {
     }
 }
 
+/// Whether the translated pattern holds an alternation, pinned case by
+/// case: each comparison in `has_alternation` fails fast on its own test.
+fn alternation(pattern: &str) -> bool {
+    super::has_alternation(pattern)
+}
+
+#[test]
+fn a_pipe_after_a_leading_right_bracket_is_not_an_alternation() {
+    // A leading `]` is a member, not the closer: the pipe stays inside
+    // the bracket in both spellings.
+    assert!(!alternation("[]|]"));
+    assert!(!alternation("[]a|b]"));
+}
+
+#[test]
+fn a_pipe_after_a_negated_leading_right_bracket_is_not_an_alternation() {
+    // A leading `^` only negates: the `]` after it is still a member, as
+    // `translate_ere` reads it.
+    assert!(!alternation("[^]|]"));
+    assert!(!alternation("[^]a|b]"));
+}
+
+#[test]
+fn a_bare_pipe_after_a_closed_bracket_is_an_alternation() {
+    // The closer ended the bracket — even after a repeated caret, whose
+    // second read is a member — so the pipe reads as syntax.
+    assert!(alternation("[a]|b"));
+    assert!(alternation("[^^]|x"));
+    assert!(alternation("a|b"));
+}
+
 #[test]
 fn only_matching_with_an_alternation_falls_back() {
     // Ruling 17 on #298: GNU prints the longest match at each position
@@ -1480,54 +1511,77 @@ fn rough_edges_match_grep_byte_for_byte() {
     );
 }
 
-#[test]
-fn brackets_match_grep_byte_for_byte() {
-    // The bracket table in `super::bre` through the whole search: the
-    // built-in prints what the system grep prints with the same exit.
-    // Every pattern matches, so no skipped-directory notice follows.
-    let files = BTreeMap::from([(
+/// The bracket corpus every bracket differential case shares.
+fn bracket_files() -> BTreeMap<&'static str, &'static [u8]> {
+    BTreeMap::from([(
         "brackets.txt",
         b"xa\nxb\n^\n^^\n^a\na^\na\nb\nd\n1\n[\n]\n[]\n[]a]\na&b\na~b\na-b\n-\n\\\na\\b\nalpha\na.a\n \n".as_slice(),
-    )]);
-    let cases: &[&[&str]] = &[
-        &["[^^][ab]", "brackets.txt"],
-        &["-E", "[^^][ab]", "brackets.txt"],
-        &["[^^]", "brackets.txt"],
-        &["-E", "[^^]", "brackets.txt"],
-        &["[^]]", "brackets.txt"],
-        &["-E", "[^]]", "brackets.txt"],
-        &["[^]a]", "brackets.txt"],
-        &["-E", "[^]a]", "brackets.txt"],
-        &["[]a]", "brackets.txt"],
-        &["-E", "[]a]", "brackets.txt"],
-        &["[a^]", "brackets.txt"],
-        &["-E", "[a^]", "brackets.txt"],
-        &["[[]", "brackets.txt"],
-        &["-E", "[[]", "brackets.txt"],
-        &["[]]", "brackets.txt"],
-        &["-E", "[]]", "brackets.txt"],
-        &["[-a]", "brackets.txt"],
-        &["-E", "[a-]", "brackets.txt"],
-        &["[a&&b]", "brackets.txt"],
-        &["-E", "[a&&b]", "brackets.txt"],
-        &["[a~~b]", "brackets.txt"],
-        &["-E", "[a~~b]", "brackets.txt"],
-        &["[a[b]", "brackets.txt"],
-        &["-E", "[a[b]", "brackets.txt"],
-        &["[\\d]", "brackets.txt"],
-        &["-E", "[\\d]", "brackets.txt"],
-        &["[a\\-z]", "brackets.txt"],
-        &["-E", "[a\\-z]", "brackets.txt"],
-        &["[a\\]]", "brackets.txt"],
-        &["-E", "[a\\]]", "brackets.txt"],
-        &["[[:alpha:]]", "brackets.txt"],
-        &["-E", "[[:alpha:]]", "brackets.txt"],
-        &["[!ab]", "brackets.txt"],
-        &["-E", "[!ab]", "brackets.txt"],
-    ];
-    for args in cases {
-        matches_like_grep(&files, args, None, &[], Some(b""), false);
-    }
+    )])
+}
+
+/// Runs one bracket case through the whole search against the system grep:
+/// the built-in prints what the system grep prints with the same exit.
+/// Every pattern matches, so no skipped-directory notice follows. Each
+/// case below runs through here under its own name, so a mutant changing
+/// one case fails fast under that name instead of hiding in a loop.
+fn bracket_search_matches_grep(args: &[&str]) {
+    let files = bracket_files();
+    matches_like_grep(&files, args, None, &[], Some(b""), false);
+}
+
+/// One test per bracket pattern and mode, generated from the shared case
+/// list: the bracket table in `super::bre` through the whole search, each
+/// comparison under its own name.
+macro_rules! bracket_search_tests {
+    ($($name:ident: [$($arg:literal),*];)*) => {
+        $(
+            #[test]
+            fn $name() {
+                bracket_search_matches_grep(&[$($arg),*]);
+            }
+        )*
+    };
+}
+
+bracket_search_tests! {
+    brackets_bre_double_caret_ab: ["[^^][ab]", "brackets.txt"];
+    brackets_ere_double_caret_ab: ["-E", "[^^][ab]", "brackets.txt"];
+    brackets_bre_double_caret: ["[^^]", "brackets.txt"];
+    brackets_ere_double_caret: ["-E", "[^^]", "brackets.txt"];
+    brackets_bre_negated_closer: ["[^]]", "brackets.txt"];
+    brackets_ere_negated_closer: ["-E", "[^]]", "brackets.txt"];
+    brackets_bre_negated_leading_closer: ["[^]a]", "brackets.txt"];
+    brackets_ere_negated_leading_closer: ["-E", "[^]a]", "brackets.txt"];
+    brackets_bre_leading_closer: ["[]a]", "brackets.txt"];
+    brackets_ere_leading_closer: ["-E", "[]a]", "brackets.txt"];
+    brackets_bre_trailing_caret: ["[a^]", "brackets.txt"];
+    brackets_ere_trailing_caret: ["-E", "[a^]", "brackets.txt"];
+    brackets_bre_open_member: ["[[]", "brackets.txt"];
+    brackets_ere_open_member: ["-E", "[[]", "brackets.txt"];
+    brackets_bre_lone_closer: ["[]]", "brackets.txt"];
+    brackets_ere_lone_closer: ["-E", "[]]", "brackets.txt"];
+    brackets_bre_leading_dash: ["[-a]", "brackets.txt"];
+    brackets_ere_leading_dash: ["-E", "[-a]", "brackets.txt"];
+    brackets_bre_trailing_dash: ["[a-]", "brackets.txt"];
+    brackets_ere_trailing_dash: ["-E", "[a-]", "brackets.txt"];
+    brackets_bre_dash_range: ["[a-b]", "brackets.txt"];
+    brackets_ere_dash_range: ["-E", "[a-b]", "brackets.txt"];
+    brackets_bre_double_ampersand: ["[a&&b]", "brackets.txt"];
+    brackets_ere_double_ampersand: ["-E", "[a&&b]", "brackets.txt"];
+    brackets_bre_double_tilde: ["[a~~b]", "brackets.txt"];
+    brackets_ere_double_tilde: ["-E", "[a~~b]", "brackets.txt"];
+    brackets_bre_open_bracket_member: ["[a[b]", "brackets.txt"];
+    brackets_ere_open_bracket_member: ["-E", "[a[b]", "brackets.txt"];
+    brackets_bre_backslash_d: ["[\\d]", "brackets.txt"];
+    brackets_ere_backslash_d: ["-E", "[\\d]", "brackets.txt"];
+    brackets_bre_escaped_dash: ["[a\\-z]", "brackets.txt"];
+    brackets_ere_escaped_dash: ["-E", "[a\\-z]", "brackets.txt"];
+    brackets_bre_escaped_closer: ["[a\\]]", "brackets.txt"];
+    brackets_ere_escaped_closer: ["-E", "[a\\]]", "brackets.txt"];
+    brackets_bre_posix_alpha: ["[[:alpha:]]", "brackets.txt"];
+    brackets_ere_posix_alpha: ["-E", "[[:alpha:]]", "brackets.txt"];
+    brackets_bre_bang_member: ["[!ab]", "brackets.txt"];
+    brackets_ere_bang_member: ["-E", "[!ab]", "brackets.txt"];
 }
 
 #[test]

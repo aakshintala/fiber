@@ -157,6 +157,32 @@ fn ere_double_dash_in_a_class_hands_over() {
 }
 
 #[test]
+fn a_dash_after_a_non_dash_stays_a_member() {
+    // Only `--` hands over (the tests above): a dash after anything else
+    // is a member or a range, in both modes.
+    assert_eq!(bre("[a-b]"), Some("[a-b]".to_owned()));
+    assert_eq!(bre("[-a]"), Some("[-a]".to_owned()));
+    assert_eq!(translate_ere("[a-b]"), Some("[a-b]".to_owned()));
+    assert_eq!(translate_ere("[-a]"), Some("[-a]".to_owned()));
+}
+
+#[test]
+fn a_single_dash_next_to_a_class_chunk_hands_nothing_over() {
+    // The `--` handover compares each dash with its neighbour across a
+    // `[:...:]` chunk as well: neither pattern holds two dashes in a row,
+    // so the translation stays (both still reach the system grep: neither
+    // is a valid regex, so `compile` hands over instead).
+    assert_eq!(bre("[a-[:alpha:]b]"), Some("[a-[:alpha:]b]".to_owned()));
+    assert_eq!(
+        translate_ere("[a-[:alpha:]b]"),
+        Some("[a-[:alpha:]b]".to_owned())
+    );
+    // A dash inside the chunk after a non-dash is a member too.
+    assert_eq!(bre("[a-[:-:]c]"), Some("[a-[:-:]c]".to_owned()));
+    assert_eq!(translate_ere("[a-[:-:]c]"), Some("[a-[:-:]c]".to_owned()));
+}
+
+#[test]
 fn bre_second_caret_is_a_member() {
     // Only the first caret negates; the runner's grep reads `[^^]` as
     // every character but `^`.
@@ -414,28 +440,82 @@ fn bracket_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]
     );
 }
 
-#[test]
-fn bracket_table_matches_grep_in_both_modes() {
-    for case in BRACKETS {
+/// Checks one BRACKETS row in one mode: the pinned translation, then the
+/// system grep on the bracket corpus where that grep is GNU. Every row
+/// below runs through here under its own name, so a mutant changing one
+/// case fails fast under that name instead of hiding in a loop.
+fn bracket_case_in_mode(pattern: &str, ere: bool) {
+    let case = BRACKETS
+        .iter()
+        .find(|case| case.pattern == pattern)
+        .unwrap_or_else(|| panic!("no BRACKETS row for {pattern:?}"));
+    if ere {
         assert_eq!(
-            translate_bre(case.pattern).as_deref(),
-            case.bre,
-            "BRE {:?}",
-            case.pattern
-        );
-        assert_eq!(
-            translate_ere(case.pattern).as_deref(),
+            translate_ere(pattern).as_deref(),
             case.ere,
-            "ERE {:?}",
-            case.pattern
+            "ERE {pattern:?}"
+        );
+        if let Some(translated) = case.ere {
+            bracket_matches_like_grep(pattern, translated, &["-E"]);
+        }
+    } else {
+        assert_eq!(
+            translate_bre(pattern).as_deref(),
+            case.bre,
+            "BRE {pattern:?}"
         );
         if let Some(translated) = case.bre {
-            bracket_matches_like_grep(case.pattern, translated, &[]);
-        }
-        if let Some(translated) = case.ere {
-            bracket_matches_like_grep(case.pattern, translated, &["-E"]);
+            bracket_matches_like_grep(pattern, translated, &[]);
         }
     }
+}
+
+/// One test per BRACKETS row and mode, generated from the shared table:
+/// the table stays the source of the pinned translations, while each case
+/// runs (and fails) under its own name.
+macro_rules! bracket_tests {
+    ($($bre:ident, $ere:ident: $pattern:literal;)*) => {
+        $(
+            #[test]
+            fn $bre() {
+                bracket_case_in_mode($pattern, false);
+            }
+            #[test]
+            fn $ere() {
+                bracket_case_in_mode($pattern, true);
+            }
+        )*
+    };
+}
+
+bracket_tests! {
+    bracket_bre_double_caret, bracket_ere_double_caret: "[^^]";
+    bracket_bre_negated_closer, bracket_ere_negated_closer: "[^]]";
+    bracket_bre_leading_closer, bracket_ere_leading_closer: "[]a]";
+    bracket_bre_negated_leading_closer, bracket_ere_negated_leading_closer: "[^]a]";
+    bracket_bre_trailing_caret, bracket_ere_trailing_caret: "[a^]";
+    bracket_bre_negated_closer_and_caret, bracket_ere_negated_closer_and_caret: "[^]^]";
+    bracket_bre_open_member, bracket_ere_open_member: "[[]";
+    bracket_bre_lone_closer, bracket_ere_lone_closer: "[]]";
+    bracket_bre_trailing_dash, bracket_ere_trailing_dash: "[a-]";
+    bracket_bre_leading_dash, bracket_ere_leading_dash: "[-a]";
+    bracket_bre_posix_pair, bracket_ere_posix_pair: "[[:alpha:][:digit:]]";
+    bracket_bre_double_ampersand, bracket_ere_double_ampersand: "[a&&b]";
+    bracket_bre_double_tilde, bracket_ere_double_tilde: "[a~~b]";
+    bracket_bre_open_bracket_member, bracket_ere_open_bracket_member: "[a[b]";
+    bracket_bre_lone_backslash, bracket_ere_lone_backslash: "[\\]";
+    bracket_bre_escaped_closer, bracket_ere_escaped_closer: "[a\\]]";
+    bracket_bre_backslash_d, bracket_ere_backslash_d: "[\\d]";
+    bracket_bre_escaped_dash, bracket_ere_escaped_dash: "[a\\-z]";
+    bracket_bre_double_caret_pair, bracket_ere_double_caret_pair: "[^^][ab]";
+    bracket_bre_bang_member, bracket_ere_bang_member: "[!ab]";
+    bracket_bre_double_dash, bracket_ere_double_dash: "[a--b]";
+    bracket_bre_collating_element, bracket_ere_collating_element: "[[.a.]]";
+    bracket_bre_equivalence_element, bracket_ere_equivalence_element: "[[=a=]]";
+    bracket_bre_open_collating, bracket_ere_open_collating: "[a[.b]";
+    bracket_bre_open_equivalence, bracket_ere_open_equivalence: "[a[=b]";
+    bracket_bre_open_class, bracket_ere_open_class: "[a[:b]";
+    bracket_bre_unterminated, bracket_ere_unterminated: "[a";
 }
 
 #[test]
