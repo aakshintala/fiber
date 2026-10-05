@@ -19,6 +19,9 @@ use serde_json::{Map, Value, json};
 #[path = "shell/command.rs"]
 mod command;
 
+#[path = "shell/prelude.rs"]
+mod prelude;
+
 #[path = "shell/read_only.rs"]
 mod read_only;
 
@@ -43,12 +46,28 @@ const HELD_OPEN: &str = "Output was still held open.";
 pub struct Shell {
     workspace: PathBuf,
     clock: Arc<dyn Clock>,
+    /// The Fiber binary whose hidden search subcommands `grep` and `find`
+    /// run in commands; none keeps the system tools.
+    search: Option<PathBuf>,
 }
 
 impl Shell {
     /// Runs commands in `workspace`, with deadlines read from `clock`.
     pub fn new(workspace: PathBuf, clock: Arc<dyn Clock>) -> Self {
-        Self { workspace, clock }
+        Self {
+            workspace,
+            clock,
+            search: None,
+        }
+    }
+
+    /// Routes `grep` and `find` in commands through the Fiber binary's
+    /// hidden search subcommands (`docs/tools.md`, "Search").
+    pub fn with_search(self, fiber: PathBuf) -> Self {
+        Self {
+            search: Some(fiber),
+            ..self
+        }
     }
 }
 
@@ -107,11 +126,17 @@ impl Tool for Shell {
         if bare_wait(&parsed.command) {
             return failed(ErrorCode::InvalidArguments, BARE_WAIT.to_owned());
         }
+        // The functions reach only the model's own command line: `classify`
+        // and `effects` saw the original string above.
+        let command = match &self.search {
+            Some(fiber) => format!("{}\n{}", prelude::define(Some(fiber)), parsed.command),
+            None => parsed.command,
+        };
         let program = shell_program();
         from_spawn(
             command::execute(
                 program,
-                &parsed.command,
+                &command,
                 &parsed.workdir,
                 Duration::from_millis(parsed.timeout_ms),
                 self.clock.as_ref(),

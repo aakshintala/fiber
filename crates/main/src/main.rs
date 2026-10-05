@@ -113,6 +113,10 @@ fn run() -> i32 {
             }
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
+        // The hidden search subcommands hold no feature logic: they only
+        // call into `tools` (`docs/architecture.md`, "The call rules").
+        cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),
+        cli::Invocation::Run(Some(cli::Commands::Find { args })) => tools::find_main(args),
     }
 }
 

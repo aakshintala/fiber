@@ -84,6 +84,28 @@ pub(crate) enum Commands {
         #[arg(value_name = "command")]
         command: Option<String>,
     },
+    /// The search behind the shell's `grep`: hidden and free to change.
+    #[command(hide = true, disable_help_flag = true)]
+    Grep {
+        /// Everything after `grep`, passed through untouched.
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "args"
+        )]
+        args: Vec<OsString>,
+    },
+    /// The search behind the shell's `find`: hidden and free to change.
+    #[command(hide = true, disable_help_flag = true)]
+    Find {
+        /// Everything after `find`, passed through untouched.
+        #[arg(
+            trailing_var_arg = true,
+            allow_hyphen_values = true,
+            value_name = "args"
+        )]
+        args: Vec<OsString>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -161,6 +183,20 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
     let ask = args.get(1).is_some_and(|arg| arg == "ask");
     match command().try_get_matches_from(&args) {
         Ok(matches) => match Cli::from_arg_matches(&matches) {
+            // Clap consumes the argv delimiter `--`, so the raw slice
+            // after the subcommand restores it: `fiber grep -- -needle`
+            // keeps `--` before the pattern, for the built-in and the
+            // fallback alike.
+            Ok(cli) if matches!(cli.command, Some(Commands::Grep { .. })) => {
+                Invocation::Run(Some(Commands::Grep {
+                    args: passthrough(&args, "grep"),
+                }))
+            }
+            Ok(cli) if matches!(cli.command, Some(Commands::Find { .. })) => {
+                Invocation::Run(Some(Commands::Find {
+                    args: passthrough(&args, "find"),
+                }))
+            }
             // `--resume` with an empty value names no session: a usage
             // error before `resolve` runs, which itself matches none.
             Ok(cli) => match cli.command {
@@ -187,6 +223,18 @@ fn parse_from(args: impl IntoIterator<Item = impl Into<OsString>>) -> Invocation
             }
         }
     }
+}
+
+/// Everything after the hidden search subcommand's name, verbatim: the
+/// subcommand is the first `name` past the binary, so a pattern of its
+/// own name still reads as an operand.
+fn passthrough(args: &[OsString], name: &str) -> Vec<OsString> {
+    let delimiter = args
+        .iter()
+        .skip(1)
+        .skip_while(|arg| arg.as_encoded_bytes() != name.as_bytes())
+        .skip(1);
+    delimiter.cloned().collect()
 }
 
 fn command() -> clap::Command {

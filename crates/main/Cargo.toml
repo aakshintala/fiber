@@ -19,6 +19,7 @@ log = { path = "../log" }
 loop = { path = "../loop" }
 provider = { path = "../provider" }
 serde_json.workspace = true
+tools = { path = "../tools" }
 
 [dev-dependencies]
 fakes = { path = "../fakes" }

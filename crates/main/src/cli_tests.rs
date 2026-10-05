@@ -12,6 +12,16 @@ fn menu() -> String {
     format!("{MENU}\n")
 }
 
+/// The subcommands a person sees: the hidden search subcommands stay out
+/// of the menu and the help tour.
+fn visible() -> Vec<String> {
+    command()
+        .get_subcommands()
+        .filter(|sub| !sub.is_hide_set())
+        .map(|sub| sub.get_name().to_owned())
+        .collect()
+}
+
 fn usage(args: &[&str]) -> (bool, String) {
     let parsed = parse_from(args.iter().copied());
     if let Invocation::Usage { ask, sentence } = parsed {
@@ -26,17 +36,18 @@ fn sentence(args: &[&str]) -> String {
 }
 
 #[test]
-fn the_menu_is_hand_grouped_and_names_every_subcommand() {
+fn the_menu_is_hand_grouped_and_names_every_visible_subcommand() {
     let mut cmd = command();
     let long = cmd.render_long_help().to_string();
     let short = cmd.render_help().to_string();
     assert_eq!(long, menu());
     assert_eq!(short, menu());
-    for sub in cmd.get_subcommands() {
+    assert!(!long.contains("grep"), "{long}");
+    assert!(!long.contains("find"), "{long}");
+    for name in visible() {
         assert!(
-            long.contains(sub.get_name()),
-            "{} is missing from the menu\n{long}",
-            sub.get_name()
+            long.contains(&name),
+            "{name} is missing from the menu\n{long}"
         );
     }
     assert!(
@@ -267,11 +278,7 @@ fn ask_takes_one_prompt_then_an_optional_dash() {
 
 #[test]
 fn a_commands_help_matches_its_flag_and_names_fiber() {
-    let cmd = command();
-    let names: Vec<String> = cmd
-        .get_subcommands()
-        .map(|sub| sub.get_name().to_owned())
-        .collect();
+    let names = visible();
     assert!(!names.is_empty());
     for name in &names {
         let rendered = super::render_help(Some(name)).unwrap();
@@ -370,5 +377,74 @@ fn the_menu_and_ask_help_show_resume() {
     assert!(
         rendered.contains("--resume <id>"),
         "ask's help shows --resume:\n{rendered}"
+    );
+}
+
+#[test]
+fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
+    assert_eq!(visible(), ["ask", "extension", "version", "help"]);
+    let Invocation::Run(Some(Commands::Grep { args })) =
+        parse_from(["fiber", "grep", "needle", "a.txt"])
+    else {
+        panic!("grep with a pattern and a path");
+    };
+    assert_eq!(args, [OsString::from("needle"), OsString::from("a.txt")]);
+    // Clap handles no help or version flag for them: all is operands.
+    let Invocation::Run(Some(Commands::Grep { args })) =
+        parse_from(["fiber", "grep", "--help", "-n"])
+    else {
+        panic!("grep with flags");
+    };
+    assert_eq!(args, [OsString::from("--help"), OsString::from("-n")]);
+    let Invocation::Run(Some(Commands::Grep { args })) = parse_from(["fiber", "grep"]) else {
+        panic!("bare grep");
+    };
+    assert!(args.is_empty());
+    let Invocation::Run(Some(Commands::Grep { args })) =
+        parse_from(["fiber", "grep", "--", "-needle", "a.txt"])
+    else {
+        panic!("grep keeps the argv delimiter");
+    };
+    assert_eq!(
+        args,
+        [
+            OsString::from("--"),
+            OsString::from("-needle"),
+            OsString::from("a.txt")
+        ]
+    );
+    let Invocation::Run(Some(Commands::Find { args })) =
+        parse_from(["fiber", "find", ".", "-name", "*.rs", "-o"])
+    else {
+        panic!("find with an expression");
+    };
+    assert_eq!(
+        args,
+        [
+            OsString::from("."),
+            OsString::from("-name"),
+            OsString::from("*.rs"),
+            OsString::from("-o")
+        ]
+    );
+}
+
+#[test]
+fn find_keeps_the_argv_delimiter_like_grep() {
+    // Clap consumes the argv delimiter `--`, so only the raw slice after
+    // the subcommand restores it: without the find arm above, the parsed
+    // args would miss it.
+    let Invocation::Run(Some(Commands::Find { args })) =
+        parse_from(["fiber", "find", "--", "-name", "*.rs"])
+    else {
+        panic!("find keeps the argv delimiter");
+    };
+    assert_eq!(
+        args,
+        [
+            OsString::from("--"),
+            OsString::from("-name"),
+            OsString::from("*.rs")
+        ]
     );
 }

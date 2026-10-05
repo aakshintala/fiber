@@ -117,7 +117,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | ring | SHA-256, for PKCE and extension binary checksums; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group | ~0 | ~0 | ~0 | 4 | 330 |
-| ignore, grep-searcher, grep-regex | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
+| ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit") and an instruction file's diff (`docs/system-prompt.md`, "When something changes") | ~0 | 380 | ~0 | 1 | 389 |
 | all of the above together | | 7,048 | 6,104 | 4,288 | 136 | 6,452 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
@@ -138,8 +138,9 @@ Notes:
 - serde_json's `preserve_order` feature is never enabled
   (`docs/prompt-cache.md`).
 - The search row is ripgrep's walker (`ignore`), its search loop
-  (`grep-searcher`) and its regex adapter (`grep-regex`, which brings
-  `regex`), measured together walking the probe's own tree and searching every
+  (`grep-searcher`), its regex adapter (`grep-regex`, which brings
+  `regex`) and the matcher trait that gives each match's span for `-o`
+  (`grep-matcher`, already in the tree through the other two), measured together walking the probe's own tree and searching every
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
   x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search,
   similar and together rows were measured on September 26, 2026.

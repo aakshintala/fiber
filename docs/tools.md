@@ -350,10 +350,11 @@ Fiber.
   as `cargo test | grep FAILED` works as before. About a fifth of the owner's
   shell `grep` calls are filters of this kind.
 - Output is GNU `grep`'s, byte for byte: `path:line:text`, `--` between
-  context groups, and the path shown only when more than one file is
-  searched. `find` prints one path per line.
-- Exit codes are GNU's: 0 when something matched, 1 when nothing did, 2 on
-  an error.
+  context groups, and the path shown when more than one file is searched
+  or `-r` names a directory. `find` prints one path per line.
+- `grep`'s exit codes are GNU's: 0 when something matched, 1 when nothing
+  did, 2 on an error. `find` exits 0 when it finished, even with nothing
+  printed, and 2 on an error.
 - `xargs grep` and `find -exec grep` run the system `grep`, because shell
   functions do not reach the programs they start.
 
