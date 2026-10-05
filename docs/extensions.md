@@ -132,7 +132,7 @@ envelope and `schema_version` (`docs/events.md`), and three kinds of traffic:
 - **what any client gets:** the event stream, and the driver commands it may
   send (`docs/invocation.md`, "Driver commands")
 - **from Fiber:** a first message, `extension_hello`, with the session's id,
-  why it started (new, resume, fork or rewind), its workspace, the extension's
+  why it started (new, resume, fork, rewind or handoff), its workspace, the extension's
   data directories and its folded state; then each hook, watcher delivery and
   command as a request the extension answers
 - **from the extension:** its registrations, and host calls as requests Fiber
@@ -418,8 +418,9 @@ state.keys()
   at the loop's next drain of its inbox, so a crash before then loses it.
   Once `fiber_exited` is written there is no next drain: `state.set` and
   `state.unset` fail with code `closing` ("When a session ends").
-- **A handoff changes nothing.** The session continues, and so does its
-  extension state.
+- **A handoff keeps it.** The session continues, and so does its extension
+  state. Only the conversation restarts, which `session_start` is told
+  ("The hook points").
 
 ## What writing a provider looks like
 
@@ -503,7 +504,7 @@ calls exactly as for the model's ("Running a tool").
 
 | Hook point | When it runs | What the hook sees | What it may return |
 |---|---|---|---|
-| `session_start` | A session starts, resumes, forks or rewinds, before the first model request | why it started, the session's id and workspace root | context to add |
+| `session_start` | A session starts, resumes, forks or rewinds, before the first model request; and at each handoff, once the note is ready | why it started, the session's id and workspace root | context to add |
 | `before_message` | A person's or a driver's message arrives, as a turn's input or as steering, before it is logged | the message's text and images, and for a session message the sender's id and its parent's id | a replacement message, a refusal with a reason, context to add |
 | `turn_start` | A turn has started, before its first model request | the turn's input and what started it | context to add |
 | `before_tool` | A call has passed its schema check and its effects function, before permission is decided | the tool's name, the arguments, the declared effects, paths and reversibility | replacement arguments, a refusal with a reason |
@@ -521,6 +522,17 @@ inbox of messages from other agents does it this way, at `session_start` or
 context is appended again. The hook sees why the session started, so an
 extension that must not repeat itself keeps what it delivered in its
 extension state ("State") and adds only what is new.
+
+`session_start` also runs at every handoff, with reason `handoff`, so what an
+extension adds at start is not lost when the conversation restarts. Extension
+state carries across a handoff but the model's context does not, so an
+extension that keeps what it delivered sees `handoff` and delivers it again,
+as it is now. The hook sees the reason, as at every other start, and not the
+handoff note. Its context follows the new opening message, before the turn's
+input and the note (`docs/handoff.md`, "What the model sees after a
+handoff"). A `non-blocking` hook that fails there has its context dropped with
+a `notice`, and the handoff completes ("When a hook fails"). `turn_start` does
+not run again, because the turn has not restarted.
 
 **`before_message`** covers every message a person or a driver sends, so a
 secret pasted into a prompt can be removed before anything records it. A
@@ -639,6 +651,7 @@ What a `blocking` failure stops, at each point:
 | Hook point | What happens |
 |---|---|
 | `session_start` | The session does not start. Fiber exits with error `hook_failed`, naming the extension. |
+| `session_start` at a handoff | The handoff completes `failed` with code `hook_failed`, as for `before_handoff`. The session does not exit. |
 | `before_message` | The message is neither logged nor sent, and the sender gets `hook_failed`. |
 | `turn_start` | The turn completes `failed` with code `hook_failed`, before any model request. |
 | `before_tool` | The call completes `failed` with code `hook_failed` and never starts. |
