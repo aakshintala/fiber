@@ -151,36 +151,41 @@ fn due_judges_a_stored_credential_by_the_clock() {
     assert!(held.due(&serde_json::json!("t")));
 }
 
-/// A connection that fails `silent` reads, as one that times out does, then
-/// sends `head`.
-struct Silent {
-    silent: u32,
+/// A connection that fails `pause` reads, as one that times out does,
+/// before each byte of `head`.
+struct Pausing {
+    pause: u32,
+    waited: u32,
     head: io::Cursor<Vec<u8>>,
 }
 
-impl Read for Silent {
+impl Read for Pausing {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        if self.silent > 0 {
-            self.silent -= 1;
+        if self.waited < self.pause {
+            self.waited += 1;
             return Err(io::ErrorKind::WouldBlock.into());
         }
+        self.waited = 0;
+        // `read_head` reads one byte at a time.
         self.head.read(buf)
     }
 }
 
-fn head_after(silent: u32) -> Head {
+fn head_pausing(pause: u32) -> Head {
     let (_keep, stop) = mpsc::channel();
-    let mut stream = Silent {
-        silent,
+    let mut stream = Pausing {
+        pause,
+        waited: 0,
         head: io::Cursor::new(b"GET /?code=ok HTTP/1.1\r\n\r\n".to_vec()),
     };
     read_head(&mut stream, &stop)
 }
 
 #[test]
-fn a_connection_silent_for_the_bound_is_dropped_and_one_poll_less_is_read() {
-    assert!(matches!(head_after(SILENT_POLLS), Head::Gone));
-    assert!(matches!(head_after(SILENT_POLLS - 1), Head::Complete(_)));
+fn a_connection_silent_for_the_bound_is_dropped_and_pauses_one_poll_shorter_never_are() {
+    assert!(matches!(head_pausing(SILENT_POLLS), Head::Gone));
+    // A pause before every byte: far more silent polls in all than the bound.
+    assert!(matches!(head_pausing(SILENT_POLLS - 1), Head::Complete(_)));
 }
 
 /// A connection that never stops sending header bytes.

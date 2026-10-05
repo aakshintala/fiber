@@ -43,8 +43,12 @@ const POLL: Duration = Duration::from_millis(20);
 /// gets a 431 and the listener serves the next connection.
 const MAX_HEAD: usize = 8 * 1024;
 
-/// How many polls of silence the listener waits on one connection before it
-/// drops the connection (a browser's speculative one) and serves the next.
+/// How many polls in a row a connection may send nothing before the listener
+/// drops it and serves the next (Ruling 7 as amended on #309). The listener
+/// serves one connection at a time and browsers open idle speculative
+/// connections, so silence on one cannot last to the callback's timeout. The
+/// count restarts whenever bytes arrive, so pauses between bytes do not add
+/// up; the callback's own timeout still ends the whole call.
 const SILENT_POLLS: u32 = 100;
 
 /// What the browser shows after the redirect.
@@ -431,7 +435,8 @@ fn answer(mut stream: TcpStream, stop: &mpsc::Receiver<()>) -> Option<Query> {
 enum Head {
     Complete(Vec<u8>),
     TooLong,
-    /// Closed, silent or failing for [`SILENT_POLLS`] reads, or cancelled.
+    /// Closed, silent or failing for [`SILENT_POLLS`] reads in a row, or
+    /// cancelled.
     Gone,
 }
 
@@ -452,7 +457,10 @@ fn read_head(stream: &mut impl Read, stop: &mpsc::Receiver<()>) -> Head {
         }
         match stream.read(&mut byte) {
             Ok(0) => return Head::Gone,
-            Ok(_) => head.push(byte[0]),
+            Ok(_) => {
+                head.push(byte[0]);
+                silent = 0;
+            }
             // A read that times out is one silent poll. Any other error
             // counts as one too, so a connection that keeps failing ends
             // within the same bound.

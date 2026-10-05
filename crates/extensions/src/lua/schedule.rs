@@ -76,7 +76,7 @@ pub(super) fn serve(
                 Some(vm)
             }
             Err(e) => {
-                shared.phase = Phase::Stopped(e);
+                shared.stop(e);
                 None
             }
         };
@@ -114,6 +114,9 @@ pub(super) fn serve(
             vm.collect();
         }
     }
+    // Stopped: no callback waits on a queued reply any more, and dropping it
+    // releases a credential lock in it.
+    hub.lock().replies.clear();
 }
 
 /// Waits for the next thing to do: a parked callback past its deadline is

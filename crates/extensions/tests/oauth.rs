@@ -16,7 +16,6 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -45,6 +44,10 @@ const GRACE: Duration = Duration::from_secs(1);
 /// How long a freed port may take to come back: the listener looks at its
 /// cancel receiver every 20 ms.
 const PORT_FREE_WITHIN: Duration = Duration::from_secs(2);
+
+/// How long a dropped credential lock may take to come back: a lock wait
+/// looks at its cancel receiver every 20 ms.
+const LOCK_FREE_WITHIN: Duration = Duration::from_secs(2);
 
 /// Fake-clock wall time at construction, in Unix seconds.
 const WALL: u64 = 1_700_000_000;
@@ -748,58 +751,13 @@ fn a_function_that_returns_no_usable_credential_leaves_the_file() {
     }
 }
 
-/// A token endpoint that holds its first request until the test releases it,
-/// then answers every request with a token.
-struct Held {
-    url: String,
-    /// The first request has arrived.
-    arrived: mpsc::Receiver<()>,
-    release: mpsc::Sender<()>,
-    requests: Arc<AtomicUsize>,
-}
-
-fn held_endpoint() -> Held {
-    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let (arrived_tx, arrived) = mpsc::channel();
-    let (release, released) = mpsc::channel::<()>();
-    let requests = Arc::new(AtomicUsize::new(0));
-    let count = Arc::clone(&requests);
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let mut stream = stream.unwrap();
-            if count.fetch_add(1, Ordering::SeqCst) == 0 {
-                arrived_tx.send(()).unwrap();
-                released.recv().unwrap();
-            }
-            // The head, then the body it announces.
-            let mut seen = Vec::new();
-            let mut byte = [0_u8; 1];
-            while !seen.ends_with(b"\r\n\r\n") {
-                stream.read_exact(&mut byte).unwrap();
-                seen.push(byte[0]);
-            }
-            let head = String::from_utf8_lossy(&seen).to_ascii_lowercase();
-            let length = head
-                .lines()
-                .find_map(|line| line.strip_prefix("content-length:"))
-                .map_or(0, |n| n.trim().parse().unwrap());
-            stream.read_exact(&mut vec![0_u8; length]).unwrap();
-            let body = json!({ "access_token": "shared", "expires_in": 3600 }).to_string();
-            write!(
-                stream,
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
-                body.len()
-            )
-            .unwrap();
-        }
-    });
-    Held {
-        url,
-        arrived,
-        release,
-        requests,
-    }
+/// A token endpoint that holds its first reply until the test releases it.
+/// The script has one token: a second refresh request would get the fake's
+/// `script_exhausted`.
+fn held_endpoint() -> OauthServer {
+    let server = OauthServer::start(vec![OauthReply::token("shared", "rt", 3600)]);
+    server.hold();
+    server
 }
 
 /// Two refreshes race for one credential, on `threads` extension threads.
@@ -812,25 +770,28 @@ fn refresh_race(
     first: &Arc<LuaProvider>,
     second: &Arc<LuaProvider>,
     threads: usize,
-    held: &Held,
+    held: &OauthServer,
 ) {
     let deadline = env.clock.now() + TIMEOUT;
     let a = start_token(first);
-    finish(&held.arrived);
+    assert!(
+        held.await_requests(1, WAIT),
+        "the first refresh never reached the endpoint"
+    );
     let b = start_token(second);
     await_callbacks_parked(env, deadline, 2, threads);
-    assert_eq!(held.requests.load(Ordering::SeqCst), 1);
-    held.release.send(()).unwrap();
+    assert_eq!(held.request_count(), 1);
+    held.release();
     assert_eq!(finish(&a).unwrap(), "shared");
     assert_eq!(finish(&b).unwrap(), "shared");
-    assert_eq!(held.requests.load(Ordering::SeqCst), 1);
+    assert_eq!(held.request_count(), 1);
 }
 
 #[test]
 fn two_sessions_refreshing_together_refresh_once() {
     let env = Env::new();
     let held = held_endpoint();
-    env.secret("url", &held.url);
+    env.secret("url", &held.url());
     env.secret("mode", "ok");
     // Two extension instances on one home, as two sessions are.
     let (one, two) = (env.extension(), env.extension_with(INIT, "fixture"));
@@ -845,7 +806,7 @@ fn two_sessions_refreshing_together_refresh_once() {
 fn two_callbacks_of_one_extension_refresh_once_without_deadlocking_the_vm() {
     let env = Env::new();
     let held = held_endpoint();
-    env.secret("url", &held.url);
+    env.secret("url", &held.url());
     env.secret("mode", "ok");
     let ext = env.extension();
     let first = LuaProvider::new(Arc::clone(&ext), "acme");
@@ -857,25 +818,19 @@ fn two_callbacks_of_one_extension_refresh_once_without_deadlocking_the_vm() {
 fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock() {
     let env = Env::new();
     let ext = env.extension();
-    // A server that takes the connection and never answers.
-    let silent = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    // A server that records the request and never answers.
     let hang = OauthServer::start(vec![]);
+    hang.hold();
     let provider = env.provider(&ext, &hang, "ok");
-    env.secret("url", &format!("http://{}", silent.local_addr().unwrap()));
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
     let deadline = env.clock.now() + TIMEOUT;
-    let (accepted_tx, accepted) = mpsc::channel();
-    std::thread::spawn(move || {
-        let held = silent.accept().unwrap();
-        accepted_tx.send(()).unwrap();
-        // Hold the connection until the test ends the process.
-        std::thread::park();
-        drop(held);
-    });
     let rx = start_token(&provider);
     // The function is on the wire, so it holds the lock.
-    finish(&accepted);
+    assert!(
+        hang.await_requests(1, WAIT),
+        "the refresh never reached the endpoint"
+    );
     assert!(env.clock.await_parked(deadline, WAIT));
     env.clock.advance(TIMEOUT);
     let error = finish(&rx).unwrap_err();
@@ -886,6 +841,149 @@ fn a_refresh_that_times_out_in_its_function_leaves_the_file_and_frees_the_lock()
     env.secret("url", &server.url());
     assert_eq!(finish(&start_token(&provider)).unwrap(), "again");
     assert_eq!(server.request_count(), 1);
+}
+
+/// A command that blocks the extension's thread in `require("block")`, where
+/// no deadline hook runs, so its caller abandons the VM past the grace.
+const BLOCK: &str = r#"
+fiber.command("block", { timeout = 60000, run = function()
+  require("block")
+end })
+"#;
+
+/// Makes `require("block")` signal that the code reached it, then block for
+/// good: the writer end stays open and sends nothing.
+fn block(dir: &Path) -> mpsc::Receiver<()> {
+    let path = dir.join("block.lua");
+    let made = std::process::Command::new("mkfifo").arg(&path).status();
+    assert!(made.unwrap().success(), "mkfifo {path:?}");
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let held = fs::OpenOptions::new().write(true).open(&path).unwrap();
+        tx.send(()).unwrap();
+        // Hold the writer end until the test ends the process.
+        std::thread::park();
+        drop(held);
+    });
+    rx
+}
+
+/// Pauses the test thread for `pause` of real time.
+fn pause(pause: Duration) {
+    let (_keep, idle) = mpsc::channel::<()>();
+    match idle.recv_timeout(pause) {
+        Ok(()) | Err(_) => {}
+    }
+}
+
+/// Whether the credential's lock is free now. A lock taken to look is
+/// dropped at once.
+fn lock_free(env: &Env) -> bool {
+    CredentialFile::new(&env.home(), "acme", "default")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .is_some()
+}
+
+/// Waits until another holder has the credential's lock.
+fn await_lock_taken(env: &Env) {
+    let attempts = WAIT.as_millis() / 10;
+    let taken = (0..attempts).any(|_| {
+        let free = lock_free(env);
+        if free {
+            pause(Duration::from_millis(10));
+        }
+        !free
+    });
+    assert!(taken, "the lock wait never took the lock within {WAIT:?}");
+}
+
+/// Asserts the credential's lock comes free within [`LOCK_FREE_WITHIN`].
+fn assert_lock_freed(env: &Env) {
+    let attempts = LOCK_FREE_WITHIN.as_millis() / 10;
+    let freed = (0..attempts).any(|_| {
+        let free = lock_free(env);
+        if !free {
+            pause(Duration::from_millis(10));
+        }
+        free
+    });
+    assert!(freed, "the lock was still held after {LOCK_FREE_WITHIN:?}");
+}
+
+/// An extension with a refresh parked on a credential lock the test holds,
+/// and a command blocking its thread. Returns the held lock and the
+/// command's caller.
+struct Stuck {
+    ext: Arc<LuaExtension>,
+    held: config::CredentialLock,
+    refresh: mpsc::Receiver<Result<String, Error>>,
+    block: mpsc::Receiver<Result<String, Error>>,
+}
+
+fn stuck(env: &Env) -> Stuck {
+    let dir = env.setup.root().join("extensions/stuck");
+    write(&dir.join("init.lua"), &format!("{INIT}\n{BLOCK}"));
+    let reached = block(&dir);
+    let ext = Arc::new(LuaExtension::new(
+        "stuck",
+        &dir,
+        env.home(),
+        env.clock.clone(),
+    ));
+    env.secret("mode", "ok");
+    let held = CredentialFile::new(&env.home(), "acme", "default")
+        .unwrap()
+        .try_lock()
+        .unwrap()
+        .unwrap();
+    let deadline = env.clock.now() + TIMEOUT;
+    let refresh = start_token(&LuaProvider::new(Arc::clone(&ext), "acme"));
+    // The refresh is parked on the lock wait.
+    await_callbacks_parked(env, deadline, 1, 1);
+    let block = start(&ext, "block", "");
+    finish(&reached);
+    Stuck {
+        ext,
+        held,
+        refresh,
+        block,
+    }
+}
+
+#[test]
+fn a_lock_taken_after_the_extension_stopped_is_released() {
+    let env = Env::new();
+    let stuck = stuck(&env);
+    env.clock.advance(TIMEOUT + GRACE);
+    assert!(matches!(finish(&stuck.block), Err(Error::Abandoned { .. })));
+    finish(&stuck.refresh).unwrap_err();
+    // The lock wait is still running: the stuck thread keeps its callback.
+    // It looks every 20 ms, so within the pause it has taken the lock, and a
+    // stopped extension drops its reply. The test keeps off the lock meanwhile
+    // so the lock wait, not the test, is the one to take it.
+    drop(stuck.held);
+    pause(LOCK_FREE_WITHIN);
+    assert!(
+        lock_free(&env),
+        "the lock was still held after {LOCK_FREE_WITHIN:?}"
+    );
+    drop(stuck.ext);
+}
+
+#[test]
+fn a_lock_queued_for_a_callback_when_another_abandons_the_vm_is_released() {
+    let env = Env::new();
+    let stuck = stuck(&env);
+    // The lock wait takes the lock; its reply waits for the blocked thread.
+    drop(stuck.held);
+    await_lock_taken(&env);
+    env.clock.advance(TIMEOUT + GRACE);
+    assert!(matches!(finish(&stuck.block), Err(Error::Abandoned { .. })));
+    finish(&stuck.refresh).unwrap_err();
+    assert_lock_freed(&env);
+    drop(stuck.ext);
 }
 
 #[test]

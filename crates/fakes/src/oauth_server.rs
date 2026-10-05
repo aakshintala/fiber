@@ -5,6 +5,8 @@
 //! so a refresh test scripts `/token` replies and a device-code test scripts
 //! `/device/token` replies.
 
+use std::time::Duration;
+
 use serde_json::json;
 
 use crate::provider_server::{ProviderServer, Response};
@@ -111,6 +113,24 @@ impl OauthServer {
     /// How many requests have been received.
     pub fn request_count(&self) -> usize {
         self.inner.requests().len()
+    }
+
+    /// Waits, at most `within` of real time, until at least `count` requests
+    /// are recorded. True once they are; false at the deadline.
+    pub fn await_requests(&self, count: usize, within: Duration) -> bool {
+        self.inner.await_requests(count, within)
+    }
+
+    /// Holds every reply until [`OauthServer::release`]. A request is still
+    /// recorded first, so [`OauthServer::await_requests`] sees it while the
+    /// client waits. Dropping the server releases what it holds.
+    pub fn hold(&self) {
+        self.inner.hold();
+    }
+
+    /// Sends the replies [`OauthServer::hold`] is holding.
+    pub fn release(&self) {
+        self.inner.release();
     }
 }
 

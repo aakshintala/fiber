@@ -303,7 +303,7 @@ impl Drop for LuaExtension {
     fn drop(&mut self) {
         let mut shared = self.hub.lock();
         if !matches!(shared.phase, Phase::Stopped(_)) {
-            shared.phase = Phase::Stopped(hub::stopped(&self.name));
+            shared.stop(hub::stopped(&self.name));
         }
         drop(shared);
         self.hub.notify();

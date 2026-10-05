@@ -1,5 +1,6 @@
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
@@ -212,4 +213,88 @@ fn percent_decode_handles_each_kind_of_byte() {
     assert_eq!(percent_decode("%zz1"), "%zz1");
     assert_eq!(percent_decode("%4z"), "%4z");
     assert_eq!(percent_decode("%%41"), "%A");
+}
+
+/// How long a test waits for something that should happen.
+const WAIT: Duration = Duration::from_secs(5);
+
+/// How long a test watches for something that should not happen.
+const QUIET: Duration = Duration::from_millis(200);
+
+/// POSTs on its own thread; the status and body arrive on the receiver.
+fn post_later(server: &OauthServer) -> mpsc::Receiver<(u16, String)> {
+    let (tx, rx) = mpsc::channel();
+    let url = server.url();
+    thread::spawn(move || {
+        let addr = url.trim_start_matches("http://").to_owned();
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream.set_read_timeout(Some(WAIT)).unwrap();
+        stream
+            .write_all(b"POST /token HTTP/1.1\r\nHost: localhost\r\ncontent-length: 3\r\n\r\na=b")
+            .unwrap();
+        let mut text = String::new();
+        // A drop that closes the connection unanswered sends nothing.
+        if stream.read_to_string(&mut text).is_err() || text.is_empty() {
+            return;
+        }
+        let status = text.split(' ').nth(1).unwrap().parse().unwrap();
+        let body = text.split_once("\r\n\r\n").unwrap().1.to_owned();
+        tx.send((status, body)).unwrap();
+    });
+    rx
+}
+
+#[test]
+fn hold_records_the_request_and_replies_only_after_release() {
+    let server = OauthServer::start(vec![OauthReply::token("at", "rt", 3600)]);
+    server.hold();
+    let rx = post_later(&server);
+
+    assert!(
+        server.await_requests(1, WAIT),
+        "the held request is recorded"
+    );
+    assert_eq!(
+        server.requests()[0].form,
+        [("a".to_owned(), "b".to_owned())]
+    );
+    assert!(rx.recv_timeout(QUIET).is_err(), "no reply while held");
+
+    server.release();
+    let (status, body) = rx.recv_timeout(WAIT).expect("release sends the reply");
+    assert_eq!(status, 200);
+    assert!(body.contains(r#""access_token":"at""#), "{body}");
+}
+
+#[test]
+fn release_with_nothing_held_leaves_replies_immediate() {
+    let server = OauthServer::start(vec![OauthReply::pending()]);
+    server.release();
+
+    assert_eq!(post(&server, "/token", "").0, 400);
+}
+
+#[test]
+fn await_requests_is_false_at_its_deadline_and_true_once_they_arrive() {
+    let server = OauthServer::start(vec![OauthReply::pending()]);
+
+    assert!(server.await_requests(0, Duration::ZERO));
+    assert!(!server.await_requests(1, QUIET));
+    post(&server, "/token", "");
+    assert!(server.await_requests(1, Duration::ZERO));
+    assert!(!server.await_requests(2, QUIET));
+}
+
+#[test]
+fn dropping_a_holding_server_releases_its_client() {
+    let server = OauthServer::start(vec![OauthReply::pending()]);
+    server.hold();
+    let rx = post_later(&server);
+    assert!(server.await_requests(1, WAIT));
+
+    drop(server);
+    let (status, _) = rx
+        .recv_timeout(WAIT)
+        .expect("the drop sends the held reply");
+    assert_eq!(status, 400);
 }

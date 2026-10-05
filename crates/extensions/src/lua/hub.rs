@@ -119,8 +119,15 @@ impl Hub {
     }
 
     /// Hands the call `id`'s parked callback the answer to what it waits on.
+    /// A stopped extension's thread takes no more replies, so the reply is
+    /// dropped, which releases a credential lock in it.
     pub(super) fn deliver(&self, id: u64, reply: Reply) {
-        self.lock().replies.push((id, reply));
+        let mut shared = self.lock();
+        if !matches!(shared.phase, Phase::Ready(_)) {
+            return;
+        }
+        shared.replies.push((id, reply));
+        drop(shared);
         self.notify();
     }
 }
@@ -232,7 +239,7 @@ impl Shared {
             // process exits, and a credential lock its VM holds with it; Rust
             // cannot stop a thread. Cap abandoned VMs per session if leaked
             // threads or locks show (docs/performance.md).
-            self.phase = Phase::Stopped(Error::Abandoned {
+            self.stop(Error::Abandoned {
                 extension: name.to_owned(),
                 callback: ENTRY.to_owned(),
             });
@@ -301,7 +308,7 @@ impl Shared {
         // process exits, and a credential lock its VM holds with it; Rust
         // cannot stop a thread. Cap abandoned VMs per session if leaked
         // threads or locks show (docs/performance.md).
-        self.phase = Phase::Stopped(stopped(name));
+        self.stop(stopped(name));
         Next::Return(Err(Error::Abandoned {
             extension: name.to_owned(),
             callback: target.to_string(),
@@ -313,6 +320,13 @@ impl Shared {
         if let Some(progress) = self.calls.get_mut(&id) {
             *progress = Progress::Done(result);
         }
+    }
+
+    /// Stops the extension with `e`. The replies no thread will take are
+    /// dropped, which releases a credential lock in one.
+    pub(super) fn stop(&mut self, e: Error) {
+        self.phase = Phase::Stopped(e);
+        self.replies.clear();
     }
 
     /// Drops the call `id`: its caller has stopped waiting.
