@@ -182,3 +182,23 @@ fn a_connection_silent_for_the_bound_is_dropped_and_one_poll_less_is_read() {
     assert!(matches!(head_after(SILENT_POLLS), Head::Gone));
     assert!(matches!(head_after(SILENT_POLLS - 1), Head::Complete(_)));
 }
+
+/// A connection that never stops sending header bytes.
+struct Dripping;
+
+impl Read for Dripping {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        buf.fill(b'a');
+        Ok(1)
+    }
+}
+
+#[test]
+fn a_client_that_keeps_sending_is_dropped_once_the_callback_is_cancelled() {
+    let (keep, stop) = mpsc::channel::<()>();
+    // Kept: still waiting, so the endless head runs to the bound.
+    assert!(matches!(read_head(&mut Dripping, &stop), Head::TooLong));
+    drop(keep);
+    // Cancelled: dropped on the first pass, long before the bound.
+    assert!(matches!(read_head(&mut Dripping, &stop), Head::Gone));
+}

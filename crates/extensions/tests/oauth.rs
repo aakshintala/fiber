@@ -411,6 +411,22 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
 }
 
 #[test]
+fn callback_serves_the_next_connection_after_dropping_a_silent_one() {
+    let env = Env::new();
+    let ext = env.extension();
+    let port = free_port();
+    let rx = listening(&env, &ext, port);
+    // Queued first, never sends: the listener waits SILENT_POLLS on it, drops
+    // it, and goes on to the request queued behind it.
+    let silent = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    let reply = get(port, "GET /?code=ok HTTP/1.1\r\n\r\n");
+    assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
+    drop(silent);
+    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    assert_eq!(query, json!({ "code": "ok" }));
+}
+
+#[test]
 fn callback_serves_a_2000_byte_head() {
     let env = Env::new();
     let ext = env.extension();
