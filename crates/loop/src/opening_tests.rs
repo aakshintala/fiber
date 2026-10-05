@@ -61,16 +61,34 @@ fn canon(path: &Path) -> PathBuf {
 
 #[test]
 fn date_of_pins_epoch_leap_day_year_end_and_midnight_edge() {
-    assert_eq!(date_of(UNIX_EPOCH), "1970-01-01");
-    // 2024-02-29T12:00:00Z, a leap day.
+    // Each `(seconds, date)` is midnight UTC of `date`, written as
+    // literals independent of the code under test: flipping any operator
+    // in `civil_from_days` moves one of them.
+    let cases = [
+        (0_u64, "1970-01-01"),
+        (946_598_400_u64, "1999-12-31"),
+        (951_782_400_u64, "2000-02-29"),
+        (951_868_800_u64, "2000-03-01"),
+        (1_709_164_800_u64, "2024-02-29"),
+        (1_735_603_200_u64, "2024-12-31"),
+        (4_107_456_000_u64, "2100-02-28"),
+        (4_107_542_400_u64, "2100-03-01"),
+        (13_574_563_200_u64, "2400-02-29"),
+        (13_574_649_600_u64, "2400-03-01"),
+        (253_402_214_400_u64, "9999-12-31"),
+    ];
+    for (secs, date) in cases {
+        assert_eq!(
+            date_of(UNIX_EPOCH + Duration::from_secs(secs)),
+            date,
+            "{secs}s"
+        );
+    }
+    // One second before midnight UTC is still the old date: 2000-03-01
+    // minus one second is 2000-02-29, a leap day.
     assert_eq!(
-        date_of(UNIX_EPOCH + Duration::from_secs(1_709_208_000)),
-        "2024-02-29"
-    );
-    // 2023-12-31T23:59:59Z, a year end.
-    assert_eq!(
-        date_of(UNIX_EPOCH + Duration::from_secs(1_704_067_199)),
-        "2023-12-31"
+        date_of(UNIX_EPOCH + Duration::from_secs(951_868_799)),
+        "2000-02-29"
     );
     // One second before midnight UTC is still the old date.
     assert_eq!(
@@ -422,6 +440,53 @@ fn unreadable_claude_is_a_notice_too() {
     assert!(collected.message.instruction_files.is_empty());
     assert_eq!(collected.notices.len(), 1);
     assert_eq!(collected.notices[0].code, contract::ErrorCode::IoFailed);
+}
+
+#[test]
+fn global_agents_dir_is_an_io_failed_notice() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // A directory where the global file should be cannot be read as one:
+    // absent would be silence, so one notice names it.
+    std::fs::create_dir_all(home.join("AGENTS.md")).unwrap();
+    let fake = clock();
+    let collected = collected(&home, &workspace, &fake);
+    assert!(collected.message.instruction_files.is_empty());
+    assert_eq!(collected.notices.len(), 1);
+    assert_eq!(collected.notices[0].code, contract::ErrorCode::IoFailed);
+    assert!(
+        collected.notices[0]
+            .message
+            .contains(&canon(&home).join("AGENTS.md").display().to_string()),
+        "{}",
+        collected.notices[0].message
+    );
+}
+
+#[test]
+fn workspace_equal_to_home_sends_global_once() {
+    let (home, _held) = dir();
+    write(&home.join("AGENTS.md"), "Global rules.\n");
+    let fake = clock();
+    let message = collected(&home, &home, &fake).message;
+    assert_eq!(message.instruction_files.len(), 1);
+    assert_eq!(message.instruction_files[0].content, "Global rules.\n");
+}
+
+#[test]
+fn chain_top_level_equal_to_home_sends_global_once() {
+    let (home, _held) = dir();
+    write(&home.join(".git/HEAD"), "ref: refs/heads/main\n");
+    write(&home.join("AGENTS.md"), "Global rules.\n");
+    let workspace = home.join("sub/dir");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let message = collected(&home, &workspace, &fake).message;
+    // The chain's top level is home itself: the global read already sent
+    // it, so only one copy reaches the message.
+    assert_eq!(message.instruction_files.len(), 1);
+    assert_eq!(message.instruction_files[0].content, "Global rules.\n");
 }
 
 #[test]

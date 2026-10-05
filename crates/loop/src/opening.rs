@@ -8,7 +8,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use contract::ErrorCode;
 use contract::events::{Environment, Git, InstructionFileSent, Notice, OpeningMessage};
 
-use crate::prompt::{PromptInputs, fill, section};
+use crate::prompt::{PromptInputs, fill};
 
 const OPENING_MD: &str = include_str!("../prompt/opening.md");
 const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
@@ -42,6 +42,11 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     // level down to the workspace.
     read_candidate(&home.join("AGENTS.md"), &mut files, &mut notices);
     for dir in &chain {
+        // The global file already covered the home directory: reading it
+        // again would send `<home>/AGENTS.md` twice.
+        if dir == &home {
+            continue;
+        }
         read_dir_file(dir, &mut files, &mut notices);
     }
     let message = OpeningMessage {
@@ -52,7 +57,9 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
             shell: inputs.shell.clone(),
             workspace: workspace.display().to_string(),
             git,
-            session_log: canonical_str(&inputs.session_log),
+            session_log: canonical(Path::new(&inputs.session_log))
+                .display()
+                .to_string(),
         },
         instruction_files: files,
         // debt: no skill runtime lists skills yet; fixed by #511.
@@ -76,7 +83,7 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
         },
     };
     let files = if message.instruction_files.is_empty() {
-        body("no-instruction-files")
+        crate::prompt::body(MESSAGES_MD, "no-instruction-files")
     } else {
         message
             .instruction_files
@@ -87,7 +94,7 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
                     .map(|parent| parent.display().to_string())
                     .unwrap_or_default();
                 fill(
-                    &body("instruction-file"),
+                    &crate::prompt::body(MESSAGES_MD, "instruction-file"),
                     &[
                         ("path", file.path.as_str()),
                         ("dir", dir.as_str()),
@@ -174,7 +181,9 @@ fn repo_chain(workspace: &Path) -> (Vec<PathBuf>, Option<Git>) {
                 up.reverse();
                 return (up, Some(read_head(&dotgit)));
             }
-            Ok(meta) if meta.is_file() => {
+            Ok(_) => {
+                // Reading a non-file fails and returns `None`, so no guard
+                // is needed: only a `gitdir:` line names a repository here.
                 if let Some(target) = gitdir_target(&dotgit, dir) {
                     up.reverse();
                     return (up, Some(read_head(&target)));
@@ -182,9 +191,8 @@ fn repo_chain(workspace: &Path) -> (Vec<PathBuf>, Option<Git>) {
                 // A `.git` file without a `gitdir:` line names no
                 // repository here; keep looking above.
             }
-            // Absent, unreadable, or neither a file nor a directory: no
-            // repository at this level.
-            _ => {}
+            // Absent or unreadable: no repository at this level.
+            Err(_) => {}
         }
         match dir.parent() {
             Some(parent) => {
@@ -231,40 +239,41 @@ fn gitdir_target(dotgit: &Path, dir: &Path) -> Option<PathBuf> {
 /// there is no `AGENTS.md`. A file that cannot be read is left out and a
 /// notice names it; an empty file is sent as it is.
 fn read_dir_file(dir: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut Vec<Notice>) {
-    let agents = dir.join("AGENTS.md");
-    match std::fs::read(&agents) {
+    if read_candidate(&dir.join("AGENTS.md"), files, notices) {
+        return;
+    }
+    let claude = dir.join("CLAUDE.md");
+    match std::fs::read(&claude) {
         Ok(bytes) => {
-            files.push(sent(&agents, &bytes));
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
-            let claude = dir.join("CLAUDE.md");
-            match std::fs::read(&claude) {
-                Ok(bytes) => {
-                    let content = String::from_utf8_lossy(&bytes);
-                    // A `CLAUDE.md` whose only content points at
-                    // `AGENTS.md` is never read.
-                    if content.trim() != AGENTS_POINTER {
-                        files.push(InstructionFileSent {
-                            path: claude.display().to_string(),
-                            content: content.into_owned(),
-                        });
-                    }
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => notices.push(io_failed(&claude, &e)),
+            // A `CLAUDE.md` whose only content points at `AGENTS.md` is
+            // never read.
+            if String::from_utf8_lossy(&bytes).trim() != AGENTS_POINTER {
+                files.push(sent(&claude, &bytes));
             }
         }
-        Err(e) => notices.push(io_failed(&agents, &e)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => notices.push(io_failed(&claude, &e)),
     }
 }
 
 /// The global file: `<home>/AGENTS.md` only. Absent is no file; unreadable
-/// is a notice.
-fn read_candidate(path: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut Vec<Notice>) {
+/// is a notice. Returns whether `path` was present or unreadable: `false`
+/// only when absent, so a directory falls through to `CLAUDE.md`.
+fn read_candidate(
+    path: &Path,
+    files: &mut Vec<InstructionFileSent>,
+    notices: &mut Vec<Notice>,
+) -> bool {
     match std::fs::read(path) {
-        Ok(bytes) => files.push(sent(path, &bytes)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => notices.push(io_failed(path, &e)),
+        Ok(bytes) => {
+            files.push(sent(path, &bytes));
+            true
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            notices.push(io_failed(path, &e));
+            true
+        }
     }
 }
 
@@ -341,17 +350,6 @@ fn size_notice(inputs: &PromptInputs, files: &[InstructionFileSent]) -> Option<N
     })
 }
 
-/// The body of a `messages.md` section: its `## name` line dropped and
-/// blank lines at either end removed, ready to `fill`.
-fn body(name: &str) -> String {
-    section(MESSAGES_MD, name)
-        .lines()
-        .skip(1)
-        .skip_while(|line| line.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
 /// `OPENING_MD` cut at its last `# Skills` line, trailing blank lines
 /// removed, for a message with an empty skills listing.
 fn cut_skills(template: &str) -> String {
@@ -364,12 +362,6 @@ fn cut_skills(template: &str) -> String {
 /// `path` with symlinks resolved, or as is when it cannot be read.
 fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
-}
-
-/// `path` with symlinks resolved for the log, or as passed when it cannot
-/// be read.
-fn canonical_str(path: &str) -> String {
-    canonical(Path::new(path)).display().to_string()
 }
 
 #[cfg(test)]

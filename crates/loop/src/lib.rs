@@ -431,24 +431,15 @@ impl Loop {
         }
         self.opened = true;
         let collected = opening::collect(&self.prompt, &self.workspace);
-        let message = Event::OpeningMessage(collected.message);
-        write(
-            &self.log,
-            &mut self.conversation,
-            &mut self.reviewed,
-            &self.model.reference,
-            &message,
-            None,
-            None,
-        )?;
-        for notice in &collected.notices {
-            let notice = Event::Notice(notice.clone());
+        for event in std::iter::once(Event::OpeningMessage(collected.message))
+            .chain(collected.notices.into_iter().map(Event::Notice))
+        {
             write(
                 &self.log,
                 &mut self.conversation,
                 &mut self.reviewed,
                 &self.model.reference,
-                &notice,
+                &event,
                 None,
                 None,
             )?;

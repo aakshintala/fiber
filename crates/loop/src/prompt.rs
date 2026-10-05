@@ -123,7 +123,7 @@ pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
 
 /// The body of a `messages.md` section: its `## name` line dropped and
 /// blank lines at either end removed, ready to `fill`.
-fn body(md: &str, name: &str) -> String {
+pub(crate) fn body(md: &str, name: &str) -> String {
     section(md, name)
         .lines()
         .skip(1)

@@ -251,7 +251,9 @@ pub(crate) fn render(
         // first message (`docs/system-prompt.md`, "Recording").
         // debt: the skills listing is always empty; fixed by #511.
         Event::OpeningMessage(message) => {
-            conversation.push(user_text(&crate::opening::render(message)));
+            conversation.push(Input::User {
+                text: crate::opening::render(message),
+            });
         }
         Event::ReasoningCompleted(reasoning) => conversation.push(Input::Reasoning {
             model: model.to_owned(),
@@ -346,13 +348,6 @@ pub(crate) fn render(
 fn user(content: &[ContentPart]) -> Input {
     Input::User {
         text: text(content),
-    }
-}
-
-/// Already-rendered text as the model reads it.
-fn user_text(rendered: &str) -> Input {
-    Input::User {
-        text: rendered.to_owned(),
     }
 }
 
