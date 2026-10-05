@@ -89,8 +89,10 @@ it. A hook can never approve a call (`docs/extensions.md`, "Hooks").
 6. **A standing allow** matching this call: allowed.
 7. Otherwise **reviewed** by the reviewer.
 
-A call to `delegate_spawn`, `delegate_fork` or `delegate_message` skips steps
-4 to 6 and is always reviewed ([Delegates](#delegates)).
+A call whose effects function returns `always_reviewed` skips steps 4 to 6
+and is reviewed (`docs/tools.md`, "What a tool declares"). The delegate tools
+return it on every call ([Delegates](#delegates)). The loop reads the
+declaration and never names a tool.
 
 The credential deny and a standing deny are both evaluated before everything
 else, because a rule that can be widened by a later layer is not a deny.
@@ -326,7 +328,15 @@ Fiber home."
 
 Standing rules come from two files in [Fiber home](state.md): `rules` at the
 top level, and the project's `rules` file. The project's rules win where
-both match.
+both match at the same step, and the project's rule is the one used and
+reported. A match in either file decides its step, so a project allow never
+overrides a global deny: every deny is step 2 and every ask is step 3. The
+file format is in `docs/configuration.md`, "Standing rules".
+
+Both files are read every time a call reaches step 2. A file that cannot be
+read, or a line that does not parse, denies every call that reaches step 2
+until it is fixed, with a reason naming the file and the line: the line it
+cannot read could be a deny. The credential deny still comes first.
 
 A project is identified by **git's shared directory**, so every worktree of a
 repository shares one set of rules and a separate clone does not. Outside a git
@@ -339,9 +349,10 @@ arguments, so its effects function returns both halves with the effects: the
 call's **subject**, its primary argument, and the **prefix** it offers as the
 widening (`docs/tools.md`, "What a tool declares"). The loop never parses a
 command. A prefix ending in `/` matches every subject that
-starts with it. Any other prefix matches a subject equal to it, and for the
-shell also one that goes on with a space: `npm test` matches
-`npm test --watch` and not `npm testing`. A tool
+starts with it. Any other prefix matches a subject equal to it, and also one
+that goes on with a space: `npm test` matches `npm test --watch` and not
+`npm testing`. This holds for every tool, because the loop cannot tell which
+tool is the shell. A tool
 with no primary argument, such as an MCP tool, returns an empty subject, and
 its rule matches the tool by name. A call a rule cannot safely match, such as
 a shell command with more than one part, returns no subject, and no rule or
@@ -396,7 +407,9 @@ added from an approval is written to the project's rules file, and its
 
 An escalation where no answer is possible writes no `permission_requested`.
 It is the reviewer's block, recorded as a `permission_resolved` with
-`decided_by: reviewer`.
+`decided_by: reviewer`. A standing ask where no answer is possible is
+denied at once, the same way: no `permission_requested`, and a
+`permission_resolved` with `decision: deny` and `decided_by: standing_rule`.
 
 ## Headless
 
@@ -423,8 +436,10 @@ exits on the pending escalation and raises it again when resumed
 ## Delegates
 
 - Starting or messaging a delegate is always reviewed. `delegate_spawn`,
-  `delegate_fork` and `delegate_message` declare `executes`, and no fast
-  path, session grant or standing allow skips the parent's reviewer for them.
+  `delegate_fork` and `delegate_message` declare `executes` and
+  `always_reviewed`, so no fast path, session grant or standing allow skips
+  the parent's reviewer for them. `executes` alone rules out only the fast
+  path.
   A delegate's reviewer reads its parent's prompt and messages as the human's,
   so without this a parent's model could talk a delegate's reviewer into an
   action the parent's own reviewer never judged. The parent's reviewer judges
