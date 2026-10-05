@@ -3,13 +3,13 @@
 //! protocol's length limit would refuse it.
 
 /// The longest qualified name Fiber declares. `research/mcp-tool-names/`
-/// measured 128 on Codex Responses and OpenAI Responses and at least 1024
-/// on a completions relay; Anthropic Messages and Google Generative AI are
-/// not measured, so 64 stays as the conservative floor.
-pub(crate) const MAX_NAME_LEN: usize = 64;
+/// measured 128 on Anthropic Messages, Codex Responses, OpenAI Responses and
+/// Google Generative AI, and at least 1024 on a completions relay, so 128 is
+/// the shortest measured limit.
+pub(crate) const MAX_NAME_LEN: usize = 128;
 
 /// Hex chars of SHA-256 carried by a cut name, so two long names sharing a
-/// prefix stay distinct. 8 is 32 bits of the hash, leaving 55 characters of
+/// prefix stay distinct. 8 is 32 bits of the hash, leaving 119 characters of
 /// the name at [`MAX_NAME_LEN`].
 pub(crate) const HASH_LEN: usize = 8;
 
