@@ -160,3 +160,15 @@ fiber.provider("fixture", {
     end,
   },
 })
+
+-- The fixture's `after_tool` hook (docs/extensions.md, "The hook points"):
+-- removes the fixture's secret from every result, and changes nothing else.
+fiber.hook("after_tool", {
+  phase = "sanitize",
+  on_failure = "blocking",
+  timeout = 1000,
+  run = function(call)
+    local text, found = call.content:gsub("hunter2", "[redacted]")
+    if found > 0 then return { content = text } end
+  end,
+})

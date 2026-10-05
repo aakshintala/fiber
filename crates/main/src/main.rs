@@ -13,6 +13,7 @@ mod cli;
 mod clock;
 mod prompt_files;
 mod resume;
+mod session_extensions;
 
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -66,6 +67,8 @@ struct Parts {
     retry: r#loop::Retry,
     /// How long an idle session waits before it exits.
     idle: Option<Duration>,
+    /// The installed extensions, started, and their hooks.
+    extensions: Arc<extensions::SessionExtensions>,
 }
 
 fn main() -> ExitCode {
@@ -361,6 +364,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         project,
         workspace,
         sessions,
+        extensions,
     } = parts;
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line.
@@ -405,7 +409,8 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
             )
             .and_then(|looped| {
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
-                Ok(looped)
+                session_extensions::written(&log, &extensions)?;
+                Ok(session_extensions::hooked(looped, &extensions))
             }),
             budget,
             idle,
@@ -538,6 +543,7 @@ fn parts_with(
     let limits = block_limits(&config);
     let retry = retry_policy(&config);
     let idle = idle_exit(&config);
+    let extensions = extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock));
     // debt: extension prompt texts and the model's addendum arrive empty;
     // filled by #510.
     // The session log's path is set by the caller, which mints the session
@@ -568,6 +574,7 @@ fn parts_with(
         budget,
         retry,
         idle,
+        extensions: Arc::new(extensions),
     })
 }
 
