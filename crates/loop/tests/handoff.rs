@@ -26,7 +26,8 @@ use r#loop::{HandoffSettings, Retry, rebuild};
 use serde_json::json;
 
 use support::{
-    MODEL, Session, TestTool, calls_reply, delivery, kinds, tool_call_reply, with_tokens,
+    MODEL, Session, TestTool, calls_reply, delivery, kinds, reasoning_reply, tool_call_reply,
+    with_tokens,
 };
 
 /// The trigger in these tests.
@@ -693,4 +694,20 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
 
     assert_eq!(second, Some(TurnOutcome::Completed));
     assert!(of_kind(&lines, "handoff_started").is_empty());
+}
+
+#[test]
+fn a_notes_reasoning_is_not_part_of_the_note() {
+    let mut session = session(
+        vec![
+            called(TRIGGER - 1),
+            reasoning_reply("Thinking it over.", "The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+
+    run(&mut session, "hi");
+
+    assert_eq!(session.requests()[2].conversation[2], user("The note."));
 }
