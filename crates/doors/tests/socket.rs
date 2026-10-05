@@ -245,6 +245,8 @@ fn status(name: &str) -> Event {
         model: "m".into(),
         state: SessionState::Idle,
         since: 0,
+        git: None,
+        context: None,
         spend: usage(),
         delegates: 0,
         jobs: 0,
