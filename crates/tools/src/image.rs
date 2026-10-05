@@ -90,16 +90,6 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
 /// not measured: a cancel stops the child within one interval.
 const POLL: Duration = Duration::from_millis(50);
 
-/// Waits one [`POLL`] interval. A child's exit and a cancel are what it waits
-/// for, and an injected clock sees neither, so the wait is the thread's own.
-#[allow(
-    clippy::disallowed_methods,
-    reason = "nothing a clock can signal: the wait is for a child process's exit"
-)]
-fn pause() {
-    thread::sleep(POLL);
-}
-
 /// Reads a pipe to its end on its own thread, so neither pipe fills while
 /// the other is read.
 fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
@@ -149,7 +139,15 @@ fn run_child(
         }
         match process.try_wait() {
             Ok(Some(status)) => break Ok(status),
-            Ok(None) => pause(),
+            Ok(None) => {
+                // The wait is for a child's exit or a cancel, which an
+                // injected clock sees neither of.
+                #[allow(
+                    clippy::disallowed_methods,
+                    reason = "nothing a clock can signal: the wait is for a child process's exit"
+                )]
+                thread::sleep(POLL);
+            }
             Err(error) => break Err(error),
         }
     };
