@@ -8,6 +8,7 @@
     reason = "main prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 
+mod approve;
 mod builtin;
 mod cli;
 mod clock;
@@ -121,6 +122,7 @@ fn run() -> i32 {
             }
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
+        cli::Invocation::Run(Some(cli::Commands::Approve(args))) => approve::approve(args.yes),
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),
@@ -503,6 +505,20 @@ fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
     ask_failed(e)
 }
 
+/// A workspace's project: its `sessions` directory and its key
+/// (`docs/state.md`, "Projects"). The one place the key is derived.
+fn project_of(home: &Path, workspace: &Path) -> Result<(PathBuf, config::ProjectKey), Failure> {
+    let sessions = log::sessions_dir(home, &doors::project(workspace));
+    // `projects/<key>/sessions`: the project's key names its parent.
+    let key = sessions
+        .parent()
+        .and_then(Path::file_name)
+        .map(|key| key.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let project = config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?;
+    Ok((sessions, project))
+}
+
 /// Fiber home, configuration, the chosen model, its credential and its
 /// provider: everything a failure of which leaves no session. `model` is
 /// `--model`, which sets configuration's `model` for this run. `recorded` is
@@ -520,14 +536,7 @@ fn parts_with(
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-    let sessions = log::sessions_dir(&home, &doors::project(&workspace));
-    // `projects/<key>/sessions`: the project's key names its parent.
-    let key = sessions
-        .parent()
-        .and_then(Path::file_name)
-        .map(|key| key.to_string_lossy().into_owned())
-        .unwrap_or_default();
-    let project = config::ProjectKey::new(key).map_err(|e| failed(e.code(), e))?;
+    let (sessions, project) = project_of(&home, &workspace)?;
     let config = Config::load(Sources {
         home: home.clone(),
         workspace: workspace.clone(),
