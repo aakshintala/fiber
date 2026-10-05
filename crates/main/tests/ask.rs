@@ -2296,4 +2296,11 @@ fn two_runs_send_byte_identical_preambles() {
     let second_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
     assert_eq!(first_body["instructions"], second_body["instructions"]);
     assert_eq!(first_body["tools"], second_body["tools"]);
+    let names: Vec<_> = first_body["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["edit", "read", "shell", "write"]);
 }

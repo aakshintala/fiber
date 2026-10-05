@@ -8,6 +8,7 @@
     reason = "main prints the usage sentence (docs/code-quality.md, \"Lints\")"
 )]
 
+mod builtin;
 mod cli;
 mod clock;
 mod prompt_files;
@@ -358,6 +359,12 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         workspace,
         sessions,
     } = parts;
+    // Before the log exists: a failure here, such as not finding the running
+    // binary, leaves no session line.
+    let (tools, infos) = match builtin::builtin(&workspace, &clock) {
+        Ok(built) => built,
+        Err(e) => return ask_failed(e),
+    };
     let permissions = ask_permissions(
         &home,
         &project,
@@ -373,7 +380,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         &dir,
         &log,
         Arc::clone(&clock),
-        Vec::new(),
+        infos,
         Box::new(io::stdout()),
     ) {
         Ok(session) => session,
@@ -389,7 +396,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 model,
                 prompt_inputs,
                 inbox,
-                Vec::new(),
+                tools,
                 permissions,
             )
             .and_then(|looped| {
