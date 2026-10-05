@@ -136,6 +136,14 @@ impl Loop {
         // conversation rebuild renders it from the log, so the first turn
         // writes none. A log with none gets one at its first turn.
         let opened = lines.iter().any(|line| line.kind == "opening_message");
+        // The tracked state the log's lines describe, when the log holds
+        // an opening message; without one the first turn writes it fresh
+        // and rebuilds the state from it.
+        let changes = if opened {
+            crate::changes::State::resumed(lines, &workspace, &prompt.home)?
+        } else {
+            crate::changes::State::empty(&prompt.home)
+        };
         // debt: copies `Loop::start`'s literal apart from five fields; a
         // shared constructor once a third constructor needs the same fields.
         Ok(Self {
@@ -178,6 +186,7 @@ impl Loop {
             workspace_label: permissions.workspace,
             answerable: true,
             opened,
+            changes,
             cut_off: false,
             ledger,
             budget: None,

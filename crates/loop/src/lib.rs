@@ -7,17 +7,15 @@
 //! reply on its own thread (`docs/architecture.md`, "One inbox" and
 //! "Streaming").
 
-use std::collections::hash_map::RandomState;
 use std::collections::{BTreeMap, VecDeque};
-use std::hash::BuildHasher;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, Grant, InputItem,
-    MessageOutcome, PreambleReason, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome,
-    TurnStarted, UsageRecorded, Variables, VariablesSource,
+    AssistantMessageCompleted, CacheLifetime, Empty, Event, Grant, InputItem, MessageOutcome,
+    PreambleReason, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
+    UsageRecorded,
 };
 use contract::inbox::{Delivery, Message};
 use contract::provider::{
@@ -28,9 +26,11 @@ use contract::shapes::Failure;
 use contract::tool::Tool;
 use contract::{ActionId, ErrorCode, TurnId};
 use log::Log;
+pub(crate) use util::{ended, mint, variables};
 
 mod calls;
 mod cancel;
+mod changes;
 mod completion;
 mod conversation;
 mod inbox;
@@ -44,6 +44,7 @@ mod retry;
 mod reviewer;
 mod schema;
 mod usage;
+mod util;
 
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
@@ -182,6 +183,9 @@ pub struct Loop {
     /// log holding one writes none, the conversation rebuild renders it
     /// from the log.
     opened: bool,
+    /// The instruction files the model was sent and the directories
+    /// checked (`docs/system-prompt.md`, "When something changes").
+    changes: changes::State,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
@@ -237,6 +241,9 @@ impl Loop {
             None,
             None,
         )?;
+        // Nothing read yet: the first turn writes the opening message
+        // and rebuilds the state from it.
+        let changes = changes::State::empty(&prompt.home);
         // `session_started` renders nothing into the conversation.
         Ok(Self {
             log,
@@ -277,6 +284,7 @@ impl Loop {
             workspace_label: permissions.workspace,
             answerable: true,
             opened: false,
+            changes,
             cut_off: false,
             ledger: usage::Ledger::default(),
             budget: None,
@@ -343,7 +351,12 @@ impl Loop {
         // carries its line. A loop that never takes a turn writes none.
         // debt: extension texts and the addendum arrive empty from `main`;
         // fixed by #510.
-        self.ensure_preamble()?;
+        // The instruction files and the date are checked at each turn
+        // start, before `turn_started` — never on the turn that wrote the
+        // opening message, whose state was just built from it.
+        if !self.ensure_preamble()? {
+            self.check_changes()?;
+        }
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         self.cancel.arm();
@@ -393,9 +406,9 @@ impl Loop {
     /// preamble does not change (`docs/prompt-cache.md`, "The preamble").
     /// The opening message and its notices follow `preamble_built`, before
     /// `turn_started`.
-    fn ensure_preamble(&mut self) -> Result<(), Error> {
+    fn ensure_preamble(&mut self) -> Result<bool, Error> {
         if self.preamble.is_some() {
-            return Ok(());
+            return Ok(false);
         }
         let unattended = !self.answerable;
         let (system_prompt, tools, event) = prompt::build(
@@ -415,8 +428,7 @@ impl Loop {
             tool_choice: event.tool_choice,
             cache_lifetime: event.cache_lifetime,
         });
-        self.ensure_opening()?;
-        Ok(())
+        self.ensure_opening()
     }
 
     /// Writes the opening message and its notices, once per session: after
@@ -425,16 +437,18 @@ impl Loop {
     /// log that already holds one writes none. The message goes through
     /// the same path as every durable event, so it renders into the
     /// conversation as its first `User` message, before the turn's input.
-    fn ensure_opening(&mut self) -> Result<(), Error> {
+    fn ensure_opening(&mut self) -> Result<bool, Error> {
         if self.opened {
-            return Ok(());
+            return Ok(false);
         }
         self.opened = true;
         let collected = opening::collect(&self.prompt, &self.workspace);
+        self.changes =
+            changes::State::initial(&collected.message, &self.workspace, &self.prompt.home);
         for event in std::iter::once(Event::OpeningMessage(collected.message))
             .chain(collected.notices.into_iter().map(Event::Notice))
         {
-            write(
+            util::write(
                 &self.log,
                 &mut self.conversation,
                 &mut self.reviewed,
@@ -442,7 +456,51 @@ impl Loop {
                 &event,
                 None,
                 None,
+                &mut self.changes.had,
             )?;
+        }
+        Ok(true)
+    }
+
+    /// The turn-start instruction-file and date check
+    /// (`docs/system-prompt.md`, "When something changes" and "The date"),
+    /// before `turn_started`: one `instruction_file` per change in path
+    /// order, then `date_changed`.
+    fn check_changes(&mut self) -> Result<(), Error> {
+        let out = self.changes.check(self.prompt.clock.as_ref());
+        for event in out
+            .files
+            .into_iter()
+            .map(Event::InstructionFile)
+            .chain(out.notices.into_iter().map(Event::Notice))
+        {
+            self.append_early(&event)?;
+        }
+        if let Some(date) = out.date {
+            self.append_early(&Event::DateChanged(date))?;
+        }
+        Ok(())
+    }
+
+    /// Writes `event` before its turn started, when there is no turn id yet.
+    fn append_early(&mut self, event: &Event) -> Result<(), Error> {
+        util::write(
+            &self.log,
+            &mut self.conversation,
+            &mut self.reviewed,
+            &self.model.reference,
+            event,
+            None,
+            None,
+            &mut self.changes.had,
+        )
+    }
+
+    /// Writes the subdirectory lines the last step's calls queued: after
+    /// the completed calls' results, before this step's request is built.
+    fn flush_queued(&mut self, turn: &TurnId) -> Result<(), Error> {
+        for event in self.changes.take_queued() {
+            self.append(&event, turn, None)?;
         }
         Ok(())
     }
@@ -460,6 +518,7 @@ impl Loop {
         // end-of-turn check, arrived before this drain.
         self.drain(turn)?;
         self.apply_steering(turn)?;
+        self.flush_queued(turn)?;
         let Some(built) = self.preamble.as_ref() else {
             // `turn` builds the preamble before its `turn_started`; reaching
             // a step without one is a bug, so the turn fails closed.
@@ -531,10 +590,11 @@ impl Loop {
             model,
             conversation,
             reviewed,
+            changes,
             ..
         } = self;
         let mut emit = |event: &Event, action: &ActionId| {
-            write(
+            util::write(
                 log,
                 conversation,
                 reviewed,
@@ -542,6 +602,7 @@ impl Loop {
                 event,
                 Some(turn),
                 Some(action),
+                &mut changes.had,
             )
         };
         // debt: a reasoning fragment does not say which reasoning item it
@@ -703,7 +764,7 @@ impl Loop {
         turn: &TurnId,
         action: Option<&ActionId>,
     ) -> Result<(), Error> {
-        write(
+        util::write(
             &self.log,
             &mut self.conversation,
             &mut self.reviewed,
@@ -711,30 +772,9 @@ impl Loop {
             event,
             Some(turn),
             action,
+            &mut self.changes.had,
         )
     }
-}
-
-/// Writes `event` to `log` and renders it into `conversation` and
-/// `reviewed`: the one path every event the loop emits takes, so the
-/// conversation is the log's rendering (`docs/loop.md`, "What the model is
-/// sent") and the reviewer's transcript its projection
-/// (`docs/permissions.md`, "What it is shown").
-fn write(
-    log: &Log,
-    conversation: &mut Vec<Input>,
-    reviewed: &mut Vec<reviewer::Reviewed>,
-    model: &str,
-    event: &Event,
-    turn: Option<&TurnId>,
-    action: Option<&ActionId>,
-) -> Result<(), Error> {
-    log.append(event, turn.cloned(), action.cloned())?;
-    if event.class() == Class::Durable {
-        conversation::render(conversation, event, action, model);
-        reviewer::render_reviewed(reviewed, event, action);
-    }
-    Ok(())
 }
 
 /// How a step ended.
@@ -746,41 +786,4 @@ enum Step {
     Replied,
     /// The turn ended.
     Ended(TurnCompleted),
-}
-
-/// `turn_completed` with `outcome`, and `error` on `failed`.
-fn ended(outcome: TurnOutcome, error: Option<Failure>) -> TurnCompleted {
-    TurnCompleted {
-        outcome,
-        error,
-        questions: None,
-    }
-}
-
-/// A new id from random bytes (`docs/events.md`, "Identity and ordering").
-/// `RandomState` seeds its keys from the operating system's randomness.
-pub(crate) fn mint(prefix: &str) -> String {
-    format!("{prefix}{:016x}", RandomState::new().hash_one(()))
-}
-
-/// This process's environment, as `session_started` records it: the `PATH`
-/// and the other names, never a value. No hub starts a session yet, so the
-/// source is always `inherited` (`docs/invocation.md`, "A session's
-/// environment").
-fn variables() -> Variables {
-    let mut path = String::new();
-    let mut names = Vec::new();
-    for (name, value) in std::env::vars_os() {
-        if name == "PATH" {
-            path = value.to_string_lossy().into_owned();
-        } else {
-            names.push(name.to_string_lossy().into_owned());
-        }
-    }
-    names.sort();
-    Variables {
-        path,
-        names,
-        source: VariablesSource::Inherited,
-    }
 }

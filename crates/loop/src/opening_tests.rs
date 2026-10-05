@@ -579,11 +579,13 @@ fn live_and_resumed_conversations_render_the_same_opening() {
     let message = collected(&home, &workspace, &fake).message;
     let rendered = render(&message);
     let mut live = Vec::new();
+    let mut had = std::collections::BTreeMap::new();
     crate::conversation::render(
         &mut live,
         &Event::OpeningMessage(message.clone()),
         None,
         "fake/model-1",
+        &mut had,
     );
     assert!(matches!(&live[0], Input::User { text } if text == &rendered));
     let line = Envelope {

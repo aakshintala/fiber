@@ -450,6 +450,7 @@ dependencies = [
  "fakes",
  "log 0.0.0",
  "serde_json",
+ "similar",
  "thiserror",
 ]
 
