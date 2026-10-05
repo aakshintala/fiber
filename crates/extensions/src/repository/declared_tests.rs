@@ -396,3 +396,19 @@ fn a_git_that_cannot_start_is_missing_only_when_it_is_not_found() {
         Error::Io { .. }
     ));
 }
+
+#[test]
+fn a_path_that_cannot_be_examined_fails_the_item_and_a_missing_one_is_skipped() {
+    let repo = Repo::new();
+    repo.write("locked/run.sh", "x");
+    repo.write("dir/inner", "x");
+    let locked = repo.root().join("locked");
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    repo.config(&server("locked/run.sh", &json!([])));
+    let denied = declared_items(&repo.root());
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o755)).unwrap();
+    let e = denied.unwrap_err();
+    assert!(matches!(&e, Error::Pin { item, .. } if item == "db"), "{e}");
+    repo.config(&server("missing.sh", &json!(["dir"])));
+    assert!(rels(&repo.item(OfferedKind::McpServer, "db")).is_empty());
+}

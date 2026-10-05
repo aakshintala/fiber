@@ -227,16 +227,15 @@ fn resolve(root: &Path, item: &str, candidate: &Path) -> Result<Found, Error> {
                 | ErrorKind::InvalidFilename
         )
     };
-    let resolved = match candidate.canonicalize() {
-        Ok(resolved) => resolved,
+    // Only a path that names nothing, or names something that is not a
+    // regular file, is skipped; any other failure is the item's.
+    match fs::metadata(candidate) {
+        Ok(meta) if meta.is_file() => {}
+        Ok(_) => return Ok(Found::Nothing),
         Err(e) if names_no_file(&e) => return Ok(Found::Nothing),
         Err(e) => return Err(fail(e)),
-    };
-    // A path that resolved but cannot be examined, or is not a regular
-    // file, names no file.
-    if !fs::metadata(&resolved).is_ok_and(|meta| meta.is_file()) {
-        return Ok(Found::Nothing);
     }
+    let resolved = candidate.canonicalize().map_err(fail)?;
     Ok(if resolved.starts_with(root) {
         Found::Inside(resolved)
     } else {
