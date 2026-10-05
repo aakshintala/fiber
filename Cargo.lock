@@ -314,6 +314,7 @@ dependencies = [
 name = "extensions"
 version = "0.0.0"
 dependencies = [
+ "base64",
  "config",
  "contract",
  "fakes",

@@ -12,9 +12,11 @@
 //! callback has started, it stops waiting a grace period past the deadline
 //! and abandons the VM. What every caller waits on, and when, is `lua/hub.rs`.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -23,6 +25,7 @@ use contract::clock::Clock;
 use mlua::{FromLua, Function, Lua, LuaOptions, MultiValue, StdLib, Table, Thread};
 use serde_json::Value;
 
+use crate::oauth::{Browser, SystemBrowser};
 use crate::{Error, host};
 
 /// Each Lua extension's default memory cap (`docs/extensions.md`, "Loading,
@@ -124,6 +127,8 @@ pub struct LuaExtension {
     dir: PathBuf,
     home: PathBuf,
     memory_cap: usize,
+    /// What `host.oauth.open` opens URLs with.
+    browser: Arc<dyn Browser>,
     /// The state every caller and the extension's thread observe.
     hub: Arc<Hub>,
 }
@@ -143,6 +148,7 @@ impl LuaExtension {
             dir: dir.into(),
             home: home.into(),
             memory_cap: MEMORY_CAP,
+            browser: Arc::new(SystemBrowser::default()),
             hub: Hub::new(clock),
         }
     }
@@ -150,6 +156,12 @@ impl LuaExtension {
     /// Sets this extension's memory cap in bytes.
     pub fn with_memory_cap(mut self, bytes: NonZeroUsize) -> Self {
         self.memory_cap = bytes.get();
+        self
+    }
+
+    /// Sets the browser `host.oauth.open` uses.
+    pub fn with_browser(mut self, browser: Arc<dyn Browser>) -> Self {
+        self.browser = browser;
         self
     }
 
@@ -268,10 +280,13 @@ impl LuaExtension {
         let load_by = self.hub.clock().now().checked_add(LOAD_TIMEOUT);
         let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
         let memory_cap = self.memory_cap;
+        let browser = Arc::clone(&self.browser);
         let hub = Arc::clone(&self.hub);
         thread::Builder::new()
             .name(format!("lua {}", self.name))
-            .spawn(move || schedule::serve(&name, &dir, &home, &hub, load_by, memory_cap))
+            .spawn(move || {
+                schedule::serve(&name, &dir, &home, &hub, load_by, memory_cap, browser);
+            })
             .map_err(|source| Error::Io {
                 path: self.dir.clone(),
                 source,
@@ -288,7 +303,7 @@ impl Drop for LuaExtension {
     fn drop(&mut self) {
         let mut shared = self.hub.lock();
         if !matches!(shared.phase, Phase::Stopped(_)) {
-            shared.phase = Phase::Stopped(hub::stopped(&self.name));
+            shared.stop(hub::stopped(&self.name));
         }
         drop(shared);
         self.hub.notify();
@@ -340,7 +355,8 @@ struct Vm {
     lua: Lua,
     name: String,
     deadline: Deadline,
-    /// What `host.http` yields, so a callback's own yield is not a request.
+    clock: Arc<dyn Clock>,
+    /// What the host calls yield, so a callback's own yield is not a request.
     http_tag: mlua::Value,
     /// What `fiber.command` registered: each name's `timeout` and `run`.
     commands: Table,
@@ -349,7 +365,7 @@ struct Vm {
     providers: Table,
 }
 
-/// One step of a callback: it returned, or it suspended on `host.http`.
+/// One step of a callback: it returned, or it suspended on a host call.
 enum Step {
     Done(Value),
     Suspend {
@@ -357,7 +373,7 @@ enum Step {
         deadline: Option<Instant>,
         timeout: Duration,
         target: Target,
-        request: host::HttpRequest,
+        request: host::Request,
     },
 }
 
@@ -372,6 +388,7 @@ impl Vm {
         clock: Arc<dyn Clock>,
         load_by: Option<Instant>,
         memory_cap: usize,
+        browser: Arc<dyn Browser>,
     ) -> Result<Self, Error> {
         let deadline = Deadline::new(Arc::clone(&clock));
         deadline.restore(load_by);
@@ -396,22 +413,27 @@ impl Vm {
         lua.set_memory_limit(memory_cap).map_err(lua_error)?;
         let (commands, providers) =
             setup::install(&lua, &deadline, dir.clone(), memory_cap).map_err(lua_error)?;
-        let http_tag = host::install(&lua, home.to_owned()).map_err(lua_error)?;
+        let entry = Rc::new(Cell::new(true));
+        let http_tag =
+            host::install(&lua, home.to_owned(), browser, Rc::clone(&entry)).map_err(lua_error)?;
         let vm = Self {
             lua,
             name: name.to_owned(),
             deadline,
+            clock,
             http_tag,
             commands,
             providers,
         };
 
-        let entry = match setup::load_file(&vm.lua, &dir, ENTRY, memory_cap) {
-            Ok(Ok(entry)) => entry,
+        let entry_fn = match setup::load_file(&vm.lua, &dir, ENTRY, memory_cap) {
+            Ok(Ok(entry_fn)) => entry_fn,
             Ok(Err(message)) => return Err(fail(message)),
             Err(e) => return Err(lua_error(e)),
         };
-        vm.resume(entry, ENTRY, LOAD_TIMEOUT, mlua::Value::Nil)?;
+        let ran = vm.resume(entry_fn, ENTRY, LOAD_TIMEOUT, mlua::Value::Nil);
+        entry.set(false);
+        ran?;
         Ok(vm)
     }
 
@@ -458,7 +480,7 @@ impl Vm {
         )
     }
 
-    /// Resumes `thread` until it returns or suspends on `host.http` again.
+    /// Resumes `thread` until it returns or suspends on a host call again.
     fn after(
         &self,
         thread: Thread,
@@ -469,7 +491,7 @@ impl Vm {
     ) -> Result<Step, Error> {
         match self.poll(&thread, args, &target.to_string(), timeout, deadline)? {
             setup::Poll::Done(value) => Ok(Step::Done(self.returned(target, value)?)),
-            setup::Poll::Http(request) => Ok(Step::Suspend {
+            setup::Poll::Host(request) => Ok(Step::Suspend {
                 thread,
                 deadline,
                 timeout,
@@ -548,14 +570,19 @@ impl Vm {
                 self.deadline.at(),
             )? {
                 setup::Poll::Done(value) => return Ok(value),
-                setup::Poll::Http(request) => {
-                    args = host::resume_values(&self.lua, host::perform(&request)).map_err(fail)?;
+                setup::Poll::Host(host::Request::Http(request)) => {
+                    let reply = host::Reply::Http(host::perform(&request));
+                    args = host::resume_values(&self.lua, &self.clock, reply).map_err(fail)?;
                 }
+                // The Lua half refuses these in the entry script before it yields.
+                setup::Poll::Host(
+                    host::Request::Callback { .. } | host::Request::Lock | host::Request::Sleep(_),
+                ) => return Err(self.yielded()),
             }
         }
     }
 
-    /// Resumes `thread` once. A yield of [`Vm::http_tag`] is one `host.http`.
+    /// Resumes `thread` once. A yield of [`Vm::http_tag`] is one host call.
     fn poll(
         &self,
         thread: &Thread,
@@ -595,24 +622,36 @@ impl Vm {
         // shorter than the time the caller can still wait. The parked
         // callback's deadline stays with the scheduler, on the injected clock.
         let bound = timeout.saturating_add(GRACE);
-        Ok(setup::Poll::Http(self.http_request(&values, Some(bound))?))
+        Ok(setup::Poll::Host(self.host_request(&values, Some(bound))?))
     }
 
-    fn http_request(
+    /// The host call a coroutine yielded: the tag, a kind and its argument.
+    fn host_request(
         &self,
         values: &MultiValue,
         timeout: Option<Duration>,
-    ) -> Result<host::HttpRequest, Error> {
+    ) -> Result<host::Request, Error> {
         let mut yielded = values.iter();
-        let tag = yielded.next();
-        let opts = yielded.next();
-        let (Some(tag), Some(mlua::Value::Table(opts))) = (tag, opts) else {
+        let (Some(tag), Some(mlua::Value::String(kind))) = (yielded.next(), yielded.next()) else {
             return Err(self.yielded());
         };
         if !tag.equals(&self.http_tag).map_err(|e| self.error(&e))? {
             return Err(self.yielded());
         }
-        host::request_from(opts, timeout).map_err(|e| self.error(&e))
+        let kind = kind.to_str().map_err(|e| self.error(&e))?;
+        host::request_from(&kind, yielded.next(), timeout)
+            .map_err(|e| self.error(&e))?
+            .ok_or_else(|| self.yielded())
+    }
+
+    /// A full garbage collection, so a lock handle left in a coroutine the
+    /// host dropped is freed now rather than at some later cycle.
+    fn collect(&self) {
+        for _ in 0..2 {
+            match self.lua.gc_collect() {
+                Ok(()) | Err(_) => {}
+            }
+        }
     }
 
     fn yielded(&self) -> Error {

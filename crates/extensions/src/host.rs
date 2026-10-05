@@ -2,8 +2,14 @@
 //! calls"): `host.secret`, `host.http`, `host.sha256`, `host.hmac_sha256` and
 //! `json`, and converting between Lua values and JSON.
 
+use std::cell::Cell;
 use std::path::PathBuf;
+use std::rc::Rc;
+use std::sync::Arc;
 use std::time::Duration;
+
+use config::CredentialLock;
+use contract::clock::Clock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
 use ring::{digest, hmac};
@@ -11,16 +17,20 @@ use serde_json::{Map, Number, Value};
 use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
-/// `host.http` yields this tag and the request table. The extension's thread
-/// runs the request off to the side and resumes the coroutine with the reply
-/// (`docs/extensions.md`, "A host call suspends the code that made it").
+use crate::oauth::{self, Browser};
+
+/// `host.http` yields this tag, `"http"` and the request table. The
+/// extension's thread runs the request off to the side and resumes the
+/// coroutine with the reply (`docs/extensions.md`, "A host call suspends the
+/// code that made it"). Every host call that waits yields the tag and its
+/// kind, as [`Request`] lists.
 const HTTP: &str = r#"
 local host, tag = ...
 function host.http(opts)
   if type(opts) ~= "table" or type(opts.url) ~= "string" then
     error("host.http: `url` must be a string", 2)
   end
-  local status, body = coroutine.yield(tag, opts)
+  local status, body = coroutine.yield(tag, "http", opts)
   if status == nil then error(body, 0) end
   return { status = status, body = body }
 end
@@ -32,7 +42,12 @@ const MAX_DEPTH: usize = 128;
 
 /// Sets the `host` and `json` globals. The returned tag is what `host.http`
 /// yields, so the scheduler can tell that yield from any other.
-pub(crate) fn install(lua: &Lua, home: PathBuf) -> mlua::Result<LuaValue> {
+pub(crate) fn install(
+    lua: &Lua,
+    home: PathBuf,
+    browser: Arc<dyn Browser>,
+    entry: Rc<Cell<bool>>,
+) -> mlua::Result<LuaValue> {
     let host = lua.create_table()?;
     host.set(
         "secret",
@@ -46,6 +61,7 @@ pub(crate) fn install(lua: &Lua, home: PathBuf) -> mlua::Result<LuaValue> {
     lua.load(HTTP)
         .set_name("=host.http")
         .call::<()>((host.clone(), tag.clone()))?;
+    oauth::install(lua, &host, &tag, browser, entry)?;
     host.set(
         "sha256",
         lua.create_function(|_, bytes: LuaString| Ok(sha256_hex(&bytes.as_bytes())))?,
@@ -105,10 +121,52 @@ pub(crate) struct HttpRequest {
     timeout: Option<Duration>,
 }
 
-/// Reads the request `host.http` yielded. `timeout` is the real-time
-/// backstop from [`HttpRequest`]: the declared timeout plus the grace, fixed
-/// when the request is made, not the time still left on the clock.
-pub(crate) fn request_from(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpRequest> {
+/// What a callback waits on when it yields to the host: the tag, a kind
+/// string and the call's argument. The extension's thread answers each with
+/// the [`Reply`] of the same name.
+pub(crate) enum Request {
+    /// `host.http`.
+    Http(HttpRequest),
+    /// `host.oauth.callback`: serve one request on this localhost port.
+    Callback { port: u16 },
+    /// `host.oauth.refresh`: take the lock on the provider's credential.
+    Lock,
+    /// `host.oauth.poll`: wait this long on the extension's clock.
+    Sleep(Duration),
+}
+
+/// The answer to a [`Request`]. A failure is the text Lua raises.
+pub(crate) enum Reply {
+    Http(Result<(u16, Vec<u8>), String>),
+    /// The query parameters of the one request the callback served.
+    Query(Result<Vec<(String, String)>, String>),
+    Lock(Result<CredentialLock, String>),
+    Slept,
+}
+
+/// Reads a yield: its kind and argument. `timeout` is the real-time backstop
+/// of an `http` request ([`HttpRequest`]): the declared timeout plus the
+/// grace, fixed when the request is made, not the time still left on the
+/// clock. None when the kind or argument is not one the host yields.
+pub(crate) fn request_from(
+    kind: &str,
+    arg: Option<&LuaValue>,
+    timeout: Option<Duration>,
+) -> mlua::Result<Option<Request>> {
+    Ok(Some(match (kind, arg) {
+        ("http", Some(LuaValue::Table(opts))) => Request::Http(http_request(opts, timeout)?),
+        ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
+            port: opts.get("port")?,
+        },
+        ("lock", _) => Request::Lock,
+        ("sleep", Some(LuaValue::Integer(seconds))) => Request::Sleep(Duration::from_secs(
+            u64::try_from(*seconds).unwrap_or_default(),
+        )),
+        _ => return Ok(None),
+    }))
+}
+
+fn http_request(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpRequest> {
     let url: String = opts.get("url")?;
     let method = opts
         .get::<Option<String>>("method")?
@@ -159,20 +217,40 @@ pub(crate) fn perform(request: &HttpRequest) -> Result<(u16, Vec<u8>), String> {
     Ok((response.status().as_u16(), bytes))
 }
 
-/// The values `coroutine.yield` returns to `host.http`: a status and a body,
-/// or nil and the error text.
+/// The values `coroutine.yield` returns to the host call that yielded: its
+/// result, or nil and the error text. `clock` is what a held credential's
+/// expiry is judged by.
 pub(crate) fn resume_values(
     lua: &Lua,
-    result: Result<(u16, Vec<u8>), String>,
+    clock: &Arc<dyn Clock>,
+    reply: Reply,
 ) -> mlua::Result<MultiValue> {
-    let (status, body) = match result {
-        Ok((status, bytes)) => (
-            LuaValue::Integer(i64::from(status)),
-            lua.create_string(bytes)?,
-        ),
-        Err(message) => (LuaValue::Nil, lua.create_string(message)?),
+    let failed = |message: String| -> mlua::Result<MultiValue> {
+        Ok(MultiValue::from_vec(vec![
+            LuaValue::Nil,
+            LuaValue::String(lua.create_string(message)?),
+        ]))
     };
-    Ok(MultiValue::from_vec(vec![status, LuaValue::String(body)]))
+    match reply {
+        Reply::Http(Ok((status, bytes))) => Ok(MultiValue::from_vec(vec![
+            LuaValue::Integer(i64::from(status)),
+            LuaValue::String(lua.create_string(bytes)?),
+        ])),
+        Reply::Http(Err(message)) | Reply::Query(Err(message)) | Reply::Lock(Err(message)) => {
+            failed(message)
+        }
+        Reply::Query(Ok(pairs)) => {
+            let table = lua.create_table()?;
+            for (key, value) in pairs {
+                table.raw_set(key, value)?;
+            }
+            Ok(MultiValue::from_vec(vec![LuaValue::Table(table)]))
+        }
+        Reply::Lock(Ok(lock)) => Ok(MultiValue::from_vec(vec![LuaValue::UserData(
+            lua.create_userdata(oauth::Held::new(lock, Arc::clone(clock)))?,
+        )])),
+        Reply::Slept => Ok(MultiValue::from_vec(vec![LuaValue::Boolean(true)])),
+    }
 }
 
 /// A Lua value as JSON. A table whose keys are exactly 1 to its length is an
