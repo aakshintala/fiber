@@ -530,10 +530,10 @@ impl Loop {
                 self.check_block_end();
                 Ok(Err(completed))
             }
-            Asked::Cancelled => {
-                self.consecutive = 0;
-                Ok(Err(crate::cancel::never_ran()))
-            }
+            // A cancel is neither a reviewer allow nor a person's answer, so
+            // the run of consecutive blocks stands (`docs/permissions.md`,
+            // "What happens on a block").
+            Asked::Cancelled => Ok(Err(crate::cancel::never_ran())),
             Asked::Closed(request_id) => {
                 let completed =
                     self.reviewer_deny(under.id, under.turn, Some(request_id), reason, reviewer)?;
@@ -665,7 +665,7 @@ impl Loop {
             Some(id),
         )?;
         self.check_block_end();
-        Ok(crate::cancel::denied(
+        Ok(crate::completion::denied(
             "reviewer",
             format!(
                 "The reviewer blocked this call: {reason} Respect this boundary and find \
@@ -712,7 +712,7 @@ impl Loop {
             turn,
             Some(id),
         )?;
-        Ok(Err(crate::cancel::denied(
+        Ok(Err(crate::completion::denied(
             tool_reason,
             format!("{reason} It did not run."),
         )))

@@ -21,7 +21,7 @@ use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
-use super::cancel::{completed, denied, failed, resolved};
+use super::completion::{completed, denied, failed, resolved};
 use crate::inbox::{self, Waited};
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
@@ -173,6 +173,11 @@ impl Loop {
             for (id, decision) in decided {
                 let state = match decision {
                     Err(completed) => State::Ready(completed),
+                    // A cancel that landed while a later call was decided
+                    // ends an approved call before it starts: no
+                    // `tool_call_started`, completed `cancelled`. A decision
+                    // line already written stays.
+                    Ok(_) if self.turn_cancelled() => State::Ready(super::cancel::never_ran()),
                     Ok((tool, arguments, declared)) => {
                         self.append(
                             &Event::ToolCallStarted(ToolCallStarted {

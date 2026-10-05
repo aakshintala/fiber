@@ -158,6 +158,26 @@ impl Loop {
         delivery: Delivery,
         turn: &TurnId,
     ) -> Result<Waited, Error> {
+        // The signal wins over whatever arrived first: a reply queued ahead
+        // of the wake is rejected `stale_request`, and the approval ends
+        // denied by the cancel. Anything else is admitted as at any drain,
+        // so a steer is still queued.
+        if self.turn_cancelled() {
+            match delivery {
+                Delivery::Reply(reply, ack) if reply.request_id == *pending => {
+                    reject(ack, ErrorCode::StaleRequest, STALE_REPLY);
+                }
+                other @ (Delivery::Prompt(..)
+                | Delivery::Steer(..)
+                | Delivery::SteerDrop(..)
+                | Delivery::Reply(..)
+                | Delivery::Close(..)
+                | Delivery::Cancelled) => {
+                    self.admit_running(other, turn)?;
+                }
+            }
+            return Ok(Waited::Cancelled);
+        }
         match delivery {
             Delivery::Reply(reply, ack) if reply.request_id == *pending => {
                 Ok(Waited::Reply(reply, ack))
@@ -166,17 +186,14 @@ impl Loop {
                 self.take_close(ack);
                 Ok(Waited::Closed)
             }
-            // The wake the door delivers after an accepted cancel. The
-            // approval wait reads the signal after it wakes: set, the
-            // approval ends; not set, the wake is stale and discarded.
-            Delivery::Cancelled if self.turn_cancelled() => Ok(Waited::Cancelled),
+            // A stale wake from an earlier turn's cancel, or the wake
+            // after an accepted cancel read with the signal not set: it
+            // carries no meaning and is discarded. A set signal returned
+            // above, so this never ends a pending approval.
             other @ (Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Reply(..)
-            // Wakes a blocked `recv` after an accepted cancel; the wait
-            // below reads the signal after it wakes, so this carries no
-            // meaning and is discarded.
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)

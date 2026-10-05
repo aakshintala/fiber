@@ -12,7 +12,7 @@
 )]
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc::{self, Sender};
 use std::sync::{Arc, Barrier, Condvar, Mutex};
 use std::thread;
@@ -24,7 +24,9 @@ use contract::events::{
     Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
-use contract::provider::{Delta, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition};
+use contract::provider::{
+    CallError, Delta, ModelCall, ModelRequest, Provider, Reply, ReplyAction, ToolDefinition,
+};
 use contract::rules::{Rules, RulesError, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender as From};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
@@ -371,7 +373,10 @@ impl CancelLatch {
             .changed
             .wait_timeout_while(fired, DEADLINE, |fired| !*fired)
             .unwrap();
-        let _ = *fired;
+        // A missed cancel ends the call instead of hanging the turn, and
+        // the panic names the wait (`docs/testing.md`, "Waits and
+        // timeouts").
+        assert!(*fired, "timed out waiting for the call's cancel");
     }
 }
 
@@ -508,6 +513,49 @@ impl Provider for Seam {
     }
 }
 
+/// A provider that answers from a scripted provider and fires the
+/// session's cancel once the `fire_at`-th call's reply is in hand. The
+/// fire happens on the loop's own thread, synchronously inside `run`, so
+/// the cancel lands after the reply but before `turn_completed`.
+struct FireCancel {
+    inner: Arc<ScriptedProvider>,
+    cancel: Arc<TurnCancel>,
+    fire_at: usize,
+    calls: AtomicUsize,
+}
+
+impl Provider for FireCancel {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        let call = self.inner.call(request);
+        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.fire_at {
+            Box::new(FireAfterReply {
+                inner: call,
+                cancel: Arc::clone(&self.cancel),
+            })
+        } else {
+            call
+        }
+    }
+}
+
+/// The call that fires the cancel once its reply is in hand.
+struct FireAfterReply {
+    inner: Box<dyn ModelCall>,
+    cancel: Arc<TurnCancel>,
+}
+
+impl ModelCall for FireAfterReply {
+    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        let ended = self.inner.run(sink);
+        self.cancel.cancel();
+        ended
+    }
+
+    fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
 /// A session on a fresh log, its loop wired to a scripted provider.
 pub(crate) struct Session {
     pub(crate) provider: Arc<ScriptedProvider>,
@@ -573,7 +621,24 @@ impl Session {
             tools,
             model,
             scripted,
+            Arc::new(TurnCancel::default()),
         )
+    }
+
+    /// A session whose `fire_at`-th model call (1-based) fires the session's
+    /// cancel once its reply is in hand, then answers from `script`: the
+    /// cancel lands after the last reply but before `turn_completed`,
+    /// deterministically, on the loop's own thread.
+    pub(crate) fn cancelling_after_reply(script: Vec<Scripted>, fire_at: usize) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        let cancel = Arc::new(TurnCancel::default());
+        let hook = Arc::new(FireCancel {
+            inner: Arc::clone(&scripted),
+            cancel: Arc::clone(&cancel),
+            fire_at,
+            calls: AtomicUsize::new(0),
+        });
+        Self::assemble(hook, Vec::new(), Vec::new(), unpriced(), scripted, cancel)
     }
 
     /// A session whose first model call blocks until cancelled, sending
@@ -581,7 +646,7 @@ impl Session {
     /// "After." at once. Returns the session and the blocking provider,
     /// which signals when its call starts to block.
     pub(crate) fn blocking(during: Vec<Delivery>) -> (Self, Arc<BlockingProvider>) {
-        let blocking = Arc::new(BlockingProvider::new());
+        let blocking = Arc::new(BlockingProvider::default());
         let session = Self::assemble(
             Arc::clone(&blocking) as Arc<dyn Provider>,
             during,
@@ -589,6 +654,7 @@ impl Session {
             unpriced(),
             // No scripted call is ever made; `requests` stays empty.
             Arc::new(ScriptedProvider::new(Vec::new())),
+            Arc::new(TurnCancel::default()),
         );
         (session, blocking)
     }
@@ -599,6 +665,7 @@ impl Session {
         tools: Vec<Arc<dyn Tool>>,
         model: Model,
         scripted: Arc<ScriptedProvider>,
+        cancel: Arc<TurnCancel>,
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -623,7 +690,6 @@ impl Session {
             during: Mutex::new((!during.is_empty()).then(|| (during, inbox.clone()))),
         };
         let rules = Arc::new(FakeRules::empty());
-        let cancel = Arc::new(TurnCancel::default());
         let looped = Loop::start(
             Arc::clone(&log),
             Arc::new(seam),

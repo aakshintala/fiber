@@ -32,21 +32,19 @@ pub struct BlockingProvider {
 }
 
 impl BlockingProvider {
-    /// A provider no call has reached yet.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Blocks until the first call starts to block, or `timeout` passes:
-    /// true when it did. The test fires its cancel after this, so the
-    /// cancel lands mid-stream.
-    pub fn wait_started(&self, timeout: Duration) -> bool {
+    /// Blocks until the first call starts to block, failing the test at
+    /// `timeout` naming the missing call. The test fires its cancel after
+    /// this, so the cancel lands mid-stream.
+    pub fn wait_started(&self, timeout: Duration) {
         let (lock, changed) = &*self.inner;
         let started = lock.lock().unwrap_or_else(PoisonError::into_inner);
         let (started, _) = changed
             .wait_timeout_while(started, timeout, |started| !started.started)
             .unwrap_or_else(PoisonError::into_inner);
-        started.started
+        assert!(
+            started.started,
+            "timed out waiting for the model call to start"
+        );
     }
 }
 
@@ -76,13 +74,16 @@ impl ModelCall for BlockingCall {
             // A cancel before `run` still ends the call at once below.
             changed.notify_all();
         }
-        let (_guard, _) = changed
+        let (guard, _) = changed
             .wait_timeout_while(
                 lock.lock().unwrap_or_else(PoisonError::into_inner),
                 LIMIT,
                 |inner| !inner.cancelled,
             )
             .unwrap_or_else(PoisonError::into_inner);
+        // A call the cancel never reached is a missed signal, not a
+        // cancellation: it must not report `Cancelled` after its timeout.
+        assert!(guard.cancelled, "timed out waiting for the call's cancel");
         Err(CallError::Cancelled)
     }
 
@@ -105,3 +106,7 @@ impl ModelCall for Answer {
 
     fn cancel(&self) {}
 }
+
+#[cfg(test)]
+#[path = "blocking_tests.rs"]
+mod tests;

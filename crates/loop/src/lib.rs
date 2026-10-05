@@ -30,6 +30,7 @@ use log::Log;
 
 mod calls;
 mod cancel;
+mod completion;
 mod conversation;
 mod inbox;
 mod permission;
@@ -293,7 +294,7 @@ impl Loop {
         };
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
-        self.arm_cancel();
+        self.cancel.arm();
         self.append(
             &Event::TurnStarted(TurnStarted {
                 input: started
@@ -562,7 +563,7 @@ impl Loop {
             let called = !calls.is_empty();
             for (id, _) in calls {
                 self.append(
-                    &Event::ToolCallCompleted(cancel::truncated()),
+                    &Event::ToolCallCompleted(completion::truncated()),
                     turn,
                     Some(&id),
                 )?;
