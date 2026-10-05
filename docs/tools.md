@@ -253,6 +253,7 @@ path's directory, ending in `/`.
   A block is unique if it is unique in the form it was matched in.
 - Matching sets the byte order mark aside and treats line endings as LF. The
   file is written back with its own line-ending style and byte order mark.
+  A byte order mark in a block's `new_text` is kept as sent.
 - Failures: a block not found fails with `no_match`; a block found more than
   once fails with `ambiguous_match`, giving the count. Both name the block by
   its index. An empty `old_text`, overlapping blocks, or edits that leave the

@@ -197,6 +197,22 @@ fn a_multi_block_edit_is_written_once() {
 }
 
 #[test]
+fn a_byte_order_mark_in_new_text_is_kept() {
+    let dir = TempDir::new("fiber-edit-bom");
+    fs::write(dir.path().join("a.txt"), "aaa\nbbb\n").unwrap();
+    let output = edit_of(
+        dir.path(),
+        json!({
+            "path": "a.txt",
+            "edits": [{"old_text": "aaa", "new_text": "\u{feff}AAA"}]
+        }),
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    let path = resolved(dir.path(), "a.txt");
+    assert_eq!(fs::read(&path).unwrap(), b"\xEF\xBB\xBFAAA\nbbb\n");
+}
+
+#[test]
 fn a_normalised_match_says_so_and_the_diff_is_not_in_the_content() {
     let dir = TempDir::new("fiber-edit-norm");
     fs::write(dir.path().join("a.txt"), "it\u{2019}s\n").unwrap();
