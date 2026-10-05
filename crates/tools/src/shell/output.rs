@@ -36,6 +36,9 @@ pub(super) struct Inner {
     pub(super) cap_fired: bool,
     /// Bytes written to the file that no `job_delta` has carried yet.
     pub(super) pending: Vec<u8>,
+    /// Types into the command's terminal; `Some` only for a `tty` command,
+    /// until the job takes it.
+    pub(super) input: Option<contract::jobs::Input>,
 }
 
 impl Default for Inner {
@@ -52,6 +55,7 @@ impl Default for Inner {
             cap: OUTPUT_CAP,
             cap_fired: false,
             pending: Vec::new(),
+            input: None,
         }
     }
 }

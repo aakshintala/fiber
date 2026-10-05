@@ -2,6 +2,7 @@
 //! it (`docs/tools.md`, "Running a command", "Stopping a command").
 
 use std::fs::File;
+use std::io::Read;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
@@ -12,13 +13,14 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::Event;
-use contract::jobs::Jobs;
+use contract::jobs::{Input, Jobs};
 use contract::tool::Cancel;
 
 use super::background::{MoveAsk, Step, running_step, wait_deadline};
 use super::output::{
     JobStream, OUTPUT_CAP, Shared, bump, lock, read_output, stream_output, stream_tail,
 };
+use super::tty;
 use rustix::process::{Pid, Signal};
 
 /// How often a group is re-checked while the shell has exited and members
@@ -73,6 +75,8 @@ pub(crate) enum MovePolicy {
     Foreground,
     /// Moves on the first pass. A shell exit with members still comes first.
     Background,
+    /// As `Background`, with the command in a pseudo-terminal.
+    Terminal,
 }
 
 /// Why the command moved.
@@ -100,7 +104,8 @@ pub(crate) enum Ran {
 }
 
 /// Runs `command` as `program -c` in `workdir` until the group is empty, the
-/// timeout, or a cancel. `program` is `/bin/bash` or `sh`. Output streams
+/// timeout, or a cancel. With `tty` it runs in a pseudo-terminal instead of
+/// pipes. `program` is `/bin/bash` or `sh`. Output streams
 /// as `tool_call_delta` through `emit` while the call runs, text only
 /// (`docs/tools.md`, "Shell", "Result and output"): the drive loop below
 /// holds the emitter, so nothing emits after this returns.
@@ -119,23 +124,35 @@ pub(crate) fn execute(
     policy: MovePolicy,
     jobs: Option<&dyn Jobs>,
 ) -> Result<Ran, std::io::Error> {
-    let (read, write) = std::io::pipe()?;
-    let write_err = write.try_clone()?;
+    let tty = policy == MovePolicy::Terminal;
     let mut cmd = Command::new(program);
-    cmd.arg("-c")
-        .arg(command)
-        .current_dir(workdir)
-        .stdin(Stdio::null())
-        .stdout(Stdio::from(write))
-        .stderr(Stdio::from(write_err));
+    cmd.arg("-c").arg(command).current_dir(workdir);
+    let mut input = None;
+    let read: Box<dyn Read + Send> = if tty {
+        let terminal = tty::open()?;
+        cmd.stdin(Stdio::from(terminal.secondary.try_clone()?))
+            .stdout(Stdio::from(terminal.secondary.try_clone()?))
+            .stderr(Stdio::from(terminal.secondary));
+        input = Some(terminal.input);
+        Box::new(terminal.reader)
+    } else {
+        let (read, write) = std::io::pipe()?;
+        let write_err = write.try_clone()?;
+        cmd.stdin(Stdio::null())
+            .stdout(Stdio::from(write))
+            .stderr(Stdio::from(write_err));
+        Box::new(read)
+    };
     scrub_env(&mut cmd);
-    detach(&mut cmd);
+    detach(&mut cmd, tty);
     let child = cmd.spawn()?;
-    // The parent drops every write end so EOF arrives when the last holder exits.
+    // The parent drops every write end, or every secondary, so EOF arrives
+    // when the last holder exits.
     drop(cmd);
 
     let pgid = child.id();
     let shared = Arc::new(Shared::default());
+    lock(&shared.inner).input = input;
     let reader = Arc::clone(&shared);
     thread::spawn(move || read_output(read, &reader));
     let waiter = Arc::clone(&shared);
@@ -168,7 +185,7 @@ pub(crate) fn execute(
         timeout_at: start.checked_add(timeout),
         move_at: match policy {
             MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
-            MovePolicy::Stay | MovePolicy::Background => None,
+            MovePolicy::Stay | MovePolicy::Background | MovePolicy::Terminal => None,
         },
         pgid,
         shared,
@@ -210,16 +227,29 @@ fn scrub_env(cmd: &mut Command) {
     unsafe_code,
     reason = "setsid between fork and exec, which CommandExt::pre_exec requires"
 )]
-fn detach(cmd: &mut Command) {
+fn detach(cmd: &mut Command, controlling_tty: bool) {
     // SAFETY: the closure runs in the child between fork and exec, where only
-    // async-signal-safe calls are sound. It calls only setsid, which is
-    // async-signal-safe and does not allocate. The child is single-threaded.
+    // async-signal-safe calls are sound. It calls only setsid and, for a
+    // terminal, the TIOCSCTTY ioctl on fd 0, both system calls. Neither
+    // allocates; the error path builds an `io::Error` from a raw errno, which
+    // does not allocate either. The child is single-threaded.
     unsafe {
-        cmd.pre_exec(|| match rustix::process::setsid() {
-            Ok(_) => Ok(()),
-            Err(err) => Err(std::io::Error::from_raw_os_error(err.raw_os_error())),
+        cmd.pre_exec(move || {
+            rustix::process::setsid().map_err(raw_error)?;
+            if controlling_tty {
+                // The session has no terminal yet; the secondary, already
+                // fd 0, becomes it.
+                // SAFETY: fd 0 is open, the secondary `Command` dup'd onto it.
+                let stdin = rustix::fd::BorrowedFd::borrow_raw(0);
+                rustix::process::ioctl_tiocsctty(stdin).map_err(raw_error)?;
+            }
+            Ok(())
         });
     }
+}
+
+fn raw_error(err: rustix::io::Errno) -> std::io::Error {
+    std::io::Error::from_raw_os_error(err.raw_os_error())
 }
 
 fn wait_child(mut child: std::process::Child, shared: &Shared) {
@@ -297,6 +327,16 @@ pub(crate) struct Moved {
 impl Moved {
     pub(crate) fn pgid(&self) -> u32 {
         self.progress.pgid
+    }
+
+    /// The command's terminal input, once; `None` for a command on pipes.
+    pub(crate) fn take_input(&self) -> Option<Input> {
+        lock(&self.progress.shared.inner).input.take()
+    }
+
+    /// The command's output state, which the call waits on after the move.
+    pub(super) fn shared(&self) -> Arc<Shared> {
+        Arc::clone(&self.progress.shared)
     }
 
     /// Copies bytes already read into `file`, then points the reader at it.
@@ -566,7 +606,7 @@ fn finish(
 /// `wake_on_cancel` is set only while the command is still running. During
 /// the grace and the drain the flag stays set, and treating it as a fresh
 /// wake would spin.
-fn park(
+pub(super) fn park(
     clock: &dyn Clock,
     shared: &Shared,
     cancel: &dyn Cancel,

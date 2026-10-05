@@ -45,7 +45,13 @@ fn the_schema_is_command_workdir_and_timeout() {
     let properties = schema["properties"].as_object().unwrap();
     assert_eq!(
         properties.keys().cloned().collect::<Vec<_>>(),
-        ["command", "run_in_background", "timeout_ms", "workdir"]
+        [
+            "command",
+            "run_in_background",
+            "timeout_ms",
+            "tty",
+            "workdir"
+        ]
     );
     assert_eq!(properties["run_in_background"]["type"], "boolean");
     assert_eq!(properties["command"]["type"], "string");
@@ -274,7 +280,11 @@ fn a_bare_wait_never_starts() {
     let marker = dir.path().join("marker");
     let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
     let command = format!("sleep 30; touch {}", marker.display());
-    let output = shell.run(&args(&command), &CancelToken::new(), &Recorder::default());
+    // A zero timeout, so a command that wrongly starts stops at once and the
+    // assertions below fail, where it would otherwise run for 30 seconds.
+    let mut arguments = args(&command);
+    arguments.insert("timeout_ms".into(), json!(0));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
     assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
     assert!(text(&output).contains("run_in_background"));
     assert!(text(&output).contains("jobs wait"));
