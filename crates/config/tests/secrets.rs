@@ -8,8 +8,8 @@ use std::fs;
 
 use common::{Setup, mode};
 use config::{
-    CredentialFile, Secret, credential_labels, delete_credential, read_credential, read_secret,
-    store_credential, store_secret,
+    CredentialFile, Secret, credential_labels, delete_credential, delete_credential_held,
+    read_credential, read_secret, store_credential, store_secret,
 };
 use contract::ErrorCode;
 
@@ -254,7 +254,7 @@ fn a_bare_secret_and_a_provider_directory_of_one_name_collide() {
 }
 
 #[test]
-fn a_stored_credential_is_deleted_and_an_empty_provider_directory_goes_with_it() {
+fn a_stored_credential_is_deleted_and_the_provider_directory_stays() {
     let setup = Setup::new();
     store_credential(&setup.home(), "acme", "work", &Secret::new(VALUE.into())).unwrap();
     store_credential(&setup.home(), "acme", "home", &Secret::new(VALUE.into())).unwrap();
@@ -264,8 +264,8 @@ fn a_stored_credential_is_deleted_and_an_empty_provider_directory_goes_with_it()
     assert!(setup.home().join("credentials/acme/home").exists());
     assert_eq!(credential_labels(&setup.home(), "acme").unwrap(), ["home"]);
     assert!(delete_credential(&setup.home(), "acme", "home").unwrap());
-    assert!(!setup.home().join("credentials/acme").exists());
-    assert!(setup.home().join("credentials").is_dir());
+    assert!(setup.home().join("credentials/acme").is_dir());
+    assert!(credential_labels(&setup.home(), "acme").unwrap().is_empty());
 }
 
 #[test]
@@ -278,15 +278,35 @@ fn deleting_a_credential_that_is_not_stored_is_false() {
 }
 
 #[test]
-fn deleting_a_credential_removes_its_lock_file_and_the_directory_it_leaves_empty() {
+fn deleting_a_credential_keeps_its_lock_file_and_directory() {
     let setup = Setup::new();
     let file = CredentialFile::new(&setup.home(), "acme", "default").unwrap();
     let lock = file.try_lock().unwrap().unwrap();
     store_credential(&setup.home(), "acme", "default", &Secret::new(VALUE.into())).unwrap();
     drop(lock);
-    assert!(setup.home().join("credentials/acme/default.lock").exists());
     assert!(delete_credential(&setup.home(), "acme", "default").unwrap());
-    assert!(!setup.home().join("credentials/acme").exists());
+    assert!(!setup.home().join("credentials/acme/default").exists());
+    assert!(setup.home().join("credentials/acme/default.lock").exists());
+}
+
+#[test]
+fn deleting_while_a_login_holds_the_lock_is_refused_and_removes_nothing() {
+    let setup = Setup::new();
+    let file = CredentialFile::new(&setup.home(), "acme", "default").unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    store_credential(&setup.home(), "acme", "default", &Secret::new(VALUE.into())).unwrap();
+    let e = delete_credential(&setup.home(), "acme", "default").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::IoFailed);
+    assert!(setup.home().join("credentials/acme/default").exists());
+    assert!(setup.home().join("credentials/acme/default.lock").exists());
+    // The holder itself may remove it, and the lock file is still there.
+    assert!(delete_credential_held(&setup.home(), "acme", "default", &lock).unwrap());
+    assert!(!setup.home().join("credentials/acme/default").exists());
+    assert!(setup.home().join("credentials/acme/default.lock").exists());
+    assert!(!delete_credential_held(&setup.home(), "acme", "default", &lock).unwrap());
+    drop(lock);
+    // The next login takes the same lock file.
+    assert!(file.try_lock().unwrap().is_some());
 }
 
 #[test]

@@ -37,8 +37,8 @@ pub use extension::{
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use rules::RulesFiles;
 pub use secret::{
-    CredentialSource, Secret, credential_labels, delete_credential, read_credential, read_secret,
-    store_credential, store_secret,
+    CredentialSource, Secret, credential_labels, delete_credential, delete_credential_held,
+    read_credential, read_secret, store_credential, store_secret,
 };
 pub use write::{Scope, remove_extension_settings, set_global, set_global_if_unset};
 

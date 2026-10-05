@@ -6,11 +6,12 @@
 
 use std::fmt;
 use std::fs;
+use std::io;
 use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
-use crate::credential_file::{credential_path, is_lock_or_tmp};
+use crate::credential_file::{CredentialFile, CredentialLock, credential_path, is_lock_or_tmp};
 use crate::error::ConfigError;
 use crate::home::{one_file_name, plain};
 use crate::write::write_atomic;
@@ -112,29 +113,42 @@ pub fn store_credential(
     write_atomic(&path, secret.0.as_bytes(), 0o600)
 }
 
-/// Deletes `credentials/<name>/<label>` (`fiber logout`), and the label's lock
-/// file and the provider's directory when nothing else is in it. `true` when
-/// a credential was removed. The same name, label and symbolic link checks as
-/// [`store_credential`] apply.
+/// Deletes `credentials/<name>/<label>` (`fiber logout`) under the label's
+/// [`CredentialFile`] lock, so it never races a login. `true` when a
+/// credential was removed. A lock held elsewhere is an error. The label's
+/// `.lock` file and the provider's directory stay: the lock file's identity
+/// must not change while anyone may hold it. The same name, label and
+/// symbolic link checks as [`store_credential`] apply.
 pub fn delete_credential(home: &Path, name: &str, label: &str) -> Result<bool, ConfigError> {
     let path = credential_path(home, name, label)?;
     if !plain(&path, false)? {
         return Ok(false);
     }
-    fs::remove_file(&path).map_err(|source| ConfigError::Io {
-        file: path.clone(),
-        source,
-    })?;
-    let mut lock = path.clone().into_os_string();
-    lock.push(".lock");
-    // The lock file is only a lock; a failure to remove it leaves the
-    // directory, which a later login reuses.
-    fs::remove_file(&lock).unwrap_or(());
-    // Still holds another label: `remove_dir` refuses a directory with
-    // anything in it.
-    if let Some(dir) = path.parent() {
-        fs::remove_dir(dir).unwrap_or(());
+    let Some(lock) = CredentialFile::new(home, name, label)?.try_lock()? else {
+        return Err(ConfigError::Io {
+            file: path,
+            source: io::Error::new(
+                io::ErrorKind::WouldBlock,
+                "another login or logout holds its lock",
+            ),
+        });
+    };
+    delete_credential_held(home, name, label, &lock)
+}
+
+/// [`delete_credential`] for a caller that already holds the label's lock,
+/// such as a login undoing its own store.
+pub fn delete_credential_held(
+    home: &Path,
+    name: &str,
+    label: &str,
+    _lock: &CredentialLock,
+) -> Result<bool, ConfigError> {
+    let path = credential_path(home, name, label)?;
+    if !plain(&path, false)? {
+        return Ok(false);
     }
+    fs::remove_file(&path).map_err(|source| ConfigError::Io { file: path, source })?;
     Ok(true)
 }
 

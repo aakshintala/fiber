@@ -436,7 +436,7 @@ fn providers_sharing_a_credential_log_in_and_out_through_either() {
         logout.stderr,
         "fiber: removed credentials/opencode/default, which opencode-go also reads\n"
     );
-    assert!(!setup.home().join("credentials/opencode").exists());
+    assert!(!setup.home().join("credentials/opencode/default").exists());
 }
 
 #[test]
@@ -477,8 +477,9 @@ fn a_key_typed_on_a_terminal_is_not_echoed_and_echo_comes_back() {
     let setup = Setup::new();
     setup.provider("acme", None, None);
     let mut run = setup.on_terminal(&["login", "acme"]);
+    // Sent the moment the prompt shows, with no wait for echo to go off: echo
+    // is already off when the prompt is written.
     run.screen.wait_for("Key for acme: ");
-    run.terminal.wait_for_echo_off();
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/acme/default");
@@ -503,7 +504,6 @@ fn the_provider_menu_on_a_terminal_picks_by_number() {
     assert!(menu.contains("  1) acme\r\n  2) beta\r\n"), "{menu:?}");
     run.screen.type_text("2\n");
     run.screen.wait_for("Key for beta: ");
-    run.terminal.wait_for_echo_off();
     run.screen.type_text(&format!("{KEY}\n"));
     run.screen
         .wait_for("fiber: stored credentials/beta/default");

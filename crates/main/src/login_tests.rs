@@ -41,7 +41,13 @@ impl Fake {
 }
 
 impl KeyReader for Fake {
-    fn read_key(&mut self, _input: &mut dyn BufRead, _err: &mut dyn Write) -> io::Result<Secret> {
+    fn read_key(
+        &mut self,
+        prompt: &str,
+        _input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret> {
+        err.write_all(prompt.as_bytes())?;
         self.asked += 1;
         match &self.key {
             Ok(key) => Ok(Secret::new(key.trim().to_owned())),
@@ -479,7 +485,7 @@ fn logout_deletes_the_one_stored_key_and_names_it() {
     let (result, err) = setup.logout(Some("acme"));
     result.unwrap();
     assert_eq!(err, "fiber: removed credentials/acme/work\n");
-    assert!(!setup.home().join("credentials/acme").exists());
+    assert!(!setup.home().join("credentials/acme/work").exists());
     let e = failed(setup.logout(Some("acme")).0);
     assert_eq!(e.code, ErrorCode::CredentialMissing);
     assert_eq!(e.message, "no stored credential for acme");
@@ -495,7 +501,6 @@ fn logging_in_then_out_leaves_the_global_label_and_no_key() {
         .unwrap();
     setup.logout(Some("acme")).0.unwrap();
     assert_eq!(setup.stored("acme", "default"), None);
-    assert!(!setup.home().join("credentials/acme").exists());
     // The label stays: the next login has nothing to write and still works.
     assert_eq!(setup.global()["providers"]["acme"]["credential"], "default");
     setup
@@ -584,10 +589,16 @@ fn a_key_from_the_environment_a_file_or_a_command_is_named_and_not_removed() {
 fn a_configured_source_comes_before_the_providers_own_in_label_order() {
     let setup = Setup::new();
     setup.install("acme", None, Some(json!({"env": "OWN_KEY"})));
-    setup.write_config(&json!({"providers": {"acme": {"credentials": {
-        "work": {"env": "WORK_KEY"},
-        "home": {"file": "/tmp/home.key"},
-    }}}}));
+    // Written by hand with `work` first: the order is the labels', not the
+    // file's.
+    fs::write(
+        setup.home().join("config.json"),
+        r#"{"providers": {"acme": {"credentials": {
+            "work": {"env": "WORK_KEY"},
+            "home": {"file": "/tmp/home.key"}
+        }}}}"#,
+    )
+    .unwrap();
     let e = failed(setup.logout(Some("acme")).0);
     assert_eq!(
         e.message,

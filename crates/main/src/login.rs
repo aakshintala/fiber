@@ -12,7 +12,8 @@ use std::thread::{self, JoinHandle};
 
 use config::{
     Config, ConfigError, CredentialFile, CredentialSource, ProviderData, Secret, Sources,
-    credential_labels, delete_credential, read_credential, set_global_if_unset, store_credential,
+    credential_labels, delete_credential, delete_credential_held, read_credential,
+    set_global_if_unset, store_credential,
 };
 use contract::ErrorCode;
 use contract::shapes::Failure;
@@ -30,15 +31,29 @@ const LABEL: &str = "default";
 /// Reads the key. The seam is the terminal: a terminal turns echo off, a
 /// pipe reads a line as it is.
 pub(crate) trait KeyReader {
-    /// One line from `input`, trimmed, wrapped in a [`Secret`] at once.
-    fn read_key(&mut self, input: &mut dyn BufRead, err: &mut dyn Write) -> io::Result<Secret>;
+    /// Writes `prompt` to `err` (nothing when it is empty), then reads one
+    /// line from `input`, trimmed, wrapped in a [`Secret`] at once. A
+    /// terminal reader turns echo off before the prompt is written, so a
+    /// paste sent as soon as the prompt shows is never echoed.
+    fn read_key(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret>;
 }
 
 /// Reads a key from a pipe or a file.
 pub(crate) struct Plain;
 
 impl KeyReader for Plain {
-    fn read_key(&mut self, input: &mut dyn BufRead, _err: &mut dyn Write) -> io::Result<Secret> {
+    fn read_key(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret> {
+        write_prompt(prompt, err)?;
         read_line(input)
     }
 }
@@ -48,14 +63,27 @@ impl KeyReader for Plain {
 pub(crate) struct NoEcho;
 
 impl KeyReader for NoEcho {
-    fn read_key(&mut self, input: &mut dyn BufRead, err: &mut dyn Write) -> io::Result<Secret> {
+    fn read_key(
+        &mut self,
+        prompt: &str,
+        input: &mut dyn BufRead,
+        err: &mut dyn Write,
+    ) -> io::Result<Secret> {
         let guard = EchoOff::new()?;
-        let key = read_line(input);
+        let key = write_prompt(prompt, err).and_then(|()| read_line(input));
         drop(guard);
         // The newline the person typed was not echoed.
         writeln!(err)?;
         key
     }
+}
+
+fn write_prompt(prompt: &str, err: &mut dyn Write) -> io::Result<()> {
+    if prompt.is_empty() {
+        return Ok(());
+    }
+    err.write_all(prompt.as_bytes())?;
+    err.flush()
 }
 
 fn read_line(input: &mut dyn BufRead) -> io::Result<Secret> {
@@ -226,7 +254,7 @@ pub(crate) fn login(provider: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), 
     let stored = stored_name(data);
     let file = CredentialFile::new(io.home, stored, LABEL).map_err(config_failure)?;
     // Held until the login ends, so two logins never both pass the check.
-    let Some(_lock) = file.try_lock().map_err(config_failure)? else {
+    let Some(lock) = file.try_lock().map_err(config_failure)? else {
         return Err(failure(
             ErrorCode::IoFailed,
             format!("another login for {name} is running"),
@@ -240,14 +268,14 @@ pub(crate) fn login(provider: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), 
             "credentials/{stored}/{LABEL} is already stored; run `fiber logout {name}` first."
         )));
     }
-    if io.terminal {
-        write!(io.err, "Key for {name}: ")
-            .and_then(|()| io.err.flush())
-            .map_err(terminal_failure)?;
-    }
+    let prompt = if io.terminal {
+        format!("Key for {name}: ")
+    } else {
+        String::new()
+    };
     let key = io
         .keys
-        .read_key(io.stdin, io.err)
+        .read_key(&prompt, io.stdin, io.err)
         .map_err(terminal_failure)?;
     if key.expose().is_empty() {
         return Err(usage("No key was given; nothing was stored."));
@@ -256,7 +284,7 @@ pub(crate) fn login(provider: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), 
     let first = set_global_if_unset(io.home, &credential_key(&name), LABEL.into());
     if let Err(e) = first {
         // A retry must start clean: no key stored without its label.
-        delete_credential(io.home, stored, LABEL).unwrap_or(false);
+        delete_credential_held(io.home, stored, LABEL, &lock).unwrap_or(false);
         return Err(config_failure(e));
     }
     writeln!(io.err, "fiber: stored credentials/{stored}/{LABEL}").map_err(terminal_failure)
@@ -273,11 +301,12 @@ fn declared_source(config: &Config, provider: &ProviderData) -> Option<String> {
         .and_then(|p| p.get(&provider.name))
         .and_then(|p| p.get("credentials"))
         .and_then(serde_json::Value::as_object);
-    let mut labels: Vec<&String> = configured.into_iter().flat_map(|l| l.keys()).collect();
-    labels.sort();
-    let from_config = labels.into_iter().find_map(|label| {
-        let value = configured?.get(label)?;
-        serde_json::from_value::<CredentialSource>(value.clone()).ok()
+    // `serde_json::Map` iterates in key order (no `preserve_order`), which is
+    // label order; `a_configured_source_comes_before_the_providers_own_in_label_order` pins it.
+    let from_config = configured.and_then(|labels| {
+        labels
+            .values()
+            .find_map(|v| serde_json::from_value::<CredentialSource>(v.clone()).ok())
     });
     let source = from_config.or_else(|| provider.credential.clone())?;
     Some(match source {
