@@ -1015,6 +1015,17 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let failed = session.lines();
+    assert_eq!(
+        kinds(&failed),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     // The failed turn ends without a last drain, so the steer is still
     // waiting: no `steering_applied` names it.
     assert!(failed.iter().all(|l| l.kind != "steering_applied"));
@@ -1022,6 +1033,20 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
     // `turn_started`.
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()
@@ -1052,6 +1077,35 @@ fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "steering_queue",
+            "steering_queue",
+            "steering_applied",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let queues: Vec<Vec<&str>> = lines
         .iter()
         .filter(|l| l.kind == "steering_queue")
@@ -1093,6 +1147,35 @@ fn a_dropped_steer_leaves_the_queue_listing() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "steering_queue",
+            "steering_queue",
+            "steering_queue",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let queues: Vec<Vec<&str>> = lines
         .iter()
         .filter(|l| l.kind == "steering_queue")

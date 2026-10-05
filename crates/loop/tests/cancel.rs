@@ -390,6 +390,27 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     // The approved call never started: no `tool_call_started`, and neither
     // tool ran.
     assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
@@ -461,6 +482,24 @@ fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
     assert_eq!(code, ErrorCode::StaleRequest);
     assert_eq!(message, "That request is no longer pending.");
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     // The approval resolved deny by cancel, the call never ran, and the
     // turn ends interrupted.
     let resolved: Vec<&contract::Envelope> = lines
@@ -484,6 +523,21 @@ fn a_cancel_after_the_last_reply_interrupts_the_turn() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(session.requests().len(), 1);
     assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
 }
@@ -503,6 +557,17 @@ fn a_cancel_after_a_failed_reply_leaves_the_turn_failed() {
     // A failed turn stays failed: the cancel never turns it interrupted.
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let last = lines.last().unwrap();
     assert_eq!(last.payload["outcome"], "failed");
     assert_eq!(last.payload["error"]["code"], "tool_error");
@@ -545,6 +610,32 @@ fn a_stale_cancel_wake_does_not_end_a_later_approval() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     answered.join().unwrap();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     // The person's reply still decided: allowed by the person, and the
     // call ran.
     let resolved: Vec<&contract::Envelope> = lines
@@ -587,11 +678,45 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
     });
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
-    let _ = session.lines();
+    let first = session.lines();
+    assert_eq!(
+        kinds(&first),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "steering_queue",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     // The kept steer starts the next turn at once, with nothing new sent:
     // the inbox is empty, so waiting on it would hang the turn instead.
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "steering_queue",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()

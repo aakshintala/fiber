@@ -3,7 +3,7 @@
 //! the cancel once the call signals it started to block.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::{Arc, Mutex, PoisonError, mpsc};
 use std::time::Duration;
 
 use contract::provider::{CallError, Delta, ModelCall, ModelRequest, Provider, Reply};
@@ -16,19 +16,38 @@ use crate::reply;
 /// call's thread from outliving the test binary by much.
 const LIMIT: Duration = Duration::from_secs(30);
 
-#[derive(Default)]
-struct Inner {
-    started: bool,
-    cancelled: bool,
+/// The two one-shot signals, each buffered: a send before the wait still
+/// meets it, so neither side races the other.
+struct Channels {
+    started_tx: mpsc::Sender<()>,
+    started_rx: Mutex<mpsc::Receiver<()>>,
+    cancel_tx: mpsc::Sender<()>,
+    cancel_rx: Mutex<mpsc::Receiver<()>>,
 }
 
 /// A provider whose first call signals when it starts to block and ends
 /// `cancelled` once cancelled. Later calls answer "After." at once, so a
 /// turn the cancel starts runs to completion.
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct BlockingProvider {
-    inner: Arc<(Mutex<Inner>, Condvar)>,
+    inner: Arc<Channels>,
     calls: Arc<AtomicUsize>,
+}
+
+impl Default for BlockingProvider {
+    fn default() -> Self {
+        let (started_tx, started_rx) = mpsc::channel();
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        Self {
+            inner: Arc::new(Channels {
+                started_tx,
+                started_rx: Mutex::new(started_rx),
+                cancel_tx,
+                cancel_rx: Mutex::new(cancel_rx),
+            }),
+            calls: Arc::new(AtomicUsize::new(0)),
+        }
+    }
 }
 
 impl BlockingProvider {
@@ -36,15 +55,13 @@ impl BlockingProvider {
     /// `timeout` naming the missing call. The test fires its cancel after
     /// this, so the cancel lands mid-stream.
     pub fn wait_started(&self, timeout: Duration) {
-        let (lock, changed) = &*self.inner;
-        let started = lock.lock().unwrap_or_else(PoisonError::into_inner);
-        let (started, _) = changed
-            .wait_timeout_while(started, timeout, |started| !started.started)
+        let started = self
+            .inner
+            .started_rx
+            .lock()
             .unwrap_or_else(PoisonError::into_inner);
-        assert!(
-            started.started,
-            "timed out waiting for the model call to start"
-        );
+        let got = started.recv_timeout(timeout);
+        assert!(got.is_ok(), "timed out waiting for the model call to start");
     }
 }
 
@@ -62,37 +79,28 @@ impl Provider for BlockingProvider {
 
 /// The first call: signals, then waits for its cancel.
 struct BlockingCall {
-    inner: Arc<(Mutex<Inner>, Condvar)>,
+    inner: Arc<Channels>,
 }
 
 impl ModelCall for BlockingCall {
     fn run(&self, _sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (lock, changed) = &*self.inner;
-        {
-            let mut inner = lock.lock().unwrap_or_else(PoisonError::into_inner);
-            inner.started = true;
-            // A cancel before `run` still ends the call at once below.
-            changed.notify_all();
-        }
-        let (guard, _) = changed
-            .wait_timeout_while(
-                lock.lock().unwrap_or_else(PoisonError::into_inner),
-                LIMIT,
-                |inner| !inner.cancelled,
-            )
+        // Buffered, so a cancel before `run` still ends the call at once
+        // below.
+        let _sent = self.inner.started_tx.send(()).is_ok();
+        let cancel = self
+            .inner
+            .cancel_rx
+            .lock()
             .unwrap_or_else(PoisonError::into_inner);
+        let got = cancel.recv_timeout(LIMIT);
         // A call the cancel never reached is a missed signal, not a
         // cancellation: it must not report `Cancelled` after its timeout.
-        assert!(guard.cancelled, "timed out waiting for the call's cancel");
+        assert!(got.is_ok(), "timed out waiting for the call's cancel");
         Err(CallError::Cancelled)
     }
 
     fn cancel(&self) {
-        let (lock, changed) = &*self.inner;
-        lock.lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .cancelled = true;
-        changed.notify_all();
+        let _sent = self.inner.cancel_tx.send(()).is_ok();
     }
 }
 

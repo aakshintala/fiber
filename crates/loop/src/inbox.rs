@@ -158,24 +158,12 @@ impl Loop {
         delivery: Delivery,
         turn: &TurnId,
     ) -> Result<Waited, Error> {
-        // The signal wins over whatever arrived first: a reply queued ahead
-        // of the wake is rejected `stale_request`, and the approval ends
-        // denied by the cancel. Anything else is admitted as at any drain,
-        // so a steer is still queued.
+        // The signal wins over whatever arrived first: every delivery is
+        // admitted as at any drain, so a steer is still queued and a reply
+        // queued ahead of the wake is rejected `stale_request`, and the
+        // approval ends denied by the cancel.
         if self.turn_cancelled() {
-            match delivery {
-                Delivery::Reply(reply, ack) if reply.request_id == *pending => {
-                    reject(ack, ErrorCode::StaleRequest, STALE_REPLY);
-                }
-                other @ (Delivery::Prompt(..)
-                | Delivery::Steer(..)
-                | Delivery::SteerDrop(..)
-                | Delivery::Reply(..)
-                | Delivery::Close(..)
-                | Delivery::Cancelled) => {
-                    self.admit_running(other, turn)?;
-                }
-            }
+            self.admit_running(delivery, turn)?;
             return Ok(Waited::Cancelled);
         }
         match delivery {
