@@ -10,8 +10,8 @@ fn a_short_name_is_unchanged() {
 #[test]
 fn a_name_at_exactly_the_limit_is_unchanged() {
     // `mcp__` is 5 chars and `__` is 2, so server and tool fill the rest.
-    let server = "s".repeat(28);
-    let tool = "t".repeat(29);
+    let server = "s".repeat(MAX_NAME_LEN / 2 - 4);
+    let tool = "t".repeat(MAX_NAME_LEN - 7 - server.len());
     let name = qualified(&server, &tool);
     assert_eq!(name.chars().count(), MAX_NAME_LEN);
     assert_eq!(name, format!("mcp__{server}__{tool}"));
@@ -19,8 +19,8 @@ fn a_name_at_exactly_the_limit_is_unchanged() {
 
 #[test]
 fn one_char_over_is_cut_to_exactly_the_limit() {
-    let server = "s".repeat(28);
-    let tool = "t".repeat(30);
+    let server = "s".repeat(MAX_NAME_LEN / 2 - 4);
+    let tool = "t".repeat(MAX_NAME_LEN - 6 - server.len());
     let full = format!("mcp__{server}__{tool}");
     assert_eq!(full.chars().count(), MAX_NAME_LEN + 1);
     let name = qualified(&server, &tool);
@@ -35,7 +35,7 @@ fn one_char_over_is_cut_to_exactly_the_limit() {
 
 #[test]
 fn two_names_sharing_a_long_prefix_stay_distinct() {
-    let server = "s".repeat(60);
+    let server = "s".repeat(MAX_NAME_LEN);
     let first = qualified(&server, "tool-alpha");
     let second = qualified(&server, "tool-beta");
     assert_ne!(first, second);
@@ -55,7 +55,7 @@ fn the_hash_covers_the_whole_name_not_the_cut() {
 
 #[test]
 fn multibyte_chars_cut_on_a_char_boundary() {
-    let server = "é".repeat(60);
+    let server = "é".repeat(MAX_NAME_LEN);
     let name = qualified(&server, "tool");
     assert_eq!(name.chars().count(), MAX_NAME_LEN);
     assert!(name.is_char_boundary(name.len()));

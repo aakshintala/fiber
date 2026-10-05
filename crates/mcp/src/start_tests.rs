@@ -194,7 +194,7 @@ fn a_long_qualified_name_is_cut() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "tool"}]));
     setup.result("tool", r#"{"content":[]}"#);
-    let server = "s".repeat(60);
+    let server = "s".repeat(crate::name::MAX_NAME_LEN);
     let mut spec = setup.spec(&server);
     spec.name = server;
     let started = start(vec![spec], &setup.workspace(), &setup.clock(), "0.0.0");

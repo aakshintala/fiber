@@ -1,5 +1,5 @@
 """Tool-name length probe (#588). Finds the longest accepted function-tool name per protocol.
-Usage: python3 probe.py anthropic|codex|zen-responses|go-completions
+Usage: python3 probe.py anthropic|codex|zen-responses|go-completions|google|openai-responses|google|openai-responses
 One tiny request per length tested (max 16 output tokens); keys are read here and never printed or saved."""
 import json, sys, os, time, urllib.request, urllib.error
 D = os.path.dirname(os.path.abspath(__file__))
@@ -44,8 +44,23 @@ def go_completions():
             {"model": "glm-5.3-flash", "max_tokens": 16, "messages": [{"role": "user", "content": "Say hi."}], "tool_choice": "none",
              "tools": [{"type": "function", "function": {"name": name(n), "description": "d", "parameters": schema()}}]})
     return send
+def google():
+    key = os.environ["GEMINI_API_KEY"]
+    def send(n):
+        return post("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash-lite:generateContent", {"x-goog-api-key": key},
+            {"contents": [{"role": "user", "parts": [{"text": "Say hi."}]}], "generationConfig": {"maxOutputTokens": 16},
+             "tools": [{"functionDeclarations": [{"name": name(n), "description": "d", "parameters": {"type": "OBJECT", "properties": {"x": {"type": "STRING"}}, "required": ["x"]}}]}],
+             "toolConfig": {"functionCallingConfig": {"mode": "NONE"}}})
+    return send
+def openai_responses():
+    key = os.environ["OPENAI_API_KEY"]
+    def send(n):
+        return post("https://api.openai.com/v1/responses", {"Authorization": "Bearer " + key},
+            {"model": "gpt-5.4-nano", "input": "Say hi.", "max_output_tokens": 16, "tool_choice": "none", "store": False,
+             "tools": [{"type": "function", "name": name(n), "description": "d", "parameters": schema()}]})
+    return send
 which = sys.argv[1]
-send = {"anthropic": anthropic, "codex": codex, "zen-responses": zen_responses, "go-completions": go_completions}[which]()
+send = {"anthropic": anthropic, "codex": codex, "zen-responses": zen_responses, "go-completions": go_completions, "google": google, "openai-responses": openai_responses}[which]()
 log = []
 def ok(n):
     time.sleep(1); st, raw = send(n)

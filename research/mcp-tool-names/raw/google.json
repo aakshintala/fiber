@@ -1,0 +1,56 @@
+{
+ "protocol": "google",
+ "max_accepted": 128,
+ "requests": [
+  {
+   "length": 64,
+   "status": 200,
+   "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"Hi! How can I help you today?\",\n            \"thoughtSignature\": \"EmAKXgFpFH0T8Oq58MqfDGBn5+GA+1D6nfTvZmWNa8Jvr/kb4kRaxjROQiONb+c3fPHNmGjpKybvr2f2FN5qLaKV9W38IRzp4Ta1Vpxp0Xvp9d5hqkcKIs937MJwRSzTRsY=\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 47,\n    \"candidatesTokenCount\": 9,\n    \"total"
+  },
+  {
+   "length": 128,
+   "status": 200,
+   "body": "{\n  \"candidates\": [\n    {\n      \"content\": {\n        \"parts\": [\n          {\n            \"text\": \"Hi!\",\n            \"thoughtSignature\": \"EmAKXgFpFH0TaVqVxAB5iYQATZzav//k5YqSQdhce9PUBU9tbRqV0t6ObjaRM9n8VhGbPZqEZMD9SUPEqD0MeH2s1Y0WqVYJ7xt/ka8MNFXT5AX0QhCSLKi9d2+Lb1HHAwo=\"\n          }\n        ],\n        \"role\": \"model\"\n      },\n      \"finishReason\": \"STOP\",\n      \"index\": 0\n    }\n  ],\n  \"usageMetadata\": {\n    \"promptTokenCount\": 55,\n    \"candidatesTokenCount\": 2,\n    \"totalTokenCount\": 57,\n    \"prom"
+  },
+  {
+   "length": 256,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 192,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 160,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 144,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 136,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 132,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 130,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  },
+  {
+   "length": 129,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"* GenerateContentRequest.tools[0].function_declarations[0].name: Invalid function name. Must start with a letter or an underscore. Must be alphameric (a-z, A-Z, 0-9), underscores (_), dots (.), colons (:), or dashes (-), with a maximum length of 128.\\n\",\n    \"status\": \"INVALID_ARGUMENT\"\n  }\n}\n"
+  }
+ ]
+}

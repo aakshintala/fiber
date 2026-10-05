@@ -50,10 +50,10 @@ the convention codex and Claude Code both use. A name longer than a protocol
 allows is cut short and given a short hash suffix, so two long names stay
 distinct.
 
-Measured limits are in `research/mcp-tool-names/`: 128 characters on Codex
-Responses and on OpenAI Responses, and no limit found below 1,024 on a
-completions relay. Anthropic Messages and Google Generative AI are not
-measured. Fiber cuts a name longer than 64 characters to 64, ending in `_`
+Measured limits are in `research/mcp-tool-names/`: 128 characters on
+Anthropic Messages, Codex Responses, OpenAI Responses and Google Generative
+AI, and no limit found below 1,024 on a completions relay. Fiber cuts a name
+longer than 128 characters to 128, ending in `_`
 and 8 hex characters of SHA-256 over the full name.
 
 MCP tools register through the tool seam like any built-in
