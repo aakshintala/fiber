@@ -221,7 +221,11 @@ fn shell_functions_reach_the_built_binary() {
     let run = |command: &str| {
         let mut arguments = Map::new();
         arguments.insert("command".into(), Value::String(command.into()));
-        shell.run(&arguments, &CancelToken::new())
+        shell.run(
+            &arguments,
+            &CancelToken::new(),
+            &fakes::emit::Recorder::default(),
+        )
     };
     let text = |output: &contract::tool::Output| match output.content.first() {
         Some(ContentPart::Text { text }) => text.clone(),

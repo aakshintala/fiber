@@ -72,7 +72,11 @@ fn shell(dir: &Path, fiber: Option<&Path>) -> Shell {
 fn run(shell: &Shell, command: &str) -> contract::tool::Output {
     let mut arguments = Map::new();
     arguments.insert("command".into(), Value::String(command.into()));
-    shell.run(&arguments, &CancelToken::new())
+    shell.run(
+        &arguments,
+        &CancelToken::new(),
+        &fakes::emit::Recorder::default(),
+    )
 }
 
 #[test]
