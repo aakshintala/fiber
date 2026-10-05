@@ -1,7 +1,7 @@
 //! The one state every waiter observes (`docs/extensions.md`, "How an
 //! extension runs" and "When an extension misbehaves"): the extension's
 //! phase, the calls not yet started, each call's progress and the replies of
-//! `host.http`, behind one lock. Every caller and the extension's thread wait
+//! host calls, behind one lock. Every caller and the extension's thread wait
 //! on one condition variable, each no later than its own limit, and every
 //! change wakes them all.
 //!
@@ -20,11 +20,9 @@ use contract::clock::{Clock, Wake};
 use serde_json::Value;
 
 use crate::Error;
+use crate::host::Reply;
 
 use super::{ENTRY, GRACE, Target, expired, timeout_ms};
-
-/// A `host.http` reply: the status and body, or why it failed.
-pub(super) type HttpResult = Result<(u16, Vec<u8>), String>;
 
 pub(super) struct Hub {
     shared: Mutex<Shared>,
@@ -119,6 +117,12 @@ impl Hub {
         self.lock().finish(id, result);
         self.notify();
     }
+
+    /// Hands the call `id`'s parked callback the answer to what it waits on.
+    pub(super) fn deliver(&self, id: u64, reply: Reply) {
+        self.lock().replies.push((id, reply));
+        self.notify();
+    }
 }
 
 #[derive(Default)]
@@ -128,8 +132,8 @@ pub(super) struct Shared {
     pub(super) queue: VecDeque<Job>,
     /// Each waiting call's progress, by id.
     pub(super) calls: HashMap<u64, Progress>,
-    /// Replies of `host.http` calls for parked callbacks, by call id.
-    pub(super) replies: Vec<(u64, HttpResult)>,
+    /// Answers to what parked callbacks wait on, by call id.
+    pub(super) replies: Vec<(u64, Reply)>,
     next_id: u64,
 }
 
@@ -149,8 +153,8 @@ pub(super) enum Phase {
 pub(super) enum Progress {
     /// Waiting in the queue.
     Queued,
-    /// Started, with the deadline it declared. `parked` while suspended on
-    /// `host.http`, when the thread is free to fail it at its deadline.
+    /// Started, with the deadline it declared. `parked` while suspended on a
+    /// host call, when the thread is free to fail it at its deadline.
     Started {
         deadline: Option<Instant>,
         parked: bool,
@@ -225,9 +229,9 @@ impl Shared {
             && expired(abandon_at, now)
         {
             // debt: the abandoned thread is leaked, still running, until the
-            // process exits; Rust cannot stop a thread. Cap abandoned VMs per
-            // session if leaked threads show in a session's peak memory
-            // (docs/performance.md).
+            // process exits, and a credential lock its VM holds with it; Rust
+            // cannot stop a thread. Cap abandoned VMs per session if leaked
+            // threads or locks show (docs/performance.md).
             self.phase = Phase::Stopped(Error::Abandoned {
                 extension: name.to_owned(),
                 callback: ENTRY.to_owned(),
@@ -294,9 +298,9 @@ impl Shared {
             return Next::Return(Err(timed_out(name, target, timeout)));
         }
         // debt: the abandoned thread is leaked, still running, until the
-        // process exits; Rust cannot stop a thread. Cap abandoned VMs per
-        // session if leaked threads show in a session's peak memory
-        // (docs/performance.md).
+        // process exits, and a credential lock its VM holds with it; Rust
+        // cannot stop a thread. Cap abandoned VMs per session if leaked
+        // threads or locks show (docs/performance.md).
         self.phase = Phase::Stopped(stopped(name));
         Next::Return(Err(Error::Abandoned {
             extension: name.to_owned(),

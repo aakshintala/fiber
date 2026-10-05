@@ -16,11 +16,11 @@ use super::{CHECK_EVERY, PRELUDE};
 
 use crate::host;
 
-/// One step of a resumed coroutine: it returned, or it suspended on
-/// `host.http`.
+/// One step of a resumed coroutine: it returned, or it suspended on a host
+/// call.
 pub(super) enum Poll {
     Done(mlua::Value),
-    Http(host::HttpRequest),
+    Host(host::Request),
 }
 
 /// Removes the base library's I/O, which belongs to the host, and runs the

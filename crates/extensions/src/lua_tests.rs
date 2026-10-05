@@ -32,6 +32,7 @@ fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
         clock.clone(),
         Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()),
         MEMORY_CAP,
+        Arc::new(SystemBrowser::default()),
     )
     .unwrap();
     let boom = vm
@@ -398,6 +399,7 @@ fn serve_after(
             &thread_hub,
             load_by,
             MEMORY_CAP,
+            Arc::new(SystemBrowser::default()),
         );
         match done_tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}

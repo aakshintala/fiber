@@ -15,6 +15,7 @@ mod installed;
 mod lua;
 mod lua_provider;
 mod manage;
+mod oauth;
 mod prepare;
 mod providers;
 mod resolve;
@@ -31,6 +32,7 @@ pub use installed::{Installed, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
 pub use manage::{Item, Plan, Request, plan};
+pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{Model, Providers};
 

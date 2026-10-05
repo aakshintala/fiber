@@ -2,7 +2,13 @@ use super::*;
 
 fn lua() -> Lua {
     let lua = Lua::new();
-    install(&lua, PathBuf::from("/nonexistent-fiber-home")).unwrap();
+    install(
+        &lua,
+        PathBuf::from("/nonexistent-fiber-home"),
+        Arc::new(crate::SystemBrowser::default()),
+        Rc::default(),
+    )
+    .unwrap();
     lua
 }
 
