@@ -1,5 +1,6 @@
 //! `fiber sessions export` (`docs/invocation.md`, "Deleting and pruning"):
-/// copies a session's log lines and its `artifacts/` into a new directory.
+//! copies a session's log lines and its `artifacts/` into a new directory.
+
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 

@@ -79,42 +79,12 @@ impl Setup {
 
     /// Runs `fiber sessions export` with `args` in the workspace.
     fn export(&self, args: &[&str]) -> Run {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
-        command
-            .arg("sessions")
-            .arg("export")
-            .args(args)
-            .current_dir(self.workspace())
-            .env_clear()
-            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
-            .env("HOME", self.root.path())
-            .env("FIBER_HOME", self.home())
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
-        let (child, watchdog) = spawn_watched(&mut command);
-        let group = child.id();
-        let (done, finished) = mpsc::channel();
-        thread::spawn(move || done.send(child.wait_with_output()).unwrap());
-        let output = match finished.recv_timeout(DEADLINE) {
-            Ok(output) => output.unwrap(),
-            Err(_) => {
-                fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
-                panic!(
-                    "waited {DEADLINE:?} for `fiber sessions export` to exit (reaped after the kill: {reaped})"
-                );
-            }
-        };
-        watchdog.stand_down(DEADLINE);
-        Run {
-            code: output.status.code(),
-            stdout: String::from_utf8(output.stdout).unwrap(),
-            stderr: String::from_utf8(output.stderr).unwrap(),
-        }
+        let mut all = vec!["sessions", "export"];
+        all.extend_from_slice(args);
+        self.fiber(&all)
     }
 
-    /// Runs `fiber` with `args` in the workspace, for the help cases.
+    /// Runs `fiber` with `args` in the workspace.
     fn fiber(&self, args: &[&str]) -> Run {
         let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
         command
