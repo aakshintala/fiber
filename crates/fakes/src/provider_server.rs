@@ -46,6 +46,10 @@ pub struct Response {
     pub headers: Vec<(String, String)>,
     /// The body bytes, byte for byte.
     pub body: Vec<u8>,
+    /// When true, the server records the request, then drops the
+    /// connection without answering: the client sees a dropped
+    /// connection. `status`, `headers` and `body` are ignored.
+    pub drop_connection: bool,
 }
 
 impl Response {
@@ -55,6 +59,7 @@ impl Response {
             status: 200,
             headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
             body: body.into(),
+            drop_connection: false,
         }
     }
 
@@ -64,6 +69,18 @@ impl Response {
             status,
             headers: vec![("content-type".to_owned(), "application/json".to_owned())],
             body: body.into(),
+            drop_connection: false,
+        }
+    }
+
+    /// Drops the connection without answering, once the request is
+    /// recorded: what a client that retries a dropped connection sees.
+    pub fn drop_connection() -> Self {
+        Self {
+            status: 0,
+            headers: Vec::new(),
+            body: Vec::new(),
+            drop_connection: true,
         }
     }
 
@@ -258,6 +275,11 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                 )
             }),
         };
+        if response.drop_connection {
+            // Recorded above; the open stream drops here, so the client
+            // sees a connection closed with no response.
+            return Ok(());
+        }
         if state.hold {
             while state.hold && !state.stopping {
                 state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);

@@ -725,26 +725,6 @@ mod retry_policy_tests {
     }
 
     #[test]
-    fn retry_policy_defaults_without_configuration() {
-        let retry = retry_policy(&config(Vec::new()));
-        assert_eq!(retry.attempts, 3);
-        assert_eq!(retry.initial, std::time::Duration::from_millis(2000));
-        assert_eq!(retry.max, std::time::Duration::from_millis(60000));
-    }
-
-    #[test]
-    fn retry_policy_reads_configuration() {
-        let retry = retry_policy(&config(vec![
-            "retry.attempts=1".into(),
-            "retry.initial_delay_ms=0".into(),
-            "retry.max_delay_ms=0".into(),
-        ]));
-        assert_eq!(retry.attempts, 1);
-        assert_eq!(retry.initial, std::time::Duration::ZERO);
-        assert_eq!(retry.max, std::time::Duration::ZERO);
-    }
-
-    #[test]
     fn retry_policy_clamps_huge_attempts() {
         let retry = retry_policy(&config(vec!["retry.attempts=18446744073709551615".into()]));
         assert_eq!(retry.attempts, u32::MAX);

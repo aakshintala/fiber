@@ -43,7 +43,7 @@ impl Default for Retry {
 }
 
 /// What `decide` says about a failure.
-pub enum Decision {
+pub(crate) enum Decision {
     /// Make another attempt after the wait.
     Retry(Duration),
     /// Record this failure; no further attempt.
@@ -58,7 +58,12 @@ impl Retry {
     /// `Fail` carries the failure to record: the input unchanged, except an
     /// over-cap wait, which sets `code` to `rate_limited`
     /// (`docs/errors.md`, "A failed model call").
-    pub fn decide(&self, failure: &Failure, should_retry: Option<bool>, retries: u32) -> Decision {
+    pub(crate) fn decide(
+        &self,
+        failure: &Failure,
+        should_retry: Option<bool>,
+        retries: u32,
+    ) -> Decision {
         if matches!(
             failure.code,
             ErrorCode::QuotaExceeded | ErrorCode::UnknownStopReason
@@ -102,15 +107,9 @@ impl Retry {
     /// The wait before retry `retries + 1`: `min(initial * 2^retries, max)`,
     /// saturating, so huge values never overflow.
     fn backoff(&self, retries: u32) -> Duration {
-        let max_ms = self.max.as_millis();
-        let mut grown = self.initial.as_millis();
-        for _ in 0..retries {
-            grown = grown.saturating_mul(2);
-            if grown >= max_ms {
-                break;
-            }
-        }
-        Duration::from_millis(u64::try_from(grown.min(max_ms)).unwrap_or(u64::MAX))
+        self.initial
+            .saturating_mul(1u32.checked_shl(retries).unwrap_or(u32::MAX))
+            .min(self.max)
     }
 }
 
@@ -153,57 +152,61 @@ impl crate::Loop {
                 Err(CallError::Failed {
                     failure,
                     should_retry,
-                }) => match self.retry.decide(&failure, should_retry, retries) {
-                    Decision::Retry(delay) => {
-                        let attempt = retries.saturating_add(1);
-                        self.append(
-                            &Event::AssistantMessageCompleted(AssistantMessageCompleted {
-                                outcome: MessageOutcome::Failed,
-                                error: Some(failure.clone()),
-                                attempt: Some(attempt),
-                            }),
-                            turn,
-                            Some(&message),
-                        )?;
-                        // A cancel that landed during the failing call ends
-                        // the turn before any wait: no `retry_scheduled`
-                        // follows a retry that never starts.
-                        if self.turn_cancelled() {
-                            return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                }) => {
+                    let decision = self.retry.decide(&failure, should_retry, retries);
+                    let attempt = retries.saturating_add(1);
+                    let error = match &decision {
+                        Decision::Retry(_) => &failure,
+                        Decision::Fail(final_failure) => final_failure,
+                    };
+                    self.append(
+                        &Event::AssistantMessageCompleted(AssistantMessageCompleted {
+                            outcome: MessageOutcome::Failed,
+                            error: Some(error.clone()),
+                            attempt: Some(attempt),
+                        }),
+                        turn,
+                        Some(&message),
+                    )?;
+                    match decision {
+                        Decision::Retry(delay) => {
+                            // A cancel that landed during the failing call ends
+                            // the turn before any wait: no `retry_scheduled`
+                            // follows a retry that never starts.
+                            if self.turn_cancelled() {
+                                return Ok(Step::Ended(crate::ended(
+                                    TurnOutcome::Interrupted,
+                                    None,
+                                )));
+                            }
+                            self.append(
+                                &Event::RetryScheduled(RetryScheduled {
+                                    code: failure.code.clone(),
+                                    attempt: attempt.saturating_add(1),
+                                    delay_ms: delay_ms(delay),
+                                }),
+                                turn,
+                                Some(&message),
+                            )?;
+                            // The wait is the delay after the failure: anchored
+                            // when the failure is handled, so time the call took
+                            // never shortens it.
+                            if self.wait_retry(delay) {
+                                return Ok(Step::Ended(crate::ended(
+                                    TurnOutcome::Interrupted,
+                                    None,
+                                )));
+                            }
+                            retries = retries.saturating_add(1);
                         }
-                        self.append(
-                            &Event::RetryScheduled(RetryScheduled {
-                                code: failure.code.clone(),
-                                attempt: attempt.saturating_add(1),
-                                delay_ms: delay_ms(delay),
-                            }),
-                            turn,
-                            Some(&message),
-                        )?;
-                        // The wait is the delay after the failure: anchored
-                        // when the failure is handled, so time the call took
-                        // never shortens it.
-                        if self.wait_retry(delay) {
-                            return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                        Decision::Fail(final_failure) => {
+                            return Ok(Step::Ended(crate::ended(
+                                TurnOutcome::Failed,
+                                Some(final_failure),
+                            )));
                         }
-                        retries = retries.saturating_add(1);
                     }
-                    Decision::Fail(final_failure) => {
-                        self.append(
-                            &Event::AssistantMessageCompleted(AssistantMessageCompleted {
-                                outcome: MessageOutcome::Failed,
-                                error: Some(final_failure.clone()),
-                                attempt: Some(retries.saturating_add(1)),
-                            }),
-                            turn,
-                            Some(&message),
-                        )?;
-                        return Ok(Step::Ended(crate::ended(
-                            TurnOutcome::Failed,
-                            Some(final_failure),
-                        )));
-                    }
-                },
+                }
                 // An interrupted reply has no `assistant_message_completed`
                 // (`docs/architecture.md`, "Cancellation").
                 Err(CallError::Cancelled) => {

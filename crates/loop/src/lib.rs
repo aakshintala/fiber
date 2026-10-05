@@ -46,7 +46,7 @@ pub use cancel::TurnCancel;
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
 pub use resume::{Resumed, resumed};
-pub use retry::{Decision, Retry};
+pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 
 /// What stops the loop.

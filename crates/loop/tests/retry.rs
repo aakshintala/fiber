@@ -193,6 +193,30 @@ fn three_failures_then_success_waits_2_4_8s() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1, 2, 3]);
     assert_eq!(
         scheduled(&lines),
@@ -230,6 +254,26 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Failed));
     });
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1, 2, 3, 4]);
     // No `retry_scheduled` after the last attempt.
     assert_eq!(scheduled(&lines), [(2, 2000), (3, 4000), (4, 8000)]);
@@ -280,6 +324,17 @@ fn x_should_retry_false_stops_a_5xx_at_once() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
     assert_eq!(session.requests().len(), 1);
@@ -298,6 +353,24 @@ fn x_should_retry_true_retries_an_invalid_request() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(scheduled(&lines), [(2, 0)]);
     assert_eq!(completed_count(&lines, "usage_recorded"), 1);
     assert_eq!(session.requests().len(), 2);
@@ -325,6 +398,24 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(scheduled(&lines), [(2, 30_000)]);
 }
 
@@ -334,6 +425,17 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1]);
     let completed = &lines[4].payload;
     assert_eq!(completed["error"]["code"], "rate_limited");
@@ -376,15 +478,31 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
     .retry(no_wait());
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let dropped = session.lines();
+    assert_eq!(
+        kinds(&dropped),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     // The finished tool call never runs, and the partial text never reaches
     // the conversation: the retry's request holds neither.
     assert!(tool.ran().is_empty());
-    assert!(
-        session
-            .lines()
-            .iter()
-            .all(|l| l.kind != "tool_call_requested")
-    );
+    assert!(dropped.iter().all(|l| l.kind != "tool_call_requested"));
     assert_eq!(session.requests().len(), 2);
     assert_eq!(session.requests()[0], session.requests()[1]);
 }
@@ -398,6 +516,17 @@ fn zero_attempts_never_retries() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Failed));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
     assert_eq!(session.requests().len(), 1);
@@ -422,6 +551,18 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
     let lines = session.lines();
     // The failed attempt's message already completed; no message is open,
     // and no second request was sent.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
     assert_eq!(session.provider.requests().len(), 1);
@@ -436,6 +577,17 @@ fn a_cancel_during_the_failing_call_is_interrupted_with_no_wait() {
     session.inbox.send(delivery("hi")).unwrap();
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1]);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
     assert_eq!(session.provider.requests().len(), 1);
@@ -470,6 +622,24 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
     });
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
     assert_eq!(session.provider.requests().len(), 2);

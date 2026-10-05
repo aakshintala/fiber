@@ -59,6 +59,36 @@ fn a_rejected_body_keeps_what_decoded_before_the_fault() {
 }
 
 #[test]
+fn a_dropped_connection_records_the_request_and_answers_nothing() {
+    let server = ProviderServer::start([Response::drop_connection()]).unwrap();
+    let addr = server.addr;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut stream = TcpStream::connect(addr).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .unwrap();
+        stream
+            .write_all(b"POST /v1 HTTP/1.1\r\nHost: localhost\r\nContent-Length: 0\r\n\r\n")
+            .unwrap();
+        let mut body = Vec::new();
+        let read = stream.read_to_end(&mut body);
+        tx.send((read.map(|_| ()), body)).unwrap();
+    });
+
+    assert!(
+        server.await_requests(1, Duration::from_secs(2)),
+        "the request is recorded before the connection drops"
+    );
+    let (read, body) = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("the dropped connection ends the read");
+    assert!(read.is_ok(), "the read ends, it does not fail");
+    assert!(body.is_empty(), "no response follows the request");
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
 fn hold_records_the_request_and_sends_the_body_only_after_release() {
     let server = ProviderServer::start([Response::stream(b"hello")]).unwrap();
     server.hold();

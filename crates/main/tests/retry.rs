@@ -12,8 +12,6 @@
 )]
 
 use std::fs;
-use std::io::{BufRead, BufReader, Read, Write};
-use std::net::TcpListener;
 use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Output, Stdio};
@@ -177,6 +175,13 @@ impl From<Output> for Run {
 }
 
 impl Run {
+    fn kinds(&self) -> Vec<&str> {
+        self.lines
+            .iter()
+            .map(|l| l["kind"].as_str().unwrap())
+            .collect()
+    }
+
     fn last(&self) -> &Value {
         self.lines.last().expect("stdout has a line")
     }
@@ -296,53 +301,25 @@ fn gemini_cut() -> Response {
         "content": {"role": "model", "parts": [{"text": "hi"}]}}]})])
 }
 
-/// A stub that drops its first connection without answering, then serves
-/// `hello` to the next one: a dropped connection followed by a success.
-/// Returns its base URL; the serving thread joins at the test's end.
-fn drop_then_hello(hello: Vec<u8>) -> (String, thread::JoinHandle<()>) {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let serve = thread::spawn(move || {
-        for first in [true, false] {
-            let (stream, _) = listener.accept().unwrap();
-            if first {
-                drop(stream);
-                continue;
-            }
-            let mut reader = BufReader::new(stream);
-            let mut line = String::new();
-            reader.read_line(&mut line).unwrap();
-            let mut length = 0;
-            loop {
-                line.clear();
-                reader.read_line(&mut line).unwrap();
-                let header = line.trim_end_matches(['\r', '\n']);
-                if header.is_empty() {
-                    break;
-                }
-                if let Some(value) = header.strip_prefix("content-length:") {
-                    length = value.trim().parse().unwrap();
-                }
-            }
-            let mut body = vec![0; length];
-            reader.read_exact(&mut body).unwrap();
-            let stream = reader.into_inner();
-            write_response(stream, &hello);
-        }
-    });
-    (url, serve)
-}
-
-fn write_response(mut stream: std::net::TcpStream, hello: &[u8]) {
-    let head = format!(
-        "HTTP/1.1 200 Fake\r\ncontent-type: text/event-stream\r\ncontent-length: {}\
-        \r\nconnection: close\r\n\r\n",
-        hello.len()
-    );
-    stream.write_all(head.as_bytes()).unwrap();
-    stream.write_all(hello).unwrap();
-    stream.flush().unwrap();
-}
+/// The event kinds of an ask that fails its first model call, then
+/// answers `Hello.` in two fragments after one retry.
+const RETRIED_HELLO_KINDS: [&str; 15] = [
+    "session_started",
+    "fiber_started",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_completed",
+    "retry_scheduled",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
 
 /// Installs `fake/m` speaking `protocol` at `server` with `attempts`
 /// retries, runs `fiber ask hi` against `[failure, success]`, and asserts
@@ -359,6 +336,7 @@ fn succeeds_after_one_retry(
     setup.provider(&server, protocol, attempts);
     let run = setup.ask();
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), RETRIED_HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert_eq!(run.retried(), [code]);
     assert_eq!(server.requests().len(), 2);
@@ -390,58 +368,66 @@ fn server_errors_timeouts_and_conflicts_are_retried() {
 
 #[test]
 fn a_dropped_connection_is_retried() {
-    let (url, serve) = drop_then_hello(responses_hello().body);
     let setup = Setup::new();
-    // The stub is not a `ProviderServer`: install the provider at its URL.
-    let source = setup.root.path().join("src");
-    write_file(
-        &source.join("extension.json"),
-        &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
-    );
-    write_file(
-        &source.join("providers/fake.json"),
-        &json!({
-            "name": "fake",
-            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-            "models": [{"id": "m", "protocol": "openai-responses",
-                "base_url": format!("{url}/v1")}]
-        }),
-    );
-    extensions::plan(
-        &setup.home(),
-        &extensions::Request::Path(source),
-        "0.0.0",
-        &extensions::Origin::github(),
-        &*fakes::clock::FakeClock::new(),
-    )
-    .unwrap()
-    .commit()
-    .unwrap();
-    write_file(
-        &setup.home().join("config.json"),
-        &json!({"model": "fake/m", "retry": {
-            "attempts": 3, "initial_delay_ms": 0, "max_delay_ms": 0}}),
-    );
+    let server = ProviderServer::start([Response::drop_connection(), responses_hello()]).unwrap();
+    setup.provider(&server, "openai-responses", 3);
     let run = setup.ask();
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), RETRIED_HELLO_KINDS);
     assert_eq!(run.last()["payload"]["text"], "Hello.");
     assert_eq!(run.retried(), ["connection_failed"]);
-    serve.join().unwrap();
+    assert!(
+        server.await_requests(2, DEADLINE),
+        "both attempts reach the server"
+    );
+    assert_eq!(server.requests().len(), 2);
 }
 
 #[test]
 fn a_stream_cut_short_is_retried_on_every_protocol() {
-    for (protocol, cut, hello) in [
-        ("openai-responses", responses_cut(), responses_hello()),
-        ("anthropic-messages", anthropic_cut(), anthropic_hello()),
-        ("openai-completions", completions_cut(), completions_hello()),
-        ("google-generative-ai", gemini_cut(), gemini_hello()),
+    // Each cut stream emits one fragment before it ends: the failed attempt
+    // is one `assistant_message_delta`, then the retry answers `Hello.`.
+    // Only `openai-responses` answers in two fragments, so only it has a
+    // second delta after its `retry_scheduled`.
+    for (protocol, cut, hello, retried_deltas) in [
+        ("openai-responses", responses_cut(), responses_hello(), 2),
+        ("anthropic-messages", anthropic_cut(), anthropic_hello(), 1),
+        (
+            "openai-completions",
+            completions_cut(),
+            completions_hello(),
+            1,
+        ),
+        ("google-generative-ai", gemini_cut(), gemini_hello(), 1),
     ] {
         let setup = Setup::new();
         let server = ProviderServer::start([Response::stream(cut.body), hello]).unwrap();
         setup.provider(&server, protocol, 3);
         let run = setup.ask();
+        let mut expected = vec![
+            "session_started",
+            "fiber_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+        ];
+        expected.extend(std::iter::repeat_n(
+            "assistant_message_delta",
+            retried_deltas,
+        ));
+        expected.extend([
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]);
         assert_eq!(run.code, Some(0), "{protocol}: {}", run.stderr);
+        assert_eq!(run.kinds(), expected, "{protocol}");
         assert_eq!(run.retried(), ["stream_incomplete"], "{protocol}");
         assert_eq!(server.requests().len(), 2, "{protocol}");
     }
@@ -458,6 +444,18 @@ fn x_should_retry_true_retries_a_400() {
     );
 }
 
+/// The event kinds of an ask whose model call fails without a retry.
+const FAILED_AT_ONCE_KINDS: [&str; 8] = [
+    "session_started",
+    "fiber_started",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 /// A failure that is never retried fails the ask with one request only.
 fn fails_at_once(failure: Response, code: &str) {
     let setup = Setup::new();
@@ -465,6 +463,7 @@ fn fails_at_once(failure: Response, code: &str) {
     setup.provider(&server, "openai-responses", 3);
     let run = setup.ask();
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), FAILED_AT_ONCE_KINDS);
     assert_eq!(run.last()["payload"]["error"]["code"], code);
     assert!(run.retried().is_empty());
     assert_eq!(server.requests().len(), 1);
@@ -488,6 +487,22 @@ fn two_503s_with_one_attempt_fail_the_ask() {
     setup.provider(&server, "openai-responses", 1);
     let run = setup.ask();
     assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "retry_scheduled",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     assert_eq!(
         run.last()["payload"]["error"]["code"],
         "provider_unavailable"
