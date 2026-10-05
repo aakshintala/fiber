@@ -11,7 +11,7 @@ use fakes::clock::FakeClock;
 
 use super::super::background::{Step, running_step, wait_deadline};
 use super::super::output::{
-    Inner, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
+    Inner, OUTPUT_CAP, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
 };
 use super::{
     MovePolicy, MoveReason, Moved, Phase, Run, StopKind, already_woken, exit_code_of, finish,
@@ -45,15 +45,7 @@ fn a_second_signal_and_an_empty_group_are_not_signalled() {
 
 #[test]
 fn bump_advances_the_sequence() {
-    let mut inner = Inner {
-        reaped: false,
-        status: None,
-        eof: false,
-        output: Vec::new(),
-        file: None,
-        discard: false,
-        seq: 0,
-    };
+    let mut inner = Inner::default();
     bump(&mut inner);
     assert_eq!(inner.seq, 1);
 }
@@ -756,6 +748,192 @@ fn parked(shared: Arc<Shared>) -> Moved {
             pgid: 2,
             shared,
             ask: None,
+            job: None,
         },
+        cap: OUTPUT_CAP,
     }
+}
+
+#[test]
+fn the_cap_stops_a_running_job_like_a_cancel() {
+    let shared = Shared::default();
+    let cancel = CancelToken::new();
+    assert!(!super::view(&shared, &cancel).cancelled);
+    lock(&shared.inner).cap_fired = true;
+    assert!(super::view(&shared, &cancel).cancelled);
+}
+
+#[test]
+fn finish_reports_a_fired_cap() {
+    let shared = Shared::default();
+    let open = |shared: &Shared| finish(shared, None, false, true, true, &Recorder::default(), 0);
+    assert!(!open(&shared).capped);
+    lock(&shared.inner).cap_fired = true;
+    assert!(open(&shared).capped);
+}
+
+#[test]
+fn the_sooner_of_two_instants() {
+    let early = at(1);
+    let late = at(2);
+    assert_eq!(super::sooner(Some(late), Some(early)), Some(early));
+    assert_eq!(super::sooner(Some(early), Some(late)), Some(early));
+    assert_eq!(super::sooner(Some(late), None), Some(late));
+    assert_eq!(super::sooner(None, Some(early)), Some(early));
+    assert_eq!(super::sooner(None, None), None);
+}
+
+const JOB_DEADLINE: Duration = Duration::from_secs(10);
+
+/// A command moved to a job and driven on its own thread. The command
+/// writes its group id and creates `block`; each `go` lets it run to its
+/// next `read -r _ < block`.
+struct Job {
+    dir: fakes::TempDir,
+    clock: Arc<FakeClock>,
+    deltas: Arc<fakes::jobs::JobDeltas>,
+    ready: fakes::children::Ready,
+    ran: thread::JoinHandle<super::Finished>,
+    out: std::path::PathBuf,
+    pgid: u32,
+}
+
+impl Job {
+    fn start(name: &str, cap: u64, script: &str) -> Self {
+        let dir = fakes::TempDir::new(name);
+        let ready = fakes::children::Ready::new(dir.path());
+        let block = dir.path().join("block");
+        let command = format!(
+            "echo $$ > '{ready}'\nmkfifo '{block}'\necho $$ >> '{ready}'\n{script}",
+            ready = ready.path().display(),
+            block = block.display(),
+        );
+        let clock = FakeClock::new();
+        let cancel = CancelToken::new();
+        let ran = super::execute(
+            std::path::Path::new("/bin/sh"),
+            &command,
+            dir.path(),
+            Duration::from_secs(3600),
+            clock.as_ref(),
+            &cancel,
+            &Recorder::default(),
+            MovePolicy::Background,
+            None,
+        )
+        .unwrap();
+        let super::Ran::Moved(mut moved) = ran else {
+            panic!("the command did not move");
+        };
+        moved.cap = cap;
+        let out = dir.path().join("job.log");
+        moved.attach_output(std::fs::File::create(&out).unwrap());
+        moved.arm(&cancel);
+        moved.detach_call_cancel();
+        let deltas = Arc::new(fakes::jobs::JobDeltas::default());
+        let stream = super::JobStream::new(
+            contract::JobId("j_t".to_owned()),
+            Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
+        );
+        let job_clock = Arc::clone(&clock);
+        let ran = thread::spawn(move || moved.drive_job(job_clock.as_ref(), &cancel, stream));
+        let pgid = ready.wait(JOB_DEADLINE)[0];
+        let _own = ready.wait(JOB_DEADLINE);
+        Self {
+            dir,
+            clock,
+            deltas,
+            ready,
+            ran,
+            out,
+            pgid,
+        }
+    }
+
+    /// Lets the command run to its next read.
+    fn go(&self) {
+        let mut fifo = std::fs::OpenOptions::new()
+            .write(true)
+            .open(self.dir.path().join("block"))
+            .unwrap();
+        std::io::Write::write_all(&mut fifo, b"go\n").unwrap();
+    }
+
+    fn end(self) -> (super::Finished, fakes::TempDir, Arc<fakes::jobs::JobDeltas>) {
+        let _ready = &self.ready;
+        let finished = self.ran.join().unwrap();
+        assert!(!group_alive(self.pgid), "the group was left running");
+        (finished, self.dir, self.deltas)
+    }
+}
+
+#[test]
+fn output_past_the_cap_stops_the_job_and_the_file_keeps_the_cap() {
+    let job = Job::start(
+        "fiber-job-cap",
+        1000,
+        "read -r _ < block\nhead -c 2000 /dev/zero | tr '\\0' x\nread -r _ < block\n",
+    );
+    job.go();
+    let out = job.out.clone();
+    let (finished, _dir, _deltas) = job.end();
+    assert!(finished.capped);
+    assert_eq!(finished.stop, Some(StopKind::Cancel));
+    assert_eq!(std::fs::read(out).unwrap().len(), 1000);
+}
+
+#[test]
+fn a_command_that_passes_the_cap_and_exits_at_once_still_ends_capped() {
+    let job = Job::start(
+        "fiber-job-cap-exit",
+        1000,
+        "read -r _ < block\nhead -c 2000 /dev/zero | tr '\\0' x\n",
+    );
+    job.go();
+    let out = job.out.clone();
+    let (finished, _dir, _deltas) = job.end();
+    assert!(finished.capped);
+    assert_eq!(std::fs::read(out).unwrap().len(), 1000);
+}
+
+#[test]
+fn a_command_under_the_cap_is_unaffected() {
+    let job = Job::start(
+        "fiber-job-under-cap",
+        1000,
+        "read -r _ < block\nhead -c 500 /dev/zero | tr '\\0' x\n",
+    );
+    job.go();
+    let out = job.out.clone();
+    let (finished, _dir, _deltas) = job.end();
+    assert!(!finished.capped);
+    assert_eq!(finished.stop, None);
+    assert_eq!(exit_code_of(finished.status), 0);
+    assert_eq!(std::fs::read(out).unwrap().len(), 500);
+}
+
+#[test]
+fn a_job_streams_paced_deltas_and_flushes_the_rest_at_its_end() {
+    let job = Job::start(
+        "fiber-job-delta",
+        super::OUTPUT_CAP,
+        "read -r _ < block\nprintf one\nread -r _ < block\nprintf two\nread -r _ < block\nprintf three\n",
+    );
+    let due = job.clock.origin() + Duration::from_millis(100);
+    job.go();
+    assert!(job.deltas.wait_for_text("one", JOB_DEADLINE));
+    job.go();
+    // Parked at the interval: the second write is held, not emitted.
+    assert!(
+        job.clock.await_parked(due, JOB_DEADLINE),
+        "the job did not park for the held delta"
+    );
+    assert_eq!(job.deltas.text(), "one");
+    job.clock.advance(Duration::from_millis(100));
+    assert!(job.deltas.wait_for_text("onetwo", JOB_DEADLINE));
+    job.go();
+    let (finished, _dir, deltas) = job.end();
+    assert!(!finished.capped);
+    let texts: Vec<_> = deltas.deltas().into_iter().map(|(_, text)| text).collect();
+    assert_eq!(texts, ["one", "two", "three"]);
 }

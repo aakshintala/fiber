@@ -4,11 +4,12 @@
 use std::fs::File;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::{self, Receiver, Sender};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::JobId;
-use contract::events::{JobCompleted, JobStarted};
+use contract::emit::Emit;
+use contract::events::{Class, Event, JobCompleted, JobStarted};
 use contract::jobs::{End, Foreground, Jobs, OpenError, Opened, Opening};
 
 struct Inner {
@@ -30,6 +31,56 @@ pub struct FakeJobs {
     inner: Arc<Mutex<Inner>>,
     completed_tx: Sender<JobCompleted>,
     completed_rx: Mutex<Receiver<JobCompleted>>,
+    deltas: Arc<JobDeltas>,
+}
+
+/// The `job_delta` lines every job of a [`FakeJobs`] emitted, in order.
+#[derive(Default)]
+pub struct JobDeltas {
+    texts: Mutex<Vec<(JobId, String)>>,
+    changed: Condvar,
+}
+
+impl JobDeltas {
+    /// Each delta's job and text so far, in arrival order.
+    pub fn deltas(&self) -> Vec<(JobId, String)> {
+        lock(&self.texts).clone()
+    }
+
+    /// The concatenated delta text so far.
+    pub fn text(&self) -> String {
+        text_of(&lock(&self.texts))
+    }
+
+    /// Waits, at most `within` of real time, until the concatenated text
+    /// contains `needle`. True once it does; false at the deadline.
+    pub fn wait_for_text(&self, needle: &str, within: Duration) -> bool {
+        let texts = lock(&self.texts);
+        let (texts, _) = self
+            .changed
+            .wait_timeout_while(texts, within, |texts| !text_of(texts).contains(needle))
+            .unwrap_or_else(PoisonError::into_inner);
+        text_of(&texts).contains(needle)
+    }
+}
+
+impl Emit for JobDeltas {
+    fn emit(&self, event: &Event) {
+        if event.class() != Class::Ephemeral {
+            return;
+        }
+        if let Event::JobDelta(delta) = event {
+            lock(&self.texts).push((
+                delta.job_id.clone(),
+                delta.progress.text.clone().unwrap_or_default(),
+            ));
+            self.changed.notify_all();
+        }
+    }
+}
+
+fn text_of(texts: &[(JobId, String)]) -> String {
+    texts.iter().map(|(_, text)| text.as_str()).collect()
 }
 
 impl FakeJobs {
@@ -58,12 +109,18 @@ impl FakeJobs {
             })),
             completed_tx,
             completed_rx: Mutex::new(completed_rx),
+            deltas: Arc::default(),
         })
     }
 
     /// Every job opened so far, in open order.
     pub fn started(&self) -> Vec<JobStarted> {
         lock(&self.inner).started.clone()
+    }
+
+    /// The `job_delta` lines the jobs emitted.
+    pub fn deltas(&self) -> Arc<JobDeltas> {
+        Arc::clone(&self.deltas)
     }
 
     /// The next completion, or `None` when none arrives within `within`.
@@ -122,6 +179,7 @@ impl Jobs for FakeJobs {
             path,
             file,
             end,
+            emit: Arc::clone(&self.deltas) as Arc<dyn Emit>,
         })
     }
 

@@ -246,3 +246,37 @@ fn registering_forgets_the_calls_that_are_gone() {
     jobs.foreground(contract::jobs::Foreground(Arc::downgrade(&live)));
     assert_eq!(super::lock(&jobs.inner).foreground.len(), 1);
 }
+
+#[test]
+fn a_jobs_deltas_are_recorded_in_order_and_other_events_ignored() {
+    use contract::events::{Event, JobDelta, Progress};
+
+    let dir = crate::TempDir::new("fiber-fake-jobs-deltas");
+    let jobs = FakeJobs::new(dir.path());
+    let opened = jobs.open(opening("x", Stop(Box::new(|| {})))).unwrap();
+    let id = opened.started.job_id.clone();
+    let delta = |text: &str| {
+        Event::JobDelta(JobDelta {
+            job_id: id.clone(),
+            progress: Progress {
+                text: Some(text.to_owned()),
+                details: None,
+            },
+        })
+    };
+    let deltas = jobs.deltas();
+    assert!(!deltas.wait_for_text("ab", Duration::from_millis(1)));
+    opened.emit.emit(&delta("a"));
+    opened.emit.emit(&Event::ToolCallDelta(Progress {
+        text: Some("ignored".to_owned()),
+        details: None,
+    }));
+    opened.emit.emit(&delta("b"));
+    assert_eq!(
+        deltas.deltas(),
+        vec![(id.clone(), "a".to_owned()), (id, "b".to_owned())]
+    );
+    assert_eq!(deltas.text(), "ab");
+    assert!(deltas.wait_for_text("ab", DEADLINE));
+    assert!(!deltas.wait_for_text("abc", Duration::from_millis(1)));
+}

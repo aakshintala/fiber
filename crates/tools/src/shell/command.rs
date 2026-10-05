@@ -16,7 +16,9 @@ use contract::jobs::Jobs;
 use contract::tool::Cancel;
 
 use super::background::{MoveAsk, Step, running_step, wait_deadline};
-use super::output::{Shared, bump, lock, read_output, stream_output, stream_tail, write_or_drop};
+use super::output::{
+    JobStream, OUTPUT_CAP, Shared, bump, lock, read_output, stream_output, stream_tail,
+};
 use rustix::process::{Pid, Signal};
 
 /// How often a group is re-checked while the shell has exited and members
@@ -57,6 +59,8 @@ pub(crate) struct Finished {
     pub held_open: bool,
     /// Fiber sent SIGTERM or SIGKILL.
     pub sent_signal: bool,
+    /// The job's output passed the cap, so Fiber stopped it.
+    pub capped: bool,
 }
 
 /// Whether the drive loop may hand the command to a job.
@@ -168,6 +172,7 @@ pub(crate) fn execute(
         },
         pgid,
         shared,
+        job: None,
     };
     let ended = pump(&mut progress, policy, clock, cancel, emit);
     // A call that left the foreground wait is no longer counted, whether it
@@ -184,6 +189,7 @@ pub(crate) fn execute(
             reason,
             bridge: Some(bridge),
             progress,
+            cap: OUTPUT_CAP,
         })),
     }
 }
@@ -253,6 +259,8 @@ struct Run {
     move_at: Option<Instant>,
     pgid: u32,
     shared: Arc<Shared>,
+    /// A job's `job_delta` lines. Set only on a job's drive.
+    job: Option<JobStream>,
     /// Set when `background` can reach this foreground call.
     ask: Option<Arc<MoveAsk>>,
 }
@@ -282,6 +290,8 @@ pub(crate) struct Moved {
     pub reason: MoveReason,
     bridge: Option<Arc<CancelBridge>>,
     progress: Run,
+    /// The job's output file stops at this many bytes. Tests set a small one.
+    cap: u64,
 }
 
 impl Moved {
@@ -291,11 +301,8 @@ impl Moved {
 
     /// Copies bytes already read into `file`, then points the reader at it.
     /// Both happen under the reader lock, so a chunk is not kept twice or lost.
-    pub(crate) fn attach_output(&self, mut file: File) {
-        let mut inner = lock(&self.progress.shared.inner);
-        let bytes = std::mem::take(&mut inner.output);
-        write_or_drop(&mut file, &bytes);
-        inner.file = Some(file);
+    pub(crate) fn attach_output(&self, file: File) {
+        lock(&self.progress.shared.inner).attach(file, self.cap);
     }
 
     /// Wakes this command when `cancel` fires. The job's stop uses it.
@@ -311,8 +318,13 @@ impl Moved {
 
     /// Runs the command to the end with no further move, on the job's
     /// cancel, which [`Moved::arm`] has subscribed.
-    pub(crate) fn drive_job(self, clock: &dyn Clock, cancel: &dyn Cancel) -> Finished {
-        // debt: no job_delta while a job runs, part 4 of #299 adds it
+    pub(crate) fn drive_job(
+        mut self,
+        clock: &dyn Clock,
+        cancel: &dyn Cancel,
+        stream: JobStream,
+    ) -> Finished {
+        self.progress.job = Some(stream);
         self.run(MovePolicy::Stay, clock, cancel, &Silent)
     }
 
@@ -396,6 +408,11 @@ fn pump(
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
         progress.streamed = stream_output(&progress.shared, emit, progress.streamed);
+        if let Some(job) = progress.job.as_mut() {
+            job.pass(&progress.shared, clock);
+        }
+        // A held `job_delta` wakes the park when it falls due.
+        let held_until = progress.job.as_ref().and_then(JobStream::deadline);
         match progress.phase {
             Phase::Running => match running_step(
                 policy,
@@ -424,7 +441,10 @@ fn pump(
                     clock,
                     &progress.shared,
                     cancel,
-                    wait_deadline(policy, progress.timeout_at, progress.move_at),
+                    sooner(
+                        wait_deadline(policy, progress.timeout_at, progress.move_at),
+                        held_until,
+                    ),
                     view.reaped,
                     true,
                     view.seq,
@@ -447,7 +467,7 @@ fn pump(
                         clock,
                         &progress.shared,
                         cancel,
-                        Some(kill_at),
+                        sooner(Some(kill_at), held_until),
                         true,
                         false,
                         view.seq,
@@ -460,7 +480,7 @@ fn pump(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && progress.seen_empty;
                 if settled || clock.now() >= until {
-                    return LoopEnd::Finished(finish(
+                    let finished = finish(
                         &progress.shared,
                         progress.stop,
                         progress.sent_signal,
@@ -468,13 +488,19 @@ fn pump(
                         view.eof,
                         emit,
                         progress.streamed,
-                    ));
+                    );
+                    // After `finish` the reader queues nothing more, so this
+                    // is every byte the file holds, before the end is reported.
+                    if let Some(job) = progress.job.as_mut() {
+                        job.flush(&progress.shared);
+                    }
+                    return LoopEnd::Finished(finished);
                 }
                 park(
                     clock,
                     &progress.shared,
                     cancel,
-                    Some(until),
+                    sooner(Some(until), held_until),
                     poll_while_occupied(progress.seen_empty),
                     false,
                     view.seq,
@@ -493,7 +519,8 @@ fn view(shared: &Shared, cancel: &dyn Cancel) -> View {
         shell_exit: inner.reaped.then(|| exit_code_of(inner.status)),
         eof: inner.eof,
         seq: inner.seq,
-        cancelled: cancel.is_cancelled(),
+        // The cap stops a job as a stop does; the end reads `capped`.
+        cancelled: cancel.is_cancelled() || inner.cap_fired,
     }
 }
 
@@ -506,7 +533,7 @@ fn finish(
     emit: &dyn Emit,
     streamed: usize,
 ) -> Finished {
-    let (output, status) = {
+    let (output, status, capped) = {
         let mut inner = lock(&shared.inner);
         if !eof {
             // The reader blocks in its read until the last holder closes
@@ -514,7 +541,11 @@ fn finish(
             // of the result.
             inner.discard = true;
         }
-        (std::mem::take(&mut inner.output), inner.status)
+        (
+            std::mem::take(&mut inner.output),
+            inner.status,
+            inner.cap_fired,
+        )
     };
     // Tailed from this exact snapshot: the reader appends from here into a
     // fresh buffer the result never sees (discarded above while open), so
@@ -528,6 +559,7 @@ fn finish(
         indeterminate: stopped && (!eof || !seen_empty),
         held_open: !stopped && !eof && seen_empty,
         sent_signal,
+        capped,
     }
 }
 
@@ -604,6 +636,14 @@ fn suppress_term(sent: bool, seen_empty: bool) -> bool {
 
 fn timeout_due(clock: &dyn Clock, at: Option<Instant>) -> bool {
     at.is_some_and(|at| clock.now() >= at)
+}
+
+/// The earlier of two optional instants.
+fn sooner(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (one, other) => one.or(other),
+    }
 }
 
 fn after(clock: &dyn Clock, delay: Duration) -> Instant {

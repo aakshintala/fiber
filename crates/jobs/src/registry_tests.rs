@@ -14,7 +14,7 @@ use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opening, Stop};
 use contract::shapes::{Failure, Process};
 use contract::{ErrorCode, JobId};
 use fakes::clock::FakeClock;
-use fakes::{CancelToken, TempDir};
+use fakes::{CancelToken, Recorder, TempDir};
 
 use super::Registry;
 
@@ -23,7 +23,10 @@ fn world() -> (TempDir, Arc<Registry>) {
     let artifacts = dir.path().join("artifacts");
     std::fs::create_dir(&artifacts).unwrap();
     let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
-    (dir, Registry::new(artifacts, clock))
+    (
+        dir,
+        Registry::new(artifacts, clock, Arc::new(Recorder::default())),
+    )
 }
 
 fn opening(description: &str) -> Opening {
@@ -84,6 +87,7 @@ fn open_without_the_registry_arc_records_nothing() {
     let registry = Registry {
         artifacts: artifacts.clone(),
         clock,
+        emit: Arc::new(Recorder::default()),
         inner: Mutex::new(super::Inner {
             jobs: Vec::new(),
             seq: 0,
@@ -142,7 +146,7 @@ fn open_into_a_missing_artifacts_directory_records_nothing() {
     let dir = TempDir::new("fiber-jobs-missing");
     let artifacts = dir.path().join("artifacts");
     let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
-    let registry = Registry::new(artifacts.clone(), clock);
+    let registry = Registry::new(artifacts.clone(), clock, Arc::new(Recorder::default()));
     let Err(error) = registry.open(opening("npm test")) else {
         panic!("open recorded a job when the output file could not be created");
     };
@@ -452,4 +456,24 @@ fn registering_forgets_the_calls_that_are_gone() {
     let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| true);
     registry.foreground(Foreground(Arc::downgrade(&live)));
     assert_eq!(super::lock(&registry.inner).foreground.len(), 1);
+}
+
+#[test]
+fn an_opened_job_emits_through_the_registrys_emitter() {
+    let dir = TempDir::new("fiber-jobs-emit");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let clock: Arc<dyn contract::clock::Clock> = FakeClock::new();
+    let recorder = Arc::new(Recorder::default());
+    let registry = Registry::new(artifacts, clock, Arc::clone(&recorder) as _);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let event = contract::events::Event::JobDelta(contract::events::JobDelta {
+        job_id: opened.started.job_id.clone(),
+        progress: contract::events::Progress {
+            text: Some("x".to_owned()),
+            details: None,
+        },
+    });
+    opened.emit.emit(&event);
+    assert_eq!(recorder.events(), vec![event]);
 }

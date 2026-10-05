@@ -10,16 +10,17 @@ use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{JobCompleted, JobStarted, Outcome};
 use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opened, Opening, Stop};
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
+use contract::{ErrorCode, JobId};
 
 use super::assemble;
 use super::command::{Finished, MovePolicy, MoveReason, Moved, StopKind};
+use super::output::JobStream;
 
 /// A description longer than this is cut, with `…` as the last character.
 /// Picked, not measured.
@@ -37,6 +38,8 @@ const PS_BOUND: Duration = Duration::from_secs(2);
 const PS_POLL: Duration = Duration::from_millis(10);
 
 const UNNAMED: &str = "Processes are still running in its group.";
+
+const CAPPED: &str = "The output passed 5 GB and the job was stopped.";
 
 const AFTER_THIRTY: &str = "Still running after 30 seconds, so it moved to the background.";
 const STARTED: &str = "Started in the background.";
@@ -218,11 +221,12 @@ fn hand_off(
     let path = opened.path.clone();
     let job_id = opened.started.job_id.clone();
     let end = opened.end;
+    let stream = JobStream::new(job_id.clone(), opened.emit);
     let job_clock = Arc::clone(&clock);
     // The job's thread starts before the receipt lists the group, so its
     // timeout and stop hold while `ps` runs.
     thread::spawn(move || {
-        let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref());
+        let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream);
         end.end(to_completed(job_id, &path, finished, timeout_ms));
     });
     let members = match reason {
@@ -405,8 +409,13 @@ fn description_of(command: &str) -> String {
 /// The end maps as the foreground result does (`assemble`); a stop that
 /// was not indeterminate is `cancelled`.
 fn to_completed(job_id: JobId, path: &Path, finished: Finished, timeout_ms: u64) -> JobCompleted {
-    let stopped = finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
-    let output = assemble(timeout_ms, finished);
+    let capped = finished.capped;
+    // The cap wins over every other end, a cancel included.
+    let stopped = !capped && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
+    let mut output = assemble(timeout_ms, finished);
+    if capped {
+        output.error = Some(super::failure(ErrorCode::OutputCap, CAPPED.to_owned()));
+    }
     let status = if stopped {
         Outcome::Cancelled
     } else if output.error.is_some() {

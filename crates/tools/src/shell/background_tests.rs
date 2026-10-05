@@ -40,6 +40,7 @@ fn finished(
         indeterminate,
         held_open,
         sent_signal,
+        capped: false,
     }
 }
 
@@ -453,4 +454,43 @@ fn a_request_after_it_was_asked_still_counts_until_the_end() {
     assert_eq!(jobs.background(), 1);
     ask.end();
     assert!(!ask.asked(), "an ended ask still reads as asked");
+}
+
+#[test]
+fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
+    let dir = fakes::TempDir::new("fiber-shell-capped");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let id = JobId("j_1".into());
+    let capped = |mut finished: Finished| {
+        finished.capped = true;
+        to_completed(id.clone(), &path, finished, 5_000)
+    };
+    let cases = [
+        finished(None, Some(StopKind::Cancel), false, true, false),
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        finished(None, Some(StopKind::Cancel), true, true, false),
+        finished(Some(status_of("exit 0")), None, false, false, true),
+        finished(Some(status_of("exit 3")), None, false, false, true),
+    ];
+    for case in cases {
+        let end = capped(case);
+        assert_eq!(end.status, Outcome::Failed);
+        let error = end.error.unwrap();
+        assert_eq!(error.code, ErrorCode::OutputCap);
+        assert_eq!(
+            error.message,
+            "The output passed 5 GB and the job was stopped."
+        );
+        assert_eq!(end.output_tail.as_deref(), Some("partial\n"));
+        assert!(end.process.is_some());
+    }
+    let exited = capped(finished(
+        Some(status_of("exit 3")),
+        None,
+        false,
+        false,
+        true,
+    ));
+    assert_eq!(exited.process.unwrap().exit_code, Some(3));
 }

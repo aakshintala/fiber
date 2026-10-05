@@ -878,6 +878,43 @@ fn run_in_background_returns_a_receipt_while_the_command_runs() {
 }
 
 #[test]
+fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
+    let dir = fakes::TempDir::new("fiber-shell-bg-delta");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "a", "b"),
+        None,
+        true,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    let deltas = jobs.deltas();
+    release_block(ready.path());
+    let ended = jobs.ended(DEADLINE).expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    // The move races the command's first line, so "a" is either in the copy
+    // at the move or a delta. Every byte after the copy is a delta, and all
+    // of it is out before the end was reported.
+    let text = deltas.text();
+    assert!(text.ends_with("b\n"), "{text:?}");
+    assert!("a\nb\n".ends_with(&text), "{text:?}");
+    assert!(
+        deltas.deltas().iter().all(|(id, _)| *id == job.job_id),
+        "{:?}",
+        deltas.deltas()
+    );
+    assert_eq!(job_output(dir.path(), &job), "a\nb\n");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn a_command_moves_after_thirty_seconds_without_being_restarted() {
     let dir = fakes::TempDir::new("fiber-shell-thirty");
     let ready = Ready::new(dir.path());

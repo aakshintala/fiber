@@ -45,6 +45,8 @@ pub struct Opened {
     pub file: std::fs::File,
     /// Reports how the job ended, once.
     pub end: End,
+    /// Where the job's `job_delta` lines go (`docs/events.md`, `job_delta`).
+    pub emit: std::sync::Arc<dyn crate::emit::Emit>,
 }
 
 /// Reports how the job ended, once. Dropped uncalled, the job is recorded
