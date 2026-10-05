@@ -247,7 +247,7 @@ fn yes_approves_an_extension_a_hook_and_a_server() {
         assert!(copy(&setup, hash).file_name().unwrap().to_string_lossy() == file);
     }
     // The install step ran in the copy, not in the repository.
-    let extension = copy(&setup, &approvals[0][3]);
+    let extension = copy(&setup, approvals[0][3]);
     assert_eq!(
         fs::read_to_string(extension.join("built.txt")).unwrap(),
         "built\n"
@@ -255,11 +255,11 @@ fn yes_approves_an_extension_a_hook_and_a_server() {
     assert!(extension.join("init.lua").is_file());
     assert!(!setup.workspace().join("pkg/built.txt").exists());
     assert_eq!(
-        fs::read_to_string(copy(&setup, &approvals[1][3]).join("scripts/fmt.sh")).unwrap(),
+        fs::read_to_string(copy(&setup, approvals[1][3]).join("scripts/fmt.sh")).unwrap(),
         "echo fmt one\n"
     );
     assert_eq!(
-        fs::read_to_string(copy(&setup, &approvals[2][3]).join("srv/run.js")).unwrap(),
+        fs::read_to_string(copy(&setup, approvals[2][3]).join("srv/run.js")).unwrap(),
         "// server\n"
     );
     // The offer was shown on stdout.
@@ -388,7 +388,7 @@ fn a_symbolic_link_out_of_the_repository_is_not_pinned() {
         "{}",
         run.stdout
     );
-    let pinned = copy(&setup, &run.approvals()[0][3]);
+    let pinned = copy(&setup, run.approvals()[0][3]);
     assert!(
         Setup::names(&pinned).is_empty(),
         "{:?}",
