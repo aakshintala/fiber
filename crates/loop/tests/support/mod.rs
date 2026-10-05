@@ -775,11 +775,15 @@ impl Session {
             during: Mutex::new((!during.is_empty()).then(|| (during, inbox.clone()))),
         };
         let rules = Arc::new(FakeRules::empty());
+        let dir = home.0.join("s_test");
+        let session_log = dir.join("events.jsonl").display().to_string();
+        let owned: Arc<FakeClock> = Arc::clone(&clock);
+        let prompt_clock: Arc<dyn contract::clock::Clock> = owned;
         let looped = Loop::start(
             Arc::clone(&log),
             Arc::new(seam),
             model,
-            r#loop::PromptInputs::default(),
+            r#loop::PromptInputs::new(home.0.clone(), "/bin/sh".into(), session_log, prompt_clock),
             rx,
             tools
                 .into_iter()

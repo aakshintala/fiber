@@ -34,6 +34,7 @@ mod cancel;
 mod completion;
 mod conversation;
 mod inbox;
+mod opening;
 mod permission;
 mod process;
 mod progress;
@@ -177,6 +178,10 @@ pub struct Loop {
     workspace_label: String,
     /// Whether a person can answer an approval; `false` for `fiber ask`.
     answerable: bool,
+    /// Whether the opening message was already written: a resume over a
+    /// log holding one writes none, the conversation rebuild renders it
+    /// from the log.
+    opened: bool,
     /// Whether this turn's previous reply was cut off by the output limit.
     cut_off: bool,
     /// Usage lines this loop has written, latest per generation.
@@ -271,6 +276,7 @@ impl Loop {
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
+            opened: false,
             cut_off: false,
             ledger: usage::Ledger::default(),
             budget: None,
@@ -385,6 +391,8 @@ impl Loop {
     /// Builds the one preamble and writes `preamble_built`, once per loop.
     /// Later turns reuse what the first turn built: between builds the
     /// preamble does not change (`docs/prompt-cache.md`, "The preamble").
+    /// The opening message and its notices follow `preamble_built`, before
+    /// `turn_started`.
     fn ensure_preamble(&mut self) -> Result<(), Error> {
         if self.preamble.is_some() {
             return Ok(());
@@ -407,6 +415,44 @@ impl Loop {
             tool_choice: event.tool_choice,
             cache_lifetime: event.cache_lifetime,
         });
+        self.ensure_opening()?;
+        Ok(())
+    }
+
+    /// Writes the opening message and its notices, once per session: after
+    /// `preamble_built` and before `turn_started`
+    /// (`docs/system-prompt.md`, "The opening message"). A resume over a
+    /// log that already holds one writes none. The message goes through
+    /// the same path as every durable event, so it renders into the
+    /// conversation as its first `User` message, before the turn's input.
+    fn ensure_opening(&mut self) -> Result<(), Error> {
+        if self.opened {
+            return Ok(());
+        }
+        self.opened = true;
+        let collected = opening::collect(&self.prompt, &self.workspace);
+        let message = Event::OpeningMessage(collected.message);
+        write(
+            &self.log,
+            &mut self.conversation,
+            &mut self.reviewed,
+            &self.model.reference,
+            &message,
+            None,
+            None,
+        )?;
+        for notice in &collected.notices {
+            let notice = Event::Notice(notice.clone());
+            write(
+                &self.log,
+                &mut self.conversation,
+                &mut self.reviewed,
+                &self.model.reference,
+                &notice,
+                None,
+                None,
+            )?;
+        }
         Ok(())
     }
 
@@ -503,7 +549,7 @@ impl Loop {
                 reviewed,
                 &model.reference,
                 event,
-                turn,
+                Some(turn),
                 Some(action),
             )
         };
@@ -672,7 +718,7 @@ impl Loop {
             &mut self.reviewed,
             &self.model.reference,
             event,
-            turn,
+            Some(turn),
             action,
         )
     }
@@ -689,10 +735,10 @@ fn write(
     reviewed: &mut Vec<reviewer::Reviewed>,
     model: &str,
     event: &Event,
-    turn: &TurnId,
+    turn: Option<&TurnId>,
     action: Option<&ActionId>,
 ) -> Result<(), Error> {
-    log.append(event, Some(turn.clone()), action.cloned())?;
+    log.append(event, turn.cloned(), action.cloned())?;
     if event.class() == Class::Durable {
         conversation::render(conversation, event, action, model);
         reviewer::render_reviewed(reviewed, event, action);

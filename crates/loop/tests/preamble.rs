@@ -24,8 +24,13 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     session.turn();
     let lines = session.lines();
     assert_eq!(
-        kinds(&lines)[0..3],
-        ["session_started", "preamble_built", "turn_started"]
+        kinds(&lines)[0..4],
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started"
+        ]
     );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["reason"], "start");
@@ -52,6 +57,51 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     );
     assert_eq!(built.payload["tools"], Value::Array(vec![]));
     assert!(built.payload.get("replaced").is_none());
+    // The opening message follows the preamble build, and renders as the
+    // conversation's first message.
+    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    assert_eq!(opening.payload["environment"]["date"], "2023-11-14");
+    assert_eq!(opening.payload["environment"]["shell"], "/bin/sh");
+    assert_eq!(opening.payload["instruction_files"], Value::Array(vec![]));
+    assert_eq!(opening.payload["skills"], Value::Array(vec![]));
+    let first = &requests[0].conversation[0];
+    assert!(
+        matches!(first, contract::provider::Input::User { text } if text.starts_with("This message is from Fiber")),
+        "{first:?}"
+    );
+}
+
+#[test]
+fn an_unreadable_instruction_file_is_a_notice_after_the_opening_message() {
+    let mut session = Session::new(vec![Scripted::text("Done.")], None);
+    // A directory where the workspace file should be cannot be read as
+    // one: the file is left out and a notice names it.
+    std::fs::create_dir_all(session.workspace.join("AGENTS.md")).unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines)[0..5],
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "notice",
+            "turn_started",
+        ]
+    );
+    let notice = lines.iter().find(|l| l.kind == "notice").unwrap();
+    assert_eq!(notice.payload["code"], "io_failed");
+    assert!(
+        notice.payload["message"]
+            .as_str()
+            .unwrap()
+            .contains(&session.workspace.join("AGENTS.md").display().to_string()),
+        "{}",
+        notice.payload["message"]
+    );
+    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    assert_eq!(opening.payload["instruction_files"], Value::Array(vec![]));
 }
 
 #[test]

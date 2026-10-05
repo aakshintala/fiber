@@ -69,8 +69,13 @@ pub(crate) fn ask_resume(
     // written. Configuration and the project key still come from the launch
     // directory; the workspace is the first `session_started`'s, wherever
     // the resume runs.
-    let parts = match crate::parts_with(model, folded.model.as_deref()) {
-        Ok(parts) => parts,
+    let parts = match crate::parts_with(model, folded.model.as_deref(), Arc::clone(&clock)) {
+        Ok(mut parts) => {
+            // The session directory's log: the opening message's
+            // environment names it.
+            parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
+            parts
+        }
         Err(e) => return ask_failed(e),
     };
     let crate::Parts {

@@ -220,7 +220,8 @@ fn live_reviewer() {
     let credentials = home.path().join("credentials");
     std::fs::create_dir_all(&credentials).unwrap();
     let id = SessionId("s_live".into());
-    let log = Arc::new(log::Log::create(home.path(), id, fakes::clock::FakeClock::new()).unwrap());
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Arc::new(log::Log::create(home.path(), id, Arc::clone(&clock)).unwrap());
     let mut watcher = log.watch();
     let (inbox, rx) = mpsc::channel();
     inbox
@@ -246,7 +247,15 @@ fn live_reviewer() {
             cost: None,
             subscription: false,
         },
-        r#loop::PromptInputs::default(),
+        r#loop::PromptInputs::new(
+            home.path().to_path_buf(),
+            "/bin/sh".into(),
+            home.path()
+                .join("s_live/events.jsonl")
+                .display()
+                .to_string(),
+            clock,
+        ),
         rx,
         vec![("builtin".to_owned(), Arc::new(Shell) as Arc<dyn Tool>)],
         r#loop::Permissions {

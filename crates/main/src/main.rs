@@ -332,10 +332,15 @@ fn ask(
 
 /// `fiber ask` on a new session.
 fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock::Clock>) -> i32 {
-    let parts = match parts_with(model, None) {
+    let mut parts = match parts_with(model, None, Arc::clone(&clock)) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
+    let id = SessionId(doors::mint("s_"));
+    let dir = parts.sessions.join(&id.0);
+    // The session directory's log: the opening message's environment
+    // names it.
+    parts.prompt.session_log = dir.join("events.jsonl").display().to_string();
     let Parts {
         provider,
         model,
@@ -349,8 +354,6 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         workspace,
         sessions,
     } = parts;
-    let id = SessionId(doors::mint("s_"));
-    let dir = sessions.join(&id.0);
     let permissions = ask_permissions(
         &home,
         &project,
@@ -474,7 +477,11 @@ fn run_turn(
 /// `usage_recorded` uses `--model`, then the configured default as a new
 /// session does. A recorded model that no longer resolves fails with the
 /// resolver's own failure, before any session line is written.
-fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Failure> {
+fn parts_with(
+    model: Option<String>,
+    recorded: Option<&str>,
+    clock: Arc<dyn contract::clock::Clock>,
+) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
         .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
@@ -514,13 +521,17 @@ fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Fa
     let retry = retry_policy(&config);
     // debt: extension prompt texts and the model's addendum arrive empty;
     // filled by #510.
-    let prompt = r#loop::PromptInputs {
-        system: prompt_files::system(&home, &project),
-        append: prompt_files::append(&home, &project),
-        addendum: None,
-        extensions: Vec::new(),
-        context_window: model.model.context_window,
-    };
+    // The session log's path is set by the caller, which mints the session
+    // directory after this returns.
+    let mut prompt = r#loop::PromptInputs::new(
+        home.clone(),
+        std::env::var("SHELL").unwrap_or_else(|_| "unknown".into()),
+        String::new(),
+        clock,
+    );
+    prompt.system = prompt_files::system(&home, &project);
+    prompt.append = prompt_files::append(&home, &project);
+    prompt.context_window = model.model.context_window;
     Ok(Parts {
         sessions,
         home,

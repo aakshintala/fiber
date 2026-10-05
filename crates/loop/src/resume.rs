@@ -132,6 +132,10 @@ impl Loop {
         let workspace = workspace.canonicalize().unwrap_or(workspace);
         let credentials =
             calls::resolve(&permissions.credentials).unwrap_or(permissions.credentials);
+        // A log that already holds an opening message keeps it: the
+        // conversation rebuild renders it from the log, so the first turn
+        // writes none. A log with none gets one at its first turn.
+        let opened = lines.iter().any(|line| line.kind == "opening_message");
         // debt: copies `Loop::start`'s literal apart from five fields; a
         // shared constructor once a third constructor needs the same fields.
         Ok(Self {
@@ -173,6 +177,7 @@ impl Loop {
             turn_blocked: None,
             workspace_label: permissions.workspace,
             answerable: true,
+            opened,
             cut_off: false,
             ledger,
             budget: None,

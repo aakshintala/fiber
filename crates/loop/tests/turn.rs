@@ -63,6 +63,7 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -74,18 +75,19 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
             "turn_completed",
         ]
     );
-    let input: Vec<&str> = lines[2].payload["input"]
+    let input: Vec<&str> = lines[3].payload["input"]
         .as_array()
         .unwrap()
         .iter()
         .map(|item| item["content"][0]["text"].as_str().unwrap())
         .collect();
     assert_eq!(input, ["one", "two", "three"]);
-    assert_eq!(lines[2].payload["input"][0]["command_id"], "c_one");
+    assert_eq!(lines[3].payload["input"][0]["command_id"], "c_one");
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
+    // `conversation[0]` is the opening message.
     assert_eq!(
-        requests[0].conversation,
+        requests[0].conversation[1..],
         [user("one"), user("two"), user("three")]
     );
     assert!(
@@ -106,9 +108,9 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let turn = lines[2].turn_id.clone().unwrap();
-    let action = lines[4].action_id.clone().unwrap();
-    for line in &lines[2..] {
+    let turn = lines[3].turn_id.clone().unwrap();
+    let action = lines[5].action_id.clone().unwrap();
+    for line in &lines[3..] {
         assert_eq!(line.turn_id.as_ref(), Some(&turn), "{}", line.kind);
     }
     let deltas: Vec<_> = lines
@@ -146,7 +148,7 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let durable: Vec<_> = lines.into_iter().filter(|l| l.seq.is_some()).collect();
     assert_eq!(log::read(&session.dir).unwrap(), durable);
     let seqs: Vec<Seq> = durable.iter().map(|l| l.seq.unwrap()).collect();
-    assert_eq!(seqs, (0..9).map(Seq).collect::<Vec<_>>());
+    assert_eq!(seqs, (0..10).map(Seq).collect::<Vec<_>>());
 }
 
 #[test]
@@ -163,6 +165,7 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -185,7 +188,7 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
     assert_eq!(steering.payload["command_id"], "c_also this");
     assert_eq!(steering.payload["source"], "driver");
     assert_eq!(
-        session.requests()[1].conversation,
+        session.requests()[1].conversation[1..],
         [user("hi"), assistant("First."), user("also this")]
     );
 }
@@ -251,13 +254,13 @@ fn the_conversation_is_kept_in_memory_not_reread_from_the_log() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let requests = session.requests();
     assert_eq!(
-        requests[1].conversation,
+        requests[1].conversation[1..],
         [user("one"), assistant("First."), user("two")]
     );
     // The second request starts where the first ended, and both carry the
     // session's own id as the cache key and the preamble's settings.
     assert_eq!(requests[0].previous_end, None);
-    assert_eq!(requests[1].previous_end, Some(1));
+    assert_eq!(requests[1].previous_end, Some(2));
     for request in &requests {
         assert_eq!(request.cache_key, "s_test");
         assert_eq!(request.tool_choice, "auto");
@@ -310,22 +313,22 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
         assert!(is_error);
         action_id.clone()
     };
-    assert_eq!(sent[0], user("one"));
-    assert!(matches!(sent[1], Input::Reasoning { .. }));
-    assert_eq!(sent[2], assistant("Hi."));
-    assert_eq!(sent[3], user("steer"));
-    assert_eq!(sent[4], assistant("Checking."));
-    let (first, first_name) = call(5);
-    let (second, second_name) = call(6);
+    assert_eq!(sent[1], user("one"));
+    assert!(matches!(sent[2], Input::Reasoning { .. }));
+    assert_eq!(sent[3], assistant("Hi."));
+    assert_eq!(sent[4], user("steer"));
+    assert_eq!(sent[5], assistant("Checking."));
+    let (first, first_name) = call(6);
+    let (second, second_name) = call(7);
     assert_eq!(
         (first_name.as_str(), second_name.as_str()),
         ("get_weather", "get_time")
     );
-    assert_eq!(result(7), first);
-    assert_eq!(result(8), second);
-    assert_eq!(sent[9], assistant("Done."));
-    assert_eq!(sent[10], user("two"));
-    assert_eq!(sent.len(), 11);
+    assert_eq!(result(8), first);
+    assert_eq!(result(9), second);
+    assert_eq!(sent[10], assistant("Done."));
+    assert_eq!(sent[11], user("two"));
+    assert_eq!(sent.len(), 12);
 }
 
 #[test]
@@ -335,7 +338,7 @@ fn rebuild_reads_only_durable_lines_and_refuses_a_bad_one() {
     session.turn();
     let mut lines = session.lines();
     assert_eq!(
-        rebuild(&lines, MODEL).unwrap(),
+        rebuild(&lines, MODEL).unwrap()[1..],
         [user("one"), assistant("Hi.")]
     );
     let turn = lines.iter().position(|l| l.kind == "turn_started").unwrap();
@@ -366,13 +369,13 @@ fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     assert_eq!(delta.payload["text"], "Think.");
     assert_eq!(delta.action_id, started.action_id);
     assert_eq!(completed.action_id, started.action_id);
-    assert_ne!(started.action_id, lines[4].action_id);
+    assert_ne!(started.action_id, lines[5].action_id);
     assert_eq!(completed.payload["provider_item"], reasoning_item("Think."));
 
     session.inbox.send(delivery("two")).unwrap();
     session.turn();
     assert_eq!(
-        session.requests()[1].conversation[1],
+        session.requests()[1].conversation[2],
         Input::Reasoning {
             model: MODEL.into(),
             text: "Think.".into(),
@@ -458,6 +461,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -477,7 +481,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         .iter()
         .find(|l| l.kind == "tool_call_arguments_delta")
         .unwrap();
-    assert_eq!(arguments.action_id, lines[4].action_id);
+    assert_eq!(arguments.action_id, lines[5].action_id);
     assert_eq!(arguments.seq, None);
     let requested = lines
         .iter()
@@ -488,14 +492,14 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         .find(|l| l.kind == "tool_call_completed")
         .unwrap();
     assert_eq!(requested.payload["name"], "get_weather");
-    assert_ne!(requested.action_id, lines[4].action_id);
+    assert_ne!(requested.action_id, lines[5].action_id);
     assert_eq!(completed.action_id, requested.action_id);
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "unknown_tool");
     let sent = &session.requests()[1].conversation;
-    assert!(matches!(&sent[1], Input::ToolCall { call, .. } if call.name == "get_weather"));
+    assert!(matches!(&sent[2], Input::ToolCall { call, .. } if call.name == "get_weather"));
     assert_eq!(
-        sent[2],
+        sent[3],
         Input::ToolResult {
             action_id: requested.action_id.clone().unwrap(),
             text: completed.payload["content"][0]["text"]
@@ -524,6 +528,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -531,15 +536,15 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
             "turn_completed",
         ]
     );
-    let call = &lines[5].payload;
+    let call = &lines[6].payload;
     assert_eq!(call["outcome"], "failed");
     assert_eq!(call["attempt"], 1);
     assert_eq!(call["error"]["code"], "invalid_request");
-    assert_eq!(lines[6].payload["outcome"], "failed");
-    assert_eq!(lines[6].payload["error"], call["error"]);
+    assert_eq!(lines[7].payload["outcome"], "failed");
+    assert_eq!(lines[7].payload["error"], call["error"]);
     // A failed call sends nothing to the model.
     assert_eq!(
-        rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap(),
+        rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap()[1..],
         [user("hi")]
     );
 }
@@ -626,11 +631,11 @@ fn a_reply_logs_each_text_part_among_its_other_items() {
         .rposition(|l| l.kind == "assistant_message_started")
         .unwrap();
     assert_eq!(rebuild(&logged[..opened], MODEL).unwrap(), sent);
-    assert_eq!(sent[0], user("hi"));
-    assert_eq!(sent[1], assistant("A"));
-    assert!(matches!(&sent[2], Input::ToolCall { call, .. } if call.name == "get_weather"));
-    assert_eq!(sent[3], assistant("B"));
-    assert!(matches!(&sent[4], Input::ToolResult { text, .. } if text == "Sunny."));
+    assert_eq!(sent[1], user("hi"));
+    assert_eq!(sent[2], assistant("A"));
+    assert!(matches!(&sent[3], Input::ToolCall { call, .. } if call.name == "get_weather"));
+    assert_eq!(sent[4], assistant("B"));
+    assert!(matches!(&sent[5], Input::ToolResult { text, .. } if text == "Sunny."));
 
     r#loop::fiber_exited(&session.log, &session.dir, Ok(())).unwrap();
     let exited = log::read(&session.dir).unwrap();
@@ -647,7 +652,7 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
     let (done, finished) = std::sync::mpsc::channel();
     let ran = std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
     let lines = session.lines();
-    assert_eq!(lines[2].payload["input"].as_array().unwrap().len(), 2);
+    assert_eq!(lines[3].payload["input"].as_array().unwrap().len(), 2);
     session.inbox.send(delivery("bye")).unwrap();
     assert_eq!(
         session.lines().last().unwrap().payload["outcome"],
@@ -949,6 +954,7 @@ fn a_zero_budget_refuses_the_first_request() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "turn_completed",
@@ -1034,6 +1040,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1097,6 +1104,7 @@ fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1168,6 +1176,7 @@ fn a_dropped_steer_leaves_the_queue_listing() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
