@@ -710,6 +710,34 @@ fn labels(setup: &Setup, label: &str, stored: &[&str]) {
     );
 }
 
+/// The kinds of one successful `ask`: a new session, or a resume of one.
+fn ask_kinds(resumed: bool) -> Vec<&'static str> {
+    let mut kinds = if resumed {
+        vec!["fiber_started", "extensions_loaded", "preamble_built"]
+    } else {
+        vec![
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+        ]
+    };
+    kinds.extend([
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]);
+    kinds
+}
+
 fn preamble_label(run: &Run) -> Value {
     let built = run.lines.iter().find(|l| l["kind"] == "preamble_built");
     built.unwrap()["payload"]["credential"].clone()
@@ -724,6 +752,7 @@ fn a_new_session_uses_and_records_the_label_the_configuration_names() {
 
     let run = setup.fiber(&["ask", "one"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), ask_kinds(false));
     assert_eq!(preamble_label(&run), "work");
     let requests = server.requests();
     assert_eq!(
@@ -740,6 +769,7 @@ fn a_session_with_no_label_set_uses_the_default_label() {
 
     let run = setup.fiber(&["ask", "one"]);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), ask_kinds(false));
     assert_eq!(preamble_label(&run), "default");
     assert_eq!(
         server.requests()[0].header("authorization"),
@@ -760,6 +790,8 @@ fn a_resumed_session_keeps_its_label_when_the_configuration_changes() {
     labels(&setup, "other", &[]);
     let second = setup.fiber(&["ask", "--resume", &id, "two"]);
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(first.kinds(), ask_kinds(false));
+    assert_eq!(second.kinds(), ask_kinds(true));
     assert_eq!(preamble_label(&second), "work");
     let requests = server.requests();
     assert_eq!(
