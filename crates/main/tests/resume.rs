@@ -808,6 +808,7 @@ fn a_resume_whose_label_no_longer_exists_fails_before_the_session() {
     labels(&setup, "work", &["work", "other"]);
     let first = setup.fiber(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.kinds(), ask_kinds(false));
     let id = first.session_id().to_owned();
     let events = setup.sessions().join(&id).join("events.jsonl");
     let before = fs::read(&events).unwrap();
