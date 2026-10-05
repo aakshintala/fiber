@@ -72,7 +72,9 @@ pub(super) fn serve(
         }
         let vm = match loaded {
             Ok(vm) => {
-                shared.phase = Phase::Ready(vm.declared());
+                let mut declared = vm.declared();
+                declared.override_hooks(shared.hook_timeout);
+                shared.phase = Phase::Ready(declared);
                 Some(vm)
             }
             Err(e) => {
@@ -245,6 +247,13 @@ fn settle(
                 Target::Command(_) => {
                     deliver(Reply::Lock(Err(
                         "host.oauth.refresh: a command has no provider credential to refresh"
+                            .to_owned(),
+                    )));
+                    None
+                }
+                Target::Hook { .. } => {
+                    deliver(Reply::Lock(Err(
+                        "host.oauth.refresh: a hook has no provider credential to refresh"
                             .to_owned(),
                     )));
                     None

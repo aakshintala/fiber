@@ -24,13 +24,14 @@ pub(super) enum Poll {
 }
 
 /// Removes the base library's I/O, which belongs to the host, and runs the
-/// prelude. Returns the tables `fiber.command` and `fiber.provider` fill.
+/// prelude. Returns the tables `fiber.command`, `fiber.provider` and
+/// `fiber.hook` fill, and the one `fiber.hook` fills with its refusals.
 pub(super) fn install(
     lua: &Lua,
     deadline: &Deadline,
     dir: PathBuf,
     memory_cap: usize,
-) -> mlua::Result<(Table, Table)> {
+) -> mlua::Result<(Table, Table, Table, Table)> {
     let globals = lua.globals();
     for name in ["print", "warn", "dofile", "loadfile"] {
         globals.raw_remove(name)?;
