@@ -320,6 +320,15 @@ or removed since the listing was last given. Each change is appended as one
 line: an added skill's name and description, or a removed skill's name. The
 opening message is never rebuilt for it.
 
+The check finds skills by the same rules as the listing ("Skills"). A skill
+added with a missing `name` or `description`, or a header that does not parse,
+is left out, and its `skill_invalid` notice is raised once, at the first turn
+start that finds it. An added skill that outranks a listed skill of the same
+name raises `skill_shadowed` naming both paths, and the `skill` tool loads the
+winner from then on. The name is already listed, so no line is appended: the
+model is given the winner's description on `reload` or after a handoff, as for
+any changed description.
+
 An edit to a skill's body needs nothing: the `skill` tool reads the file when
 the skill is loaded. An edit to a description is not checked at turn start. It
 reaches the model on `reload`, which sends each changed skill again as an added
@@ -357,7 +366,7 @@ compiled into the binary:
 | `crates/loop/prompt/system.md` | Fiber's system prompt text |
 | `crates/tools/prompt/guidelines.md` | the built-in tools' guidelines, one `##` section per tool |
 | `crates/loop/prompt/opening.md` | the opening message |
-| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the diff, deleted and date lines, the extension heading, the nudge, and the handoff note request |
+| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the diff, deleted and date lines, the added and removed skill lines, the extension heading, the nudge, and the handoff note request |
 | `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass` (`docs/permissions.md`, "The reviewer") |
 
 In `messages.md`, a section's text runs from its `## name` line to the next
