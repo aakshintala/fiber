@@ -465,7 +465,15 @@ fn the_menu_and_ask_help_show_resume() {
 fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
     assert_eq!(
         visible(),
-        ["ask", "extension", "approve", "version", "help"]
+        [
+            "ask",
+            "extension",
+            "approve",
+            "login",
+            "logout",
+            "version",
+            "help"
+        ]
     );
     let Invocation::Run(Some(Commands::Grep { args })) =
         parse_from(["fiber", "grep", "needle", "a.txt"])
