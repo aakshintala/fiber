@@ -228,6 +228,20 @@ fn a_restart_without_jobs_has_no_jobs_line() {
 }
 
 #[test]
+fn a_restart_forgets_the_artifacts_of_results_left_behind() {
+    let mut carry = Carry {
+        texts: vec![(ActionId("a_note".into()), "note".into())],
+        artifacts: vec![(ActionId("a_old".into()), "artifacts/a_old.txt".into())],
+        ..Carry::default()
+    };
+    carry.restart(&completed(Some(Note::Actions {
+        note: vec![ActionId("a_note".into())],
+    })));
+    // Memory follows the context: the old result is not in the new one.
+    assert!(carry.artifacts.is_empty());
+}
+
+#[test]
 fn a_hooks_note_text_is_the_note() {
     let mut carry = Carry::default();
     let restarted = carry.restart(&completed(Some(Note::Hook {

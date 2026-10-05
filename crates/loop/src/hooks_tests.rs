@@ -268,7 +268,7 @@ fn run_with(
                 content: vec![ContentPart::Text { text: "go".into() }],
                 sender: Sender {
                     origin: Origin::Driver,
-                    command_id: CommandId("c_go".into()),
+                    command_id: Some(CommandId("c_go".into())),
                 },
             },
             Ack(Box::new(|_| {})),

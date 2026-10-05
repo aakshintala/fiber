@@ -358,3 +358,54 @@ fn wait_for_text_sees_a_delta_emitted_after_the_wait_started() {
         assert!(deltas.wait_for_text("hell", DEADLINE));
     });
 }
+
+#[test]
+fn running_lists_unended_jobs_in_open_order() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let seam: &dyn Jobs = jobs.as_ref();
+    assert!(seam.running().is_empty());
+    let first = seam.open(opening("one", Stop(Box::new(|| {})))).unwrap();
+    let second = seam.open(opening("two", Stop(Box::new(|| {})))).unwrap();
+    let third = seam.open(opening("three", Stop(Box::new(|| {})))).unwrap();
+    let ids = [
+        first.started.job_id.clone(),
+        second.started.job_id.clone(),
+        third.started.job_id.clone(),
+    ];
+    assert_eq!(seam.running(), ids.to_vec());
+    second.end.end(completed(&ids[1].0, Outcome::Completed));
+    assert_eq!(seam.running(), vec![ids[0].clone(), ids[2].clone()]);
+    drop(first.end);
+    drop(third.end);
+    assert!(seam.running().is_empty());
+}
+
+#[test]
+fn deliver_to_sends_each_later_end_whose_claim_holds() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let seam: &dyn Jobs = jobs.as_ref();
+    let before = seam.open(opening("before", Stop(Box::new(|| {})))).unwrap();
+    before
+        .end
+        .end(completed(&before.started.job_id.0, Outcome::Completed));
+    let (tx, rx) = mpsc::channel();
+    seam.deliver_to(tx);
+    assert!(
+        rx.try_recv().is_err(),
+        "an end before deliver_to sends nothing"
+    );
+    let opened = seam.open(opening("after", Stop(Box::new(|| {})))).unwrap();
+    let id = opened.started.job_id.clone();
+    opened.end.end(completed(&id.0, Outcome::Failed));
+    let delivery = rx.try_recv().expect("the end sent a notice");
+    let contract::inbox::Delivery::Job(notice) = delivery else {
+        panic!("the end sent {delivery:?}");
+    };
+    assert_eq!(notice.completed.job_id, id);
+    assert_eq!(notice.completed.status, Outcome::Failed);
+    assert!(rx.try_recv().is_err(), "one end sends one notice");
+    assert!(seam.running().is_empty(), "the notice is sent as it ends");
+    assert!((notice.claim.0)(), "the claim holds");
+}

@@ -435,7 +435,7 @@ pub(crate) fn message(text: &str) -> Message {
         content: vec![ContentPart::Text { text: text.into() }],
         sender: From {
             origin: Origin::Driver,
-            command_id: CommandId(format!("c_{text}")),
+            command_id: Some(CommandId(format!("c_{text}"))),
         },
     }
 }
@@ -784,7 +784,7 @@ impl Session {
             model,
             scripted,
             cancel,
-            FakeClock::new(),
+            (FakeClock::new(), 0),
         )
     }
 
@@ -807,7 +807,22 @@ impl Session {
             unpriced(),
             inner,
             Arc::new(TurnCancel::default()),
-            clock,
+            (clock, 0),
+        )
+    }
+
+    /// As [`Session::with_tools`], for a model whose context window is
+    /// `window` tokens.
+    pub(crate) fn windowed(script: Vec<Scripted>, tools: Vec<Arc<dyn Tool>>, window: u64) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        Self::assemble_with(
+            Arc::clone(&scripted) as Arc<dyn Provider>,
+            Vec::new(),
+            tools,
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            (FakeClock::new(), window),
         )
     }
 
@@ -818,7 +833,7 @@ impl Session {
         model: Model,
         scripted: Arc<ScriptedProvider>,
         cancel: Arc<TurnCancel>,
-        clock: Arc<FakeClock>,
+        (clock, window): (Arc<FakeClock>, u64),
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -858,6 +873,7 @@ impl Session {
                     prompt_clock,
                 );
                 prompt.credential = Some("work".into());
+                prompt.context_window = (window != 0).then_some(window);
                 prompt
             },
             rx,

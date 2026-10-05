@@ -12,8 +12,10 @@ mod approve;
 mod builtin;
 mod cli;
 mod clock;
+mod cost;
 mod credential;
 mod handoff;
+mod late_emit;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
@@ -379,13 +381,19 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         extensions,
         mcp,
     } = parts;
+    let (job_emit, jobs) = late_emit::registry(&dir, &clock);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
-    let (tools, infos, driver, session_servers) =
-        match mcp_servers::session_tools(&workspace, &dir.join("artifacts"), &clock, mcp.specs) {
-            Ok(built) => built,
-            Err(e) => return ask_failed(e),
-        };
+    let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+        &workspace,
+        &dir.join("artifacts"),
+        &clock,
+        &jobs,
+        mcp.specs,
+    ) {
+        Ok(built) => built,
+        Err(e) => return ask_failed(e),
+    };
     let forget = Arc::clone(&session_servers.forget);
     let permissions = ask_permissions(
         &home,
@@ -397,6 +405,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Ok(log) => Arc::new(log),
         Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
     };
+    job_emit.set(Arc::clone(&log) as _);
     let session = match Session::open(
         &home,
         &dir,
@@ -409,6 +418,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Err(e) => return stop_and_fail(session_servers, e),
     };
     session.shell(driver);
+    session.jobs(jobs.clone());
     let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
         finish(
             // `Loop::start` writes `session_started`, which `fiber_started`
@@ -426,7 +436,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                 session_extensions::written(&log, &extensions)?;
                 r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
-                let looped = session_extensions::hooked(looped, &extensions);
+                let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
                 Ok(looped.handoff(handoff).on_handoff(forget))
             }),
             budget,
@@ -598,7 +608,7 @@ fn parts_with(
         prompt,
         model: Model {
             reference: model.reference(),
-            cost: model.model.cost.clone().map(declared_cost),
+            cost: model.model.cost.clone().map(cost::declared),
             subscription: model.model.subscription,
         },
         reviewer,
@@ -717,7 +727,7 @@ fn choose_reviewer(
         provider,
         model: Model {
             reference: model.reference(),
-            cost: model.model.cost.clone().map(declared_cost),
+            cost: model.model.cost.clone().map(cost::declared),
             subscription: model.model.subscription,
         },
     })
@@ -752,28 +762,6 @@ fn retry_policy(config: &Config) -> r#loop::Retry {
         attempts: u32::try_from(count("retry.attempts", 3)).unwrap_or(u32::MAX),
         initial: Duration::from_millis(count("retry.initial_delay_ms", 2000)),
         max: Duration::from_millis(count("retry.max_delay_ms", 60000)),
-    }
-}
-
-/// Field-by-field copy of a model's declared prices. `loop` cannot depend on
-/// `config`, so the prices it prices with live in `contract`.
-fn declared_cost(cost: config::Cost) -> contract::provider::Cost {
-    contract::provider::Cost {
-        input: cost.input,
-        output: cost.output,
-        cache_read: cost.cache_read,
-        cache_write: cost.cache_write,
-        tiers: cost
-            .tiers
-            .into_iter()
-            .map(|tier| contract::provider::Tier {
-                input_tokens_above: tier.input_tokens_above,
-                input: tier.input,
-                output: tier.output,
-                cache_read: tier.cache_read,
-                cache_write: tier.cache_write,
-            })
-            .collect(),
     }
 }
 

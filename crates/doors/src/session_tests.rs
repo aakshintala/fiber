@@ -973,7 +973,7 @@ fn close_after_resume_keeps_a_session_that_has_turns() {
                 content: vec![ContentPart::Text { text: "one".into() }],
                 sender: Sender {
                     origin: Origin::Driver,
-                    command_id: CommandId("c_1".into()),
+                    command_id: Some(CommandId("c_1".into())),
                 },
                 changed_by: None,
             }],
@@ -1152,4 +1152,37 @@ fn a_shell_registered_after_close_is_cancelled() {
     done_rx
         .recv_timeout(DEADLINE)
         .expect("close returned without the tool's timeout");
+}
+
+#[test]
+fn run_sends_the_jobs_ends_to_the_loops_inbox() {
+    use contract::jobs::{Jobs as _, Opening, Stop};
+    let opened = open();
+    let dir = fakes::TempDir::new("fd-jobs");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    opened.session.jobs(jobs.clone());
+    let job = jobs
+        .open(Opening {
+            tool: "shell".into(),
+            description: "npm test".into(),
+            stop: Stop(Box::new(|| {})),
+            input: None,
+        })
+        .unwrap();
+    let id = job.started.job_id.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            drop(job.end);
+            let delivery = inbox
+                .recv_timeout(DEADLINE)
+                .expect("the job's end reached the inbox");
+            let Delivery::Job(notice) = delivery else {
+                panic!("the end sent {delivery:?}");
+            };
+            assert_eq!(notice.completed.job_id, id);
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
 }

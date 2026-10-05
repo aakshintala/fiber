@@ -16,7 +16,7 @@ use contract::{ActionId, ErrorCode, TurnId};
 
 use crate::prompt::{body, fill};
 use crate::retry::Attempted;
-use crate::{Error, Loop};
+use crate::{Error, Loop, Step};
 
 /// How automatic handoff is set (`docs/configuration.md`, `handoff.*`).
 #[derive(Debug, Clone, PartialEq)]
@@ -116,6 +116,9 @@ pub(crate) struct State {
     pub(crate) held: Vec<Option<String>>,
     /// Whether this turn began as a person's `handoff` between turns.
     person_turn: bool,
+    /// Whether a handoff of any trigger ran in this step: the overflow rule
+    /// runs at most once per step.
+    step_ran: bool,
 }
 
 impl State {
@@ -130,6 +133,7 @@ impl State {
             blocked: false,
             held: Vec::new(),
             person_turn: false,
+            step_ran: false,
         }
     }
 
@@ -164,6 +168,9 @@ pub(crate) struct Carry {
     pub(crate) texts: Vec<(ActionId, String)>,
     /// The calls of the last reply, in call order, with their results.
     pub(crate) step: Vec<StepCall>,
+    /// The artifact of each tool result in this context that has one, by
+    /// call, as a path relative to the session directory.
+    pub(crate) artifacts: Vec<(ActionId, String)>,
 }
 
 /// One call of the last reply: the call, its result once written, and the
@@ -236,6 +243,12 @@ impl Carry {
             conversation.extend(others.iter().map(|call| call.call.clone()));
             conversation.extend(others.iter().filter_map(|call| call.result.clone()));
         }
+        // Only a result still in this context can be moved out of it.
+        self.artifacts.retain(|(id, _)| {
+            conversation.iter().any(
+                |input| matches!(input, Input::ToolResult { action_id, .. } if action_id == id),
+            )
+        });
         self.nudged = false;
         conversation
     }
@@ -250,9 +263,18 @@ impl Carry {
         });
     }
 
-    /// A call of the last reply completed, with its result and the note its
-    /// `control.handoff` set, when it completed.
-    pub(crate) fn call_completed(&mut self, action: &ActionId, result: &Input, note: Option<&str>) {
+    /// A call of the last reply completed, with its result, its artifact and
+    /// the note its `control.handoff` set, when it completed.
+    pub(crate) fn call_completed(
+        &mut self,
+        action: &ActionId,
+        result: &Input,
+        artifact: Option<&str>,
+        note: Option<&str>,
+    ) {
+        if let Some(path) = artifact {
+            self.artifacts.push((action.clone(), path.to_owned()));
+        }
         if let Some(call) = self.step.iter_mut().find(|call| call.action == *action) {
             call.result = Some(result.clone());
             call.note = note.map(str::to_owned);
@@ -316,6 +338,11 @@ pub(crate) fn note_request_text(session_log: &str, instructions: Option<&str>) -
         ));
     }
     text
+}
+
+/// The turn's end when a handoff was cancelled: a person cancelled the turn.
+fn cancelled(outcome: Outcome) -> Option<TurnCompleted> {
+    (outcome == Outcome::Cancelled).then(|| crate::ended(TurnOutcome::Interrupted, None))
 }
 
 /// What the note request came to.
@@ -416,6 +443,7 @@ impl Loop {
     /// at the trigger, or gives the nudge once per context. Returns the
     /// turn's end when the handoff was cancelled.
     pub(crate) fn check_context(&mut self, turn: &TurnId) -> Result<Option<TurnCompleted>, Error> {
+        self.handoff.step_ran = false;
         if !self.handoff.held.is_empty() {
             return self.run_person_handoff(turn);
         }
@@ -426,7 +454,12 @@ impl Loop {
             return Ok(None);
         };
         if size >= trigger_at && !self.handoff.blocked {
-            return self.run_handoff(turn, HandoffTrigger::Auto, None, size);
+            return Ok(cancelled(self.run_handoff(
+                turn,
+                HandoffTrigger::Auto,
+                None,
+                size,
+            )?));
         }
         if self.handoff.settings.nudge
             && !self.handoff.carry.nudged
@@ -457,7 +490,8 @@ impl Loop {
             .collect();
         let instructions = (!parts.is_empty()).then(|| parts.join("\n\n"));
         let size = self.context_estimate();
-        let ended = self.run_handoff(turn, HandoffTrigger::Person, instructions, size)?;
+        let ended =
+            cancelled(self.run_handoff(turn, HandoffTrigger::Person, instructions, size)?);
         if ended.is_none() && self.handoff.person_turn && self.handoff.carry.input.is_empty() {
             return Ok(Some(crate::ended(TurnOutcome::Completed, None)));
         }
@@ -517,14 +551,14 @@ impl Loop {
         trigger: HandoffTrigger,
         instructions: Option<String>,
         tokens_before: u64,
-    ) -> Result<Option<TurnCompleted>, Error> {
+    ) -> Result<Outcome, Error> {
+        self.handoff.step_ran = true;
         self.append(
             &Event::HandoffStarted(HandoffStarted { trigger }),
             turn,
             None,
         )?;
-        let noted = self.request_note(turn, instructions.as_deref())?;
-        let mut ended = None;
+        let noted = self.request_note(turn, trigger, instructions.as_deref())?;
         let (outcome, error, note) = match noted {
             Noted::Note(id) => (
                 Outcome::Completed,
@@ -532,10 +566,7 @@ impl Loop {
                 Some(Note::Actions { note: vec![id] }),
             ),
             Noted::Failed(failure) => (Outcome::Failed, Some(failure), None),
-            Noted::Cancelled => {
-                ended = Some(crate::ended(TurnOutcome::Interrupted, None));
-                (Outcome::Cancelled, None, None)
-            }
+            Noted::Cancelled => (Outcome::Cancelled, None, None),
         };
         self.append(
             &Event::HandoffCompleted(HandoffCompleted {
@@ -553,14 +584,23 @@ impl Loop {
             Outcome::Failed => self.handoff.blocked = true,
             Outcome::Cancelled => {}
         }
-        Ok(ended)
+        Ok(outcome)
     }
 
     /// Asks the model for its note: the conversation and one more user
     /// input, which is never logged. A cancel that landed before the call
     /// ends it at once, as it ends any call (`cancel::run_cancellable`).
-    fn request_note(&mut self, turn: &TurnId, instructions: Option<&str>) -> Result<Noted, Error> {
-        let mut conversation = self.conversation.clone();
+    fn request_note(
+        &mut self,
+        turn: &TurnId,
+        trigger: HandoffTrigger,
+        instructions: Option<&str>,
+    ) -> Result<Noted, Error> {
+        let mut conversation = if trigger == HandoffTrigger::Overflow {
+            self.moved_results()
+        } else {
+            self.conversation.clone()
+        };
         conversation.push(Input::User {
             text: note_request_text(&self.handoff.carry.session_log, instructions),
         });
@@ -616,6 +656,113 @@ impl Loop {
             )));
         }
         Ok(Noted::Note(message))
+    }
+
+    /// The conversation with the last step's tool results moved out: each
+    /// result after the last reply input is replaced by a line naming its
+    /// artifact, written here where the result has none. A result whose
+    /// artifact cannot be written stays inline; the log holds it in full.
+    fn moved_results(&self) -> Vec<Input> {
+        let mut conversation = self.conversation.clone();
+        // From the end back to the last reply input: what followed the reply.
+        let after_reply = conversation.iter_mut().rev().take_while(|input| {
+            !matches!(
+                input,
+                Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. }
+            )
+        });
+        for input in after_reply {
+            if let Input::ToolResult {
+                action_id, text, ..
+            } = input
+                && let Some(path) = self.artifact_of(action_id, text)
+            {
+                *text = fill(
+                    &body(crate::conversation::MESSAGES_MD, "moved-result"),
+                    &[("path", path.as_str())],
+                );
+            }
+        }
+        conversation
+    }
+
+    /// The path of the full text of a tool result: its artifact, or one
+    /// written now, named after the call's action.
+    fn artifact_of(&self, action: &ActionId, text: &str) -> Option<String> {
+        let relative = match self
+            .handoff
+            .carry
+            .artifacts
+            .iter()
+            .find(|(id, _)| id == action)
+        {
+            Some((_, path)) => path.clone(),
+            None => {
+                self.log
+                    .write_artifact(&format!("{}.txt", action.0), text.as_bytes())
+                    .ok()?
+                    .0
+            }
+        };
+        let session = std::path::Path::new(&self.handoff.carry.session_log).parent();
+        Some(session.map_or(relative.clone(), |dir| {
+            dir.join(&relative).display().to_string()
+        }))
+    }
+
+    /// The overflow rule (`docs/handoff.md`, "Overflow"): a request that
+    /// does not fit, or that the provider rejected for size as `failed`,
+    /// hands off with the last step's tool results moved out, then sends the
+    /// step's request from the new context. Once per step; with automatic
+    /// handoff off, or when the handoff does not complete, the turn fails
+    /// `context_overflow`.
+    pub(crate) fn overflowed(
+        &mut self,
+        turn: &TurnId,
+        failed: Option<Failure>,
+    ) -> Result<Step, Error> {
+        let over = failed.unwrap_or_else(|| {
+            failure(
+                ErrorCode::ContextOverflow,
+                "The request does not fit the model's context window.",
+            )
+        });
+        if !self.handoff.settings.enabled || self.handoff.step_ran {
+            return Ok(Step::Ended(crate::ended(TurnOutcome::Failed, Some(over))));
+        }
+        let size = self.context_estimate();
+        match self.run_handoff(turn, HandoffTrigger::Overflow, None, size)? {
+            Outcome::Completed => self.send(turn),
+            Outcome::Failed => Ok(Step::Ended(crate::ended(TurnOutcome::Failed, Some(over)))),
+            Outcome::Cancelled => Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None))),
+        }
+    }
+
+    /// Sends the step's request from the conversation as it stands, once the
+    /// budget and the window allow it (`docs/loop.md`, "One step").
+    pub(crate) fn send(&mut self, turn: &TurnId) -> Result<Step, Error> {
+        let Some(request) = self.request_for(self.conversation.clone()) else {
+            // `turn` builds the preamble before its `turn_started`; reaching
+            // a step without one is a bug, so the turn fails closed.
+            return Ok(Step::Ended(crate::ended(
+                TurnOutcome::Failed,
+                Some(failure(
+                    ErrorCode::LogCorrupt,
+                    "The preamble was not built.",
+                )),
+            )));
+        };
+        if let Some(completed) = self.over_budget() {
+            return Ok(Step::Ended(completed));
+        }
+        let window = self.prompt.context_window.unwrap_or(0);
+        if self.handoff.settings.enabled && window != 0 && self.context_estimate() > window {
+            return self.overflowed(turn, None);
+        }
+        // A refused request leaves the previous request's end in place, so a
+        // later request still marks the cache where that request ended.
+        self.sent = Some(self.conversation.len());
+        self.attempt(&request, turn)
     }
 
     /// Writes the opening message and its notices, and rebuilds the tracked

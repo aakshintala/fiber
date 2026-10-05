@@ -325,6 +325,7 @@ impl Loop {
             idle_left: false,
             hooks: None,
             handoff: crate::handoff::State::new(carry),
+            ending: crate::jobs::Ending::default(),
         };
         resumed.mark_orphans(lines)?;
         Ok(resumed)

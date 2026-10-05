@@ -295,7 +295,13 @@ fn ask_runs_the_prompt_alone_and_stdout_is_the_log() {
         };
         assert_eq!(message.content, [ContentPart::Text { text: "hi".into() }]);
         assert!(matches!(message.sender.origin, Origin::Driver));
-        assert!(message.sender.command_id.0.starts_with("c_"));
+        assert!(
+            message
+                .sender
+                .command_id
+                .as_ref()
+                .is_some_and(|id| id.0.starts_with("c_"))
+        );
         assert!(
             matches!(
                 inbox

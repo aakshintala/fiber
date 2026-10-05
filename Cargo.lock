@@ -744,6 +744,7 @@ dependencies = [
  "doors",
  "extensions",
  "fakes",
+ "jobs",
  "log 0.0.0",
  "loop",
  "mcp",

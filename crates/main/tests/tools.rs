@@ -26,8 +26,8 @@ use serde_json::{Value, json};
 const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The request's tool order: the loop keys tools by name, so this is name
-/// order, and `main` pushes them in the same order.
-const TOOL_NAMES: [&str; 5] = ["edit", "handoff", "read", "shell", "write"];
+/// order, whatever order `main` pushes them in.
+const TOOL_NAMES: [&str; 6] = ["edit", "handoff", "jobs", "read", "shell", "write"];
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -135,6 +135,91 @@ impl Setup {
         watchdog.stand_down(DEADLINE);
         Run::from(output)
     }
+
+    /// Runs `fiber` as [`Setup::run`] does, reading stdout as it is
+    /// written, and calls `act` once the lines so far satisfy `when`. Each
+    /// line, and the exit after the last, is waited for within
+    /// [`DEADLINE`].
+    fn run_then(&self, args: &[&str], when: impl Fn(&[Value]) -> bool, act: impl FnOnce()) -> Run {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
+        command
+            .args(args)
+            .current_dir(self.workspace())
+            .env_clear()
+            .env("PATH", std::env::var_os("PATH").unwrap_or_default())
+            .env("HOME", self.root.path())
+            .env("FIBER_HOME", self.home())
+            .env("FIBER_TEST_FAKE_KEY", "sk-test")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped());
+        let (mut child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        let guard = KillGroup(group);
+        let stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (line_tx, lines_rx) = mpsc::channel();
+        thread::spawn(move || {
+            for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
+                if line_tx.send(line.unwrap()).is_err() {
+                    return;
+                }
+            }
+        });
+        let (err_tx, err_rx) = mpsc::channel();
+        thread::spawn(move || {
+            let mut text = String::new();
+            match std::io::Read::read_to_string(&mut stderr, &mut text) {
+                Ok(_) | Err(_) => {}
+            }
+            match err_tx.send(text) {
+                Ok(()) | Err(_) => {}
+            }
+        });
+        let mut text = String::new();
+        let mut lines = Vec::new();
+        let mut act = Some(act);
+        loop {
+            match lines_rx.recv_timeout(DEADLINE) {
+                Ok(line) => {
+                    text.push_str(&line);
+                    text.push('\n');
+                    lines.push(serde_json::from_str(&line).unwrap_or(Value::Null));
+                    if when(&lines)
+                        && let Some(act) = act.take()
+                    {
+                        act();
+                    }
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    fakes::kill_group(group, "KILL").unwrap();
+                    panic!(
+                        "waited {DEADLINE:?} for a line from `fiber {}`; so far: {text}",
+                        args.join(" ")
+                    );
+                }
+            }
+        }
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || done.send(child.wait()).unwrap());
+        let status = finished
+            .recv_timeout(DEADLINE)
+            .expect("fiber exited after closing stdout")
+            .unwrap();
+        assert!(
+            !group_alive(group),
+            "`fiber` left a process in its group behind"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(DEADLINE);
+        Run {
+            code: status.code(),
+            stdout: text,
+            lines,
+            stderr: err_rx.recv_timeout(DEADLINE).unwrap_or_default(),
+        }
+    }
 }
 
 fn write(file: &Path, value: &Value) {
@@ -223,7 +308,7 @@ impl Run {
     }
 }
 
-/// `preamble_built` for `reason`, with the four built-in tools and nothing
+/// `preamble_built` for `reason`, with the five built-in tools and nothing
 /// replaced. A resume builds the same set again; it does not replace one.
 fn assert_preamble(run: &Run, reason: &str) {
     let preamble = run
@@ -333,7 +418,7 @@ fn read_kinds() -> Vec<&'static str> {
 }
 
 #[test]
-fn a_new_session_offers_the_four_builtin_tools_and_a_read_completes() {
+fn a_new_session_offers_the_five_builtin_tools_and_a_read_completes() {
     let setup = Setup::new();
     let note = "alpha line\n";
     fs::write(setup.workspace().join("note.txt"), note).unwrap();
@@ -971,5 +1056,124 @@ fn handoff_configuration_reaches_a_resumed_session() {
         5
     );
     assert_eq!(of_kind(&second, "handoff_started").len(), 1);
+    assert_eq!(server.requests().len(), 4);
+}
+
+#[test]
+fn a_background_shell_job_is_waited_for_before_ask_exits() {
+    let setup = Setup::new();
+    let ready = setup.workspace().join("ready");
+    // The job runs until the test creates `ready`: past the receipt, the
+    // final reply and the ending notice. One plain command, so a standing
+    // rule can match it.
+    fs::write(
+        setup.workspace().join("wait.sh"),
+        "until [ -e ready ]; do sleep 0.01; done\necho done\n",
+    )
+    .unwrap();
+    let command = "sh wait.sh";
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_bg",
+            "shell",
+            &json!({"command": command, "run_in_background": true}),
+        )]),
+        hello(),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    // A shell call is reviewed; a global standing rule allows this one.
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sh wait.sh"})
+        ),
+    )
+    .unwrap();
+
+    let run = setup.run_then(
+        &["ask", "start the job"],
+        |lines| {
+            lines
+                .iter()
+                .position(|line| line["kind"] == "jobs_pending_notified")
+                .is_some_and(|at| {
+                    lines[at..]
+                        .iter()
+                        .any(|line| line["kind"] == "turn_completed")
+                })
+        },
+        || fs::write(&ready, "").unwrap(),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    let expected = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "job_started",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["turn_started", "step_started", "jobs_pending_notified"],
+        &reply,
+        &["turn_started", "step_started", "job_completed"],
+        &reply,
+        &["fiber_exited"],
+    ]
+    .concat();
+    // `job_delta` is ephemeral, and where it lands depends on when the
+    // job writes, so the comparison leaves it out.
+    let lines: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "job_delta")
+        .collect();
+    let kinds: Vec<&str> = lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, expected);
+    let job_id = lines[13]["payload"]["job_id"].as_str().unwrap();
+    // The ending notice's turn starts with Fiber's own message.
+    let notice = &lines[23]["payload"]["input"];
+    assert_eq!(notice[0]["source"], "fiber");
+    assert!(notice[0].get("command_id").is_none());
+    assert!(
+        notice[0]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains(job_id)
+    );
+    assert_eq!(lines[25]["payload"]["job_ids"], json!([job_id]));
+    let completed = &lines[35];
+    assert_eq!(completed["payload"]["job_id"], job_id);
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
 }

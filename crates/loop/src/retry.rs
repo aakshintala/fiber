@@ -157,6 +157,9 @@ impl crate::Loop {
                 reasoning,
                 message,
             } => return self.record(reply, reasoning, turn, &message),
+            Attempted::Failed(failure) if failure.code == ErrorCode::ContextOverflow => {
+                return self.overflowed(turn, Some(failure));
+            }
             Attempted::Failed(failure) => {
                 Step::Ended(crate::ended(TurnOutcome::Failed, Some(failure)))
             }

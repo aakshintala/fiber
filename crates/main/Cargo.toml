@@ -15,6 +15,7 @@ config = { path = "../config" }
 contract = { path = "../contract" }
 doors = { path = "../doors" }
 extensions = { path = "../extensions" }
+jobs = { path = "../jobs" }
 log = { path = "../log" }
 loop = { path = "../loop" }
 mcp = { path = "../mcp" }

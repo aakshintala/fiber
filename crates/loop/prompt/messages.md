@@ -74,6 +74,14 @@ Fiber: the date is now {date}.
 
 Fiber: background job {job_id} ended: {status}.
 
+## jobs-pending
+
+Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for.
+
+## jobs-check
+
+Fiber: no one has prompted this session for a while, and these background jobs are still running: {job_ids}. Read each job's output file, and stop with `jobs stop` any that look hung or that you no longer need.
+
 ## extension
 
 # Instructions from the {extension} extension
@@ -109,3 +117,7 @@ The person asked that the next stretch of work focus on:
 Fiber: these background jobs are still running. Each one's end is reported when it happens.
 
 {jobs}
+
+## moved-result
+
+Fiber: this result was moved out of your context. Its full text is at {path}.

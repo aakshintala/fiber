@@ -163,7 +163,12 @@ impl Rendered {
             Event::ToolCallCompleted(completed) => {
                 if let Some(action) = action {
                     let result = result_of(action, completed);
-                    self.carry.call_completed(action, &result, noted(completed));
+                    self.carry.call_completed(
+                        action,
+                        &result,
+                        completed.artifact.as_deref(),
+                        noted(completed),
+                    );
                     self.conversation.push(result);
                     self.pending.retain(|p| &p.action_id != action);
                     self.outstanding.retain(|id| id != action);
@@ -200,6 +205,7 @@ impl Rendered {
             Event::ReasoningCompleted(_)
             | Event::TextCompleted(_)
             | Event::AssistantMessageCompleted(_)
+            | Event::JobsPendingNotified(_)
             | Event::FiberExited(_)
             | Event::SessionStarted(_)
             | Event::Rewound(_)
@@ -246,7 +252,6 @@ impl Rendered {
             | Event::JobDelta(_)
             | Event::JobLine(_)
             | Event::DelegateFinished(_)
-            | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 self.render(event, action, model);
@@ -441,7 +446,7 @@ pub(crate) fn render(
         Event::ToolCallCompleted(completed) => {
             if let Some(action) = action {
                 let result = result_of(action, completed);
-                carry.call_completed(action, &result, noted(completed));
+                carry.call_completed(action, &result, completed.artifact.as_deref(), noted(completed));
                 conversation.push(result);
             }
         }
@@ -451,7 +456,10 @@ pub(crate) fn render(
         // rendered, and a failed call sends nothing. Its retry is a new action.
         Event::AssistantMessageCompleted(_)
         // Every other kind adds nothing the model reads. Each is listed, so a
-        // new kind does not compile until it is placed.
+        // new kind does not compile until it is placed. The ending notice's
+        // text is its turn's `message` item; `jobs_pending_notified` only
+        // records the jobs it named.
+        | Event::JobsPendingNotified(_)
         | Event::FiberExited(_)
         | Event::SessionStarted(_)
         | Event::Rewound(_)
@@ -498,7 +506,6 @@ pub(crate) fn render(
         | Event::JobLine(_)
         | Event::DelegateFinished(_)
         | Event::JobCompleted(_)
-        | Event::JobsPendingNotified(_)
         | Event::CommandAccepted(_)
         | Event::CommandRejected(_) => {}
     }

@@ -25,7 +25,7 @@ const PROMPT: &str = include_str!("../prompt/reviewer.md");
 fn sender(origin: Origin) -> Sender {
     Sender {
         origin,
-        command_id: CommandId("c_1".into()),
+        command_id: Some(CommandId("c_1".into())),
     }
 }
 

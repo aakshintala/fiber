@@ -217,6 +217,8 @@ pub struct Loop {
     /// Handoff: the settings, the context's measure and what its render
     /// carries (`docs/handoff.md`).
     handoff: handoff::State,
+    /// The session's jobs, and how far the loop is in ending with them.
+    ending: jobs::Ending,
 }
 
 /// The one built preamble: what every request sends and what
@@ -318,6 +320,7 @@ impl Loop {
             idle_left: false,
             hooks: None,
             handoff: handoff::State::new(handoff::Carry::default()),
+            ending: jobs::Ending::default(),
         })
     }
 
@@ -360,7 +363,8 @@ impl Loop {
     }
 
     /// Runs turns until `close` is taken or every sender of the inbox is
-    /// gone (`docs/invocation.md`, "Lifecycle").
+    /// gone, then, while jobs still run, the ending notice and their ends
+    /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
     pub fn run(mut self) -> Result<(), Error> {
         while self.turn()?.is_some() {}
         Ok(())
@@ -506,6 +510,8 @@ impl Loop {
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         }
         self.append(&Event::StepStarted(Empty {}), turn, None)?;
+        // A jobs notice comes first, before the drain's `steering_queue`.
+        self.write_pending(turn)?;
         // Queued first: a steer held during an approval, or taken by the
         // end-of-turn check, arrived before this drain.
         self.drain(turn)?;
@@ -514,26 +520,7 @@ impl Loop {
         if let Some(completed) = self.check_context(turn)? {
             return Ok(Step::Ended(completed));
         }
-        let Some(request) = self.request_for(self.conversation.clone()) else {
-            // `turn` builds the preamble before its `turn_started`; reaching
-            // a step without one is a bug, so the turn fails closed.
-            return Ok(Step::Ended(ended(
-                TurnOutcome::Failed,
-                Some(Failure {
-                    code: ErrorCode::LogCorrupt,
-                    message: "The preamble was not built.".to_owned(),
-                    retry_after: None,
-                    provider: None,
-                }),
-            )));
-        };
-        if let Some(completed) = self.over_budget() {
-            return Ok(Step::Ended(completed));
-        }
-        // A refused request leaves the previous request's end in place, so a
-        // later request still marks the cache where that request ended.
-        self.sent = Some(self.conversation.len());
-        self.attempt(&request, turn)
+        self.send(turn)
     }
 
     /// When billed spend has reached `budget.usd`, the turn fails and the

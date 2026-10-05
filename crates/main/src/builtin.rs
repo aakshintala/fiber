@@ -24,19 +24,22 @@ type SessionTools = (
     Arc<dyn Fn() + Send + Sync>,
 );
 
-/// `edit`, `handoff`, `read`, `shell` and `write`, each registered by `builtin`.
-/// `read`, `write` and `edit` share one session's file state, which a
-/// handoff forgets, and `read` runs the image child (`fiber image`) into
-/// `artifacts`, the session's `artifacts/` directory. A failure to find the running binary is
-/// `io_failed`, before any session line.
+/// `edit`, `handoff`, `read`, `shell`, `write` and `jobs`, each registered
+/// by `builtin`. `read`, `write` and `edit` share one session's file state,
+/// which a handoff forgets, and `read` runs the image child (`fiber image`)
+/// into `artifacts`, the session's `artifacts/` directory; the model's
+/// `shell` moves commands into `jobs`, which the `jobs` tool lists, waits on
+/// and stops. The driver shell runs in the foreground only. A failure to find
+/// the running binary is `io_failed`, before any session line.
 pub(crate) fn builtin(
     workspace: &Path,
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
+    jobs: &Arc<jobs::Registry>,
 ) -> Result<SessionTools, Failure> {
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
-    with_binary(fiber, workspace, artifacts, clock)
+    with_binary(fiber, workspace, artifacts, clock, jobs)
 }
 
 /// [`builtin`] with the binary the shell's search and the image child run.
@@ -47,13 +50,16 @@ pub(crate) fn with_binary(
     workspace: &Path,
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
+    jobs: &Arc<jobs::Registry>,
 ) -> Result<SessionTools, Failure> {
     let files = Arc::new(
         tools::Files::new(workspace.to_path_buf())
             .with_images(fiber.clone(), artifacts.to_path_buf()),
     );
-    let shell =
-        tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber.clone());
+    let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
+    let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
+        .with_search(fiber.clone())
+        .with_jobs(moves);
     let driver =
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let built = [
@@ -62,6 +68,7 @@ pub(crate) fn with_binary(
         registered(files.read())?,
         registered(shell)?,
         registered(files.write())?,
+        registered(jobs::JobsTool::new(Arc::clone(jobs)))?,
     ];
     let mut pairs = Vec::new();
     let mut infos = Vec::new();

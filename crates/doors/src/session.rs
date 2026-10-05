@@ -125,7 +125,8 @@ impl Session {
     }
 
     /// Sends `first` on the inbox, then serves clients until `run` returns.
-    /// `first` is queued before any client's command.
+    /// `first` is queued before any client's command. The jobs
+    /// [`Session::jobs`] set send their ends to the same inbox.
     pub fn run(
         &self,
         first: Vec<Delivery>,
@@ -139,6 +140,11 @@ impl Session {
                 Ok(()) => {}
                 Err(mpsc::SendError(delivery)) => drop(delivery),
             }
+        }
+        // A job's end wakes the loop through the same inbox
+        // (`docs/tools.md`, "Background jobs").
+        if let Some(jobs) = lock(&self.gate.jobs).as_ref() {
+            jobs.deliver_to(inbox.clone());
         }
         *lock(&self.gate.inbox) = Some(inbox);
         *lock(&self.gate.cancel) = Some(cancel);
@@ -159,7 +165,7 @@ impl Session {
             content: vec![ContentPart::Text { text: prompt }],
             sender: CommandSender {
                 origin: Origin::Driver,
-                command_id: CommandId(mint("c_")),
+                command_id: Some(CommandId(mint("c_"))),
             },
         };
         self.run(

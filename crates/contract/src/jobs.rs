@@ -143,6 +143,17 @@ pub trait Jobs: Send + Sync {
     /// Registers a running foreground call. Held weakly: the call holds the
     /// strong reference while it runs in the foreground.
     fn foreground(&self, call: Foreground);
+
+    /// The jobs still running, in start order. A job's end is sent to the
+    /// inbox before this stops listing it, so once a job is gone from here
+    /// its notice is already waiting there.
+    fn running(&self) -> Vec<crate::JobId>;
+
+    /// Sends each later job end to `inbox` as a
+    /// [`crate::inbox::Delivery::Job`], so the loop can wake the model with
+    /// it (`docs/tools.md`, "Background jobs"). Before this, an end sends
+    /// nothing.
+    fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
 }
 
 /// A running foreground call, as the `background` command reaches it. The

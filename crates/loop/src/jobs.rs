@@ -1,15 +1,22 @@
 //! A finished background job wakes the loop (`docs/tools.md`, "Background
 //! jobs"): its notice starts a turn while the loop is idle, joins the
 //! running turn at the next step boundary, and is written as a
-//! `job_completed` with no action. A resume marks each job a crash left
-//! running `orphaned` (`docs/events.md`, "Resume").
+//! `job_completed` with no action. A session about to end with jobs running
+//! wakes the model once with the ending notice, then waits for every job.
+//! A resume marks each job a crash left running `orphaned`
+//! (`docs/events.md`, "Resume").
 
 use std::collections::HashSet;
+use std::sync::Arc;
+use std::time::Instant;
 
-use contract::events::{Event, InputItem, JobCompleted, Outcome};
+use contract::events::{
+    Event, InputItem, JobCompleted, JobsPendingNotified, Outcome, PendingReason,
+};
 use contract::inbox::{JobNotice, Message};
+use contract::jobs::Jobs;
 use contract::provider::Input;
-use contract::shapes::Failure;
+use contract::shapes::{ContentPart, Failure, Origin, Sender};
 use contract::{CommandId, Envelope, ErrorCode, JobId, TurnId};
 
 use crate::prompt::{body, fill};
@@ -23,7 +30,7 @@ const ORPHANED: &str = "The process that ran this job died; it may still be runn
 #[derive(Debug)]
 pub(crate) enum Queued {
     /// Written as `steering_applied`, or as a `message` item when it starts
-    /// a turn.
+    /// a turn. Fiber's own ending notice only ever starts a turn.
     Steer(Message),
     /// Written as `job_completed` with no action; named in a `jobs` item
     /// when it starts a turn.
@@ -32,6 +39,34 @@ pub(crate) enum Queued {
     /// turn, and run at the next step boundary (`docs/handoff.md`, "A
     /// person"); no line is written for it.
     Handoff(CommandId, Option<String>),
+    /// The jobs the ending notice or the jobs check named, and which of the
+    /// two it was: written as `jobs_pending_notified`, the first line of its
+    /// turn's first step.
+    Pending(Vec<JobId>, PendingReason),
+}
+
+/// The session's jobs as the loop ends (`docs/tools.md`, "Background
+/// jobs"; `docs/invocation.md`, "Lifecycle").
+#[derive(Default)]
+pub(crate) struct Ending {
+    /// The session's jobs. `None`: no job ever runs, and the loop ends as
+    /// it would without jobs.
+    jobs: Option<Arc<dyn Jobs>>,
+    /// The ending notice was given. It is given once per process.
+    notified: bool,
+    /// A turn started after `close` was taken: it, and every later turn,
+    /// takes no steer.
+    pub(crate) after_close: bool,
+    /// An idle wait saw a job running and has not since seen none.
+    ran: bool,
+    /// The idle deadline counted from when a wait last saw the jobs end.
+    quiet: Option<Instant>,
+    /// When the last prompt or steer was taken, or the first idle wait
+    /// began: the unattended delay counts from here.
+    attended: Option<Instant>,
+    /// The jobs check was given since the last prompt or steer, so it is
+    /// not armed (`docs/invocation.md`, "Lifecycle").
+    checked: bool,
 }
 
 /// The notice's completion, when its claim holds: no `jobs wait` or `stop`
@@ -41,6 +76,114 @@ pub(crate) fn claimed(notice: JobNotice) -> Option<JobCompleted> {
 }
 
 impl Loop {
+    /// The session's jobs: their ends wake the model, and the session does
+    /// not end while one runs (`docs/tools.md`, "Background jobs"). Without
+    /// them no job ever runs.
+    pub fn jobs(mut self, jobs: Arc<dyn Jobs>) -> Self {
+        self.ending.jobs = Some(jobs);
+        self
+    }
+
+    /// Whether the loop was given the session's jobs.
+    pub(crate) fn has_jobs(&self) -> bool {
+        self.ending.jobs.is_some()
+    }
+
+    /// The jobs still running, in start order.
+    pub(crate) fn running(&self) -> Vec<JobId> {
+        self.ending
+            .jobs
+            .as_ref()
+            .map(|jobs| jobs.running())
+            .unwrap_or_default()
+    }
+
+    /// The ending notice for `running`, once per process: true when this
+    /// call gave it. Its text is a `message` from Fiber that starts the
+    /// next turn, and `jobs_pending_notified` is queued for that turn's
+    /// first step (`docs/events.md`, `jobs_pending_notified`).
+    pub(crate) fn notify_pending(&mut self, running: Vec<JobId>, input: &mut Vec<Queued>) -> bool {
+        if std::mem::replace(&mut self.ending.notified, true) {
+            return false;
+        }
+        self.notice(running, PendingReason::Ending, input);
+        true
+    }
+
+    /// A prompt or a steer was taken: the session is attended from now,
+    /// and the jobs check is armed again.
+    pub(crate) fn attended(&mut self) {
+        self.ending.attended = Some(self.log.clock().now());
+        self.ending.checked = false;
+    }
+
+    /// When an idle wait starts the unattended clock: from now, unless a
+    /// prompt or an earlier wait already started it.
+    pub(crate) fn start_unattended(&mut self) {
+        if self.ending.attended.is_none() {
+            self.ending.attended = Some(self.log.clock().now());
+        }
+    }
+
+    /// When the jobs check comes due: the idle delay after the last prompt,
+    /// while it is armed and jobs run. `None` with no idle delay, no jobs
+    /// running, or the check already given since the last prompt.
+    pub(crate) fn check_deadline(&self) -> Option<Instant> {
+        let after = self.idle_exit?;
+        if self.ending.checked || self.running().is_empty() {
+            return None;
+        }
+        self.ending.attended?.checked_add(after)
+    }
+
+    /// The jobs check, once until the next prompt: a `message` from Fiber
+    /// listing the running jobs starts the next turn, and
+    /// `jobs_pending_notified` with `reason` `unattended` is queued for its
+    /// first step. The session does not end.
+    pub(crate) fn check_jobs(&mut self, input: &mut Vec<Queued>) {
+        self.ending.checked = true;
+        let running = self.running();
+        self.notice(running, PendingReason::Unattended, input);
+    }
+
+    /// One notice about `running`: its text, as a `message` from Fiber, is
+    /// the next turn's input, and `jobs_pending_notified` is queued for that
+    /// turn's first step (`docs/events.md`, `jobs_pending_notified`).
+    fn notice(&mut self, running: Vec<JobId>, reason: PendingReason, input: &mut Vec<Queued>) {
+        input.push(Queued::Steer(Message {
+            content: vec![ContentPart::Text {
+                text: pending_text(&running, reason),
+            }],
+            sender: Sender {
+                origin: Origin::Fiber,
+                command_id: None,
+            },
+        }));
+        self.queued.push_back(Queued::Pending(running, reason));
+    }
+
+    /// The deadline an idle wait keeps, from the `deadline` it began with:
+    /// none while a job runs, since idle means no jobs running, and never
+    /// before the idle delay has passed since a wait saw the last job end
+    /// (`docs/invocation.md`, "Lifecycle"). `running` is read here, before
+    /// the caller's last look at the inbox: a job's end is sent there
+    /// before `running` stops listing it.
+    pub(crate) fn idle_until(&mut self, deadline: Option<Instant>) -> Option<Instant> {
+        let deadline = deadline?;
+        if !self.running().is_empty() {
+            self.ending.ran = true;
+            return None;
+        }
+        if std::mem::take(&mut self.ending.ran) {
+            self.ending.quiet = self.idle_deadline();
+        }
+        Some(
+            self.ending
+                .quiet
+                .map_or(deadline, |quiet| quiet.max(deadline)),
+        )
+    }
+
     /// A notice taken while a turn runs or an approval waits: queued for
     /// the next step boundary, after anything already queued.
     pub(crate) fn admit_job(&mut self, notice: JobNotice) {
@@ -79,9 +222,27 @@ impl Loop {
                         input.push(InputItem::Jobs { job_ids: vec![id] });
                     }
                 }
+                // A `jobs_pending_notified` a cancelled turn kept: its
+                // message is already logged, so it is no input item, and is
+                // written at the first step boundary.
+                Queued::Pending(ids, reason) => self.queued.push_back(Queued::Pending(ids, reason)),
             }
         }
         input
+    }
+
+    /// Writes each `jobs_pending_notified` at the front of the queue: the
+    /// ending notice or the jobs check queues it before anything else, and
+    /// it is the first line after its turn's first `step_started`
+    /// (`docs/events.md`, `jobs_pending_notified`).
+    pub(crate) fn write_pending(&mut self, turn: &TurnId) -> Result<(), Error> {
+        while let Some(Queued::Pending(..)) = self.queued.front() {
+            if let Some(Queued::Pending(job_ids, reason)) = self.queued.pop_front() {
+                let event = Event::JobsPendingNotified(JobsPendingNotified { job_ids, reason });
+                self.append(&event, turn, None)?;
+            }
+        }
+        Ok(())
     }
 
     /// Writes everything queued, in arrival order: a steer as
@@ -104,6 +265,9 @@ impl Loop {
                 Queued::Handoff(_, instructions) => {
                     self.handoff.held.push(instructions);
                     continue;
+                }
+                Queued::Pending(job_ids, reason) => {
+                    Event::JobsPendingNotified(JobsPendingNotified { job_ids, reason })
                 }
             };
             self.append(&event, turn, None)?;
@@ -177,6 +341,25 @@ fn orphans(lines: &[Envelope]) -> Result<Vec<JobCompleted>, Error> {
             output_tail: None,
         })
         .collect())
+}
+
+/// What a notice about running jobs tells the model, naming `job_ids`: the
+/// ending notice, or the jobs check. It is logged as its turn's `message`
+/// item, which a resume renders as it does any message
+/// (`docs/prompt-cache.md`).
+pub(crate) fn pending_text(job_ids: &[JobId], reason: PendingReason) -> String {
+    let ids: Vec<&str> = job_ids.iter().map(|id| id.0.as_str()).collect();
+    fill(
+        body(
+            crate::conversation::MESSAGES_MD,
+            match reason {
+                PendingReason::Ending => "jobs-pending",
+                PendingReason::Unattended => "jobs-check",
+            },
+        )
+        .trim_end(),
+        &[("job_ids", ids.join(", ").as_str())],
+    )
 }
 
 /// What a `job_completed` with no action tells the model: the job, how it

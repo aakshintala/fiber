@@ -66,6 +66,9 @@ pub(crate) enum InboxRecv {
     Closed,
     /// The idle deadline passed on an empty inbox.
     Idle,
+    /// The jobs check came due on an empty inbox; only a wait that checks
+    /// the jobs ends this way.
+    Unattended,
 }
 
 impl Loop {
@@ -85,9 +88,12 @@ impl Loop {
 
     /// The next delivery, or why the wait ended. Anything already queued is
     /// taken before the deadline is checked, so a prompt queued as the
-    /// deadline passes still starts its turn. The deadline is not moved
-    /// here: the caller keeps the one from the start of the idle wait.
-    pub(crate) fn recv_until(&mut self, deadline: Option<Instant>) -> InboxRecv {
+    /// deadline passes still starts its turn. The caller keeps the deadline
+    /// from the start of the idle wait; while a job runs there is none, and
+    /// a wait that sees the last job end counts the delay from then.
+    /// With `check`, the wait also ends when the jobs check comes due
+    /// (`docs/invocation.md`, "Lifecycle").
+    pub(crate) fn recv_until(&mut self, deadline: Option<Instant>, check: bool) -> InboxRecv {
         loop {
             match self.inbox.try_recv() {
                 Ok(delivery) => return InboxRecv::Delivery(delivery),
@@ -95,7 +101,15 @@ impl Loop {
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
             let clock = Arc::clone(self.log.clock());
-            if deadline.is_some_and(|until| clock.now() >= until) {
+            let idle = self.idle_until(deadline);
+            let due = if check { self.check_deadline() } else { None };
+            if due.is_some_and(|until| clock.now() >= until) {
+                return InboxRecv::Unattended;
+            }
+            // Idle needs no job running and the check needs one, so at most
+            // one of the two is set.
+            let deadline = idle.or(due);
+            if idle.is_some_and(|until| clock.now() >= until) {
                 match self.inbox.try_recv() {
                     Ok(delivery) => return InboxRecv::Delivery(delivery),
                     Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
@@ -122,16 +136,20 @@ impl Loop {
     }
 
     /// Blocks until a prompt or a steer is waiting to start a turn, and
-    /// drains everything else already queued. `None` once `close` was taken
-    /// with nothing to start, the idle delay has passed on an empty inbox,
-    /// or every sender is gone (`docs/loop.md`, "Starting a turn").
+    /// drains everything else already queued. When the session has been
+    /// unattended for the idle delay with jobs running, the jobs check
+    /// starts the turn instead (`docs/invocation.md`, "Lifecycle"). `None`
+    /// once `close` was taken with nothing to start, the idle delay has
+    /// passed on an empty inbox, or every sender is gone (`docs/loop.md`,
+    /// "Starting a turn").
     pub(crate) fn wait_for_turn(&mut self) -> Result<Option<TurnInput>, Error> {
         if self.closing {
-            return Ok(None);
+            return Ok(self.ending());
         }
         // Idle starts as the wait begins. A rejected command, a dropped
         // steer and a wake do not move it (`docs/invocation.md`, "Lifecycle").
         let deadline = self.idle_deadline();
+        self.start_unattended();
         loop {
             let mut input = TurnInput {
                 pieces: Vec::new(),
@@ -170,21 +188,73 @@ impl Loop {
                     self.admit_idle(delivery, &mut input);
                 }
             } else {
-                let first = match self.recv_until(deadline) {
-                    InboxRecv::Delivery(first) => first,
+                match self.recv_until(deadline, true) {
+                    InboxRecv::Delivery(first) => {
+                        let mut batch = vec![first];
+                        batch.extend(self.inbox.try_iter());
+                        for delivery in batch {
+                            self.admit_idle(delivery, &mut input);
+                        }
+                    }
+                    InboxRecv::Unattended => self.check_jobs(&mut input.pieces),
                     InboxRecv::Closed | InboxRecv::Idle => return Ok(None),
-                };
-                let mut batch = vec![first];
-                batch.extend(self.inbox.try_iter());
-                for delivery in batch {
-                    self.admit_idle(delivery, &mut input);
                 }
             }
             if !input.pieces.is_empty() {
                 return Ok(Some(input));
             }
             if self.closing {
-                return Ok(None);
+                return Ok(self.ending());
+            }
+        }
+    }
+
+    /// What starts a turn once `close` was taken (`docs/tools.md`,
+    /// "Background jobs"): job notices already taken, then, while jobs
+    /// still run, the ending notice once, then each job's end as it
+    /// arrives. `None` once no job runs and nothing is waiting, or every
+    /// sender is gone. Without jobs, `None` at once. Steers still queued
+    /// are not run, and no prompt or steer starts a turn.
+    fn ending(&mut self) -> Option<TurnInput> {
+        if !self.has_jobs() {
+            return None;
+        }
+        self.queued
+            .retain(|piece| !matches!(piece, Queued::Steer(_)));
+        let mut input = TurnInput {
+            pieces: self.queued.drain(..).collect(),
+            prompt: None,
+        };
+        for delivery in std::mem::take(&mut self.deferred) {
+            self.admit_idle(delivery, &mut input);
+        }
+        // Every turn from here on starts after `close`.
+        self.ending.after_close = true;
+        loop {
+            if !input.pieces.is_empty() {
+                return Some(input);
+            }
+            let running = self.running();
+            if running.is_empty() {
+                // A job's end is sent before `running` stops listing it, so
+                // what is waiting now holds the last ends.
+                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                    self.admit_idle(delivery, &mut input);
+                }
+                return (!input.pieces.is_empty()).then_some(input);
+            }
+            if self.notify_pending(running, &mut input.pieces) {
+                return Some(input);
+            }
+            match self.recv_until(None, false) {
+                InboxRecv::Delivery(first) => {
+                    let mut batch = vec![first];
+                    batch.extend(self.inbox.try_iter());
+                    for delivery in batch {
+                        self.admit_idle(delivery, &mut input);
+                    }
+                }
+                InboxRecv::Closed | InboxRecv::Idle | InboxRecv::Unattended => return None,
             }
         }
     }
@@ -222,7 +292,7 @@ impl Loop {
                         content: message.content.clone(),
                         sender: message.sender.clone(),
                     }),
-                    Queued::Job(_) | Queued::Handoff(..) => None,
+                    Queued::Job(_) | Queued::Handoff(..) | Queued::Pending(..) => None,
                 })
                 .collect(),
         });
@@ -287,14 +357,17 @@ impl Loop {
                 } else if has_message(input) {
                     reject(ack, ErrorCode::Busy, BUSY);
                 } else {
+                    self.attended();
                     input.pieces.push(Queued::Steer(message));
                     input.prompt = Some(ack);
                 }
             }
             Delivery::Steer(message, ack) => {
-                if self.closing && input.pieces.is_empty() {
+                // After `close` a steer joins only a turn a message starts.
+                if self.closing && !has_message(input) {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
+                    self.attended();
                     accept(ack);
                     input.pieces.push(Queued::Steer(message));
                 }
@@ -322,10 +395,11 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning while idle.
             Delivery::Cancelled => {}
-            // After `close`, news does not start a turn, as a steer does
-            // not; the claim is left untaken.
+            // After `close`, news starts a turn only while the loop waits
+            // for the session's jobs; without them the claim is left
+            // untaken.
             Delivery::Job(notice) => {
-                if !(self.closing && input.pieces.is_empty())
+                if !(self.closing && input.pieces.is_empty() && !self.has_jobs())
                     && let Some(completed) = crate::jobs::claimed(notice)
                 {
                     input.pieces.push(Queued::Job(completed));
@@ -344,7 +418,13 @@ impl Loop {
                     reject(ack, ErrorCode::Busy, BUSY);
                 }
             }
+            // A turn started after `close` takes no steer; the turn in
+            // flight when it arrived still does.
+            Delivery::Steer(_, ack) if self.ending.after_close => {
+                reject(ack, ErrorCode::Closing, CLOSING);
+            }
             Delivery::Steer(message, ack) => {
+                self.attended();
                 accept(ack);
                 self.queued.push_back(Queued::Steer(message));
                 self.emit_queue(Some(turn))?;
@@ -414,9 +494,9 @@ fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
         .iter()
         .position(|piece| match piece {
             Queued::Steer(message) => {
-                !std::mem::take(&mut prompt) && message.sender.command_id == *id
+                !std::mem::take(&mut prompt) && message.sender.command_id.as_ref() == Some(id)
             }
-            Queued::Job(_) | Queued::Handoff(..) => false,
+            Queued::Job(_) | Queued::Handoff(..) | Queued::Pending(..) => false,
         })
         .map(|index| input.pieces.remove(index))
         .is_some()
@@ -427,7 +507,7 @@ fn drop_queued(queued: &mut std::collections::VecDeque<Queued>, id: &CommandId) 
     queued
         .iter()
         .position(
-            |piece| matches!(piece, Queued::Steer(message) if message.sender.command_id == *id),
+            |piece| matches!(piece, Queued::Steer(message) if message.sender.command_id.as_ref() == Some(id)),
         )
         .map(|index| queued.remove(index))
         .is_some()

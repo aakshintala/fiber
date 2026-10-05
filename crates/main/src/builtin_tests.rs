@@ -28,8 +28,13 @@ impl Emit for Quiet {
 fn the_driver_shell_runs_echo() {
     let root = fakes::TempDir::new("fiber-driver-shell");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
     let (_tools, _infos, driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let mut arguments = serde_json::Map::new();
     arguments.insert(
         "command".to_owned(),
@@ -61,8 +66,19 @@ fn read_is_wired_to_the_image_child() {
     )
     .unwrap();
     std::fs::set_permissions(&fiber, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let (tools, _infos, _driver, _forget) =
-        super::with_binary(fiber, root.path(), &root.path().join("artifacts"), &clock).unwrap();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget) = super::with_binary(
+        fiber,
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+    )
+    .unwrap();
     let (_, read) = tools
         .iter()
         .find(|(_, tool)| tool.definition().name == "read")
@@ -89,8 +105,13 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
     let root = fakes::TempDir::new("fiber-forget");
     std::fs::write(root.path().join("a.txt"), "old\n").unwrap();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
     let (tools, _infos, _driver, forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let tool = |name: &str| {
         tools
             .iter()
@@ -122,8 +143,13 @@ fn without_the_forget_callback_the_same_write_goes_through() {
     let root = fakes::TempDir::new("fiber-no-forget");
     std::fs::write(root.path().join("a.txt"), "old\n").unwrap();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
     let (tools, _infos, _driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let tool = |name: &str| {
         tools
             .iter()
@@ -152,25 +178,27 @@ fn without_the_forget_callback_the_same_write_goes_through() {
 }
 
 #[test]
-fn builtin_registers_the_tools_in_name_order_with_handoff_among_them() {
-    let root = fakes::TempDir::new("fiber-names");
+fn builtin_registers_the_tools_in_name_order_then_jobs() {
+    let root = fakes::TempDir::new("fiber-builtin-jobs");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
     let (tools, infos, _driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
-
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let names: Vec<String> = tools
         .iter()
-        .map(|(by, tool)| {
-            assert_eq!(by, "builtin");
+        .map(|(who, tool)| {
+            assert_eq!(who, "builtin");
             tool.definition().name
         })
         .collect();
-    assert_eq!(names, ["edit", "handoff", "read", "shell", "write"]);
+    assert_eq!(names, ["edit", "handoff", "read", "shell", "write", "jobs"]);
+    let listed: Vec<&str> = infos.iter().map(|info| info.name.as_str()).collect();
     assert_eq!(
-        infos
-            .iter()
-            .map(|info| info.name.as_str())
-            .collect::<Vec<_>>(),
-        ["edit", "handoff", "read", "shell", "write"]
+        listed,
+        ["edit", "handoff", "read", "shell", "write", "jobs"]
     );
 }

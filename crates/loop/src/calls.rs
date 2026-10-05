@@ -436,9 +436,11 @@ impl Loop {
         // The deadline is this moment, and a rejected reply does not move it.
         let deadline = self.idle_deadline();
         loop {
-            let delivery = match self.recv_until(deadline) {
+            let delivery = match self.recv_until(deadline, false) {
                 super::inbox::InboxRecv::Delivery(delivery) => delivery,
-                super::inbox::InboxRecv::Idle => {
+                // Without `check` the wait never ends unattended; the arm
+                // keeps the match total.
+                super::inbox::InboxRecv::Idle | super::inbox::InboxRecv::Unattended => {
                     self.idle_left = true;
                     return Ok(Asked::Idle);
                 }

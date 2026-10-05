@@ -38,7 +38,7 @@ struct Inner {
     /// a wake that lands before the condvar wait is still visible.
     seq: u64,
     /// The loop's inbox, which a job's end is sent to. `None` until
-    /// [`Registry::deliver_to`].
+    /// [`contract::jobs::Jobs::deliver_to`].
     inbox: Option<Sender<Delivery>>,
     /// Running foreground calls, held weakly (`Jobs::foreground`).
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
@@ -113,13 +113,6 @@ impl Registry {
         let wake: Arc<dyn Wake> = registry.clone();
         clock.subscribe(Arc::downgrade(&wake));
         registry
-    }
-
-    /// Sends each later job end to `inbox` as a [`Delivery::Job`], so the
-    /// loop can wake the model with it (`docs/tools.md`, "Background
-    /// jobs"). Before this, an end sends nothing.
-    pub fn deliver_to(&self, inbox: Sender<Delivery>) {
-        lock(&self.inner).inbox = Some(inbox);
     }
 
     /// Mints the id, creates the empty output file, and records the job
@@ -228,8 +221,10 @@ impl Registry {
             .now()
             .checked_add(Duration::from_millis(timeout_ms));
         match self.park_until(id, until, cancel) {
-            Parked::Ended => Ok(self.answer_if_ended(id).unwrap_or_else(|| self.running(id))),
-            Parked::Timeout | Parked::Cancelled => Ok(self.running(id)),
+            Parked::Ended => Ok(self
+                .answer_if_ended(id)
+                .unwrap_or_else(|| self.still_running(id))),
+            Parked::Timeout | Parked::Cancelled => Ok(self.still_running(id)),
         }
     }
 
@@ -247,8 +242,10 @@ impl Registry {
             return Ok(answer);
         }
         match self.park_until(id, None, cancel) {
-            Parked::Ended => Ok(self.answer_if_ended(id).unwrap_or_else(|| self.running(id))),
-            Parked::Timeout | Parked::Cancelled => Ok(self.running(id)),
+            Parked::Ended => Ok(self
+                .answer_if_ended(id)
+                .unwrap_or_else(|| self.still_running(id))),
+            Parked::Timeout | Parked::Cancelled => Ok(self.still_running(id)),
         }
     }
 
@@ -279,8 +276,10 @@ impl Registry {
         };
         text.push_str(&since_text(&path, from));
         let state = match parked {
-            Parked::Ended => self.answer_if_ended(id).unwrap_or_else(|| self.running(id)),
-            Parked::Timeout | Parked::Cancelled => self.running(id),
+            Parked::Ended => self
+                .answer_if_ended(id)
+                .unwrap_or_else(|| self.still_running(id)),
+            Parked::Timeout | Parked::Cancelled => self.still_running(id),
         };
         text.push_str(&state.text);
         Ok(Answer {
@@ -322,7 +321,7 @@ impl Registry {
         Ok(Some(Arc::clone(&job.stop)))
     }
 
-    fn running(&self, id: &str) -> Answer {
+    fn still_running(&self, id: &str) -> Answer {
         let inner = lock(&self.inner);
         let path = inner
             .jobs
@@ -628,6 +627,19 @@ impl contract::jobs::Jobs for Registry {
         let mut inner = lock(&self.inner);
         inner.foreground.retain(|call| call.strong_count() > 0);
         inner.foreground.push(call.0);
+    }
+
+    fn running(&self) -> Vec<JobId> {
+        lock(&self.inner)
+            .jobs
+            .iter()
+            .filter(|job| matches!(job.phase, Phase::Running))
+            .map(|job| job.started.job_id.clone())
+            .collect()
+    }
+
+    fn deliver_to(&self, inbox: Sender<Delivery>) {
+        lock(&self.inner).inbox = Some(inbox);
     }
 }
 
