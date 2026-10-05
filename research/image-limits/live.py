@@ -39,21 +39,21 @@ def post(url, headers, body):
 
 def req(b64, mime):
     if vendor == "anthropic":
-        key = open("/tmp/anthropic-key").read().strip()
+        key = open(os.path.expanduser("~/.config/probe-keys/anthropic-key")).read().strip()
         return ("https://api.anthropic.com/v1/messages", {"x-api-key": key, "anthropic-version": "2023-06-01"},
             {"model": "claude-sonnet-5-5", "max_tokens": 60, "messages": [{"role": "user", "content": [
                 {"type": "image", "source": {"type": "base64", "media_type": mime, "data": b64}}, {"type": "text", "text": PROMPT}]}]})
     if vendor == "openai-chat":
-        key = open("/tmp/openai-key").read().strip()
+        key = open(os.path.expanduser("~/.config/probe-keys/openai-key")).read().strip()
         return ("https://api.openai.com/v1/chat/completions", {"authorization": "Bearer " + key},
             {"model": "gpt-6-luna", "max_completion_tokens": 300, "messages": [{"role": "user", "content": [
                 {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}, {"type": "text", "text": PROMPT}]}]})
     if vendor == "openai":
-        key = open("/tmp/openai-key").read().strip()
+        key = open(os.path.expanduser("~/.config/probe-keys/openai-key")).read().strip()
         return ("https://api.openai.com/v1/responses", {"authorization": "Bearer " + key},
             {"model": "gpt-6-luna", "max_output_tokens": 300, "input": [{"role": "user", "content": [
                 {"type": "input_image", "image_url": f"data:{mime};base64,{b64}"}, {"type": "input_text", "text": PROMPT}]}]})
-    key = open("/tmp/gemini-key").read().strip()
+    key = open(os.path.expanduser("~/.config/probe-keys/gemini-key")).read().strip()
     return ("https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-lite:generateContent", {"x-goog-api-key": key},
         {"contents": [{"parts": [{"inline_data": {"mime_type": mime, "data": b64}}, {"text": PROMPT}]}], "generationConfig": {"maxOutputTokens": 300}})
 

@@ -1,8 +1,9 @@
+import os
 # Probe #95/#134: what OpenAI Responses (GPT-6 Luna via OpenRouter, store:false) accepts when a
 # reasoning item is resent, dropped, rebuilt, tampered with or sent to another model.
 # Usage: python3 resp.py [explore|main|include]
 import json, urllib.request, uuid, copy, sys, time
-KEY=open('/tmp/openrouter-key').read().strip()
+KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
 URL='https://openrouter.ai/api/v1/responses'
 GPT,SON='openai/gpt-6-luna','anthropic/claude-sonnet-5'
 RAW=[]

@@ -63,7 +63,7 @@ The `ttl` reached Anthropic. The 1-hour first send cost 1.60 times the default
 one, which is Anthropic's 1-hour write price (2 times base input) over its
 5-minute price (1.25 times).
 
-To re-run, put an OpenRouter key in `/tmp/openrouter-key`, then run
+To re-run, put an OpenRouter key in `~/.config/probe-keys/openrouter-key`, then run
 `python3 probe_or_anthropic_cache.py raw/openrouter-anthropic-cache` from this
 directory. It writes one `<case>.json` per case, holding the request and both
 replies' usage. Raw results: `raw/openrouter-anthropic-cache/`.

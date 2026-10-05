@@ -1,7 +1,8 @@
+import os
 # Probe #134: instructions vs input system message (answer + cache), tool with no strict key, store default.
 # Model gpt-6-luna direct, https://api.openai.com/v1/responses. Prices $0.10/M in, $0.01/M cached, $0.50/M out.
 import json, urllib.request, uuid, time
-KEY=open('/tmp/openai-key').read().strip(); URL='https://api.openai.com/v1/responses'; M='gpt-6-luna'
+KEY=open(os.path.expanduser('~/.config/probe-keys/openai-key')).read().strip(); URL='https://api.openai.com/v1/responses'; M='gpt-6-luna'
 RAW=[]; SPEND=0.0; CAP=0.75; N=0
 def call(body,label):
     global SPEND,N

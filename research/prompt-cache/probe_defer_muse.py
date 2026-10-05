@@ -1,8 +1,9 @@
+import os
 # Probe: does OpenAI Responses deferral (defer_loading + client tool_search) work
 # through OpenRouter on GPT-6 Luna, what does a deferred tool cost, and does
 # loading one keep the cache? Usage: python3 probe_defer_responses.py
 import json, urllib.request, time, uuid, copy
-KEY=open('/tmp/muse-key').read().strip()
+KEY=open(os.path.expanduser('~/.config/probe-keys/muse-key')).read().strip()
 URL='https://api.meta.ai/v1/responses'
 MODEL='muse-spark-1.3-contributor'
 def call(body):

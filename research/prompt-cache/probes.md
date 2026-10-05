@@ -1,8 +1,8 @@
 # Prompt cache probes
 
 Live and local probes behind `docs/prompt-cache.md`, run on September 24, 2026.
-The scripts are in this directory and read their keys from `/tmp/muse-key` and
-`/tmp/openrouter-key`.
+The scripts are in this directory and read their keys from `~/.config/probe-keys/muse-key` and
+`~/.config/probe-keys/openrouter-key`.
 
 ## Serialization (`probe_serde.rs`)
 
