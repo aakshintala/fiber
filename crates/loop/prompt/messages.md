@@ -109,3 +109,7 @@ The person asked that the next stretch of work focus on:
 Fiber: these background jobs are still running. Each one's end is reported when it happens.
 
 {jobs}
+
+## moved-result
+
+Fiber: this result was moved out of your context. Its full text is at {path}.

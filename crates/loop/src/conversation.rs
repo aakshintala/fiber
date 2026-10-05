@@ -163,7 +163,12 @@ impl Rendered {
             Event::ToolCallCompleted(completed) => {
                 if let Some(action) = action {
                     let result = result_of(action, completed);
-                    self.carry.call_completed(action, &result, noted(completed));
+                    self.carry.call_completed(
+                        action,
+                        &result,
+                        completed.artifact.as_deref(),
+                        noted(completed),
+                    );
                     self.conversation.push(result);
                     self.pending.retain(|p| &p.action_id != action);
                     self.outstanding.retain(|id| id != action);
@@ -440,7 +445,7 @@ pub(crate) fn render(
         Event::ToolCallCompleted(completed) => {
             if let Some(action) = action {
                 let result = result_of(action, completed);
-                carry.call_completed(action, &result, noted(completed));
+                carry.call_completed(action, &result, completed.artifact.as_deref(), noted(completed));
                 conversation.push(result);
             }
         }

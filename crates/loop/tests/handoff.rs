@@ -1752,3 +1752,494 @@ fn a_held_person_handoff_still_runs_at_the_boundary_after_a_tool_handoff() {
     assert_eq!(requests[1].conversation[2], user("Tool note."));
     assert_eq!(requests[2].conversation[2], user("The note."));
 }
+
+// Overflow (`docs/handoff.md`, "Overflow").
+
+/// A request the provider rejected for size: one assistant message, failed.
+const REJECTED: &[&str] = &["assistant_message_started", "assistant_message_completed"];
+/// A handoff whose note request failed.
+const FAILED_NOTE: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "assistant_message_completed",
+    "handoff_completed",
+];
+/// A reply that calls two tools, with their runs.
+const TWO_CALLS: &[&str] = &[
+    "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
+    "tool_call_arguments_delta",
+    "tool_call_requested",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_started",
+    "tool_call_completed",
+    "tool_call_completed",
+];
+const MOVED: &str = "Fiber: this result was moved out of your context. Its full text is at ";
+/// What the `long` tool returns, and the first four bytes of it its bound
+/// keeps.
+const LONG: &str = "0123456789";
+
+/// A tool whose result is cut to four bytes, so it has an artifact.
+fn long() -> Arc<TestTool> {
+    let mut tool = TestTool::reads("long", LONG);
+    tool.bound = contract::tool::Bound { start: 4, end: 0 };
+    Arc::new(tool)
+}
+
+fn overflowing() -> Scripted {
+    failed(ErrorCode::ContextOverflow)
+}
+
+/// A reply calling the weather tool and the long tool, with `tokens` in its
+/// prompt.
+fn called_both(tokens: u64) -> Scripted {
+    with_tokens(tool_call_reply("", &["get_weather", "long"]), tokens, 0)
+}
+
+fn both_tools() -> Vec<Arc<dyn contract::tool::Tool>> {
+    vec![weather(), long()]
+}
+
+fn error_of(line: &Envelope) -> &str {
+    line.payload["error"]["code"].as_str().unwrap()
+}
+
+#[test]
+fn a_provider_overflow_moves_the_last_steps_results_and_hands_off() {
+    let mut session = Session::with_tools(
+        vec![
+            called_both(100),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        None,
+        both_tools(),
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING, STEP, TWO_CALLS, STEP, REJECTED, HANDED_OFF, REPLY, ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "overflow"
+    );
+    let completions = of_kind(&lines, "tool_call_completed");
+    let weather_id = completions[0].action_id.as_ref().unwrap().0.clone();
+    let long_id = completions[1].action_id.as_ref().unwrap().0.clone();
+    let cut = completions[1].payload["artifact"].as_str().unwrap();
+    assert!(completions[0].payload.get("artifact").is_none());
+
+    let session_dir = std::fs::canonicalize(&session.dir).unwrap();
+    let requests = session.requests();
+    assert_eq!(requests.len(), 4);
+    // The note request: the unchanged conversation, with each result moved.
+    let asked = &requests[2].conversation;
+    assert_eq!(asked.len(), requests[1].conversation.len() + 1);
+    let results: Vec<&str> = asked
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolResult { text, .. } => Some(text.as_str()),
+            Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. } => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2);
+    let written = format!("artifacts/{weather_id}.txt");
+    assert_eq!(
+        results[0],
+        format!("{MOVED}{}.", session_dir.join(&written).display())
+    );
+    assert_eq!(
+        results[1],
+        format!("{MOVED}{}.", session_dir.join(cut).display())
+    );
+    assert_eq!(cut, format!("artifacts/{long_id}.txt"));
+    // A result without an artifact now has one holding its text; one with an
+    // artifact is not rewritten.
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join(&written)).unwrap(),
+        "abcd"
+    );
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join(cut)).unwrap(),
+        LONG
+    );
+    // The replacement is only in the note request: the log keeps the result.
+    assert!(!lines.iter().any(|line| {
+        serde_json::to_string(&line.payload)
+            .unwrap()
+            .contains("moved out of your context")
+    }));
+    // The step's request is sent again from the new context.
+    let next = &requests[3].conversation;
+    assert_eq!(next.len(), 3);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[2], user("The note."));
+    assert_eq!(requests[3].previous_end, None);
+}
+
+#[test]
+fn a_note_request_rejected_for_size_fails_the_turn_context_overflow() {
+    let mut session = Session::with_tools(
+        vec![called_both(100), overflowing(), overflowing()],
+        None,
+        both_tools(),
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, TWO_CALLS, STEP, REJECTED, FAILED_NOTE, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    let done = of_kind(&lines, "handoff_completed");
+    assert_eq!(done[0].payload["outcome"], "failed");
+    assert_eq!(error_of(done[0]), "context_overflow");
+    assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
+    assert_eq!(session.requests().len(), 3);
+}
+
+#[test]
+fn a_provider_overflow_with_automatic_handoff_off_fails_the_turn() {
+    let mut session =
+        Session::with_tools(vec![called_both(100), overflowing()], None, both_tools())
+            .handoff(HandoffSettings {
+                enabled: false,
+                ..settings()
+            })
+            .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, TWO_CALLS, STEP, REJECTED, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn an_overflow_in_the_step_of_a_failed_automatic_handoff_fails_the_turn() {
+    // The automatic handoff at the step's start fails, then the step's
+    // request overflows: one handoff per step.
+    let mut session = session(
+        vec![
+            called(TRIGGER - 1),
+            failed(ErrorCode::QuotaExceeded),
+            overflowing(),
+        ],
+        settings(),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, FAILED_NOTE, REJECTED, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
+}
+
+#[test]
+fn an_overflow_in_a_later_step_than_a_failed_automatic_handoff_hands_off() {
+    // Step 2: the automatic handoff fails, and the request goes on. Step 3:
+    // the automatic trigger stays blocked, but the overflow rule runs.
+    let mut session = session(
+        vec![
+            called(TRIGGER - 1),
+            failed(ErrorCode::QuotaExceeded),
+            called(100),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            FAILED_NOTE,
+            CALL_BODY,
+            STEP,
+            REJECTED,
+            HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let started = of_kind(&lines, "handoff_started");
+    assert_eq!(started[0].payload["trigger"], "auto");
+    assert_eq!(started[1].payload["trigger"], "overflow");
+}
+
+#[test]
+fn a_second_overflow_in_one_step_fails_the_turn() {
+    let mut session = session(
+        vec![
+            called(100),
+            overflowing(),
+            Scripted::text("The note."),
+            overflowing(),
+        ],
+        settings(),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING, STEP, CALL_BODY, STEP, REJECTED, HANDED_OFF, REJECTED, ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
+    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+}
+
+#[test]
+fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation() {
+    // A text reply, then a steer that arrived during it: the next step's
+    // request overflows with no tool result in the last step.
+    let mut session = Session::with_tools_injecting(
+        vec![
+            said("Hello.", 100),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        vec![support::steer("and more")],
+        vec![weather()],
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "overflow"
+    );
+    let requests = session.requests();
+    assert_eq!(requests.len(), 4);
+    let asked = &requests[2].conversation;
+    assert_eq!(asked[..asked.len() - 1], requests[1].conversation[..]);
+    assert!(text_of(asked.last().unwrap()).starts_with("Fiber is about to restart"));
+    // The steer is carried verbatim.
+    let next = &requests[3].conversation;
+    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[2], user("and more"));
+    assert_eq!(next[3], user("The note."));
+}
+
+#[test]
+fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
+    let mut session = session(
+        vec![
+            called(100),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+    // No file can be written under `artifacts/`.
+    let artifacts = session.dir.join("artifacts");
+    std::fs::remove_dir_all(&artifacts).unwrap();
+    std::fs::write(&artifacts, "not a directory").unwrap();
+
+    let (outcome, lines) = run(&mut session, "hi");
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        "completed"
+    );
+    let requests = session.requests();
+    let asked = &requests[2].conversation;
+    // The result is as it was: `abcd`.
+    assert_eq!(asked[3], requests[1].conversation[3]);
+    assert!(matches!(&asked[3], Input::ToolResult { text, .. } if text == "abcd"));
+}
+
+#[test]
+fn a_cancel_during_the_overflow_note_request_ends_the_turn_interrupted() {
+    let mut session = Session::cancelling_at_call(
+        vec![called(100), overflowing(), Scripted::text("never read")],
+        3,
+        vec![weather()],
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            REJECTED,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "handoff_completed",
+            ],
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        "cancelled"
+    );
+    assert_eq!(session.requests().len(), 3);
+}
+
+/// A settings whose automatic trigger is twice the window, so an estimate
+/// over the window is not handed off at the step's start.
+fn beyond_the_window() -> HandoffSettings {
+    HandoffSettings {
+        tokens: 1_000_000,
+        window_fraction: 2.0,
+        ..settings()
+    }
+}
+
+const WINDOW: u64 = 1_000;
+
+fn windowed(script: Vec<Scripted>, settings: HandoffSettings, window: u64) -> Session {
+    Session::windowed(script, vec![weather()], window)
+        .handoff(settings)
+        .retry(no_wait())
+}
+
+#[test]
+fn an_estimate_over_a_known_window_hands_off_before_sending() {
+    // 1,000 prompt tokens and a one-token result: 1,001 over the window.
+    let mut session = windowed(
+        vec![
+            called(WINDOW),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        beyond_the_window(),
+        WINDOW,
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let started = of_kind(&lines, "handoff_started");
+    assert_eq!(started[0].payload["trigger"], "overflow");
+    // No request that would not fit was made: the note request, then the
+    // step's request from the new context.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        matches!(&requests[1].conversation[3], Input::ToolResult { text, .. }
+        if text.starts_with(MOVED))
+    );
+    assert_eq!(requests[2].conversation.len(), 3);
+}
+
+#[test]
+fn an_estimate_exactly_at_the_window_is_sent() {
+    let mut session = windowed(
+        vec![called(WINDOW - 1), said("Done.", 50)],
+        beyond_the_window(),
+        WINDOW,
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn an_unknown_window_skips_the_size_check() {
+    let mut session = windowed(
+        vec![called(WINDOW), said("Done.", 50)],
+        beyond_the_window(),
+        0,
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn automatic_handoff_off_skips_the_size_check() {
+    let mut session = windowed(
+        vec![called(WINDOW), said("Done.", 50)],
+        HandoffSettings {
+            enabled: false,
+            ..beyond_the_window()
+        },
+        WINDOW,
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
+    assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn an_estimate_over_the_window_after_a_handoff_in_the_step_fails_the_turn() {
+    // The window is 1,000, so the automatic trigger is 700: it hands off at
+    // the step's start, and the next request is still estimated over.
+    let mut session = windowed(
+        vec![called(WINDOW), Scripted::text(&"x".repeat(8_000))],
+        HandoffSettings {
+            window_fraction: 0.7,
+            ..beyond_the_window()
+        },
+        WINDOW,
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+
+    assert_eq!(outcome, Some(TurnOutcome::Failed));
+    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
+    assert_eq!(session.requests().len(), 2);
+}
