@@ -2738,3 +2738,60 @@ fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
     let rebuilt = r#loop::rebuild(&history.lines(), MODEL).unwrap();
     assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
 }
+
+#[test]
+fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
+    // The first resume logs the orphan and the process exits again on the
+    // same request; the second resume reads the orphan from the log and
+    // still sends it after the open batch's results.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_9"));
+    history.write(requested("shell"), Some("a_0"));
+    history.write(job_started("j_a"), Some("a_0"));
+    history.write(completed("Started j_a."), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+
+    drop(history.resume_headless(Vec::new()));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    let (tx, rx) = mpsc::channel();
+    history.inbox_tx = tx;
+    history.inbox_rx = Some(rx);
+    let looped = history.resume_headless(Vec::new());
+    // The orphan is logged once.
+    assert!(history.new_lines().is_empty());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    drop(looped);
+
+    let lines = history.lines();
+    assert_eq!(
+        lines.iter().filter(|l| l.kind == "job_completed").count(),
+        1
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let conversation = &requests[0].conversation;
+    let rebuilt = r#loop::rebuild(&lines, MODEL).unwrap();
+    assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
+    // The notice follows the open call's result. (The opening message the
+    // finishing turn writes between a_1 and its result is #696's.)
+    let result = conversation
+        .iter()
+        .position(
+            |input| matches!(input, Input::ToolResult { action_id, .. } if action_id.0 == "a_1"),
+        )
+        .unwrap();
+    assert_eq!(result, conversation.len() - 2);
+    assert_eq!(
+        conversation.last(),
+        Some(&Input::User {
+            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}")
+        })
+    );
+}

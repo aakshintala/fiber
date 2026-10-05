@@ -197,8 +197,9 @@ impl Loop {
             .unwrap_or_default();
         // The conversation, with the fixed results, and its length at the
         // last `assistant_message_started`: the previous request's end, for
-        // the cache markers.
-        let (conversation, sent) =
+        // the cache markers. Notices the log holds behind the open batch
+        // are released after its results, as the finishing turn writes them.
+        let (conversation, sent, held) =
             crate::conversation::rebuild_and_sent(lines, &model.reference, &open)?;
         let mut reviewed = Vec::new();
         let mut grants = Vec::new();
@@ -268,7 +269,7 @@ impl Loop {
             closing: false,
             suspended: halted,
             deferred: VecDeque::new(),
-            held: Vec::new(),
+            held,
             conversation,
             sent,
             tools,

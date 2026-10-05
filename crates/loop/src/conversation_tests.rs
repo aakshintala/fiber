@@ -576,7 +576,18 @@ fn a_notice_behind_an_open_batch_renders_at_the_end() {
         line("tool_call_requested", &call("a"), Some("a_1")),
         line("job_completed", &orphaned("j_1"), None),
     ];
+    // `rebuild` has no turn to finish: a notice still held at the end of
+    // the log ends the conversation. A result logged before its call
+    // leaves the call outstanding to the end.
+    let mut misordered = vec![line("tool_call_completed", &result("one"), Some("a_1"))];
+    misordered.extend(lines.clone());
+    assert_eq!(
+        shape(&super::rebuild(&misordered, "fake/model-1").unwrap()),
+        ["result a_1", "call a_1", "user"]
+    );
     let open = std::collections::HashSet::from([ActionId("a_1".into())]);
-    let (rebuilt, _) = super::rebuild_and_sent(&lines, "fake/model-1", &open).unwrap();
-    assert_eq!(shape(&rebuilt), ["call a_1", "user"]);
+    let (rebuilt, _, held) = super::rebuild_and_sent(&lines, "fake/model-1", &open).unwrap();
+    // Held apart for the finishing turn to release after the results.
+    assert_eq!(shape(&rebuilt), ["call a_1"]);
+    assert_eq!(shape(&held), ["user"]);
 }

@@ -32,7 +32,9 @@ const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped.
 pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
-    Ok(rebuild_and_sent(lines, model, &HashSet::new())?.0)
+    let (mut conversation, _, mut held) = rebuild_and_sent(lines, model, &HashSet::new())?;
+    conversation.append(&mut held);
+    Ok(conversation)
 }
 
 /// The actions with a `tool_call_completed` in `lines`.
@@ -49,16 +51,22 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
     Ok(completed)
 }
 
+/// What [`rebuild_and_sent`] returns: the conversation, the previous
+/// request's end, and the notices held behind the open batch.
+pub(crate) type Rebuilt = (Vec<Input>, Option<usize>, Vec<Input>);
+
 /// The conversation `lines` render, with its length at the last
 /// `assistant_message_started`: the previous request's end, for the cache
 /// markers (`docs/prompt-cache.md`). `None` when the log holds none. The
 /// length is read after the line renders, so the fixed results its flush
-/// just added count.
+/// just added count. The third part is the job notices still waiting
+/// behind calls whose results the log does not hold yet: the `open` batch
+/// a resume finishes, which releases them after its results.
 pub(crate) fn rebuild_and_sent(
     lines: &[Envelope],
     model: &str,
     open: &HashSet<ActionId>,
-) -> Result<(Vec<Input>, Option<usize>), Error> {
+) -> Result<Rebuilt, Error> {
     let completed = completed_actions(lines)?;
     let mut rendered = Rendered::default();
     let mut sent = None;
@@ -70,7 +78,8 @@ pub(crate) fn rebuild_and_sent(
             }
         }
     }
-    Ok((rendered.finish(), sent))
+    let (conversation, held) = rendered.finish();
+    Ok((conversation, sent, held))
 }
 
 /// `rebuild`'s state: the conversation so far, and the calls requested but
@@ -258,10 +267,11 @@ impl Rendered {
         }
     }
 
-    fn finish(mut self) -> Vec<Input> {
+    /// The conversation, and the notices still held behind calls with no
+    /// result yet.
+    fn finish(mut self) -> (Vec<Input>, Vec<Input>) {
         self.flush();
-        self.conversation.append(&mut self.held);
-        self.conversation
+        (self.conversation, self.held)
     }
 }
 
