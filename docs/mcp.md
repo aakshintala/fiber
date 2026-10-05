@@ -28,7 +28,13 @@ either.
 A remote server that needs OAuth uses MCP's OAuth flow, which the client
 carries ([ADR 0008](adr/0008-the-mcp-client-is-built-in.md)). A person logs in
 to a server with `fiber mcp login <server>`, and `fiber mcp logout <server>`
-deletes the stored token. Token refresh follows the provider
+deletes the stored token. Both look up the server's URL from its
+configuration. The token is stored by that URL, not by the server's name, at
+`credentials/mcp/<hash>`, where the hash is a SHA-256 of the canonical URL, and
+the file records the URL itself (`docs/state.md`, "What each part holds"). A token is
+only ever sent to the URL it was issued for, whatever name a configuration or a
+repository gives the server, and one login serves every project that uses
+that server. Token refresh follows the provider
 rule in `docs/model-routing.md`, "Credentials": lock the credential file,
 re-read it, refresh once. A headless start with no valid token counts as
 the server failing to start (see [Starting servers](#starting-servers)).
@@ -134,6 +140,14 @@ learns whether the server stopped, and the call is never `cancelled`
 A result goes through the tool contract in `docs/tools.md`:
 
 - text goes to `content`
+- a resource link becomes one line of text giving its URI, name and MIME type;
+  `mcp_resources` `read` fetches it ("Prompts and resources")
+- an embedded text resource becomes text
+- an embedded image or PDF takes the path `read` takes for a file of that kind
+  (`docs/tools.md`, "read")
+- any other content, audio and other binary content included, is written to
+  `artifacts/`, and the model gets one line giving its MIME type, size and
+  path
 - an image is processed once (`docs/model-routing.md`, "Image limits") and
   goes to `content` as an image part, written to `artifacts/`
 - an image that cannot be read, or is over 50 megapixels, ends the call
@@ -346,9 +360,3 @@ shared between sessions.
 - A delegate starts its own servers as any session does ("Starting
   servers"). Servers are not moved into the hub: a hub restart would restart
   them under running sessions, and the two above would be wrong shared.
-
-## Not settled here
-
-- Where a server's OAuth token is stored
-- How MCP content other than text and images, such as audio and resource
-  links, reaches the model
