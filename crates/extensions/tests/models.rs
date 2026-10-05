@@ -216,3 +216,19 @@ fn an_extensions_directory_that_cannot_be_listed_is_io_failed() {
     let err = Providers::load(&setup.home()).unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed);
 }
+
+#[test]
+fn the_installed_providers_are_listed_by_name_and_looked_up() {
+    let setup = Setup::new();
+    let providers = installed(
+        &setup,
+        &[
+            ("zed", provider("zed", &["a"])),
+            ("alpha", provider("alpha", &["b"])),
+        ],
+    );
+    assert_eq!(providers.names().collect::<Vec<_>>(), ["alpha", "zed"]);
+    assert_eq!(providers.get("zed").unwrap().name, "zed");
+    assert!(providers.get("nobody").is_none());
+    assert_eq!(Providers::default().names().count(), 0);
+}
