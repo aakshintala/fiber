@@ -2125,3 +2125,41 @@ fn a_batch_while_a_call_runs_is_written_at_the_next_step_boundary() {
     let sent = &requests[1].conversation;
     assert_eq!(rebuilt[..sent.len()], sent[..]);
 }
+
+#[test]
+fn a_batch_after_close_with_no_job_running_starts_no_turn() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    world.send(Delivery::Close(ignore()));
+    world.send(batch(JOB, "late", None));
+    assert_eq!(world.turn(), None);
+    assert!(world.requests().is_empty());
+}
+
+#[test]
+fn a_batch_after_close_while_its_job_runs_starts_a_turn() {
+    let world = World::new(
+        vec![
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+            Scripted::text("Done."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    let ending = world.next_turn();
+    assert_eq!(kinds(&ending), one_step_with(&["jobs_pending_notified"]));
+    world.send(batch(&id, "still going", None));
+    let woken = world.next_turn();
+    assert_eq!(kinds(&woken), one_step_with(&["job_line"]));
+    assert_eq!(woken[2].payload["lines"], "still going");
+    job.end.end(failed(&id));
+    let last = world.next_turn();
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    ran(&finished);
+}
