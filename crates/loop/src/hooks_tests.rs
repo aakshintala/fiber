@@ -848,3 +848,45 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
     assert_eq!(streamed[1].payload["code"], "extension_failed");
     assert_eq!(streamed[1].payload["extension"], "acme");
 }
+
+#[test]
+fn mcp_servers_started_writes_each_failure_then_each_notice() {
+    let home = fakes::TempDir::new("fiber-mcp-servers-started");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Log::create(home.path(), SessionId("s_test".into()), clock).unwrap();
+    let mut watcher = log.watch();
+    crate::mcp_servers_started(
+        &log,
+        vec![contract::events::McpServerFailed {
+            server: "fx".into(),
+            reason: contract::events::ServerFailure::Deadline,
+            will_restart: false,
+            error: Failure {
+                code: ErrorCode::McpServerUnavailable,
+                message: "The MCP server `fx` did not answer before its startup deadline.".into(),
+                retry_after: None,
+                provider: None,
+            },
+        }],
+        vec![Notice {
+            code: ErrorCode::RepositoryCodeSkipped,
+            message: "The MCP server `repo` was skipped.".into(),
+            extension: None,
+        }],
+    )
+    .unwrap();
+    drop(log);
+    let mut streamed = Vec::new();
+    while let Ok(Some(line)) = watcher.recv() {
+        streamed.push(line);
+    }
+    let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
+    assert_eq!(kinds, ["mcp_server_failed", "notice"]);
+    assert_eq!(streamed[0].payload["server"], "fx");
+    assert_eq!(streamed[0].payload["reason"], "deadline");
+    assert_eq!(
+        streamed[0].payload["error"]["code"],
+        "mcp_server_unavailable"
+    );
+    assert_eq!(streamed[1].payload["code"], "repository_code_skipped");
+}

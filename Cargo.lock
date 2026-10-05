@@ -625,10 +625,22 @@ dependencies = [
  "fakes",
  "log 0.0.0",
  "loop",
+ "mcp",
  "provider",
  "rustix",
  "serde_json",
  "tools",
+]
+
+[[package]]
+name = "mcp"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "ring",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

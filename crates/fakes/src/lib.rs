@@ -39,3 +39,10 @@ pub use watchdog::Watchdog;
 pub fn lua_fixture() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("lua-fixture")
 }
+
+/// The fake MCP stdio server's `server.sh`: it reads the directory named
+/// by its first argument, holding `tools.json` and one `call-<tool>.json`
+/// per tool.
+pub fn mcp_fixture() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("mcp-fixture/server.sh")
+}
