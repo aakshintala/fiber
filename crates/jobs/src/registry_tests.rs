@@ -37,6 +37,7 @@ fn opening(description: &str) -> Opening {
         tool: "shell".into(),
         description: description.into(),
         stop: Stop(Box::new(|| {})),
+        lines: false,
         input: None,
     }
 }
@@ -306,6 +307,57 @@ fn an_unclaimed_end_sends_one_notice_whose_claim_holds_once() {
     assert!(answer.text.contains("completed"), "{}", answer.text);
 }
 
+fn line(id: &str, lines: &str, suppressed: Option<u64>) -> contract::events::JobLine {
+    contract::events::JobLine {
+        job_id: JobId(id.into()),
+        lines: lines.into(),
+        suppressed,
+    }
+}
+
+#[test]
+fn lines_are_offered_only_to_a_job_that_asks() {
+    let (_dir, registry) = world();
+    let plain = registry.open(opening("npm test")).unwrap();
+    assert!(plain.lines.is_none());
+    let monitor = registry
+        .open(Opening {
+            lines: true,
+            ..opening("tail -f log")
+        })
+        .unwrap();
+    assert!(monitor.lines.is_some());
+}
+
+#[test]
+fn a_monitors_lines_reach_the_inbox_in_order_before_its_notice() {
+    let (_dir, registry) = world();
+    let opened = registry
+        .open(Opening {
+            lines: true,
+            ..opening("tail -f log")
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let lines = opened.lines.unwrap();
+    // Before `deliver_to` a batch is dropped.
+    (lines.0)(line(&id, "early", None));
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    (lines.0)(line(&id, "one", None));
+    (lines.0)(line(&id, "two", Some(3)));
+    opened.end.end(ended_ok(&id));
+    for expected in [line(&id, "one", None), line(&id, "two", Some(3))] {
+        let delivery = rx.try_recv().expect("a batch");
+        let Delivery::JobLine(sent) = delivery else {
+            panic!("expected a line, got {delivery:?}");
+        };
+        assert_eq!(sent, expected);
+    }
+    let _end = notice(&rx);
+    assert!(rx.try_recv().is_err());
+}
+
 #[test]
 fn a_notice_after_a_wait_claimed_the_end_does_not_hold() {
     let (_dir, registry) = world();
@@ -387,6 +439,7 @@ fn counted_stop(
             stop: Stop(Box::new(move || {
                 seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             })),
+            lines: false,
             input: None,
         })
         .unwrap();
@@ -511,6 +564,7 @@ fn open_tty(
             tool: "shell".into(),
             description: "python3".into(),
             stop: Stop(Box::new(|| {})),
+            lines: false,
             input: Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
                 record.lock().unwrap().extend_from_slice(bytes);
                 file.lock()
@@ -646,6 +700,7 @@ fn a_failed_write_to_the_terminal_is_an_io_error() {
             tool: "shell".into(),
             description: "cat".into(),
             stop: Stop(Box::new(|| {})),
+            lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
@@ -696,6 +751,7 @@ fn a_write_that_typed_less_than_it_was_given_says_so() {
             tool: "shell".into(),
             description: "cat".into(),
             stop: Stop(Box::new(|| {})),
+            lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
         })
         .unwrap();

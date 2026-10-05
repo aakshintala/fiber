@@ -1224,3 +1224,170 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
 }
+
+#[test]
+fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
+    let setup = Setup::new();
+    let ready = setup.workspace().join("ready");
+    // The monitor prints once the test creates `ready`: past the receipt,
+    // the final reply and the ending notice. Both lines go out in one
+    // write, so they are one batch.
+    fs::write(
+        setup.workspace().join("watch.sh"),
+        "until [ -e ready ]; do sleep 0.01; done\nprintf 'one\\ntwo\\n'\n",
+    )
+    .unwrap();
+    // How many turns the lines and the end take depends on when they
+    // arrive, so every later request is answered with text.
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_monitor",
+            "shell",
+            &json!({"command": "sh watch.sh", "monitor": true}),
+        )]),
+        hello(),
+        hello(),
+        hello(),
+        hello(),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sh watch.sh"})
+        ),
+    )
+    .unwrap();
+
+    let run = setup.run_then(
+        &["ask", "start the monitor"],
+        |lines| {
+            lines
+                .iter()
+                .position(|line| line["kind"] == "jobs_pending_notified")
+                .is_some_and(|at| {
+                    lines[at..]
+                        .iter()
+                        .any(|line| line["kind"] == "turn_completed")
+                })
+        },
+        || fs::write(&ready, "").unwrap(),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // A reply that is text alone: one step, then the turn's end.
+    let reply = [
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ];
+    let opening = [
+        &[
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "job_started",
+            "tool_call_completed",
+            "step_started",
+        ][..],
+        &reply,
+        &["turn_started", "step_started", "jobs_pending_notified"],
+        &reply,
+    ]
+    .concat();
+    // The batch wakes the model. The end arrives with it, at the turn's
+    // next step boundary, or after the turn, which starts another.
+    let step = &reply[..reply.len() - 1];
+    let schedules = [
+        [
+            &opening[..],
+            &["turn_started", "step_started", "job_line", "job_completed"],
+            &reply,
+            &["fiber_exited"],
+        ]
+        .concat(),
+        [
+            &opening[..],
+            &["turn_started", "step_started", "job_line"],
+            step,
+            &["step_started", "job_completed"],
+            &reply,
+            &["fiber_exited"],
+        ]
+        .concat(),
+        [
+            &opening[..],
+            &["turn_started", "step_started", "job_line"],
+            &reply,
+            &["turn_started", "step_started", "job_completed"],
+            &reply,
+            &["fiber_exited"],
+        ]
+        .concat(),
+    ];
+    // `job_delta` is ephemeral, and where it lands depends on when the
+    // job writes, so the comparison leaves it out.
+    let lines: Vec<&Value> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] != "job_delta")
+        .collect();
+    let kinds: Vec<&str> = lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    assert!(schedules.contains(&kinds), "{kinds:?}");
+    let job_id = lines[13]["payload"]["job_id"].as_str().unwrap();
+    let receipt = lines[14]["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(receipt.starts_with("Started a monitor.\n"), "{receipt}");
+    let batch = &lines[kinds.iter().position(|kind| *kind == "job_line").unwrap()];
+    assert_eq!(batch["payload"]["job_id"], job_id);
+    assert_eq!(batch["payload"]["lines"], "one\ntwo");
+    assert!(batch["payload"].get("suppressed").is_none());
+    assert!(batch.get("action_id").is_none_or(Value::is_null));
+    let completed = &lines[kinds
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .unwrap()];
+    assert_eq!(completed["payload"]["job_id"], job_id);
+    assert_eq!(completed["payload"]["status"], "completed");
+    // The deltas left out above: all of this job's, inside its life, and
+    // together exactly what it printed, so a missing or duplicated one fails.
+    let all: Vec<&str> = run
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    let started = all.iter().position(|kind| *kind == "job_started").unwrap();
+    let ended = all
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .unwrap();
+    let mut printed = String::new();
+    for (index, line) in run.lines.iter().enumerate() {
+        if line["kind"] == "job_delta" {
+            assert!(started < index && index < ended, "{all:?}");
+            assert_eq!(line["payload"]["job_id"], job_id);
+            printed.push_str(line["payload"]["text"].as_str().unwrap());
+        }
+    }
+    assert_eq!(printed, "one\ntwo\n");
+}

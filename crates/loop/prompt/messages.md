@@ -74,6 +74,15 @@ Fiber: the date is now {date}.
 
 Fiber: background job {job_id} ended: {status}.
 
+## job-line
+
+Fiber: monitor {job_id} printed:
+{lines}
+
+## job-line-suppressed
+
+{suppressed} earlier deliveries were suppressed by the rate limit; restart the monitor with a more selective filter if you need them.
+
 ## jobs-pending
 
 Fiber: this session is about to end, and these background jobs are still running: {job_ids}. Stop any you do not need with `jobs stop`; the rest will be waited for.

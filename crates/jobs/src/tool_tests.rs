@@ -57,6 +57,7 @@ fn open(registry: &Arc<Registry>, description: &str, stop: Stop) -> contract::jo
             tool: "shell".into(),
             description: description.into(),
             stop,
+            lines: false,
             input: None,
         })
         .unwrap()
@@ -858,6 +859,7 @@ fn tty_job(registry: &Arc<Registry>) -> (String, contract::jobs::Opened) {
             tool: "shell".into(),
             description: "python3".into(),
             stop: idle_stop(),
+            lines: false,
             input: Some(contract::jobs::Input(Box::new(|bytes, _, _| {
                 Ok(bytes.len())
             }))),
@@ -939,6 +941,7 @@ fn a_failed_write_to_the_terminal_is_a_tool_error() {
             tool: "shell".into(),
             description: "cat".into(),
             stop: idle_stop(),
+            lines: false,
             input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),

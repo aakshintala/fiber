@@ -37,7 +37,7 @@ use fakes::{Scripted, ScriptedProvider};
 use log::Log;
 use serde_json::{Map, Value, json};
 
-use super::notice_text;
+use super::{line_text, notice_text};
 use crate::{Loop, Model};
 
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -1003,6 +1003,7 @@ fn open_job(jobs: &FakeJobs) -> contract::jobs::Opened {
         tool: "shell".into(),
         description: "npm test".into(),
         stop: contract::jobs::Stop(Box::new(|| {})),
+        lines: false,
         input: None,
     })
     .unwrap()
@@ -1973,4 +1974,192 @@ fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
     ran(&finished);
     assert_eq!(world.requests().len(), 2);
     assert_eq!(durable_kinds(&world), session_of(&[expected]));
+}
+
+// Monitors: a batch of lines wakes the model as a job's end does.
+
+/// A monitor's batch for `id`.
+fn line(id: &str, lines: &str, suppressed: Option<u64>) -> contract::events::JobLine {
+    contract::events::JobLine {
+        job_id: JobId(id.into()),
+        lines: lines.into(),
+        suppressed,
+    }
+}
+
+fn batch(id: &str, lines: &str, suppressed: Option<u64>) -> Delivery {
+    Delivery::JobLine(line(id, lines, suppressed))
+}
+
+const SUPPRESSED: &str = "3 earlier deliveries were suppressed by the rate limit; \
+restart the monitor with a more selective filter if you need them.";
+
+#[test]
+fn a_job_line_reads_as_the_monitors_batch_and_any_suppressed_count() {
+    assert_eq!(
+        line_text(&line(JOB, "build ok\ntests ok", None)),
+        format!("Fiber: monitor {JOB} printed:\nbuild ok\ntests ok")
+    );
+    assert_eq!(
+        line_text(&line(JOB, "build ok", Some(3))),
+        format!("Fiber: monitor {JOB} printed:\nbuild ok\n{SUPPRESSED}")
+    );
+}
+
+#[test]
+fn a_batch_while_idle_starts_a_turn_named_by_its_monitor() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(batch(JOB, "build ok\ntests ok", Some(3)));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&["job_line"]));
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [JOB]}])
+    );
+    assert_eq!(lines[2].action_id, None);
+    assert_eq!(lines[2].turn_id, lines[0].turn_id);
+    assert_eq!(
+        Value::Object(lines[2].payload.clone()),
+        json!({"job_id": JOB, "lines": "build ok\ntests ok", "suppressed": 3})
+    );
+    let requests = world.requests();
+    assert_eq!(
+        requests[0].conversation.last(),
+        Some(&Input::User {
+            text: format!("Fiber: monitor {JOB} printed:\nbuild ok\ntests ok\n{SUPPRESSED}")
+        })
+    );
+    // A resume renders the batch from the log as the loop sent it.
+    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let sent = &requests[0].conversation;
+    assert_eq!(rebuilt[..sent.len()], sent[..]);
+}
+
+#[test]
+fn a_monitors_batches_and_its_end_are_one_jobs_item_naming_it_once() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(batch(JOB, "one", None));
+    world.send(batch(OTHER, "two", None));
+    world.send(batch(JOB, "three", None));
+    world.send(held(JOB));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        one_step_with(&["job_line", "job_line", "job_line", "job_completed"])
+    );
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [JOB, OTHER]}])
+    );
+    let texts: Vec<&str> = lines[2..5]
+        .iter()
+        .map(|line| line.payload["lines"].as_str().unwrap())
+        .collect();
+    assert_eq!(texts, ["one", "two", "three"]);
+    assert_notice(&lines[5], JOB);
+    let users = users(&world.requests()[0]);
+    assert_eq!(
+        users[users.len() - 4..],
+        [
+            format!("Fiber: monitor {JOB} printed:\none"),
+            format!("Fiber: monitor {OTHER} printed:\ntwo"),
+            format!("Fiber: monitor {JOB} printed:\nthree"),
+            rendered(JOB),
+        ]
+    );
+    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let sent = &world.requests()[0].conversation;
+    assert_eq!(rebuilt[..sent.len()], sent[..]);
+}
+
+#[test]
+fn a_message_between_batches_splits_the_jobs_items() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    world.send(batch(JOB, "one", None));
+    world.send(steer("And this."));
+    world.send(batch(JOB, "two", None));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    let input = lines[0].payload["input"].as_array().unwrap().clone();
+    assert_eq!(input.len(), 3);
+    assert_eq!(input[0], json!({"type": "jobs", "job_ids": [JOB]}));
+    assert_eq!(input[1]["type"], "message");
+    assert_eq!(input[2], json!({"type": "jobs", "job_ids": [JOB]}));
+}
+
+#[test]
+fn a_batch_while_a_call_runs_is_written_at_the_next_step_boundary() {
+    let mut world = World::new(
+        vec![calls("sends"), Scripted::text("Seen.")],
+        Vec::new(),
+        |inbox| {
+            sending(
+                inbox,
+                vec![batch(JOB, "ready", None), steer("Also."), held(JOB)],
+            )
+        },
+    );
+    world.send(prompt("go"));
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(
+        kinds(&lines),
+        two_steps_with(&RAN, &["job_line", "steering_applied", "job_completed"])
+    );
+    assert_eq!(lines[9].payload["lines"], "ready");
+    assert_eq!(lines[9].action_id, None);
+    let requests = world.requests();
+    assert!(
+        !users(&requests[0])
+            .iter()
+            .any(|text| text.contains("printed:"))
+    );
+    let users = users(&requests[1]);
+    assert!(
+        users.contains(&format!("Fiber: monitor {JOB} printed:\nready")),
+        "{users:?}"
+    );
+    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let sent = &requests[1].conversation;
+    assert_eq!(rebuilt[..sent.len()], sent[..]);
+}
+
+#[test]
+fn a_batch_after_close_with_no_job_running_starts_no_turn() {
+    let mut world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    world.send(Delivery::Close(ignore()));
+    world.send(batch(JOB, "late", None));
+    assert_eq!(world.turn(), None);
+    assert!(world.requests().is_empty());
+}
+
+#[test]
+fn a_batch_after_close_while_its_job_runs_starts_a_turn() {
+    let world = World::new(
+        vec![
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+            Scripted::text("Done."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    let ending = world.next_turn();
+    assert_eq!(kinds(&ending), one_step_with(&["jobs_pending_notified"]));
+    world.send(batch(&id, "still going", None));
+    let woken = world.next_turn();
+    assert_eq!(kinds(&woken), one_step_with(&["job_line"]));
+    assert_eq!(woken[2].payload["lines"], "still going");
+    job.end.end(failed(&id));
+    let last = world.next_turn();
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    ran(&finished);
 }

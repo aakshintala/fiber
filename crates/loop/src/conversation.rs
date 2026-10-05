@@ -250,11 +250,22 @@ impl Rendered {
             | Event::JobStarted(_)
             | Event::DelegateStarted(_)
             | Event::JobDelta(_)
-            | Event::JobLine(_)
             | Event::DelegateFinished(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 self.render(event, action, model);
+            }
+            // A monitor's batch joins at a step boundary, as a job's end
+            // does, and waits for a suspended batch's results the same way.
+            Event::JobLine(line) => {
+                self.flush();
+                if self.outstanding.is_empty() {
+                    self.render(event, action, model);
+                } else {
+                    self.held.push(Input::User {
+                        text: crate::jobs::line_text(line),
+                    });
+                }
             }
             // A job notice joins at a step boundary, as a steer does: it
             // starts a new batch. A `wait` or `stop` record, under its
@@ -382,6 +393,10 @@ pub(crate) fn render(
         Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
             text: crate::jobs::notice_text(completed),
         }),
+        // A monitor's batch: one message, rendered from the line alone.
+        Event::JobLine(line) => conversation.push(Input::User {
+            text: crate::jobs::line_text(line),
+        }),
         // The opening message is rendered from its logged fields only, so
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").
@@ -503,7 +518,6 @@ pub(crate) fn render(
         | Event::JobStarted(_)
         | Event::DelegateStarted(_)
         | Event::JobDelta(_)
-        | Event::JobLine(_)
         | Event::DelegateFinished(_)
         | Event::JobCompleted(_)
         | Event::CommandAccepted(_)

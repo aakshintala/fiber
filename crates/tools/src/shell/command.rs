@@ -17,8 +17,10 @@ use contract::jobs::{Input, Jobs};
 use contract::tool::Cancel;
 
 use super::background::{MoveAsk, Step, running_step, wait_deadline};
+use super::monitor::Feed;
 use super::output::{
-    JobStream, OUTPUT_CAP, Shared, bump, lock, read_output, stream_output, stream_tail,
+    Errors, JobStream, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output, stream_output,
+    stream_tail,
 };
 use super::tty;
 use rustix::process::{Pid, Signal};
@@ -63,6 +65,8 @@ pub(crate) struct Finished {
     pub sent_signal: bool,
     /// The job's output passed the cap, so Fiber stopped it.
     pub capped: bool,
+    /// A monitor's flood stopped it.
+    pub flooded: bool,
 }
 
 /// Whether the drive loop may hand the command to a job.
@@ -77,6 +81,8 @@ pub(crate) enum MovePolicy {
     Background,
     /// As `Background`, with the command in a pseudo-terminal.
     Terminal,
+    /// As `Background`, for a monitor: standard error on its own pipe.
+    Monitor,
 }
 
 /// Why the command moved.
@@ -128,6 +134,7 @@ pub(crate) fn execute(
     let mut cmd = Command::new(program);
     cmd.arg("-c").arg(command).current_dir(workdir);
     let mut input = None;
+    let mut errors = None;
     let read: Box<dyn Read + Send> = if tty {
         let terminal = tty::open()?;
         cmd.stdin(Stdio::from(terminal.secondary.try_clone()?))
@@ -137,7 +144,14 @@ pub(crate) fn execute(
         Box::new(terminal.reader)
     } else {
         let (read, write) = std::io::pipe()?;
-        let write_err = write.try_clone()?;
+        // A monitor's standard error is its own pipe, kept from its lines.
+        let write_err = if policy == MovePolicy::Monitor {
+            let (read_err, write_err) = std::io::pipe()?;
+            errors = Some(read_err);
+            write_err
+        } else {
+            write.try_clone()?
+        };
         cmd.stdin(Stdio::null())
             .stdout(Stdio::from(write))
             .stderr(Stdio::from(write_err));
@@ -152,9 +166,20 @@ pub(crate) fn execute(
 
     let pgid = child.id();
     let shared = Arc::new(Shared::default());
-    lock(&shared.inner).input = input;
+    {
+        let mut inner = lock(&shared.inner);
+        inner.input = input;
+        if errors.is_some() {
+            inner.lines = Some(Vec::new());
+            inner.errors = Some(Errors::default());
+        }
+    }
     let reader = Arc::clone(&shared);
     thread::spawn(move || read_output(read, &reader));
+    if let Some(read_err) = errors {
+        let reader = Arc::clone(&shared);
+        thread::spawn(move || read_errors(read_err, &reader));
+    }
     let waiter = Arc::clone(&shared);
     thread::spawn(move || wait_child(child, &waiter));
 
@@ -185,11 +210,15 @@ pub(crate) fn execute(
         timeout_at: start.checked_add(timeout),
         move_at: match policy {
             MovePolicy::Foreground => start.checked_add(MOVE_AFTER),
-            MovePolicy::Stay | MovePolicy::Background | MovePolicy::Terminal => None,
+            MovePolicy::Stay
+            | MovePolicy::Background
+            | MovePolicy::Terminal
+            | MovePolicy::Monitor => None,
         },
         pgid,
         shared,
         job: None,
+        feed: None,
     };
     let ended = pump(&mut progress, policy, clock, cancel, emit);
     // A call that left the foreground wait is no longer counted, whether it
@@ -291,6 +320,9 @@ struct Run {
     shared: Arc<Shared>,
     /// A job's `job_delta` lines. Set only on a job's drive.
     job: Option<JobStream>,
+    /// A monitor's deliveries. Set only on a monitor's drive. Boxed, so a
+    /// command that is not a monitor carries one pointer.
+    feed: Option<Box<Feed>>,
     /// Set when `background` can reach this foreground call.
     ask: Option<Arc<MoveAsk>>,
 }
@@ -345,6 +377,15 @@ impl Moved {
         lock(&self.progress.shared.inner).attach(file, self.cap);
     }
 
+    /// Writes a monitor's held standard error to `file` and points its
+    /// reader there; with no file, its standard error is dropped from now
+    /// on. Nothing for any other command.
+    pub(crate) fn attach_errors(&self, file: Option<File>) {
+        if let Some(errors) = lock(&self.progress.shared.inner).errors.as_mut() {
+            errors.attach(file, self.cap);
+        }
+    }
+
     /// Wakes this command when `cancel` fires. The job's stop uses it.
     pub(crate) fn arm(&self, cancel: &dyn Cancel) {
         let wake: Arc<dyn Wake> = self.progress.shared.clone();
@@ -363,8 +404,10 @@ impl Moved {
         clock: &dyn Clock,
         cancel: &dyn Cancel,
         stream: JobStream,
+        feed: Option<Feed>,
     ) -> Finished {
         self.progress.job = Some(stream);
+        self.progress.feed = feed.map(Box::new);
         self.run(MovePolicy::Stay, clock, cancel, &Silent)
     }
 
@@ -451,6 +494,16 @@ fn pump(
         if let Some(job) = progress.job.as_mut() {
             job.pass(&progress.shared, clock);
         }
+        // After the job's delta, before the park: the reader queues each
+        // chunk for both under one lock, so every byte a delta carried is
+        // offered before the drive thread parks again.
+        if let Some(feed) = progress.feed.as_mut() {
+            feed.pass(
+                &progress.shared,
+                clock,
+                matches!(progress.phase, Phase::Running),
+            );
+        }
         // A held `job_delta` wakes the park when it falls due.
         let held_until = progress.job.as_ref().and_then(JobStream::deadline);
         match progress.phase {
@@ -520,7 +573,7 @@ fn pump(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && progress.seen_empty;
                 if settled || clock.now() >= until {
-                    let finished = finish(
+                    let mut finished = finish(
                         &progress.shared,
                         progress.stop,
                         progress.sent_signal,
@@ -533,6 +586,10 @@ fn pump(
                     // is every byte the file holds, before the end is reported.
                     if let Some(job) = progress.job.as_mut() {
                         job.flush(&progress.shared);
+                    }
+                    if let Some(feed) = progress.feed.as_mut() {
+                        feed.finish(&progress.shared, clock);
+                        finished.flooded = feed.flooded();
                     }
                     return LoopEnd::Finished(finished);
                 }
@@ -557,7 +614,7 @@ fn view(shared: &Shared, cancel: &dyn Cancel) -> View {
     View {
         reaped: inner.reaped,
         shell_exit: inner.reaped.then(|| exit_code_of(inner.status)),
-        eof: inner.eof,
+        eof: inner.all_eof(),
         seq: inner.seq,
         // The cap stops a job as a stop does; the end reads `capped`.
         cancelled: cancel.is_cancelled() || inner.cap_fired,
@@ -600,6 +657,7 @@ fn finish(
         held_open: !stopped && !eof && seen_empty,
         sent_signal,
         capped,
+        flooded: false,
     }
 }
 

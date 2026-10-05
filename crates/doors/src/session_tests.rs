@@ -1166,6 +1166,7 @@ fn run_sends_the_jobs_ends_to_the_loops_inbox() {
             tool: "shell".into(),
             description: "npm test".into(),
             stop: Stop(Box::new(|| {})),
+            lines: false,
             input: None,
         })
         .unwrap();

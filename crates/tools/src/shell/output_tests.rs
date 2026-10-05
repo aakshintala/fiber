@@ -11,7 +11,7 @@ use fakes::TempDir;
 use fakes::clock::FakeClock;
 use fakes::jobs::JobDeltas;
 
-use super::{JobStream, Shared, lock, read_output};
+use super::{Errors, JobStream, Shared, lock, read_errors, read_output};
 
 struct Chunks(Vec<Vec<u8>>);
 
@@ -189,4 +189,98 @@ fn nothing_pending_emits_nothing() {
     stream.flush(&shared);
     assert!(deltas.deltas().is_empty());
     assert_eq!(stream.deadline(), None);
+}
+
+#[test]
+fn standard_error_is_held_then_written_to_its_file_up_to_the_cap() {
+    let dir = TempDir::new("fiber-shell-errors");
+    let path = dir.path().join("err.log");
+    let shared = Shared::default();
+    lock(&shared.inner).errors = Some(Errors::default());
+    read_errors(Chunks(vec![b"ab".to_vec()]), &shared);
+    {
+        let mut inner = lock(&shared.inner);
+        let errors = inner.errors.as_mut().unwrap();
+        assert!(errors.eof);
+        errors.attach(Some(std::fs::File::create(&path).unwrap()), 5);
+        errors.sink(b"cdef");
+        errors.sink(b"g");
+    }
+    // Past the cap the bytes are dropped; nothing stops.
+    assert_eq!(std::fs::read(&path).unwrap(), b"abcde");
+    assert!(!lock(&shared.inner).cap_fired);
+}
+
+#[test]
+fn standard_error_with_no_file_is_dropped_after_the_move() {
+    let shared = Shared::default();
+    lock(&shared.inner).errors = Some(Errors::default());
+    read_errors(Chunks(vec![b"before".to_vec()]), &shared);
+    let mut inner = lock(&shared.inner);
+    let errors = inner.errors.as_mut().unwrap();
+    assert_eq!(errors.held, b"before", "held until the move");
+    errors.attach(None, 5);
+    errors.sink(b"after");
+    assert!(errors.held.is_empty(), "nothing is held past the move");
+    assert_eq!(errors.written, 0);
+}
+
+#[test]
+fn standard_error_reaches_no_line_and_no_delta() {
+    let shared = Shared::default();
+    {
+        let mut inner = lock(&shared.inner);
+        inner.errors = Some(Errors::default());
+        inner.lines = Some(Vec::new());
+    }
+    read_errors(Chunks(vec![b"secret\n".to_vec()]), &shared);
+    let inner = lock(&shared.inner);
+    assert!(inner.lines.as_ref().unwrap().is_empty());
+    assert!(inner.pending.is_empty());
+    assert!(inner.output.is_empty());
+}
+
+#[test]
+fn the_end_of_output_waits_for_both_streams() {
+    let shared = Shared::default();
+    lock(&shared.inner).errors = Some(Errors::default());
+    read_output(Chunks(Vec::new()), &shared);
+    assert!(lock(&shared.inner).eof);
+    assert!(
+        !lock(&shared.inner).all_eof(),
+        "standard error is still open"
+    );
+    read_errors(Chunks(Vec::new()), &shared);
+    assert!(lock(&shared.inner).all_eof());
+    // Without a separate standard error, standard output alone decides.
+    let plain = Shared::default();
+    assert!(!lock(&plain.inner).all_eof());
+    read_output(Chunks(Vec::new()), &plain);
+    assert!(lock(&plain.inner).all_eof());
+}
+
+#[test]
+fn a_monitors_output_is_kept_for_its_lines_from_the_move_on() {
+    let dir = TempDir::new("fiber-shell-lines");
+    let path = dir.path().join("out.log");
+    let shared = Shared::default();
+    {
+        let mut inner = lock(&shared.inner);
+        inner.lines = Some(Vec::new());
+        inner.output = b"before\n".to_vec();
+        inner.attach(std::fs::File::create(&path).unwrap(), 100);
+    }
+    read_output(Chunks(vec![b"after\n".to_vec()]), &shared);
+    assert_eq!(
+        lock(&shared.inner).lines.as_deref(),
+        Some(&b"before\nafter\n"[..])
+    );
+    // Any other job keeps none.
+    let plain = Shared::default();
+    lock(&plain.inner).attach(
+        std::fs::File::create(dir.path().join("p.log")).unwrap(),
+        100,
+    );
+    read_output(Chunks(vec![b"x\n".to_vec()]), &plain);
+    assert!(lock(&plain.inner).lines.is_none());
 }

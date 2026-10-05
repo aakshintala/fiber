@@ -21,6 +21,7 @@ fn opening(description: &str, stop: Stop) -> Opening {
         tool: "shell".into(),
         description: description.into(),
         stop,
+        lines: false,
         input: None,
     }
 }
@@ -408,4 +409,44 @@ fn deliver_to_sends_each_later_end_whose_claim_holds() {
     assert!(rx.try_recv().is_err(), "one end sends one notice");
     assert!(seam.running().is_empty(), "the notice is sent as it ends");
     assert!((notice.claim.0)(), "the claim holds");
+}
+
+#[test]
+fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let plain = jobs
+        .open(opening("echo hi", Stop(Box::new(|| {}))))
+        .unwrap();
+    assert!(plain.lines.is_none());
+    let (tx, rx) = mpsc::channel();
+    jobs.deliver_to(tx);
+    let opened = jobs
+        .open(Opening {
+            lines: true,
+            ..opening("tail -f log", Stop(Box::new(|| {})))
+        })
+        .unwrap();
+    let id = opened.started.job_id.clone();
+    let line = |text: &str| contract::events::JobLine {
+        job_id: id.clone(),
+        lines: text.into(),
+        suppressed: None,
+    };
+    let lines = opened.lines.unwrap();
+    (lines.0)(line("one"));
+    (lines.0)(line("two"));
+    opened.end.end(completed(&id.0, Outcome::Completed));
+    assert_eq!(jobs.lines().lines(), vec![line("one"), line("two")]);
+    for text in ["one", "two"] {
+        let delivery = rx.try_recv().unwrap();
+        let contract::inbox::Delivery::JobLine(sent) = delivery else {
+            panic!("expected a line, got {delivery:?}");
+        };
+        assert_eq!(sent, line(text));
+    }
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        contract::inbox::Delivery::Job(_)
+    ));
 }

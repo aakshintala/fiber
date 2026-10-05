@@ -11,7 +11,7 @@ use fakes::{CancelToken, Recorder};
 use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 
-use super::{Shell, bare_wait, exit_line, from_spawn, signal_name, timeout_line};
+use super::{Mode, Shell, bare_wait, exit_line, from_spawn, parse, signal_name, timeout_line};
 
 fn shell() -> Shell {
     Shell::new(std::env::temp_dir(), FakeClock::new())
@@ -47,12 +47,17 @@ fn the_schema_is_command_workdir_and_timeout() {
         properties.keys().cloned().collect::<Vec<_>>(),
         [
             "command",
+            "deadline_ms",
+            "monitor",
             "run_in_background",
             "timeout_ms",
             "tty",
             "workdir"
         ]
     );
+    assert_eq!(properties["monitor"]["type"], "boolean");
+    assert_eq!(properties["deadline_ms"]["type"], "integer");
+    assert_eq!(properties["deadline_ms"]["minimum"], 0);
     assert_eq!(properties["run_in_background"]["type"], "boolean");
     assert_eq!(properties["command"]["type"], "string");
     assert_eq!(properties["workdir"]["type"], "string");
@@ -357,7 +362,10 @@ fn result_lines_name_what_was_observed() {
 fn a_spawn_failure_is_tool_error_with_no_process() {
     let output = from_spawn(
         Err(std::io::Error::new(std::io::ErrorKind::NotFound, "missing")),
-        1,
+        super::Limit {
+            ms: 1,
+            monitor: false,
+        },
     );
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(output.process.is_none());
@@ -474,4 +482,194 @@ fn run_in_background_skips_the_bare_wait_and_returns_a_receipt() {
         .expect("the stopped sleep to end");
     assert_eq!(ended.status, Outcome::Cancelled);
     assert!(ended.output_tail.is_none());
+}
+
+fn monitor_args(command: &str) -> Map<String, Value> {
+    let mut arguments = args(command);
+    arguments.insert("monitor".into(), json!(true));
+    arguments
+}
+
+/// Each refusal, with what its message names. A marker the command would
+/// touch shows it never started.
+#[test]
+fn a_monitor_call_that_breaks_a_rule_never_starts() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-args");
+    let marker = dir.path().join("marker");
+    let touch = format!("touch {}", marker.display());
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let with = |pairs: &[(&str, Value)]| {
+        let mut arguments = args(&touch);
+        for (key, value) in pairs {
+            arguments.insert((*key).into(), value.clone());
+        }
+        arguments
+    };
+    let cases = [
+        (
+            with(&[("deadline_ms", json!(1_000))]),
+            "set `monitor: true`",
+        ),
+        (
+            with(&[("monitor", json!(true)), ("timeout_ms", json!(1_000))]),
+            "A monitor's limit is `deadline_ms`.",
+        ),
+        (
+            with(&[("monitor", json!(true)), ("tty", json!(true))]),
+            "`monitor` cannot be combined",
+        ),
+        (
+            with(&[("monitor", json!(true)), ("run_in_background", json!(true))]),
+            "`monitor` cannot be combined",
+        ),
+        (
+            with(&[("monitor", json!(true)), ("deadline_ms", json!(1_800_001))]),
+            "more than 1800000",
+        ),
+        (
+            with(&[("monitor", json!(true)), ("deadline_ms", json!(-1))]),
+            "`deadline_ms` is negative",
+        ),
+        (
+            with(&[("monitor", json!(true)), ("deadline_ms", json!(1.5))]),
+            "`deadline_ms` must be an integer",
+        ),
+        (
+            with(&[("monitor", json!("yes"))]),
+            "`monitor` must be a boolean",
+        ),
+    ];
+    for (arguments, needle) in cases {
+        let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments), "{needle}");
+        assert!(
+            text(&output).contains(needle),
+            "{needle}: {}",
+            text(&output)
+        );
+        assert!(output.process.is_none());
+    }
+    let without = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let output = without.run(
+        &monitor_args(&touch),
+        &CancelToken::new(),
+        &Recorder::default(),
+    );
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(
+        text(&output).contains("Background jobs are not available in this session."),
+        "{}",
+        text(&output)
+    );
+    assert!(!marker.exists(), "a refused call started its command");
+    assert!(jobs.started().is_empty());
+}
+
+#[test]
+fn a_non_interactive_shell_allows_a_deadline_of_ten_minutes_at_most() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-limit");
+    let marker = dir.path().join("marker");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
+        .non_interactive();
+    let mut arguments = monitor_args(&format!("touch {}", marker.display()));
+    arguments.insert("deadline_ms".into(), json!(600_001));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(
+        text(&output).contains("more than 600000"),
+        "{}",
+        text(&output)
+    );
+    assert!(!marker.exists());
+}
+
+/// At each limit the call is accepted: a command that exits at once
+/// completes in the foreground with no job.
+#[test]
+fn a_deadline_at_the_limit_is_accepted() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-at");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let interactive =
+        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let batch = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .with_jobs(jobs.clone())
+        .non_interactive();
+    for (shell, deadline) in [(&interactive, 1_800_000), (&batch, 600_000)] {
+        let mut arguments = monitor_args("exit 0");
+        arguments.insert("deadline_ms".into(), json!(deadline));
+        let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+        assert_ne!(
+            code(&output),
+            Some(ErrorCode::InvalidArguments),
+            "{deadline}"
+        );
+    }
+}
+
+#[test]
+fn a_bare_wait_is_refused_for_a_monitor() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-sleep");
+    let marker = dir.path().join("marker");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    // A zero deadline, so a command that wrongly starts stops at once.
+    let mut arguments = monitor_args(&format!("sleep 30; touch {}", marker.display()));
+    arguments.insert("deadline_ms".into(), json!(0));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(text(&output).contains("jobs wait"), "{}", text(&output));
+    assert!(!marker.exists());
+    assert!(jobs.started().is_empty());
+}
+
+#[test]
+fn a_monitor_is_classified_as_its_command() {
+    let shell = shell();
+    let plain = shell.effects(&args("ls")).unwrap();
+    let monitored = shell.effects(&monitor_args("ls")).unwrap();
+    assert_eq!(plain, monitored);
+}
+
+#[test]
+fn the_flags_parse_to_one_mode_and_only_run_in_background_skips_the_bare_wait() {
+    let cases = [
+        (false, false, false, Some(Mode::Foreground)),
+        (true, false, false, Some(Mode::Background)),
+        (
+            false,
+            true,
+            false,
+            Some(Mode::Terminal {
+                run_in_background: false,
+            }),
+        ),
+        (
+            true,
+            true,
+            false,
+            Some(Mode::Terminal {
+                run_in_background: true,
+            }),
+        ),
+        (false, false, true, Some(Mode::Monitor)),
+        (true, false, true, None),
+        (false, true, true, None),
+        (true, true, true, None),
+    ];
+    for (background, tty, monitor, expected) in cases {
+        let mut arguments = args("ls");
+        arguments.insert("run_in_background".into(), json!(background));
+        arguments.insert("tty".into(), json!(tty));
+        arguments.insert("monitor".into(), json!(monitor));
+        let mode = parse(&arguments, Path::new("/"), 1_800_000)
+            .ok()
+            .map(|parsed| parsed.mode);
+        assert_eq!(mode, expected, "{background} {tty} {monitor}");
+        if let Some(mode) = mode {
+            assert_eq!(mode.in_background(), background, "{mode:?}");
+        }
+    }
 }

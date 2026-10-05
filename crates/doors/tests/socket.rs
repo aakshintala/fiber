@@ -335,7 +335,7 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             "close".to_owned()
         }
         Delivery::Cancelled => panic!("a wake arrives as a delivery"),
-        Delivery::Job(_) => panic!("no job runs here"),
+        Delivery::Job(_) | Delivery::JobLine(_) => panic!("no job runs here"),
     }
 }
 
@@ -1550,6 +1550,7 @@ fn open_job(jobs: &FakeJobs, fired: mpsc::Sender<()>) -> contract::jobs::Opened 
         tool: "shell".into(),
         description: "sleep 60".into(),
         stop: Stop(Box::new(move || fired.send(()).unwrap())),
+        lines: false,
         input: None,
     })
     .unwrap()

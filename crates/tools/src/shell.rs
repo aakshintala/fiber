@@ -23,6 +23,9 @@ mod background;
 #[path = "shell/command.rs"]
 mod command;
 
+#[path = "shell/monitor.rs"]
+mod monitor;
+
 #[path = "shell/output.rs"]
 mod output;
 
@@ -47,6 +50,21 @@ const DEFAULT_TIMEOUT_MS: u64 = 600_000;
 const BARE_WAIT: &str = "This command waits with `sleep` for 25 seconds or more. \
      Use `run_in_background`, wait with `jobs wait`, or run a monitor with an `until` loop.";
 
+/// A monitor's deadline when the model gives no `deadline_ms`: 5 minutes
+/// (`docs/tools.md`, "Background jobs").
+const DEFAULT_DEADLINE_MS: u64 = 300_000;
+
+/// The longest deadline a monitor may have: 30 minutes.
+const MAX_DEADLINE_MS: u64 = 1_800_000;
+
+/// The longest deadline in a non-interactive run: 10 minutes.
+const MAX_DEADLINE_NON_INTERACTIVE_MS: u64 = 600_000;
+
+const MONITOR_TIMEOUT: &str = "A monitor's limit is `deadline_ms`.";
+const DEADLINE_WITHOUT_MONITOR: &str =
+    "`deadline_ms` is a monitor's deadline; set `monitor: true` with it.";
+const MONITOR_ALONE: &str = "`monitor` cannot be combined with `run_in_background` or `tty`.";
+
 const NO_JOBS: &str = "Background jobs are not available in this session.";
 
 const CANCELLED_BEFORE: &str = "Cancelled before it started.";
@@ -64,6 +82,8 @@ pub struct Shell {
     /// When set, a long command, `run_in_background`, or a shell that exits
     /// with members left becomes a job. Without it, nothing moves.
     jobs: Option<Arc<dyn Jobs>>,
+    /// The longest `deadline_ms` a monitor may have.
+    max_deadline_ms: u64,
 }
 
 impl Shell {
@@ -74,6 +94,16 @@ impl Shell {
             clock,
             search: None,
             jobs: None,
+            max_deadline_ms: MAX_DEADLINE_MS,
+        }
+    }
+
+    /// A shell for a non-interactive run: a monitor's deadline is at most
+    /// 10 minutes (`docs/tools.md`, "Background jobs").
+    pub fn non_interactive(self) -> Self {
+        Self {
+            max_deadline_ms: MAX_DEADLINE_NON_INTERACTIVE_MS,
+            ..self
         }
     }
 
@@ -102,7 +132,8 @@ impl Tool for Shell {
             name: "shell".to_owned(),
             description: "Runs a command in a new process session. `command` is the command. \
                  `workdir` defaults to the workspace; a relative path is resolved against it. \
-                 `timeout_ms` defaults to 600000. Standard output and standard error are one stream."
+                 `timeout_ms` defaults to 600000. Standard output and standard error are one stream, \
+                 except in a monitor, whose standard error goes to its own file."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
@@ -127,6 +158,15 @@ impl Tool for Shell {
                     "tty": {
                         "type": "boolean",
                         "description": "Run the command in a pseudo-terminal, as a job, and return its receipt with the first 250 ms of output. Type into it with `jobs` `write`."
+                    },
+                    "monitor": {
+                        "type": "boolean",
+                        "description": "Start the command as a monitor: a job whose standard output lines reach you in batches. Standard error goes to its own file."
+                    },
+                    "deadline_ms": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "A monitor's deadline, in milliseconds. The default is 300000; the most is 1800000, or 600000 in a non-interactive run."
                     }
                 },
                 "required": ["command"],
@@ -142,7 +182,7 @@ impl Tool for Shell {
     ) -> Result<Effects, contract::tool::EffectsError> {
         // A call `parse` rejects never runs. The closed default keeps a bad
         // `timeout_ms` or `workdir` off the read-only fast path.
-        match parse(arguments, &self.workspace) {
+        match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => Ok(classify(&parsed.command, &parsed.workdir)),
             Err(_) => Ok(classify::executes(None, None)),
         }
@@ -152,14 +192,14 @@ impl Tool for Shell {
         if cancel.is_cancelled() {
             return line_only(CANCELLED_BEFORE);
         }
-        let parsed = match parse(arguments, &self.workspace) {
+        let parsed = match parse(arguments, &self.workspace, self.max_deadline_ms) {
             Ok(parsed) => parsed,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        if (parsed.run_in_background || parsed.tty) && self.jobs.is_none() {
+        if parsed.mode != Mode::Foreground && self.jobs.is_none() {
             return failed(ErrorCode::InvalidArguments, NO_JOBS.to_owned());
         }
-        if !parsed.run_in_background && !parsed.tty && bare_wait(&parsed.command) {
+        if !parsed.mode.in_background() && bare_wait(&parsed.command) {
             return failed(ErrorCode::InvalidArguments, BARE_WAIT.to_owned());
         }
         // The functions reach only the model's own command line: `classify`
@@ -169,11 +209,16 @@ impl Tool for Shell {
             None => parsed.command.clone(),
         };
         let program = shell_program();
-        let policy = match (&self.jobs, parsed.run_in_background, parsed.tty) {
-            (None, _, _) => command::MovePolicy::Stay,
-            (Some(_), _, true) => command::MovePolicy::Terminal,
-            (Some(_), false, false) => command::MovePolicy::Foreground,
-            (Some(_), true, false) => command::MovePolicy::Background,
+        let policy = match (&self.jobs, parsed.mode) {
+            (None, _) => command::MovePolicy::Stay,
+            (Some(_), Mode::Foreground) => command::MovePolicy::Foreground,
+            (Some(_), Mode::Background) => command::MovePolicy::Background,
+            (Some(_), Mode::Terminal { .. }) => command::MovePolicy::Terminal,
+            (Some(_), Mode::Monitor) => command::MovePolicy::Monitor,
+        };
+        let limit = Limit {
+            ms: parsed.timeout_ms,
+            monitor: parsed.mode == Mode::Monitor,
         };
         match command::execute(
             program,
@@ -186,24 +231,24 @@ impl Tool for Shell {
             policy,
             self.jobs.as_deref(),
         ) {
-            Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), parsed.timeout_ms),
+            Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), limit),
             Ok(command::Ran::Moved(moved)) => match &self.jobs {
                 Some(jobs) => background::take(
                     moved,
                     Arc::clone(jobs),
                     Arc::clone(&self.clock),
                     &parsed.command,
-                    parsed.timeout_ms,
-                    parsed.tty,
+                    limit,
+                    matches!(parsed.mode, Mode::Terminal { .. }),
                     cancel,
                     emit,
                 ),
                 None => {
                     let finished = moved.resume(self.clock.as_ref(), cancel, emit);
-                    from_spawn(Ok(finished), parsed.timeout_ms)
+                    from_spawn(Ok(finished), limit)
                 }
             },
-            Err(err) => from_spawn(Err(err), parsed.timeout_ms),
+            Err(err) => from_spawn(Err(err), limit),
         }
     }
 
@@ -222,39 +267,120 @@ impl Tool for Shell {
 struct Parsed {
     command: String,
     workdir: PathBuf,
+    /// The command's timeout: `timeout_ms`, or a monitor's deadline.
     timeout_ms: u64,
-    run_in_background: bool,
-    tty: bool,
+    mode: Mode,
 }
 
-fn parse(arguments: &Map<String, Value>, workspace: &Path) -> Result<Parsed, String> {
+/// How a call runs: the arguments `run_in_background`, `tty` and `monitor`,
+/// validated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// None of them: moves only after 30 seconds or a shell exit.
+    Foreground,
+    /// `run_in_background`.
+    Background,
+    /// `tty`, with `run_in_background` or without.
+    Terminal { run_in_background: bool },
+    /// `monitor`, alone.
+    Monitor,
+}
+
+impl Mode {
+    /// The call set `run_in_background`, the one mode a bare wait may use
+    /// (`docs/tools.md`, "Running a command").
+    fn in_background(self) -> bool {
+        matches!(
+            self,
+            Self::Background
+                | Self::Terminal {
+                    run_in_background: true
+                }
+        )
+    }
+}
+
+/// How long a command may run, and whether it is a monitor's deadline,
+/// which a timeout names as such (`docs/tools.md`, "Background jobs").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Limit {
+    /// Milliseconds.
+    pub(crate) ms: u64,
+    /// The limit is a monitor's `deadline_ms`.
+    pub(crate) monitor: bool,
+}
+
+impl Limit {
+    /// What a stop at this limit says.
+    pub(crate) fn line(self) -> String {
+        if self.monitor {
+            deadline_line(self.ms)
+        } else {
+            timeout_line(self.ms)
+        }
+    }
+}
+
+fn parse(
+    arguments: &Map<String, Value>,
+    workspace: &Path,
+    max_deadline_ms: u64,
+) -> Result<Parsed, String> {
     let command = match arguments.get("command") {
         Some(Value::String(command)) => command.clone(),
         Some(_) => return Err("`command` must be a string.".to_owned()),
         None => return Err("Give the command to run as `command`.".to_owned()),
     };
     let workdir = workdir(arguments, workspace)?;
-    let timeout_ms = match arguments.get("timeout_ms") {
-        None => DEFAULT_TIMEOUT_MS,
-        Some(value) => timeout_ms(value)?,
+    let given_timeout = arguments
+        .get("timeout_ms")
+        .map(|value| millis(value, "timeout_ms"))
+        .transpose()?;
+    let given_deadline = arguments
+        .get("deadline_ms")
+        .map(|value| millis(value, "deadline_ms"))
+        .transpose()?;
+    let run_in_background = flag(arguments, "run_in_background")?;
+    let tty = flag(arguments, "tty")?;
+    let monitor = flag(arguments, "monitor")?;
+    let mode = match (monitor, tty, run_in_background) {
+        (true, false, false) => Mode::Monitor,
+        (true, _, _) => return Err(MONITOR_ALONE.to_owned()),
+        (false, true, run_in_background) => Mode::Terminal { run_in_background },
+        (false, false, true) => Mode::Background,
+        (false, false, false) => Mode::Foreground,
     };
-    let run_in_background = match arguments.get("run_in_background") {
-        None => false,
-        Some(Value::Bool(value)) => *value,
-        Some(_) => return Err("`run_in_background` must be a boolean.".to_owned()),
-    };
-    let tty = match arguments.get("tty") {
-        None => false,
-        Some(Value::Bool(value)) => *value,
-        Some(_) => return Err("`tty` must be a boolean.".to_owned()),
+    let timeout_ms = if mode == Mode::Monitor {
+        if given_timeout.is_some() {
+            return Err(MONITOR_TIMEOUT.to_owned());
+        }
+        let deadline = given_deadline.unwrap_or(DEFAULT_DEADLINE_MS);
+        if deadline > max_deadline_ms {
+            return Err(format!(
+                "`deadline_ms` is more than {max_deadline_ms}, the longest a monitor may run here. Give {max_deadline_ms} or less."
+            ));
+        }
+        deadline
+    } else {
+        if given_deadline.is_some() {
+            return Err(DEADLINE_WITHOUT_MONITOR.to_owned());
+        }
+        given_timeout.unwrap_or(DEFAULT_TIMEOUT_MS)
     };
     Ok(Parsed {
         command,
         workdir,
         timeout_ms,
-        run_in_background,
-        tty,
+        mode,
     })
+}
+
+fn flag(arguments: &Map<String, Value>, name: &str) -> Result<bool, String> {
+    match arguments.get(name) {
+        None => Ok(false),
+        Some(Value::Bool(value)) => Ok(*value),
+        Some(_) => Err(format!("`{name}` must be a boolean.")),
+    }
 }
 
 fn workdir(arguments: &Map<String, Value>, workspace: &Path) -> Result<PathBuf, String> {
@@ -280,20 +406,22 @@ fn workdir(arguments: &Map<String, Value>, workspace: &Path) -> Result<PathBuf, 
     }
 }
 
-fn timeout_ms(value: &Value) -> Result<u64, String> {
+fn millis(value: &Value, name: &str) -> Result<u64, String> {
+    let not_integer = || format!("`{name}` must be an integer number of milliseconds.");
     let Some(number) = value.as_number() else {
-        return Err("`timeout_ms` must be an integer number of milliseconds.".to_owned());
+        return Err(not_integer());
     };
     // Signed first, so 0 is accepted and a negative is rejected. Checking
     // `as_u64` first would make `<` and `<=` agree on every value.
     let Some(ms) = number.as_i64() else {
-        return Err("`timeout_ms` must be an integer number of milliseconds.".to_owned());
+        return Err(not_integer());
     };
     if ms < 0 {
-        return Err("`timeout_ms` is negative. Give 0 or more milliseconds.".to_owned());
+        return Err(format!(
+            "`{name}` is negative. Give 0 or more milliseconds."
+        ));
     }
-    u64::try_from(ms)
-        .map_err(|_| "`timeout_ms` must be an integer number of milliseconds.".to_owned())
+    u64::try_from(ms).map_err(|_| not_integer())
 }
 
 /// The first part is the text before the first `;`, `&`, `|` or newline.
@@ -356,9 +484,9 @@ fn shell_program() -> &'static Path {
     }
 }
 
-fn from_spawn(result: Result<Finished, std::io::Error>, timeout_ms: u64) -> Output {
+fn from_spawn(result: Result<Finished, std::io::Error>, limit: Limit) -> Output {
     match result {
-        Ok(finished) => assemble(timeout_ms, finished),
+        Ok(finished) => assemble(limit, finished),
         Err(err) => failed(
             ErrorCode::ToolError,
             format!("The command could not be started: {err}."),
@@ -366,7 +494,7 @@ fn from_spawn(result: Result<Finished, std::io::Error>, timeout_ms: u64) -> Outp
     }
 }
 
-fn assemble(timeout_ms: u64, finished: Finished) -> Output {
+fn assemble(limit: Limit, finished: Finished) -> Output {
     if finished.indeterminate {
         let timed_out = finished.stop == Some(StopKind::Timeout);
         return with_process(
@@ -376,7 +504,7 @@ fn assemble(timeout_ms: u64, finished: Finished) -> Output {
         );
     }
     if finished.stop == Some(StopKind::Timeout) {
-        let line = timeout_line(timeout_ms);
+        let line = limit.line();
         return with_process(
             text_of(&finished.output, &line),
             Some(failure(ErrorCode::Timeout, line)),
@@ -454,6 +582,14 @@ pub(crate) fn exit_line(code: i32) -> String {
 
 pub(crate) fn timeout_line(timeout_ms: u64) -> String {
     format!("Timed out after {timeout_ms} ms and stopped.")
+}
+
+/// What a monitor stopped at its deadline says (`docs/tools.md`,
+/// "Background jobs").
+pub(crate) fn deadline_line(deadline_ms: u64) -> String {
+    format!(
+        "The monitor's deadline of {deadline_ms} ms passed; start it again if you still need it."
+    )
 }
 
 /// The signal's name, such as `SIGKILL`.
