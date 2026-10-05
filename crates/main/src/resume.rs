@@ -5,6 +5,7 @@
 //! instead (`docs/invocation.md`, "Processes").
 
 use std::io;
+use std::path::Path;
 use std::sync::Arc;
 
 use doors::Session;
@@ -90,12 +91,18 @@ pub(crate) fn ask_resume(
         project,
         ..
     } = parts;
+    // The recorded workspace, not the launch directory. A failure here,
+    // such as not finding the running binary, returns before `fiber_started`,
+    // so the log stays as it was.
+    let (tools, infos) = match crate::builtin::builtin(Path::new(&folded.workspace), &clock) {
+        Ok(built) => built,
+        Err(e) => return ask_failed(e),
+    };
     let permissions = crate::ask_permissions(&home, &project, folded.workspace, &clock);
-    let session =
-        match Session::resume(&home, &dir, &log, clock, Vec::new(), Box::new(io::stdout())) {
-            Ok(session) => session,
-            Err(e) => return ask_failed(e),
-        };
+    let session = match Session::resume(&home, &dir, &log, clock, infos, Box::new(io::stdout())) {
+        Ok(session) => session,
+        Err(e) => return ask_failed(e),
+    };
     if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true) {
         session.close(log);
         return ask_failed(failed(e.code(), e));
@@ -109,7 +116,7 @@ pub(crate) fn ask_resume(
                 model,
                 prompt_inputs,
                 inbox,
-                Vec::new(),
+                tools,
                 permissions,
             ),
             budget,
