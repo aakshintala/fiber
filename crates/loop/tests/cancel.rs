@@ -51,6 +51,18 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
     // its `turn_started` input.
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     let next = session.lines();
+    assert_eq!(
+        kinds(&next),
+        [
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let started = next.iter().find(|l| l.kind == "turn_started").unwrap();
     let input: Vec<&str> = started.payload["input"]
         .as_array()
@@ -91,6 +103,23 @@ fn a_cancel_landing_between_steps_sends_no_request() {
     // The cancelled turn never sent its second request.
     assert_eq!(session.requests().len(), 1);
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(
         lines
             .iter()
@@ -186,6 +215,28 @@ fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
     // The tool saw the cancel: it waited on the signal itself.
     assert!(slow.cancelled.lock().unwrap().contains(&true));
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_delta",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     let done = completed(&lines);
     assert_eq!(done.len(), 2);
     // The running call carries its tool's own content, with no error.
@@ -244,6 +295,23 @@ fn a_call_returning_an_error_after_cancel_keeps_failed() {
     });
     gate.check("brittle");
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     let done = completed(&lines);
     assert_eq!(done.len(), 1);
     // An error is never cancelled: the failure and its code stay.
@@ -281,6 +349,27 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     let requested: Vec<&contract::Envelope> = lines
         .iter()
         .filter(|l| l.kind == "permission_requested")
@@ -343,6 +432,23 @@ fn a_cancelled_review_completes_cancelled() {
         assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
     });
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     // The review keeps its resolved line, decided by the cancel.
     let resolved: Vec<&contract::Envelope> = lines
         .iter()
