@@ -225,11 +225,10 @@ impl Carry {
             });
         }
         // The model had not seen the other calls of a step a tool ended: they
-        // follow the note, the calls then their results, in call order.
-        if step
-            .iter()
-            .any(|call| call.note.is_some() && ids.contains(&call.action))
-        {
+        // follow the note, the calls then their results, in call order. A
+        // tool ended the step when a note action is one of its calls; a
+        // note request's action is a reply, never a call.
+        if step.iter().any(|call| ids.contains(&call.action)) {
             let others: Vec<&StepCall> = step
                 .iter()
                 .filter(|call| !ids.contains(&call.action))
