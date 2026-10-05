@@ -58,9 +58,9 @@ impl JobDeltas {
         let texts = lock(&self.texts);
         let (texts, _) = self
             .changed
-            .wait_timeout_while(texts, within, |texts| !text_of(texts).contains(needle))
+            .wait_timeout_while(texts, within, |texts| lacks(texts, needle))
             .unwrap_or_else(PoisonError::into_inner);
-        text_of(&texts).contains(needle)
+        !lacks(&texts, needle)
     }
 }
 
@@ -77,6 +77,11 @@ impl Emit for JobDeltas {
             self.changed.notify_all();
         }
     }
+}
+
+/// True while the concatenated text does not contain `needle`.
+fn lacks(texts: &[(JobId, String)], needle: &str) -> bool {
+    !text_of(texts).contains(needle)
 }
 
 fn text_of(texts: &[(JobId, String)]) -> String {

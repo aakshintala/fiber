@@ -75,6 +75,16 @@ fn a_copy_past_the_cap_is_kept_whole_and_fires_it_at_once() {
 }
 
 #[test]
+fn a_copy_of_exactly_the_cap_leaves_it_unfired_until_one_more_byte() {
+    let dir = TempDir::new("fiber-output-copy-exact");
+    let (shared, path) = attached(&dir, b"abcd", 4);
+    assert!(!lock(&shared.inner).cap_fired);
+    feed(&shared, &[b"e"]);
+    assert!(lock(&shared.inner).cap_fired);
+    assert_eq!(std::fs::read(&path).unwrap(), b"abcd");
+}
+
+#[test]
 fn a_copy_under_the_cap_leaves_it_unfired_and_counts_toward_it() {
     let dir = TempDir::new("fiber-output-under");
     let (shared, path) = attached(&dir, b"abc", 5);

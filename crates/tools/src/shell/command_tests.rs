@@ -786,16 +786,19 @@ fn the_sooner_of_two_instants() {
 const JOB_DEADLINE: Duration = Duration::from_secs(10);
 
 /// A command moved to a job and driven on its own thread. The command
-/// writes its group id and creates `block`; each `go` lets it run to its
-/// next `read -r _ < block`.
+/// writes its group id, then holds `block` open read-write on fd 3, and each
+/// `go` lets it past its next `read -r _ <&3`. The one descriptor, held by
+/// both sides, never rendezvouses on an open and never reads end-of-file.
 struct Job {
     dir: fakes::TempDir,
     clock: Arc<FakeClock>,
     deltas: Arc<fakes::jobs::JobDeltas>,
-    ready: fakes::children::Ready,
-    ran: thread::JoinHandle<super::Finished>,
+    block: std::fs::File,
+    done: mpsc::Receiver<super::Finished>,
     out: std::path::PathBuf,
     pgid: u32,
+    watchdog: fakes::Watchdog,
+    _ready: fakes::children::Ready,
 }
 
 impl Job {
@@ -804,7 +807,7 @@ impl Job {
         let ready = fakes::children::Ready::new(dir.path());
         let block = dir.path().join("block");
         let command = format!(
-            "echo $$ > '{ready}'\nmkfifo '{block}'\necho $$ >> '{ready}'\n{script}",
+            "echo $$ > '{ready}'\nmkfifo '{block}'\nexec 3<>'{block}'\necho $$ >> '{ready}'\n{script}",
             ready = ready.path().display(),
             block = block.display(),
         );
@@ -825,6 +828,8 @@ impl Job {
         let super::Ran::Moved(mut moved) = ran else {
             panic!("the command did not move");
         };
+        let pgid = moved.pgid();
+        let watchdog = fakes::Watchdog::group(pgid);
         moved.cap = cap;
         let out = dir.path().join("job.log");
         moved.attach_output(std::fs::File::create(&out).unwrap());
@@ -836,33 +841,46 @@ impl Job {
             Arc::clone(&deltas) as Arc<dyn contract::emit::Emit>,
         );
         let job_clock = Arc::clone(&clock);
-        let ran = thread::spawn(move || moved.drive_job(job_clock.as_ref(), &cancel, stream));
-        let pgid = ready.wait(JOB_DEADLINE)[0];
+        let (tx, done) = mpsc::channel();
+        thread::spawn(move || {
+            let finished = moved.drive_job(job_clock.as_ref(), &cancel, stream);
+            let _sent = tx.send(finished);
+        });
+        // Both lines: the fifo exists and fd 3 is open once the second arrives.
+        assert_eq!(ready.wait(JOB_DEADLINE)[0], pgid);
         let _own = ready.wait(JOB_DEADLINE);
+        // Read-write, so the open never waits for the shell.
+        let block = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open(&block)
+            .unwrap();
         Self {
             dir,
             clock,
             deltas,
-            ready,
-            ran,
+            block,
+            done,
             out,
             pgid,
+            watchdog,
+            _ready: ready,
         }
     }
 
-    /// Lets the command run to its next read.
+    /// Lets the command past its next read.
     fn go(&self) {
-        let mut fifo = std::fs::OpenOptions::new()
-            .write(true)
-            .open(self.dir.path().join("block"))
-            .unwrap();
-        std::io::Write::write_all(&mut fifo, b"go\n").unwrap();
+        std::io::Write::write_all(&mut &self.block, b"go\n").unwrap();
     }
 
+    /// The job's end, waited for at most [`JOB_DEADLINE`].
     fn end(self) -> (super::Finished, fakes::TempDir, Arc<fakes::jobs::JobDeltas>) {
-        let _ready = &self.ready;
-        let finished = self.ran.join().unwrap();
+        let finished = self
+            .done
+            .recv_timeout(JOB_DEADLINE)
+            .expect("the job's drive did not return within the deadline");
         assert!(!group_alive(self.pgid), "the group was left running");
+        self.watchdog.stand_down(JOB_DEADLINE);
         (finished, self.dir, self.deltas)
     }
 }
@@ -872,7 +890,7 @@ fn output_past_the_cap_stops_the_job_and_the_file_keeps_the_cap() {
     let job = Job::start(
         "fiber-job-cap",
         1000,
-        "read -r _ < block\nhead -c 2000 /dev/zero | tr '\\0' x\nread -r _ < block\n",
+        "read -r _ <&3\nhead -c 2000 /dev/zero | tr '\\0' x\nread -r _ <&3\n",
     );
     job.go();
     let out = job.out.clone();
@@ -887,7 +905,7 @@ fn a_command_that_passes_the_cap_and_exits_at_once_still_ends_capped() {
     let job = Job::start(
         "fiber-job-cap-exit",
         1000,
-        "read -r _ < block\nhead -c 2000 /dev/zero | tr '\\0' x\n",
+        "read -r _ <&3\nhead -c 2000 /dev/zero | tr '\\0' x\n",
     );
     job.go();
     let out = job.out.clone();
@@ -901,7 +919,7 @@ fn a_command_under_the_cap_is_unaffected() {
     let job = Job::start(
         "fiber-job-under-cap",
         1000,
-        "read -r _ < block\nhead -c 500 /dev/zero | tr '\\0' x\n",
+        "read -r _ <&3\nhead -c 500 /dev/zero | tr '\\0' x\n",
     );
     job.go();
     let out = job.out.clone();
@@ -917,20 +935,26 @@ fn a_job_streams_paced_deltas_and_flushes_the_rest_at_its_end() {
     let job = Job::start(
         "fiber-job-delta",
         super::OUTPUT_CAP,
-        "read -r _ < block\nprintf one\nread -r _ < block\nprintf two\nread -r _ < block\nprintf three\n",
+        "read -r _ <&3\nprintf one\nread -r _ <&3\nprintf two\nread -r _ <&3\nprintf three\n",
     );
     let due = job.clock.origin() + Duration::from_millis(100);
     job.go();
-    assert!(job.deltas.wait_for_text("one", JOB_DEADLINE));
+    assert!(
+        job.deltas.wait_for_text("one", JOB_DEADLINE),
+        "waited {JOB_DEADLINE:?} for the first delta"
+    );
     job.go();
     // Parked at the interval: the second write is held, not emitted.
     assert!(
         job.clock.await_parked(due, JOB_DEADLINE),
-        "the job did not park for the held delta"
+        "waited {JOB_DEADLINE:?} for the job to park for the held delta"
     );
     assert_eq!(job.deltas.text(), "one");
     job.clock.advance(Duration::from_millis(100));
-    assert!(job.deltas.wait_for_text("onetwo", JOB_DEADLINE));
+    assert!(
+        job.deltas.wait_for_text("onetwo", JOB_DEADLINE),
+        "waited {JOB_DEADLINE:?} for the held delta after the interval"
+    );
     job.go();
     let (finished, _dir, deltas) = job.end();
     assert!(!finished.capped);

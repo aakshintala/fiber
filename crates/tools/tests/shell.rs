@@ -896,7 +896,16 @@ fn a_running_job_emits_what_it_prints_after_the_move_as_job_deltas() {
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
     let job = started(&output);
     let deltas = jobs.deltas();
-    release_block(ready.path());
+    // The FIFO open waits for the shell's read, so it runs on its own thread.
+    let block = ready.path().to_path_buf();
+    let (released, release) = mpsc::channel();
+    thread::spawn(move || {
+        release_block(&block);
+        let _sent = released.send(());
+    });
+    release
+        .recv_timeout(DEADLINE)
+        .expect("waited for the command's read of the block fifo");
     let ended = jobs.ended(DEADLINE).expect("the job to finish");
     assert_eq!(ended.status, Outcome::Completed);
     // The move races the command's first line, so "a" is either in the copy

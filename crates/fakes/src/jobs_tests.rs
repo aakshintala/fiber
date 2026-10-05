@@ -280,3 +280,35 @@ fn a_jobs_deltas_are_recorded_in_order_and_other_events_ignored() {
     assert!(deltas.wait_for_text("ab", DEADLINE));
     assert!(!deltas.wait_for_text("abc", Duration::from_millis(1)));
 }
+
+#[test]
+fn lacks_is_true_exactly_while_the_text_misses_the_needle() {
+    let texts = vec![
+        (JobId("j".into()), "ab".to_owned()),
+        (JobId("j".into()), "c".to_owned()),
+    ];
+    assert!(!super::lacks(&texts, "abc"));
+    assert!(!super::lacks(&texts, "bc"));
+    assert!(super::lacks(&texts, "ac"));
+    assert!(super::lacks(&[], "a"));
+}
+
+#[test]
+fn wait_for_text_sees_a_delta_emitted_after_the_wait_started() {
+    use contract::emit::Emit as _;
+    use contract::events::{Event, JobDelta, Progress};
+
+    let deltas = super::JobDeltas::default();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            deltas.emit(&Event::JobDelta(JobDelta {
+                job_id: JobId("j".into()),
+                progress: Progress {
+                    text: Some("hello".into()),
+                    details: None,
+                },
+            }));
+        });
+        assert!(deltas.wait_for_text("hell", DEADLINE));
+    });
+}
