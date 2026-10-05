@@ -140,7 +140,8 @@ at the top of Fiber home for what it keeps per machine, and
 `projects/<key>/data/<name>/` for what it keeps per project. `<name>` is
 slugged as for `extensions/`. Fiber hands both paths to the extension and
 creates each the first time the extension writes there. A memory system or
-an index lives here. Nothing in them is session state, so a rewind or fork
+an index lives here. A write of Markdown files here takes the permission
+fast path (`docs/permissions.md`, "Fast paths"). Nothing in them is session state, so a rewind or fork
 never touches them ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)).
 `fiber extension remove` deletes an extension's data directories too, asking first in a
 terminal.
