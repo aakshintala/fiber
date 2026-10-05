@@ -128,6 +128,10 @@ impl Tool for Shell {
             end: 8192,
         }
     }
+
+    fn guidelines(&self) -> Option<String> {
+        crate::guidelines::of("shell")
+    }
 }
 
 struct Parsed {

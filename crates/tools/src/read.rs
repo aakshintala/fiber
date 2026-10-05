@@ -136,6 +136,10 @@ impl Tool for Read {
             end: 0,
         }
     }
+
+    fn guidelines(&self) -> Option<String> {
+        crate::guidelines::of("read")
+    }
 }
 
 /// `offset` and `limit`. Absent means `default`. Below 1, or not an integer,

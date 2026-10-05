@@ -16,12 +16,13 @@ use std::sync::mpsc::Receiver;
 
 use contract::events::{
     AssistantMessageCompleted, CacheLifetime, Class, Empty, Event, Grant, InputItem,
-    MessageOutcome, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
-    UsageRecorded, Variables, VariablesSource,
+    MessageOutcome, PreambleReason, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome,
+    TurnStarted, UsageRecorded, Variables, VariablesSource,
 };
 use contract::inbox::{Delivery, Message};
 use contract::provider::{
     CallError, Cost, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Failure;
 use contract::tool::Tool;
@@ -36,6 +37,7 @@ mod inbox;
 mod permission;
 mod process;
 mod progress;
+mod prompt;
 mod resume;
 mod retry;
 mod reviewer;
@@ -45,6 +47,7 @@ mod usage;
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
+pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
@@ -104,7 +107,16 @@ pub struct Loop {
     provider: Arc<dyn Provider>,
     /// The model `provider` reaches, and how its calls are priced.
     model: Model,
-    system_prompt: String,
+    /// What the one preamble build reads, once (`docs/prompt-cache.md`,
+    /// "The preamble").
+    prompt: prompt::PromptInputs,
+    /// Why the one build writes `preamble_built`: `start` on a new
+    /// session, `resume` on a resumed one.
+    preamble_reason: PreambleReason,
+    /// The built preamble: what every request sends and what
+    /// `preamble_built` records. `None` until the first turn builds it
+    /// (`docs/prompt-cache.md`, "The preamble").
+    preamble: Option<Preamble>,
     inbox: Receiver<Delivery>,
     /// The signal that cancels the running turn, armed while one runs.
     pub(crate) cancel: Arc<TurnCancel>,
@@ -125,9 +137,8 @@ pub struct Loop {
     sent: Option<usize>,
     /// The registered tools by name.
     tools: BTreeMap<String, calls::Registered>,
-    /// Each tool registered under a name already taken. #304 records it on
-    /// `preamble_built`, with each tool's `registered_by`.
-    #[expect(dead_code, reason = "read when #304 writes preamble_built")]
+    /// Each tool registered under a name already taken, recorded on
+    /// `preamble_built` with each tool's `registered_by`.
     replaced: Vec<ToolReplaced>,
     /// The workspace, symlinks resolved.
     workspace: PathBuf,
@@ -177,6 +188,16 @@ pub struct Loop {
     retry: Retry,
 }
 
+/// The one built preamble: what every request sends and what
+/// `preamble_built` records (`docs/prompt-cache.md`, "The preamble").
+#[derive(Debug, Clone)]
+struct Preamble {
+    /// The system prompt text as sent.
+    system_prompt: String,
+    /// The tools as sent, in name order.
+    tools: Vec<ToolDefinition>,
+}
+
 impl Loop {
     /// Starts a new session's loop, writing `session_started`. `tools` are
     /// registered by name, each with who registered it: `builtin`, or the
@@ -186,7 +207,7 @@ impl Loop {
         log: Arc<Log>,
         provider: Arc<dyn Provider>,
         model: Model,
-        system_prompt: String,
+        prompt: prompt::PromptInputs,
         inbox: Receiver<Delivery>,
         tools: Vec<(String, Arc<dyn Tool>)>,
         permissions: Permissions,
@@ -212,7 +233,9 @@ impl Loop {
             log,
             provider,
             model,
-            system_prompt,
+            prompt,
+            preamble_reason: PreambleReason::Start,
+            preamble: None,
             inbox,
             cancel: Arc::new(TurnCancel::default()),
             // A new session is its own root (`docs/prompt-cache.md`, "Cache
@@ -305,6 +328,13 @@ impl Loop {
         let Some(started) = self.wait_for_turn()? else {
             return Ok(None);
         };
+        // The one preamble build, before `turn_started`: `answerable` is
+        // already what the builder set, so an unattended loop's prompt
+        // carries its line. A loop that never takes a turn writes none.
+        // debt: extension texts and the addendum arrive empty from `main`;
+        // fixed by #510. The skills listing stays empty until Part C
+        // builds the opening message; fixed by #511.
+        self.ensure_preamble()?;
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         self.cancel.arm();
@@ -349,6 +379,31 @@ impl Loop {
         Ok(Some(outcome))
     }
 
+    /// Builds the one preamble and writes `preamble_built`, once per loop.
+    /// Later turns reuse what the first turn built: between builds the
+    /// preamble does not change (`docs/prompt-cache.md`, "The preamble").
+    fn ensure_preamble(&mut self) -> Result<(), Error> {
+        if self.preamble.is_some() {
+            return Ok(());
+        }
+        let unattended = !self.answerable;
+        let (system_prompt, tools, event) = prompt::build(
+            &self.prompt,
+            &self.model.reference,
+            unattended,
+            &self.tools,
+            self.provider.as_ref(),
+            self.preamble_reason,
+            self.replaced.clone(),
+        );
+        self.log.append(&Event::PreambleBuilt(event), None, None)?;
+        self.preamble = Some(Preamble {
+            system_prompt,
+            tools,
+        });
+        Ok(())
+    }
+
     /// One step (`docs/loop.md`, "One step").
     fn step(&mut self, turn: &TurnId) -> Result<Step, Error> {
         // A cancel that landed ends the turn before anything is sent: no
@@ -362,13 +417,23 @@ impl Loop {
         // end-of-turn check, arrived before this drain.
         self.drain(turn)?;
         self.apply_steering(turn)?;
+        let Some(built) = self.preamble.as_ref() else {
+            // `turn` builds the preamble before its `turn_started`; reaching
+            // a step without one is a bug, so the turn fails closed.
+            return Ok(Step::Ended(ended(
+                TurnOutcome::Failed,
+                Some(Failure {
+                    code: ErrorCode::LogCorrupt,
+                    message: "The preamble was not built.".to_owned(),
+                    retry_after: None,
+                    provider: None,
+                }),
+            )));
+        };
         let request = ModelRequest {
-            system_prompt: self.system_prompt.clone(),
-            tools: self.tools.values().map(|(_, _, d)| d.clone()).collect(),
+            system_prompt: built.system_prompt.clone(),
+            tools: built.tools.clone(),
             effort: None,
-            // debt: weakens docs/prompt-cache.md, "The preamble"; fixed by
-            // #304. tool_choice is fixed at "auto" and no preamble_built is
-            // logged.
             tool_choice: "auto".to_owned(),
             cache_lifetime: CacheLifetime::OneHour,
             cache_key: self.cache_key.clone(),

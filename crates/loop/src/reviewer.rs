@@ -74,46 +74,12 @@ pub(crate) struct Sections {
 
 /// The reviewer's instructions, split per `docs/system-prompt.md`'s rule.
 pub(crate) fn sections() -> Sections {
-    sections_of(include_str!("../prompt/reviewer.md"))
-}
-
-/// Splits `md` into its sections, each from its `## name` line to the next
-/// `## ` line, blank lines at either end removed.
-fn sections_of(md: &str) -> Sections {
-    let mut groups: Vec<(&str, Vec<&str>)> = Vec::new();
-    for line in md.lines() {
-        if let Some(name) = line.strip_prefix("## ") {
-            groups.push((name, vec![line]));
-        } else if let Some((_, lines)) = groups.last_mut() {
-            lines.push(line);
-        }
-    }
-    let section = |name: &str| {
-        groups
-            .iter()
-            .find(|(at, _)| *at == name)
-            .map_or_else(String::new, |(_, lines)| joined(lines))
-    };
+    let md = include_str!("../prompt/reviewer.md");
     Sections {
-        shared: section("shared"),
-        first: section("first-pass"),
-        second: section("second-pass"),
+        shared: crate::prompt::section(md, "shared"),
+        first: crate::prompt::section(md, "first-pass"),
+        second: crate::prompt::section(md, "second-pass"),
     }
-}
-
-/// `lines` joined, with trailing blank lines removed. Every group starts
-/// with its non-blank `## ` line, so there is nothing to remove up front.
-fn joined(lines: &[&str]) -> String {
-    let end = lines
-        .iter()
-        .rposition(|line| !line.trim().is_empty())
-        .map_or(0, |at| at + 1);
-    lines
-        .iter()
-        .take(end)
-        .copied()
-        .collect::<Vec<_>>()
-        .join("\n")
 }
 
 /// Adds what `event` puts in what the reviewer is shown: each person's

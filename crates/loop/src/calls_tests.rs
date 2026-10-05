@@ -219,7 +219,7 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
             cost: None,
             subscription: false,
         },
-        "You are terse.".into(),
+        crate::prompt::PromptInputs::default(),
         rx,
         Vec::new(),
         crate::Permissions {

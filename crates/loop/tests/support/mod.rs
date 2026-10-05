@@ -779,7 +779,7 @@ impl Session {
             Arc::clone(&log),
             Arc::new(seam),
             model,
-            "You are terse.".into(),
+            r#loop::PromptInputs::default(),
             rx,
             tools
                 .into_iter()

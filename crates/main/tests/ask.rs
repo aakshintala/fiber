@@ -518,9 +518,10 @@ fn gemini_hello() -> Response {
 }
 
 /// The event kinds of a turn answered by [`hello`].
-const HELLO_KINDS: [&str; 12] = [
+const HELLO_KINDS: [&str; 13] = [
     "session_started",
     "fiber_started",
+    "preamble_built",
     "turn_started",
     "step_started",
     "assistant_message_started",
@@ -624,6 +625,7 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1496,7 +1498,12 @@ fn assert_weather(run: &Run) {
         "assistant_message_started",
         "assistant_message_delta",
     ];
-    let mut kinds = vec!["session_started", "fiber_started", "turn_started"];
+    let mut kinds = vec![
+        "session_started",
+        "fiber_started",
+        "preamble_built",
+        "turn_started",
+    ];
     kinds.extend(step);
     kinds.extend([
         "tool_call_arguments_delta",
@@ -1593,6 +1600,7 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "turn_completed",
@@ -1650,6 +1658,7 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1725,6 +1734,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     let mut kinds = vec![
         "session_started",
         "fiber_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -1791,6 +1801,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1860,6 +1871,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -2257,4 +2269,23 @@ fn live_gemini_completes_one_turn() {
         "gemini-3.1-flash-lite",
         "GEMINI_API_KEY",
     );
+}
+
+#[test]
+fn two_runs_send_byte_identical_preambles() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let first = setup.fiber(&["ask", "one"], None);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let second = setup.fiber(&["ask", "two"], None);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let first_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let second_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_eq!(first_body["instructions"], second_body["instructions"]);
+    assert_eq!(first_body["tools"], second_body["tools"]);
 }

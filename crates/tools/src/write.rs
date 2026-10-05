@@ -130,6 +130,10 @@ impl Tool for Write {
         self.shared.set_seen(&path, hash_bytes(&written));
         stored(&path, created, old.as_deref(), &written)
     }
+
+    fn guidelines(&self) -> Option<String> {
+        crate::guidelines::of("write")
+    }
 }
 
 /// A path that is not there yet is a reversible create. Anything we cannot

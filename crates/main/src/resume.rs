@@ -76,6 +76,7 @@ pub(crate) fn ask_resume(
     let crate::Parts {
         provider,
         model,
+        prompt: prompt_inputs,
         reviewer,
         limits,
         budget,
@@ -101,7 +102,7 @@ pub(crate) fn ask_resume(
                 &lines,
                 provider,
                 model,
-                crate::SYSTEM_PROMPT.to_owned(),
+                prompt_inputs,
                 inbox,
                 Vec::new(),
                 permissions,

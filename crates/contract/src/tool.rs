@@ -47,6 +47,12 @@ pub trait Tool: Send + Sync {
     fn bound(&self) -> Bound {
         Bound::DEFAULT
     }
+
+    /// Guideline lines for the system prompt, if any
+    /// (`docs/system-prompt.md`, "Tool guidelines").
+    fn guidelines(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What a call declares before it runs (`docs/permissions.md`, "Effects" and
