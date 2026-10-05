@@ -306,9 +306,12 @@ impl Inner {
     }
 
     /// Keeps `line` when its kind is one whose latest wins
-    /// (`session_status`, `extensions_loaded`).
+    /// (`session_status`, `extensions_loaded`, `steering_queue`).
     fn remember(&mut self, line: &Envelope) {
-        if matches!(line.kind.as_str(), "session_status" | "extensions_loaded") {
+        if matches!(
+            line.kind.as_str(),
+            "session_status" | "extensions_loaded" | "steering_queue"
+        ) {
             self.latest.insert(line.kind.clone(), line.clone());
         }
     }

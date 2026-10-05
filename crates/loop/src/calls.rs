@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Component, Path, PathBuf};
-use std::sync::{Arc, Weak};
+use std::sync::Arc;
 use std::thread;
 
 use contract::clock::{Clock, Wake};
@@ -16,11 +16,12 @@ use contract::events::{
     ToolReplaced,
 };
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
 
+use super::cancel::{completed, denied, failed, resolved};
 use crate::inbox::{self, Waited};
 use crate::progress::{SharedWake, Stream};
 use crate::{Error, Loop, schema};
@@ -130,19 +131,37 @@ impl Loop {
     /// Decides every call in order, then runs the approved ones concurrently and
     /// writes each call's completion in request order. Deciding waits for a
     /// person's reply, so every decision line is written before any
-    /// `tool_call_started`.
+    /// `tool_call_started`. Returns true when a cancel ended the step: the
+    /// caller ends the turn `interrupted` instead of taking a next step.
     pub(crate) fn run_calls(
         &mut self,
         calls: Vec<(ActionId, ToolCallRequested)>,
         turn: &TurnId,
-    ) -> Result<(), Error> {
+    ) -> Result<bool, Error> {
         let mut decided = Vec::with_capacity(calls.len());
         for (id, call) in calls {
+            // Deciding stops at the first cancel: a call approved but not
+            // yet started, and every call not yet decided, completes
+            // `cancelled` with no `tool_call_started` and no permission
+            // lines. A decision line already written stays.
+            if self.turn_cancelled() {
+                decided.push((id, Err(super::cancel::never_ran())));
+                continue;
+            }
             let decision = self.decide(&call, &id, turn)?;
+            if self.turn_cancelled() {
+                decided.push((id, Err(super::cancel::never_ran())));
+                continue;
+            }
             decided.push((id, decision));
         }
+        let cancel = Arc::clone(&self.cancel);
         thread::scope(|scope| {
             let wake = Arc::new(SharedWake::default());
+            // The signal wakes the park below, so a cancel with nothing
+            // due and nothing returned still ends the wait.
+            let step_wake: Arc<dyn Wake> = wake.clone();
+            cancel.subscribe(Arc::downgrade(&step_wake));
             // A clock move wakes the wait below: without it a held change
             // would wait for the call to end instead of its interval, and
             // the timer that flushes it would never fire (`docs/tools.md`,
@@ -167,8 +186,10 @@ impl Loop {
                         let bound = tool.bound();
                         let stream = Arc::new(Stream::new(Arc::clone(&wake)));
                         let thread_stream = Arc::clone(&stream);
+                        let call_cancel = Arc::clone(&cancel);
                         scope.spawn(move || {
-                            let output = tool.run(&arguments, &NeverCancel, thread_stream.as_ref());
+                            let output =
+                                tool.run(&arguments, call_cancel.as_ref(), thread_stream.as_ref());
                             thread_stream.finish(output);
                         });
                         State::Running { bound, stream }
@@ -212,7 +233,7 @@ impl Loop {
                     continue;
                 }
                 if running.iter().all(is_done) {
-                    return Ok(());
+                    return Ok(self.turn_cancelled());
                 }
                 // Nothing to write: park until the earliest held change is
                 // due, an emit, a call returning or a clock move. Each pass
@@ -311,6 +332,7 @@ impl Loop {
             )? {
                 Asked::Allow => Ok(Ok((tool, arguments, effects.declared))),
                 Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
+                Asked::Cancelled => Ok(Err(super::cancel::never_ran())),
                 Asked::Closed(request_id) => {
                     Ok(Err(self.unanswerable(id, turn, Some(request_id))?))
                 }
@@ -401,9 +423,27 @@ impl Loop {
                     )));
                 }
             };
-            match self.take_while_waiting(&request_id, delivery) {
+            match self.take_while_waiting(&request_id, delivery, turn)? {
                 Waited::Again => {}
                 Waited::Closed => return Ok(Asked::Closed(request_id)),
+                // The wake the door delivers after an accepted cancel:
+                // the request ends denied by the cancel, and the call
+                // completes `cancelled`. A stale wake from an earlier
+                // turn finds the signal not cancelled and keeps waiting.
+                Waited::Cancelled => {
+                    self.decided(
+                        id,
+                        turn,
+                        resolved(
+                            Some(request_id),
+                            Decision::Deny,
+                            DecidedBy::Cancel,
+                            None,
+                            None,
+                        ),
+                    )?;
+                    return Ok(Asked::Cancelled);
+                }
                 Waited::Reply(reply, ack) => {
                     let Some(answered) = self.answered(tool, offer.as_ref(), &reply.answer) else {
                         inbox::reject(ack, ErrorCode::InvalidArguments, inbox::UNFIT_REPLY);
@@ -588,19 +628,6 @@ impl Loop {
     }
 }
 
-/// A cancel signal that never fires.
-///
-/// debt: a call is never cancelled, #301 keeps a token, fires it, and then writes `cancelled`
-struct NeverCancel;
-
-impl Cancel for NeverCancel {
-    fn is_cancelled(&self) -> bool {
-        false
-    }
-
-    fn subscribe(&self, _waker: Weak<dyn Wake>) {}
-}
-
 impl Loop {
     /// Writes one due or flushed delta under the call's action, and returns
     /// its encoded bytes for pacing. Errors are ignored: the line is
@@ -624,13 +651,27 @@ impl Loop {
         };
         let completed = match &call.state {
             State::Done => return Ok(false),
+            // A decided call the cancel reached before its completion was
+            // written completes `cancelled`: a denial or failure decided
+            // but not yet written, or a call approved but never started. A
+            // `permission_resolved` line already written stays.
+            State::Ready(_) if self.turn_cancelled() => super::cancel::never_ran(),
             State::Ready(completed) => completed.clone(),
             State::Running { stream, bound, .. } => match stream.take_finished() {
                 Some((output, flushed)) => {
                     if let Some(delta) = flushed {
                         self.write_delta(&delta, turn, &call.id);
                     }
-                    Box::new(self.finish(output, *bound, &call.id))
+                    let mut finished = self.finish(output, *bound, &call.id);
+                    // A running call keeps running until its tool returns,
+                    // then completes with what the tool gave, `cancelled`
+                    // instead of `completed`. A tool that returned an error
+                    // keeps `failed` with that error: those outcomes are
+                    // never `cancelled`.
+                    if self.turn_cancelled() && finished.error.is_none() {
+                        finished.status = CallStatus::Cancelled;
+                    }
+                    Box::new(finished)
                 }
                 None => return Ok(false),
             },
@@ -638,40 +679,6 @@ impl Loop {
         call.state = State::Done;
         self.append(&Event::ToolCallCompleted(*completed), turn, Some(&call.id))?;
         Ok(true)
-    }
-}
-
-/// How a call the reply cut off completes (`docs/loop.md`, "A reply cut off
-/// by the output limit").
-pub(crate) fn truncated() -> ToolCallCompleted {
-    failed(
-        ErrorCode::OutputTruncated,
-        "Your reply reached its output limit, so this call did not run and its \
-         arguments may be incomplete. Make the call again, split into smaller \
-         calls if it was large."
-            .to_owned(),
-    )
-}
-
-/// A `permission_resolved` line carrying `request_id`, `decision`,
-/// `decided_by`, `reason` and `feedback`: every other key is absent. A call
-/// whose answer remembered something sets `grant` or `rule` on it.
-fn resolved(
-    request_id: Option<RequestId>,
-    decision: Decision,
-    decided_by: DecidedBy,
-    reason: Option<String>,
-    feedback: Option<String>,
-) -> PermissionResolved {
-    PermissionResolved {
-        request_id,
-        decision,
-        decided_by,
-        reason,
-        feedback,
-        grant: None,
-        rule: None,
-        reviewer: None,
     }
 }
 
@@ -686,50 +693,9 @@ pub(crate) enum Asked {
     Gone(Box<ToolCallCompleted>),
     /// `close` was taken while waiting; the caller denies as its step does.
     Closed(RequestId),
-}
-
-/// A call that was denied with `reason`, the model told `text`.
-pub(crate) fn denied(reason: &str, text: String) -> Box<ToolCallCompleted> {
-    Box::new(ToolCallCompleted {
-        status: CallStatus::Denied,
-        reason: Some(reason.to_owned()),
-        ..completed(text, None)
-    })
-}
-
-/// A call that failed with `code` before it ran, the model told `message`.
-fn failed(code: ErrorCode, message: String) -> ToolCallCompleted {
-    ToolCallCompleted {
-        status: CallStatus::Failed,
-        ..completed(
-            message.clone(),
-            Some(Failure {
-                code,
-                message,
-                retry_after: None,
-                provider: None,
-            }),
-        )
-    }
-}
-
-fn completed(text: String, error: Option<Failure>) -> ToolCallCompleted {
-    ToolCallCompleted {
-        status: CallStatus::Completed,
-        reason: None,
-        error,
-        process: None,
-        content: if text.is_empty() {
-            Vec::new()
-        } else {
-            vec![ContentPart::Text { text }]
-        },
-        details: None,
-        artifact: None,
-        changes: None,
-        control: None,
-        changed_by: None,
-    }
+    /// A cancel woke the wait: the caller completes the call `cancelled`.
+    /// The deny-by-cancel line is written.
+    Cancelled,
 }
 
 /// Whether a call with `declared` effects takes a fast path

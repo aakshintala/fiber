@@ -14,7 +14,7 @@ use contract::tool::{Effects, Tool};
 use contract::{ActionId, ErrorCode, RequestId, TurnId};
 use serde_json::{Map, Value};
 
-use crate::calls::{Approved, Asked, denied};
+use crate::calls::{Approved, Asked};
 use crate::{Error, Loop, Model};
 
 /// What step 7 says about one call: it runs, or how its denial reads.
@@ -530,6 +530,10 @@ impl Loop {
                 self.check_block_end();
                 Ok(Err(completed))
             }
+            Asked::Cancelled => {
+                self.consecutive = 0;
+                Ok(Err(crate::cancel::never_ran()))
+            }
             Asked::Closed(request_id) => {
                 let completed =
                     self.reviewer_deny(under.id, under.turn, Some(request_id), reason, reviewer)?;
@@ -598,7 +602,8 @@ impl Loop {
             previous_end,
             max_output_tokens,
         };
-        let reply = endpoint.provider.call(&request).run(&mut |_| {});
+        let call = endpoint.provider.call(&request);
+        let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
         if let Ok(reply) = &reply {
             let cost = endpoint
                 .cost
@@ -620,15 +625,21 @@ impl Loop {
         Ok(reply)
     }
 
-    /// A cancelled review denies the call. It neither counts nor escalates.
+    /// A cancelled review completes `cancelled`, not denied: its resolved
+    /// line stays, decided by the cancel.
     fn review_cancelled(&mut self, id: &ActionId, turn: &TurnId) -> Result<Decided, Error> {
-        self.deny_quietly(
-            id,
+        self.append(
+            &Event::PermissionResolved(resolved(
+                None,
+                Decision::Deny,
+                DecidedBy::Cancel,
+                Some("The review was cancelled.".to_owned()),
+                None,
+            )),
             turn,
-            DecidedBy::Cancel,
-            "The review was cancelled.",
-            "cancelled",
-        )
+            Some(id),
+        )?;
+        Ok(Err(crate::cancel::never_ran()))
     }
 
     /// Denies the call as the reviewer, with no `permission_requested`: no
@@ -654,7 +665,7 @@ impl Loop {
             Some(id),
         )?;
         self.check_block_end();
-        Ok(denied(
+        Ok(crate::cancel::denied(
             "reviewer",
             format!(
                 "The reviewer blocked this call: {reason} Respect this boundary and find \
@@ -701,7 +712,7 @@ impl Loop {
             turn,
             Some(id),
         )?;
-        Ok(Err(denied(
+        Ok(Err(crate::cancel::denied(
             tool_reason,
             format!("{reason} It did not run."),
         )))

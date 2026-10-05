@@ -3,7 +3,7 @@
 //! wait all admit a delivery through the same rules.
 
 use contract::commands::Reply;
-use contract::events::SteeringApplied;
+use contract::events::{QueuedMessage, SteeringApplied, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Message, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
@@ -42,6 +42,9 @@ pub(crate) enum Waited {
     Reply(Reply, Ack),
     /// `close` was taken. The pending approval is now unanswerable.
     Closed,
+    /// The wake after an accepted cancel, with the signal set. The pending
+    /// approval ends denied by the cancel.
+    Cancelled,
 }
 
 impl Loop {
@@ -49,43 +52,63 @@ impl Loop {
     /// drains everything else already queued. `None` once `close` was taken
     /// with nothing to start, or every sender is gone
     /// (`docs/loop.md`, "Starting a turn").
-    pub(crate) fn wait_for_turn(&mut self) -> Option<TurnInput> {
+    pub(crate) fn wait_for_turn(&mut self) -> Result<Option<TurnInput>, Error> {
         if self.closing {
-            return None;
+            return Ok(None);
         }
         loop {
-            let first = self.inbox.recv().ok()?;
-            let mut batch = vec![first];
-            batch.extend(self.inbox.try_iter());
             let mut input = TurnInput {
                 messages: Vec::new(),
                 prompt: None,
             };
-            for delivery in batch {
-                self.admit_idle(delivery, &mut input);
+            // Steers the previous turn kept start this one, in order,
+            // ahead of whatever is already waiting. This holds after any
+            // outcome, not only `interrupted`. While `closing` nothing
+            // starts, so steers still queued are not run.
+            let kept = self.queued.len();
+            input.messages.extend(self.queued.drain(..));
+            if kept > 0 {
+                // The queue moved into `turn_started`.
+                self.emit_queue(None)?;
+                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                    self.admit_idle(delivery, &mut input);
+                }
+            } else {
+                let first = match self.inbox.recv() {
+                    Ok(first) => first,
+                    Err(_) => return Ok(None),
+                };
+                let mut batch = vec![first];
+                batch.extend(self.inbox.try_iter());
+                for delivery in batch {
+                    self.admit_idle(delivery, &mut input);
+                }
             }
             if !input.messages.is_empty() {
-                return Some(input);
+                return Ok(Some(input));
             }
             if self.closing {
-                return None;
+                return Ok(None);
             }
         }
     }
 
     /// Drains the inbox at a step boundary or the end-of-turn check. A steer
     /// taken here is left in `queued` until [`Self::apply_steering`].
-    pub(crate) fn drain(&mut self) {
+    pub(crate) fn drain(&mut self, turn: &TurnId) -> Result<(), Error> {
         let waiting: Vec<Delivery> = self.inbox.try_iter().collect();
         for delivery in waiting {
-            self.admit_running(delivery);
+            self.admit_running(delivery, turn)?;
         }
+        Ok(())
     }
 
     /// Logs every queued steer as `steering_applied`, in arrival order, and
     /// clears the queue (`docs/loop.md`, "One step").
     pub(crate) fn apply_steering(&mut self, turn: &TurnId) -> Result<(), Error> {
+        let mut applied = false;
         while let Some(message) = self.queued.pop_front() {
+            applied = true;
             self.append(
                 &contract::events::Event::SteeringApplied(SteeringApplied {
                     content: message.content,
@@ -96,25 +119,67 @@ impl Loop {
                 None,
             )?;
         }
+        if applied {
+            self.emit_queue(Some(turn))?;
+        }
         Ok(())
     }
 
+    /// Writes the queue as it stands: every steering message still queued,
+    /// oldest first, empty when the queue is (`docs/events.md`,
+    /// `steering_queue`).
+    fn emit_queue(&mut self, turn: Option<&TurnId>) -> Result<(), Error> {
+        let event = contract::events::Event::SteeringQueue(SteeringQueue {
+            messages: self
+                .queued
+                .iter()
+                .map(|message| QueuedMessage {
+                    content: message.content.clone(),
+                    sender: message.sender.clone(),
+                })
+                .collect(),
+        });
+        match turn {
+            Some(turn) => self.append(&event, turn, None),
+            // Between turns there is no turn to name. The line is
+            // ephemeral, so nothing renders it into the conversation.
+            None => self
+                .log
+                .append(&event, None, None)
+                .map(|_| ())
+                .map_err(crate::Error::Log),
+        }
+    }
+
     /// Admits `delivery` while the loop waits for a reply to `pending`.
-    pub(crate) fn take_while_waiting(&mut self, pending: &RequestId, delivery: Delivery) -> Waited {
+    pub(crate) fn take_while_waiting(
+        &mut self,
+        pending: &RequestId,
+        delivery: Delivery,
+        turn: &TurnId,
+    ) -> Result<Waited, Error> {
         match delivery {
             Delivery::Reply(reply, ack) if reply.request_id == *pending => {
-                Waited::Reply(reply, ack)
+                Ok(Waited::Reply(reply, ack))
             }
             Delivery::Close(ack) => {
                 self.take_close(ack);
-                Waited::Closed
+                Ok(Waited::Closed)
             }
+            // The wake the door delivers after an accepted cancel. The
+            // approval wait reads the signal after it wakes: set, the
+            // approval ends; not set, the wake is stale and discarded.
+            Delivery::Cancelled if self.turn_cancelled() => Ok(Waited::Cancelled),
             other @ (Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
-            | Delivery::Reply(..)) => {
-                self.admit_running(other);
-                Waited::Again
+            | Delivery::Reply(..)
+            // Wakes a blocked `recv` after an accepted cancel; the wait
+            // below reads the signal after it wakes, so this carries no
+            // meaning and is discarded.
+            | Delivery::Cancelled) => {
+                self.admit_running(other, turn)?;
+                Ok(Waited::Again)
             }
         }
     }
@@ -149,11 +214,14 @@ impl Loop {
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
+            // A stale wake from an earlier turn's cancel: it carries no
+            // meaning while idle.
+            Delivery::Cancelled => {}
         }
     }
 
     /// `delivery` while a turn is in flight and nothing is pending.
-    fn admit_running(&mut self, delivery: Delivery) {
+    fn admit_running(&mut self, delivery: Delivery, turn: &TurnId) -> Result<(), Error> {
         match delivery {
             Delivery::Prompt(_, ack) => {
                 if self.closing {
@@ -165,17 +233,23 @@ impl Loop {
             Delivery::Steer(message, ack) => {
                 accept(ack);
                 self.queued.push_back(message);
+                self.emit_queue(Some(turn))?;
             }
             Delivery::SteerDrop(id, ack) => {
                 if drop_queued(&mut self.queued, &id) {
                     accept(ack);
+                    self.emit_queue(Some(turn))?;
                 } else {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
                 }
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
+            // A stale wake from an earlier turn's cancel: it carries no
+            // meaning at a drain.
+            Delivery::Cancelled => {}
         }
+        Ok(())
     }
 
     /// Accepts `close`. No later turn starts, and no later approval can be

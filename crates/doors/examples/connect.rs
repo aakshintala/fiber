@@ -188,7 +188,7 @@ mod tests {
         });
 
         session
-            .run(Vec::new(), |_inbox| {
+            .run(Vec::new(), Arc::new(|| false), |_inbox| {
                 writeln!(
                     typed,
                     r#"{{"id":"c_sub","command":"subscribe","args":{{"level":"full"}}}}"#

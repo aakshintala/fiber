@@ -29,6 +29,8 @@ const UNFIT: &str = "The arguments do not fit this command.";
 const PAST: &str = "`from_seq` is past the latest line.";
 const REVERSED: &str = "`to_seq` is before `from_seq`.";
 const ENDED: &str = "The session ended before answering.";
+/// A `cancel` names no running turn.
+const NO_TURN: &str = "No turn is running.";
 const HISTORY: usize = 256;
 
 /// A line that is not one of the commands this process answers.
@@ -217,7 +219,15 @@ fn classify(bytes: &[u8]) -> Result<Classified, Option<CommandId>> {
 fn built(command: &str) -> bool {
     matches!(
         command,
-        "subscribe" | "prompt" | "steer" | "steer_drop" | "reply" | "tools" | "history" | "close"
+        "subscribe"
+            | "prompt"
+            | "steer"
+            | "steer_drop"
+            | "reply"
+            | "cancel"
+            | "tools"
+            | "history"
+            | "close"
     )
 }
 
@@ -249,12 +259,12 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Reply(reply, ack));
         }
+        Command::Cancel => cancel(conn, id),
         Command::Close => {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
         }
         Command::Message(_)
-        | Command::Cancel
         | Command::JobStop(_)
         | Command::Background
         | Command::Reload
@@ -268,12 +278,27 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
     }
 }
 
-/// Queues a full subscriber's latest `session_status` after its fold. It is
-/// ephemeral, so the fold does not have it and a catch-up cannot recover
-/// it: it is pushed kept, like every line doors itself queues.
-pub(crate) fn queue_latest(injector: &Injector, status: Option<Envelope>) {
-    if let Some(status) = status {
-        injector.push_kept(status);
+/// Ends the running turn (`docs/architecture.md`, "Cancellation").
+/// Accepted when a turn is running, even one already cancelled; rejected
+/// `stale_request` when none is. Answered at once, on the reader thread,
+/// never through the loop. After an accepted cancel the loop gets a wake
+/// for its inbox, which carries no meaning beyond waking it.
+fn cancel(conn: &mut Conn, id: CommandId) {
+    if conn.gate.cancel_turn() {
+        accept(conn, id, None);
+        conn.gate.deliver(Delivery::Cancelled);
+    } else {
+        reject(conn, Some(id), ErrorCode::StaleRequest, NO_TURN);
+    }
+}
+
+/// Queues a full subscriber's latest `session_status` and `steering_queue`
+/// after its fold. Both are ephemeral, so the fold does not have them and
+/// a catch-up cannot recover them: they are pushed kept, like every line
+/// doors itself queues.
+pub(crate) fn queue_latest(injector: &Injector, status: Option<Envelope>, queue: Option<Envelope>) {
+    for line in [status, queue].into_iter().flatten() {
+        injector.push_kept(line);
     }
 }
 
@@ -282,7 +307,7 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
     // The watcher is registered before `latest` is read. A line written in
     // between is queued and may also be in `latest`; the latest wins. The
     // log is dropped here so this connection does not hold the session lock.
-    let (watcher, status, extensions) = {
+    let (watcher, status, queue, extensions) = {
         let Some(log) = conn.gate.log.upgrade() else {
             reject(conn, Some(id), ErrorCode::Closing, ENDED);
             return;
@@ -299,12 +324,17 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
             }
         };
         let status = log.latest("session_status");
+        let queue = if summary {
+            None
+        } else {
+            log.latest("steering_queue")
+        };
         let extensions = if summary {
             log.latest("extensions_loaded")
         } else {
             None
         };
-        (watcher, status, extensions)
+        (watcher, status, queue, extensions)
     };
     let injector = watcher.injector();
     // The acknowledgement is written here, before the writer starts, so it
@@ -323,7 +353,7 @@ fn subscribe(conn: &mut Conn, id: CommandId, level: contract::commands::Subscrib
             }
         }
     } else {
-        queue_latest(&injector, status);
+        queue_latest(&injector, status, queue);
     }
     conn.subscribed = true;
     conn.full = !summary;

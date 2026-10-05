@@ -99,7 +99,7 @@ impl Opened {
         let session = self.session.take().unwrap();
         let (done, finished) = mpsc::channel();
         thread::spawn(move || {
-            let ran = session.run(Vec::new(), behave);
+            let ran = session.run(Vec::new(), Arc::new(|| false), behave);
             match done.send((ran, session)) {
                 Ok(()) | Err(_) => {}
             }
@@ -205,7 +205,8 @@ fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
         Delivery::Close(_)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
-        | Delivery::Reply(..) => panic!("the prompt arrives as a prompt"),
+        | Delivery::Reply(..)
+        | Delivery::Cancelled => panic!("the prompt arrives as a prompt"),
     }
 }
 
@@ -399,6 +400,7 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Reply(..)
+            | Delivery::Cancelled
             | Delivery::Close(_) => panic!("the prompt arrives as a prompt"),
         }
         Ok(())

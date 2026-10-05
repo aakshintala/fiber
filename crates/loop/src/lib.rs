@@ -29,6 +29,7 @@ use contract::{ActionId, ErrorCode, TurnId};
 use log::Log;
 
 mod calls;
+mod cancel;
 mod conversation;
 mod inbox;
 mod permission;
@@ -39,6 +40,7 @@ mod reviewer;
 mod schema;
 mod usage;
 
+pub use cancel::TurnCancel;
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
 pub use resume::{Resumed, resumed};
@@ -101,6 +103,8 @@ pub struct Loop {
     model: Model,
     system_prompt: String,
     inbox: Receiver<Delivery>,
+    /// The signal that cancels the running turn, armed while one runs.
+    pub(crate) cancel: Arc<TurnCancel>,
     /// The root session's id, for providers that route by key.
     cache_key: String,
     /// Steering messages taken and not yet applied, in arrival order: held
@@ -204,6 +208,7 @@ impl Loop {
             model,
             system_prompt,
             inbox,
+            cancel: Arc::new(TurnCancel::default()),
             // A new session is its own root (`docs/prompt-cache.md`, "Cache
             // markers and keys").
             cache_key: started.session_id.0.clone(),
@@ -237,6 +242,14 @@ impl Loop {
             ledger: usage::Ledger::default(),
             budget: None,
         })
+    }
+
+    /// The signal that cancels this loop's running turn
+    /// (`docs/architecture.md`, "Cancellation"). Without it the loop
+    /// arms a signal nobody cancels, so an unwired loop still works.
+    pub fn cancelled_by(mut self, cancel: Arc<TurnCancel>) -> Self {
+        self.cancel = cancel;
+        self
     }
 
     /// Caps billed spend at `usd` US dollars. `None` is no limit
@@ -275,11 +288,12 @@ impl Loop {
     /// Returns how the turn ended, or `None` once `close` was taken while
     /// idle or every sender of the inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
-        let Some(started) = self.wait_for_turn() else {
+        let Some(started) = self.wait_for_turn()? else {
             return Ok(None);
         };
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
+        self.arm_cancel();
         self.append(
             &Event::TurnStarted(TurnStarted {
                 input: started
@@ -300,14 +314,14 @@ impl Loop {
         if let Some(ack) = started.prompt {
             inbox::accept(ack);
         }
-        let completed = loop {
+        let mut completed = loop {
             match self.step(&turn)? {
                 Step::Next => {}
                 // Anything waiting continues the turn (`docs/loop.md`,
                 // "Ending a turn"). A steer taken here waits for the next
                 // step; a prompt is rejected.
                 Step::Replied => {
-                    self.drain();
+                    self.drain(&turn)?;
                     if self.queued.is_empty() {
                         break ended(TurnOutcome::Completed, None);
                     }
@@ -315,6 +329,7 @@ impl Loop {
                 Step::Ended(completed) => break completed,
             }
         };
+        self.disarm_cancel(&mut completed);
         let outcome = completed.outcome;
         self.append(&Event::TurnCompleted(completed), &turn, None)?;
         Ok(Some(outcome))
@@ -322,10 +337,16 @@ impl Loop {
 
     /// One step (`docs/loop.md`, "One step").
     fn step(&mut self, turn: &TurnId) -> Result<Step, Error> {
+        // A cancel that landed ends the turn before anything is sent: no
+        // `step_started`, no request, and queued steers stay queued for
+        // the next turn.
+        if self.turn_cancelled() {
+            return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
+        }
         self.append(&Event::StepStarted(Empty {}), turn, None)?;
         // Queued first: a steer held during an approval, or taken by the
         // end-of-turn check, arrived before this drain.
-        self.drain();
+        self.drain(turn)?;
         self.apply_steering(turn)?;
         let request = ModelRequest {
             system_prompt: self.system_prompt.clone(),
@@ -405,6 +426,7 @@ impl Loop {
         turn: &TurnId,
         message: &ActionId,
     ) -> Result<(Result<Reply, CallError>, VecDeque<ActionId>), Error> {
+        let cancel = Arc::clone(&self.cancel);
         let Self {
             log,
             provider,
@@ -433,7 +455,7 @@ impl Loop {
         let mut in_reasoning = false;
         let mut failed = None;
         let call = provider.call(request);
-        let reply = call.run(&mut |delta| {
+        let reply = cancel::run_cancellable(&cancel, call, &mut |delta| {
             let written = match delta {
                 Delta::Text(text) => {
                     in_reasoning = false;
@@ -540,7 +562,7 @@ impl Loop {
             let called = !calls.is_empty();
             for (id, _) in calls {
                 self.append(
-                    &Event::ToolCallCompleted(calls::truncated()),
+                    &Event::ToolCallCompleted(cancel::truncated()),
                     turn,
                     Some(&id),
                 )?;
@@ -562,7 +584,11 @@ impl Loop {
         if calls.is_empty() {
             return Ok(Step::Replied);
         }
-        self.run_calls(calls, turn)?;
+        if self.run_calls(calls, turn)? {
+            // A cancel ended the step: the turn ends `interrupted` instead
+            // of taking a next step.
+            return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
+        }
         if let Some(error) = self.turn_blocked.take() {
             // Headless, the block budget ran out: the step's calls
             // completed, and the turn ends `failed` with code `blocked`

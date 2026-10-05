@@ -158,8 +158,10 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
+            "steering_queue",
             "step_started",
             "steering_applied",
+            "steering_queue",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
@@ -193,7 +195,8 @@ fn a_message_waiting_at_a_step_boundary_is_applied_by_that_step() {
     let lines = session.lines();
     let kinds = kinds(&lines);
     let second_step = kinds.iter().rposition(|k| *k == "step_started").unwrap();
-    assert_eq!(kinds[second_step + 1], "steering_applied");
+    assert_eq!(kinds[second_step + 1], "steering_queue");
+    assert_eq!(kinds[second_step + 2], "steering_applied");
     assert_eq!(
         kinds.iter().filter(|k| **k == "steering_applied").count(),
         1
@@ -985,4 +988,124 @@ fn session_started_records_the_path_and_the_other_names_without_values() {
         .collect();
     expected.sort();
     assert_eq!(names, expected);
+}
+
+/// The texts of a `steering_queue` line's messages, oldest first.
+fn queued(line: &contract::Envelope) -> Vec<&str> {
+    line.payload["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["content"][0]["text"].as_str().unwrap())
+        .collect()
+}
+
+#[test]
+fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
+    let failure = Failure {
+        code: ErrorCode::ConnectionFailed,
+        message: "The connection to the provider failed.".into(),
+        retry_after: None,
+        provider: None,
+    };
+    let mut session = Session::new(
+        vec![Scripted::failed(failure), Scripted::text("Recovered.")],
+        Some(message("meanwhile")),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Failed));
+    let failed = session.lines();
+    // The failed turn ends without a last drain, so the steer is still
+    // waiting: no `steering_applied` names it.
+    assert!(failed.iter().all(|l| l.kind != "steering_applied"));
+    // The next turn starts without a new prompt, carrying the steer on its
+    // `turn_started`.
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
+    let input: Vec<&str> = started.payload["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["content"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(input, ["meanwhile"]);
+}
+
+#[test]
+fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
+    let tool: std::sync::Arc<dyn contract::tool::Tool> =
+        std::sync::Arc::new(TestTool::reads("get_weather", "Sunny."));
+    let mut session = Session::open(
+        vec![
+            tool_call_reply("", &["get_weather"]),
+            Scripted::text("Done."),
+        ],
+        vec![steer("one"), steer("two")],
+        vec![tool],
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let queues: Vec<Vec<&str>> = lines
+        .iter()
+        .filter(|l| l.kind == "steering_queue")
+        .map(queued)
+        .collect();
+    assert_eq!(queues, [vec!["one"], vec!["one", "two"], Vec::new()]);
+    let applied: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.kind == "steering_applied")
+        .map(|l| l.payload["content"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(applied, ["one", "two"]);
+}
+
+#[test]
+fn a_dropped_steer_leaves_the_queue_listing() {
+    let tool: std::sync::Arc<dyn contract::tool::Tool> =
+        std::sync::Arc::new(TestTool::reads("get_weather", "Sunny."));
+    let mut session = Session::open(
+        vec![
+            tool_call_reply("", &["get_weather"]),
+            Scripted::text("Done."),
+        ],
+        vec![
+            steer("keep"),
+            steer("drop"),
+            contract::inbox::Delivery::SteerDrop(
+                contract::CommandId("c_drop".into()),
+                support::ignore(),
+            ),
+        ],
+        vec![tool],
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let queues: Vec<Vec<&str>> = lines
+        .iter()
+        .filter(|l| l.kind == "steering_queue")
+        .map(queued)
+        .collect();
+    assert_eq!(
+        queues,
+        [vec!["keep"], vec!["keep", "drop"], vec!["keep"], Vec::new()]
+    );
+    let applied: Vec<&str> = lines
+        .iter()
+        .filter(|l| l.kind == "steering_applied")
+        .map(|l| l.payload["content"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(applied, ["keep"]);
 }

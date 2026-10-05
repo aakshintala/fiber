@@ -113,14 +113,21 @@ fn plain() -> Vec<&'static str> {
     ]
 }
 
-/// `tool_turn` with `steering_applied` at the start of its last step.
+/// `tool_turn` with `steering_applied` at the start of its last step: the
+/// drain lists the queued steer, the step applies it, and the queue lists
+/// empty once it is applied.
 fn applied(middle: &[&str]) -> Vec<String> {
     let mut kinds = tool_turn(middle);
     let step = kinds
         .iter()
         .rposition(|kind| kind == "step_started")
         .unwrap();
-    kinds.insert(step + 1, "steering_applied".to_owned());
+    for (at, kind) in ["steering_queue", "steering_applied", "steering_queue"]
+        .into_iter()
+        .enumerate()
+    {
+        kinds.insert(step + 1 + at, kind.to_owned());
+    }
     kinds
 }
 
@@ -282,7 +289,9 @@ fn denied_pair() -> Vec<String> {
     .collect()
 }
 
-/// A text reply continued by a second step, with nothing steered.
+/// A text reply continued by a second step: a steer taken at the end of
+/// the turn lists the queue, and its drop on the next step lists it empty
+/// again, with nothing applied.
 fn continued() -> Vec<&'static str> {
     vec![
         "session_started",
@@ -294,7 +303,9 @@ fn continued() -> Vec<&'static str> {
         "text_completed",
         "usage_recorded",
         "assistant_message_completed",
+        "steering_queue",
         "step_started",
+        "steering_queue",
         "assistant_message_started",
         "assistant_message_delta",
         "assistant_message_delta",
@@ -318,8 +329,10 @@ fn closed_and_steered() -> Vec<&'static str> {
         "text_completed",
         "usage_recorded",
         "assistant_message_completed",
+        "steering_queue",
         "step_started",
         "steering_applied",
+        "steering_queue",
         "assistant_message_started",
         "assistant_message_delta",
         "assistant_message_delta",
@@ -345,7 +358,9 @@ fn applied_then_dropped() -> Vec<String> {
         "tool_call_started",
         "tool_call_completed",
         "step_started",
+        "steering_queue",
         "steering_applied",
+        "steering_queue",
         "assistant_message_started",
         "assistant_message_delta",
         "tool_call_arguments_delta",
@@ -605,10 +620,16 @@ fn a_steer_then_its_drop_in_one_drain_apply_nothing_and_both_are_accepted() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(take(&steer_answers), accepted());
     assert_eq!(take(&drop_answers), accepted());
-    assert_eq!(
-        kinds(&session.lines()),
-        tool_turn(&["tool_call_started", "tool_call_completed"])
-    );
+    // The steer lists the queue when taken, and the drop lists it again
+    // when it removes the steer, leaving nothing to apply.
+    let mut expected = tool_turn(&["tool_call_started", "tool_call_completed"]);
+    let at = expected
+        .iter()
+        .rposition(|kind| kind == "step_started")
+        .unwrap();
+    expected.insert(at + 1, "steering_queue".to_owned());
+    expected.insert(at + 2, "steering_queue".to_owned());
+    assert_eq!(kinds(&session.lines()), expected);
 }
 
 #[test]
@@ -688,10 +709,16 @@ fn a_steer_held_during_an_approval_can_be_dropped() {
     assert_eq!(take(&drop_answers), accepted());
     assert_eq!(take(&reply_answers), accepted());
     let lines = session.lines();
-    assert_eq!(
-        kinds(&lines),
-        asked(&["tool_call_started", "tool_call_completed"])
-    );
+    // The steer queued during the approval lists the queue, and its drop
+    // lists it again, before the person's answer resolves the request.
+    let mut expected = asked(&["tool_call_started", "tool_call_completed"]);
+    let at = expected
+        .iter()
+        .position(|kind| kind == "permission_requested")
+        .unwrap();
+    expected.insert(at + 1, "steering_queue".to_owned());
+    expected.insert(at + 2, "steering_queue".to_owned());
+    assert_eq!(kinds(&lines), expected);
     assert!(lines.iter().all(|line| line.kind != "steering_applied"));
     assert_eq!(tool.ran().len(), 1);
 }
