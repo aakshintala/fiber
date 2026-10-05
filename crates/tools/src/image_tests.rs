@@ -299,12 +299,26 @@ const LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
 
 #[test]
 fn a_cancel_after_the_child_started_stops_and_reaps_it() {
+    cancel_stops_and_reaps("");
+}
+
+#[test]
+fn a_cancel_after_one_pipe_closed_stops_and_reaps_the_child() {
+    cancel_stops_and_reaps("exec 2>&-\n");
+}
+
+/// Starts a child that runs `prelude`, then sleeps, cancels once it is up,
+/// and checks the call ended and the child is gone.
+fn cancel_stops_and_reaps(prelude: &str) {
     let dir = workspace();
     let ready = fakes::children::Ready::new(dir.path());
     // `exec` keeps the pid: the one process the call must stop.
     let fiber = stub(
         dir.path(),
-        &format!("echo $$ > '{}'\nexec sleep 3600", ready.path().display()),
+        &format!(
+            "{prelude}echo $$ > '{}'\nexec sleep 3600",
+            ready.path().display()
+        ),
     );
     let files =
         Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
@@ -350,7 +364,12 @@ fn a_child_that_fills_both_pipes_does_not_deadlock() {
 head -c 300000 /dev/zero | tr '\0' y
 exit 3"#,
     );
-    let output = run_with(dir.path(), &fiber, "a.png");
+    // On a thread, so a deadlock fails at the limit instead of hanging.
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let root = dir.path().to_path_buf();
+    let call = std::thread::spawn(move || drop(done_tx.send(run_with(&root, &fiber, "a.png"))));
+    let output = done_rx.recv_timeout(LIMIT).expect("the call ends");
+    call.join().unwrap();
     assert_eq!(code(&output), Some(ErrorCode::ToolError));
     assert!(
         message(&output).contains("exited with status 3"),

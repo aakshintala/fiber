@@ -256,18 +256,23 @@ fn an_image_that_fits_neither_format_shrinks_by_three_quarters() {
     let stored = process(&jpeg_of(&noise(1400, 1400))).unwrap();
     assert!(fits(&stored));
     // The side steps 1400, 1050, 787, ...: each is three quarters of the last.
-    let mut side = 1400;
-    let mut steps = vec![side];
-    while side > 1 {
-        side = side * 3 / 4;
-        steps.push(side);
-    }
+    let steps: Vec<u32> = std::iter::successors(Some(1400), |&side| Some(next_side(side)))
+        .take(64)
+        .collect();
     assert!(steps.contains(&stored.width), "{}", stored.width);
     // Two cuts: 1400 and 1050 do not fit, 787 does.
     assert_eq!((stored.width, stored.height), (787, 787));
     assert!(stored.width < 1400);
     assert_eq!(stored.width, stored.height);
     assert_eq!(stored.extension, "jpg");
+}
+
+#[test]
+fn an_image_that_fits_after_one_cut_is_stored_at_three_quarters() {
+    // 1000 does not fit; one cut, to 750, does.
+    let stored = process(&jpeg_of(&noise(1000, 1000))).unwrap();
+    assert!(fits(&stored));
+    assert_eq!((stored.width, stored.height), (750, 750));
 }
 
 #[test]
@@ -420,11 +425,13 @@ fn a_failed_attempt_cuts_the_side_to_three_quarters_rounded_down() {
 
 #[test]
 fn the_sides_a_fit_tries_reach_one_pixel_in_under_forty_attempts() {
-    let mut side = 2000;
-    let mut attempts = 1;
-    while side > 1 {
-        side = next_side(side);
-        attempts += 1;
-    }
-    assert!(attempts < super::MAX_ATTEMPTS, "{attempts}");
+    // Bounded, so a `next_side` that never shrinks fails instead of hanging.
+    let sides: Vec<u32> = std::iter::successors(Some(2000), |&side| Some(next_side(side)))
+        .take(64)
+        .collect();
+    let attempts = sides.iter().position(|&side| side == 1).map(|at| at + 1);
+    assert!(
+        attempts.is_some_and(|n| n < super::MAX_ATTEMPTS),
+        "{attempts:?}"
+    );
 }

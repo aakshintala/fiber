@@ -8,9 +8,9 @@ use std::hash::BuildHasher;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output as Collected, Stdio};
-use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::sync::Arc;
+use std::sync::mpsc::{self, Sender};
 use std::thread;
-use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::clock::Wake;
@@ -88,33 +88,35 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
     }
 }
 
-/// Re-checks the child this often if no wake arrives. Picked, not measured.
-const POLL: Duration = Duration::from_millis(50);
-
-/// Wakes the wait below: a cancel, or a pipe that reached end-of-file.
-#[derive(Default)]
-struct Signal {
-    changed: Mutex<u64>,
-    cv: Condvar,
+/// What the wait below hears about.
+enum Event {
+    Cancelled,
+    PipeEnded,
 }
+
+/// Wakes the wait below on a cancel. A message sent before the wait starts
+/// stays queued, so none is lost.
+struct Signal(Sender<Event>);
 
 impl Wake for Signal {
     fn wake(&self) {
-        // The count moves under the wait's lock, so a wake that lands before
-        // the wait starts is still seen.
-        *self.changed.lock().unwrap_or_else(PoisonError::into_inner) += 1;
-        self.cv.notify_all();
+        // The receiver lives as long as the wait; a send after it is gone
+        // has nothing to wake.
+        drop(self.0.send(Event::Cancelled));
     }
 }
 
 /// Reads a pipe to its end on its own thread, so neither pipe fills while
 /// the other is read.
-fn drain(mut pipe: impl Read + Send + 'static, signal: Arc<Signal>) -> thread::JoinHandle<Vec<u8>> {
+fn drain(
+    mut pipe: impl Read + Send + 'static,
+    ended: Sender<Event>,
+) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut bytes = Vec::new();
         // A read error ends the capture with what arrived.
         let _ended = pipe.read_to_end(&mut bytes);
-        signal.wake();
+        drop(ended.send(Event::PipeEnded));
         bytes
     })
 }
@@ -141,40 +143,37 @@ fn run_child(
         Ok(process) => process,
         Err(error) => return Some(Err(error)),
     };
-    let signal = Arc::new(Signal::default());
-    let wake: Arc<dyn Wake> = signal.clone();
+    let (sender, receiver) = mpsc::channel();
+    let wake: Arc<dyn Wake> = Arc::new(Signal(sender.clone()));
     cancel.subscribe(Arc::downgrade(&wake));
     let out = process
         .stdout
         .take()
-        .map(|pipe| drain(pipe, signal.clone()));
-    let err = process
-        .stderr
-        .take()
-        .map(|pipe| drain(pipe, signal.clone()));
+        .map(|pipe| drain(pipe, sender.clone()));
+    let err = process.stderr.take().map(|pipe| drain(pipe, sender));
+    // Both pipes are piped above, so two drain threads run.
+    let mut open = 2_u8;
     let status = loop {
-        let seen = *signal
-            .changed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
         if cancel.is_cancelled() {
-            // Already exited, or killed here: either way it is reaped. The
-            // pipe threads are left to end with the pipes.
+            // `Child::kill` signals this one pid: the child is not a group
+            // leader, so no group signal is involved. Already exited, or
+            // killed here: either way it is reaped. The pipe threads are left
+            // to end with the pipes.
             drop(process.kill());
+            // A `wait` failure is dropped: the output is dropped too, and
+            // the error has no caller to act on it.
             drop(process.wait());
             return None;
         }
-        match process.try_wait() {
-            Ok(Some(status)) => break Ok(status),
-            Ok(None) => {}
-            Err(error) => break Err(error),
+        if open == 0 {
+            // Both pipes closed: the child is exiting, and a pipe can close
+            // a moment before the child is waitable, so block on it.
+            break process.wait();
         }
-        let guard = signal
-            .changed
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner);
-        if *guard == seen {
-            drop(signal.cv.wait_timeout(guard, POLL));
+        // Blocks until a cancel or a pipe end. `wake` holds a sender, so the
+        // channel never disconnects while this loop runs.
+        if let Ok(Event::PipeEnded) = receiver.recv() {
+            open -= 1;
         }
     };
     let join = |handle: Option<thread::JoinHandle<Vec<u8>>>| {
