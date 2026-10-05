@@ -119,3 +119,28 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
         .expect("release sends the body");
     assert!(body.ends_with(b"hello"));
 }
+
+/// The status line's code of a bodiless GET answered by `server`.
+fn get_status(server: &ProviderServer) -> String {
+    let mut stream = TcpStream::connect(server.addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    stream
+        .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut text = String::new();
+    stream.read_to_string(&mut text).unwrap();
+    text.split(' ').nth(1).unwrap().to_owned()
+}
+
+#[test]
+fn a_request_past_the_script_gets_the_fallback_or_the_default_500() {
+    let with = ProviderServer::start_with_fallback([], Response::status(503, "")).unwrap();
+    assert_eq!(get_status(&with), "503");
+    assert_eq!(get_status(&with), "503");
+
+    let without = ProviderServer::start([Response::status(200, "")]).unwrap();
+    assert_eq!(get_status(&without), "200");
+    assert_eq!(get_status(&without), "500");
+}

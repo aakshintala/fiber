@@ -121,6 +121,8 @@ impl Request {
 #[derive(Default)]
 struct State {
     script: VecDeque<Response>,
+    /// The response of every request past the script.
+    fallback: Option<Response>,
     requests: Vec<Request>,
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
@@ -141,10 +143,20 @@ impl ProviderServer {
     /// Listens on a free port on 127.0.0.1 and serves `script` in order. The
     /// port accepts connections when this returns.
     pub fn start(script: impl IntoIterator<Item = Response>) -> io::Result<Self> {
+        Self::start_with_fallback(script, no_scripted_response())
+    }
+
+    /// Like [`ProviderServer::start`], but every request past the script
+    /// gets `fallback` instead of the 500 saying the script ran out.
+    pub fn start_with_fallback(
+        script: impl IntoIterator<Item = Response>,
+        fallback: Response,
+    ) -> io::Result<Self> {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let addr = listener.local_addr()?;
         let state = Arc::new(Mutex::new(State {
             script: script.into_iter().collect(),
+            fallback: Some(fallback),
             ..State::default()
         }));
         let arrived = Arc::new(Condvar::new());
@@ -268,12 +280,11 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
                 400,
                 format!(r#"{{"error":"fakes: malformed chunked body: {why}"}}"#),
             ),
-            None => state.script.pop_front().unwrap_or_else(|| {
-                Response::status(
-                    500,
-                    r#"{"error":"fakes: no scripted response left for this request"}"#,
-                )
-            }),
+            None => state
+                .script
+                .pop_front()
+                .or_else(|| state.fallback.clone())
+                .unwrap_or_else(no_scripted_response),
         };
         if response.drop_connection {
             // Recorded above; the open stream drops here, so the client
@@ -288,6 +299,13 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
         response
     };
     write_response(reader.get_mut(), &response)
+}
+
+fn no_scripted_response() -> Response {
+    Response::status(
+        500,
+        r#"{"error":"fakes: no scripted response left for this request"}"#,
+    )
 }
 
 fn invalid(what: &str) -> io::Error {

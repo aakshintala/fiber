@@ -1,0 +1,161 @@
+//! The fake OAuth token endpoint (`docs/testing.md`, "Fakes"): a local HTTP
+//! server over [`ProviderServer`] that answers form-encoded POSTs from one
+//! script, in request order, and records each request's path and decoded form
+//! fields. It does not route on the path: a flow uses one endpoint at a time,
+//! so a refresh test scripts `/token` replies and a device-code test scripts
+//! `/device/token` replies.
+
+use serde_json::json;
+
+use crate::provider_server::{ProviderServer, Response};
+
+/// One scripted reply of the token endpoint.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OauthReply(Response);
+
+impl OauthReply {
+    /// A 200 token reply: `access_token`, `refresh_token`, `token_type` and
+    /// `expires_in` seconds.
+    pub fn token(access: &str, refresh: &str, expires_in: u64) -> Self {
+        Self(Response::status(
+            200,
+            json!({
+                "access_token": access,
+                "refresh_token": refresh,
+                "token_type": "Bearer",
+                "expires_in": expires_in,
+            })
+            .to_string(),
+        ))
+    }
+
+    /// A device-code reply: the user has not approved yet.
+    pub fn pending() -> Self {
+        Self::error("authorization_pending")
+    }
+
+    /// A device-code reply: poll less often.
+    pub fn slow_down() -> Self {
+        Self::error("slow_down")
+    }
+
+    /// A reply: the user refused.
+    pub fn denied() -> Self {
+        Self::error("access_denied")
+    }
+
+    /// A reply: the device code ran out.
+    pub fn expired() -> Self {
+        Self::error("expired_token")
+    }
+
+    /// Any status and body, sent as they are: a malformed body, a 500.
+    pub fn raw(status: u16, body: &str) -> Self {
+        Self(Response::status(status, body))
+    }
+
+    fn error(code: &str) -> Self {
+        Self(Response::status(400, json!({ "error": code }).to_string()))
+    }
+}
+
+/// One request the endpoint received.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct OauthRequest {
+    /// The request target, such as `/token`.
+    pub path: String,
+    /// The form body's fields in order, percent-decoded.
+    pub form: Vec<(String, String)>,
+}
+
+/// A fake token endpoint listening on a local port. Dropping it closes the
+/// port.
+pub struct OauthServer {
+    inner: ProviderServer,
+}
+
+impl OauthServer {
+    /// Listens on a free 127.0.0.1 port and serves `replies` in order, one per
+    /// request whatever its path. A request past the script gets a 500
+    /// `{"error":"script_exhausted"}`.
+    #[allow(
+        clippy::expect_used,
+        reason = "a fake that cannot bind a loopback port has nothing to run; a build aborts on panic"
+    )]
+    pub fn start(replies: Vec<OauthReply>) -> Self {
+        let script = replies.into_iter().map(|reply| reply.0);
+        let exhausted = Response::status(500, r#"{"error":"script_exhausted"}"#);
+        Self {
+            inner: ProviderServer::start_with_fallback(script, exhausted)
+                .expect("binding 127.0.0.1"),
+        }
+    }
+
+    /// The base URL, such as `http://127.0.0.1:49152`.
+    pub fn url(&self) -> String {
+        self.inner.url()
+    }
+
+    /// Every request received so far, in arrival order.
+    pub fn requests(&self) -> Vec<OauthRequest> {
+        self.inner
+            .requests()
+            .into_iter()
+            .map(|request| OauthRequest {
+                path: request.path,
+                form: decode_form(&String::from_utf8_lossy(&request.body)),
+            })
+            .collect()
+    }
+
+    /// How many requests have been received.
+    pub fn request_count(&self) -> usize {
+        self.inner.requests().len()
+    }
+}
+
+/// `application/x-www-form-urlencoded` fields, in order: `+` is a space and
+/// `%XX` is a byte. An invalid escape stays as written.
+fn decode_form(body: &str) -> Vec<(String, String)> {
+    body.split('&')
+        .filter(|pair| !pair.is_empty())
+        .map(|pair| {
+            let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
+            (percent_decode(name), percent_decode(value))
+        })
+        .collect()
+}
+
+fn percent_decode(text: &str) -> String {
+    let mut bytes = text.bytes();
+    let mut out = Vec::with_capacity(text.len());
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'+' => out.push(b' '),
+            b'%' => {
+                // Two hex digits make a byte; anything else leaves the `%`
+                // as written and the next bytes to be read as themselves.
+                let mut ahead = bytes.clone();
+                match (ahead.next().and_then(hex), ahead.next().and_then(hex)) {
+                    (Some(high), Some(low)) => {
+                        out.push(high * 16 + low);
+                        bytes = ahead;
+                    }
+                    _ => out.push(b'%'),
+                }
+            }
+            other => out.push(other),
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex(digit: u8) -> Option<u8> {
+    char::from(digit)
+        .to_digit(16)
+        .and_then(|value| u8::try_from(value).ok())
+}
+
+#[cfg(test)]
+#[path = "oauth_server_tests.rs"]
+mod tests;
