@@ -402,7 +402,7 @@ fn a_configured_server_declares_and_runs_its_tools() {
     assert_eq!(requests.len(), 2);
     assert_eq!(
         tool_names(&requests[0].body),
-        ["edit", "mcp__fx__echo", "read", "shell", "write"],
+        ["edit", "handoff", "mcp__fx__echo", "read", "shell", "write"],
     );
     let preamble = run
         .lines
@@ -617,7 +617,7 @@ fn disabled_hides_a_tool() {
     assert_eq!(requests.len(), 1);
     assert_eq!(
         tool_names(&requests[0].body),
-        ["edit", "mcp__fx__echo", "read", "shell", "write"]
+        ["edit", "handoff", "mcp__fx__echo", "read", "shell", "write"]
     );
 }
 
