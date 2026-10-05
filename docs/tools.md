@@ -445,7 +445,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Arguments: `command` (required); `workdir` (optional; defaults to the
   workspace; a relative path is resolved against the workspace);
   `timeout_ms` (optional); `run_in_background` (optional); `tty`
-  (optional). Each call starts fresh: a `cd` does not carry over to the
+  (optional); `monitor` (optional; starts a monitor, "Background jobs");
+  `deadline_ms` (optional; a monitor's deadline). Each call starts fresh: a `cd` does not carry over to the
   next call.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
@@ -480,8 +481,8 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - A command moves to the background, becoming a job ("Background jobs"),
   when any of these happens:
   - It has run for 30 seconds.
-  - It was started with `run_in_background` or `tty`, in which case it
-    moves at once.
+  - It was started with `run_in_background`, `tty` or `monitor`, in which
+    case it moves at once.
   - A driver sends the `background` driver command (`docs/invocation.md`).
   - Its shell exits while processes it started are still running ("When a
     command ends").
@@ -628,7 +629,9 @@ The kinds are `docs/events.md`.
   message does. Jobs finishing together are delivered together in one turn,
   not one turn each. If a `jobs wait` already returned a job's final state to
   the model, no completion notice is sent for it.
-- A monitor is a job running a watch command. Lines on its standard output
+- A monitor is a job running a watch command. The model starts one with a
+  `shell` call that sets `monitor: true`, so the command goes through the
+  shell's classifier, permissions and `workdir` like any other. Lines on its standard output
   are delivered to the model in batches, the same way as a completion.
   Standard error goes to a separate file and never reaches the model. It
   ends when its command exits, it is stopped, or its deadline passes.
@@ -644,8 +647,8 @@ The kinds are `docs/events.md`.
     restart it with a more selective source.
   - Deadline: every monitor has a deadline, 5 minutes by default, at most
     30 minutes, and at most 10 minutes in a non-interactive run. The model
-    may set a shorter or longer one within those limits when it starts the
-    monitor. At the deadline the monitor ends as `failed` with code
+    may set a shorter or longer one within those limits with the call's
+    `deadline_ms`. At the deadline the monitor ends as `failed` with code
     `timeout`, as a timed-out shell call does (`process.timed_out`). The
     model is told the monitor expired and can start it again. The deadline
     is what stops a forgotten monitor from holding a non-interactive run

@@ -220,10 +220,10 @@ optional `multiSelect` (`docs/tools.md`, "The call").
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; or `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); a closed set |
+| `source` | string | yes | `driver`, a client's command; `extension`, an extension's `host.drive`; `session`, another session's `session_message` (`docs/tools.md`, "Messaging other sessions"); or `fiber`, Fiber's own message, such as the ending notice (`docs/tools.md`, "Background jobs"); a closed set |
 | `extension` | string | no | the extension's name, when `source` is `extension` |
 | `from_session_id` | string | no | the sending session's id, when `source` is `session` |
-| `command_id` | string | yes | the id of the `prompt`, `steer` or `message` command that sent it |
+| `command_id` | string | no | the id of the `prompt`, `steer` or `message` command that sent it; present unless `source` is `fiber` |
 
 ### `changed_by`
 
@@ -340,7 +340,7 @@ Each item has a `type`, an open set; a consumer skips an item it does not know.
 
 | `type` | Keys | Meaning |
 |---|---|---|
-| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver, an extension or another session |
+| `message` | `content` (content parts), the keys of "Where a message came from", `changed_by` | a message from a driver, an extension, another session or Fiber |
 | `shell_command` | `seq` (integer) | a `shell_command` line since the last turn, named by its `seq` |
 | `jobs` | `job_ids` (array of strings) | jobs whose news started the turn; their `job_completed` and `job_line` lines follow at the first step boundary |
 | `handoff` | `command_id` (string) | a `handoff` command sent between turns, which is a turn of its own (`docs/invocation.md`) |
@@ -1199,6 +1199,11 @@ Durable.
 | Key | Type | Required | Meaning |
 |---|---|---|---|
 | `job_ids` | array of strings | yes | the jobs named in the ending notice (`docs/tools.md`, "Background jobs") |
+
+The ending notice starts a turn whose input is one `message` item with
+`source` `fiber`, carrying the notice's text. The request is built from that
+text. `jobs_pending_notified` is the first line after that turn's first
+`step_started`, and it adds nothing to the request.
 
 A delegate's `session_id` is on `delegate_started`, and `delegate_finished` is
 keyed by `job_id`, as `job_line` is (`docs/delegates.md`, "Events"). There is
