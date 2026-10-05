@@ -423,7 +423,7 @@ the person typed it, and a client that can attach already controls the session
   The terminal sends it for `!command`, and sends `!!command` with `send`
   false.
 
-pi does the same with `!` and `!!` (`excludeFromContext`). Settled by
+Settled by
 [#148](https://github.com/aakshintala/fiber/issues/148).
 
 **`rewind` starts a new session process.** The session being rewound closes
@@ -644,7 +644,7 @@ premise 5 requires.
 Settled by
 [Shutdown: what SIGTERM has to guarantee](https://github.com/aakshintala/fiber/issues/34);
 that ticket's resolution holds the rationale and the rejected alternatives.
-What pi, codex and Claude Code do, and what a crash leaves behind, are
+What reference agents do, and what a crash leaves behind, are
 `research/shutdown/`.
 
 A shutdown is Fiber stopping because a signal told it to. It is bounded, it
@@ -708,7 +708,7 @@ command stage is at most 2.8 s (800 ms grace plus 2 s drain), the levels of
 a tree run concurrently, and the rest is margin. It sits under the
 supervisors Fiber runs under: Docker sends SIGKILL 10 s after SIGTERM,
 Kubernetes 30 s, systemd 90 s (each one's documented default, not measured).
-codex's headless server gives itself 45 s. Past the bound, every group still
+Past the bound, every group still
 alive gets SIGKILL; each call, job or delegate it belonged to ends `failed`
 with code `indeterminate` (`docs/tools.md`: "never `completed`"), and the
 exit code is unchanged. A delegate killed this way leaves a log with no
@@ -1071,3 +1071,4 @@ supervisor that knows only about Fiber is worth less than one that does not.
 ## Related
 
 - The terminal's own shape: `docs/tui.md`
+- Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)

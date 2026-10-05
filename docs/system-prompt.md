@@ -26,10 +26,8 @@ then the rest of the conversation.
 Because the opening message lives in the log, a resume never reads the files
 again, and the bytes the provider cached still match. Anything that changes
 later, whether during a session or between two runs of it, reaches the model as
-a message appended at the end ("When something changes"). Codex and Claude
-Code also carry this material in conversation messages; pi puts it in the
-system prompt
-([research/system-prompt/reference-agents.md](../research/system-prompt/reference-agents.md)).
+a message appended at the end ("When something changes"). What reference agents do is in
+[research/system-prompt/reference-agents.md](../research/system-prompt/reference-agents.md).
 
 ## The system prompt
 
@@ -106,8 +104,7 @@ tool's guidelines are left out, because the model has not seen the tool.
 The guidelines travel with the tool, not with the system prompt: `loop` never
 names a tool (`docs/architecture.md`), and an extension that replaces a
 built-in by name brings its own guidelines. The built-in tools' guidelines are
-`crates/tools/prompt/guidelines.md`, one `##` section per tool. pi builds its
-rules from per-tool guidelines the same way.
+`crates/tools/prompt/guidelines.md`, one `##` section per tool.
 
 The tool set is fixed per build, so the guidelines are too.
 
@@ -125,8 +122,7 @@ Provider data may give a model an addendum: text appended after the model line,
 for what that model needs to be told and others do not
 (`docs/model-routing.md`). One prompt serves every model; the addendum is the
 only variation. A model switch already rebuilds the preamble, so an addendum
-costs no extra cache miss. Codex keeps a separate prompt per model family for
-the same reason.
+costs no extra cache miss.
 
 ### Extension texts
 
@@ -163,8 +159,7 @@ logged as `opening_message`.
 - the path of the session log
 
 Git state stops at the branch. A status snapshot and recent commits go stale as
-soon as anything changes, and `git status` is slow in a large monorepo. Codex
-and pi send no git state; Claude Code sends a snapshot.
+soon as anything changes, and `git status` is slow in a large monorepo.
 
 ### Instruction files
 
@@ -191,9 +186,8 @@ fresh clone. They are text the model reads, like a README. What guards the
 machine is the permission decision on every call (`docs/permissions.md`), not
 which files were loaded.
 
-Measured on the owner's sessions, only `AGENTS.md` and `CLAUDE.md` occur, and
-2% of sessions ran in a repository with only a `CLAUDE.md`
-([research/system-prompt/instruction-files.md](../research/system-prompt/instruction-files.md)).
+The evidence is in
+[research/system-prompt/instruction-files.md](../research/system-prompt/instruction-files.md).
 
 ### Subdirectory files
 
@@ -204,8 +198,7 @@ once per context. After a handoff it is sent again only when a call touches
 that directory again.
 
 A call that declares no paths, such as a shell command Fiber cannot read,
-never triggers a subdirectory file. Claude Code loads nested files the same
-way. Codex instead tells the model to look for them itself.
+never triggers a subdirectory file.
 
 ### Skills listing
 
@@ -283,16 +276,11 @@ extension texts, `SYSTEM.md` and `APPEND_SYSTEM.md`. The session runs anyway.
 The 10% matches `tool_definitions_large` (`docs/tools.md`).
 
 Nothing is cut. A rules file with its end cut off breaks rules its author
-thought were in force. Codex cuts at 32 KiB across all files and only logs a
-warning.
+thought were in force.
 
 The skills listing follows the same rule. When it passes 10% of the context
 window, the build is followed by a `notice` with code `skills_large`, naming
-the sources that add the most to it. The listing is never cut. Claude Code
-caps its listing at 1% of the window and codex at 2%, shortening descriptions
-when over. Measured on the owner's 36 skills, the listing is about 2,500
-tokens, more than 1% of a 200,000-token window, so a cap would cut the
-person's own skills on every such model.
+the sources that add the most to it. The listing is never cut.
 
 ## When something changes
 
@@ -314,9 +302,7 @@ modification time, then content when those differ.
 
 A change counts as the session's own when the file still matches what Fiber
 recorded after the last call whose declared paths included it. Outside changes
-are an editor, a `git pull` or another agent. In the owner's sessions, 0.7% of
-pi and 3% of Claude Code sessions edited an instruction file, all through the
-model's own calls.
+are an editor, a `git pull` or another agent.
 
 A chain of diffs lasts at most one context. A handoff writes a fresh opening
 message from the current files, so the next context starts from full text.
@@ -420,6 +406,7 @@ All four are durable, because the model saw them.
 ## Evidence
 
 - [research/system-prompt/reference-agents.md](../research/system-prompt/reference-agents.md):
-  how pi, codex and Claude Code build their prompts, from primary sources.
+  how reference agents build their prompts, from primary sources.
 - [research/system-prompt/instruction-files.md](../research/system-prompt/instruction-files.md):
   the owner's instruction files, their sizes, and how often they change.
+- Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)

@@ -18,9 +18,7 @@ workspace, and neither the gate nor the `CI` check builds, lints or tests it.
 A rule a tool can check fails CI. It is not a sentence a reviewer is trusted
 to remember. The archived tree wrote down that core must not name built-in
 tools and broke the rule 211 times
-([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)). codex asks
-for Rust files under 800 lines in prose, and 270 of its 3,009 source files
-are longer. A check is named for what it checks: the archived tree's
+([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)). A check is named for what it checks: the archived tree's
 "public-surface audit" checked for leaked paths, not public items
 ([fiber-zig#446](https://github.com/aakshintala/fiber-zig/issues/446)).
 
@@ -195,7 +193,7 @@ An item is private, or `pub(crate)`, unless another crate uses it. rustc's
 
 CI fails a source file over 800 lines. Unit tests live in their own file, a
 `tests.rs` or `<name>_tests.rs` included with `#[cfg(test)] mod tests;`, so a
-file's length is its code. A test file, named `tests.rs` or ending in `_tests.rs` or under a crate's `tests/` directory, has no cap. 800 is codex's own target,
+file's length is its code. A test file, named `tests.rs` or ending in `_tests.rs` or under a crate's `tests/` directory, has no cap. 800 is
 picked rather than measured.
 
 ## Comments
@@ -253,3 +251,5 @@ Only what no tool can:
 - every code a doc says something fails with, is rejected with, or carries
   as a notice's code has a row in `docs/errors.md`, "Registry", or its
   notices table
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docscode-qualitymd).

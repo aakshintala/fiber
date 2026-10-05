@@ -153,9 +153,7 @@ rejects it for size:
 There is one retry. If the note request is rejected for size too, the turn
 fails with `context_overflow`, a stable error code.
 
-A single step's results can be large: in the owner's pi sessions the largest
-step, with each result cut at 16 KiB, was about 49,000 tokens, about 25% of a
-200,000 token window
+A single step's results can be large
 ([research/compaction/usage.md](../research/compaction/usage.md), section 6).
 That is why the last step's results are what gets moved out.
 
@@ -241,11 +239,7 @@ actions, and `handoff_completed`.
 Every handoff makes the next request miss the prompt cache after the system
 prompt and tools. On token cost alone, handing off earlier is still cheaper,
 down to a floor where a fresh context is already near the trigger
-([research/compaction/cost.md](../research/compaction/cost.md)). Replayed over
-the owner's sessions, handing off at 400,000 tokens costs 0.75 to 0.92 of never
-handing off on Opus 5.5, and a handoff at 150,000 to 400,000 tokens repays its
-cost within 2 to 12 steps where sessions ran a median of 42 or more further
-steps.
+([research/compaction/cost.md](../research/compaction/cost.md)).
 
 Cost therefore cannot choose T; quality does. The owner's experience is that
 current models with 1 million token windows decay around 400,000 tokens, and
@@ -255,11 +249,10 @@ cost model supports handing off at that point too.
 
 ## Evidence
 
-- [research/compaction/README.md](../research/compaction/README.md): how pi,
-  codex and Claude Code handle an overflowing session, from primary sources.
+- [research/compaction/README.md](../research/compaction/README.md): how
+  reference agents handle an overflowing session, from primary sources.
 - [research/compaction/usage.md](../research/compaction/usage.md): the owner's
-  usage. 1.8% of 685 pi sessions compacted. In Claude Code the owner ran
-  `/handoff` 40 times, `/clear` 117 times and `/compact` 11 times.
+  usage.
 - [research/compaction/thresholds.md](../research/compaction/thresholds.md):
   price cliffs, context anxiety, and the reference agents' triggers.
 - [research/compaction/cost.md](../research/compaction/cost.md): how often each
@@ -273,3 +266,4 @@ cost model supports handing off at that point too.
   [The tool contract](https://github.com/aakshintala/fiber/issues/14)
 - The prompt cache: `docs/prompt-cache.md`, settled by
   [Prompt cache](https://github.com/aakshintala/fiber/issues/33)
+- Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)
