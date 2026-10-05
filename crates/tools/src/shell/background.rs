@@ -5,7 +5,7 @@
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError, Weak, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -31,6 +31,10 @@ const TAIL_BYTES: usize = 2_048;
 /// `ps` lists the group within this, or the receipt names no one. Picked,
 /// not measured.
 const PS_BOUND: Duration = Duration::from_secs(2);
+
+/// How often `ps`'s exit is checked once its output closed. Picked, not
+/// measured.
+const PS_POLL: Duration = Duration::from_millis(10);
 
 const UNNAMED: &str = "Processes are still running in its group.";
 
@@ -225,16 +229,7 @@ fn group_members(program: &Path, pgid: u32, clock: &dyn Clock) -> Option<String>
         }
         let _sent = tx.send(Some(bytes));
     });
-    let Some(stdout) = until_listed(&rx, clock, clock.now().checked_add(PS_BOUND)) else {
-        // Std's `Child::kill` signals this `ps` alone, never a group.
-        let _killed = child.kill();
-        let _reaped = child.wait();
-        return None;
-    };
-    // The pipe closed, so `ps` is exiting.
-    if !child.wait().is_ok_and(|status| status.success()) {
-        return None;
-    }
+    let stdout = until_exited(&mut child, &rx, clock, clock.now().checked_add(PS_BOUND))?;
     let rows = parse_ps(&String::from_utf8_lossy(&stdout), pgid);
     (!rows.is_empty()).then(|| format_rows(&rows))
 }
@@ -242,7 +237,7 @@ fn group_members(program: &Path, pgid: u32, clock: &dyn Clock) -> Option<String>
 /// `Some(bytes)` is `ps`'s whole output; `None` says the clock moved.
 type Listed = Option<Vec<u8>>;
 
-/// Wakes [`until_listed`] when the clock moves.
+/// Wakes [`until_exited`] when the clock moves.
 struct Tick(mpsc::Sender<Listed>);
 
 impl Wake for Tick {
@@ -251,27 +246,44 @@ impl Wake for Tick {
     }
 }
 
-/// `ps`'s output, or `None` once `deadline` passes on `clock`. A clock at or
-/// past the deadline hands the wait a zero bound, which takes only output
-/// already sent.
-fn until_listed(
+/// `ps`'s output once its pipe closed and it exited successfully, all
+/// before `deadline` on `clock`; else `None`, and at the deadline only this
+/// `ps` is killed. A clock at or past the deadline hands the wait a zero
+/// bound. Once the pipe closed, the exit is polled every [`PS_POLL`].
+fn until_exited(
+    child: &mut Child,
     rx: &mpsc::Receiver<Listed>,
     clock: &dyn Clock,
     deadline: Option<Instant>,
-) -> Listed {
+) -> Option<Vec<u8>> {
+    let mut listed = None;
+    let mut due = false;
     loop {
-        let mut received = None;
-        clock.wait_until(deadline, &mut |bound| {
-            received = Some(match bound {
-                Some(bound) => rx.recv_timeout(bound).ok(),
-                None => rx.recv().ok(),
-            });
-        });
-        match received {
-            Some(Some(Some(bytes))) => return Some(bytes),
-            Some(Some(None)) => {}
-            Some(None) | None => return None,
+        if listed.is_some()
+            && let Ok(Some(status)) = child.try_wait()
+        {
+            return listed.filter(|_| status.success());
         }
+        if due {
+            // Std's `Child::kill` signals this `ps` alone, never a group.
+            let _killed = child.kill();
+            let _reaped = child.wait();
+            return None;
+        }
+        clock.wait_until(deadline, &mut |bound| {
+            due = bound == Some(Duration::ZERO);
+            let wait = match listed {
+                Some(_) => Some(bound.map_or(PS_POLL, |bound| bound.min(PS_POLL))),
+                None => bound,
+            };
+            let received = match wait {
+                Some(wait) => rx.recv_timeout(wait).ok(),
+                None => rx.recv().ok(),
+            };
+            if let Some(Some(bytes)) = received {
+                listed = Some(bytes);
+            }
+        });
     }
 }
 

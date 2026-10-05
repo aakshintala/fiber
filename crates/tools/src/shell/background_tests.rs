@@ -16,7 +16,9 @@ use contract::jobs::Stop;
 use contract::shapes::ContentPart;
 use contract::tool::Cancel;
 use contract::{ErrorCode, JobId};
+use fakes::children::Ready;
 use fakes::clock::FakeClock;
+use fakes::kill_pid;
 
 use super::super::command::{Finished, MoveReason, StopKind};
 use super::{
@@ -141,14 +143,10 @@ fn a_shell_exit_names_members_or_says_the_group_is_still_occupied() {
 
 const DEADLINE: Duration = Duration::from_secs(10);
 
-/// A `ps` that prints `rows` and exits, or never exits when `rows` is `None`.
-fn fake_ps(dir: &Path, rows: Option<&str>) -> std::path::PathBuf {
+/// A `ps` that runs `script` with `sh`.
+fn fake_ps(dir: &Path, script: &str) -> std::path::PathBuf {
     let path = dir.join("ps");
-    let body = match rows {
-        Some(rows) => format!("#!/bin/sh\nprintf '{rows}'\n"),
-        None => "#!/bin/sh\nexec sleep 1000\n".to_owned(),
-    };
-    std::fs::write(&path, body).unwrap();
+    std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
     std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
     path
 }
@@ -169,22 +167,54 @@ fn list(ps: &Path, pgid: u32, clock: &Arc<FakeClock>) -> mpsc::Receiver<Option<S
 fn the_group_is_listed_from_ps() {
     let dir = fakes::TempDir::new("fiber-shell-ps");
     let clock = FakeClock::new();
-    let ps = fake_ps(
-        dir.path(),
-        Some("  12  99 sleep\\n  50   7 other\\n  34  99 my cmd\\n"),
-    );
+    let rows = "printf '  12  99 sleep\\n  50   7 other\\n  34  99 my cmd\\n'";
+    let ps = fake_ps(dir.path(), rows);
     let listed = |pgid| list(&ps, pgid, &clock).recv_timeout(DEADLINE).unwrap();
     assert_eq!(listed(99).as_deref(), Some("sleep (12), my cmd (34)"));
     assert_eq!(listed(8), None);
     let missing = list(&dir.path().join("missing"), 99, &clock);
     assert_eq!(missing.recv_timeout(DEADLINE).unwrap(), None);
+    let failing = fake_ps(dir.path(), &format!("{rows}; exit 1"));
+    let failed = list(&failing, 99, &clock);
+    assert_eq!(failed.recv_timeout(DEADLINE).unwrap(), None);
+}
+
+#[test]
+fn a_ps_that_closes_its_output_and_hangs_is_killed_at_the_bound() {
+    let dir = fakes::TempDir::new("fiber-shell-ps-closes");
+    let clock = FakeClock::new();
+    let ready = Ready::new(dir.path());
+    let ps = fake_ps(
+        dir.path(),
+        &format!(
+            "printf '  12  99 sleep\\n'; exec >&-; echo $$ > '{ready}'; exec sleep 1000",
+            ready = ready.path().display()
+        ),
+    );
+    let bound = clock.now() + PS_BOUND;
+    let rx = list(&ps, 99, &clock);
+    let pid = ready.wait(DEADLINE)[0];
+    assert!(
+        clock.await_parked(bound, DEADLINE),
+        "the listing did not park at its bound"
+    );
+    assert!(
+        matches!(rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the listing returned before its bound"
+    );
+    clock.advance(PS_BOUND);
+    assert_eq!(
+        rx.recv_timeout(DEADLINE).expect("the bound to end it"),
+        None
+    );
+    assert!(!kill_pid(pid, "0").unwrap(), "the hung ps was not killed");
 }
 
 #[test]
 fn a_ps_that_does_not_finish_is_killed_at_the_bound() {
     let dir = fakes::TempDir::new("fiber-shell-ps-hangs");
     let clock = FakeClock::new();
-    let ps = fake_ps(dir.path(), None);
+    let ps = fake_ps(dir.path(), "exec sleep 1000");
     let bound = clock.now() + PS_BOUND;
     let rx = list(&ps, 99, &clock);
     assert!(
