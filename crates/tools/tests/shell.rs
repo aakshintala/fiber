@@ -1830,7 +1830,9 @@ fn open_feed(ready: &Path) -> std::fs::File {
 
 /// One step: waits for the drive thread to park at its deadline, moves the
 /// clock by `step`, prints `line` and waits until the job's delta shows the
-/// drive thread took it, which it offers first.
+/// drive thread took it. The drive thread offers what a delta carried before
+/// it parks again, so the next step's park means `line` was offered at this
+/// step's instant.
 fn print_step(
     run: &JobRun,
     deadline: Instant,

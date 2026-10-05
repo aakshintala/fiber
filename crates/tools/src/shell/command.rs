@@ -491,16 +491,18 @@ fn pump(
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
         progress.streamed = stream_output(&progress.shared, emit, progress.streamed);
-        // Before the job's delta, so a delta shows its bytes were offered.
+        if let Some(job) = progress.job.as_mut() {
+            job.pass(&progress.shared, clock);
+        }
+        // After the job's delta, before the park: the reader queues each
+        // chunk for both under one lock, so every byte a delta carried is
+        // offered before the drive thread parks again.
         if let Some(feed) = progress.feed.as_mut() {
             feed.pass(
                 &progress.shared,
                 clock,
                 matches!(progress.phase, Phase::Running),
             );
-        }
-        if let Some(job) = progress.job.as_mut() {
-            job.pass(&progress.shared, clock);
         }
         // A held `job_delta` wakes the park when it falls due.
         let held_until = progress.job.as_ref().and_then(JobStream::deadline);
