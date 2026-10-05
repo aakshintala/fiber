@@ -104,14 +104,18 @@ fn a_failed_second_move_puts_the_first_copy_back() {
     for fail_on in [3, 4] {
         let (dirs, paths) = pair(&format!("commit-{fail_on}"));
         let calls = Cell::new(0);
-        let err = commit_all(&paths, |from, to| {
-            calls.set(calls.get() + 1);
-            if calls.get() == fail_on {
-                Err(io::Error::other("injected"))
-            } else {
-                fs::rename(from, to)
-            }
-        })
+        let err = commit_all(
+            &paths,
+            |from, to| {
+                calls.set(calls.get() + 1);
+                if calls.get() == fail_on {
+                    Err(io::Error::other("injected"))
+                } else {
+                    fs::rename(from, to)
+                }
+            },
+            |_, _| Ok(()),
+        )
         .unwrap_err();
         assert_eq!(err.code(), contract::ErrorCode::IoFailed);
         for n in ["a", "b"] {
@@ -126,7 +130,7 @@ fn a_failed_second_move_puts_the_first_copy_back() {
 #[test]
 fn every_staged_copy_goes_in_place_and_nothing_is_left_beside() {
     let (dirs, paths) = pair("commit-ok");
-    commit_all(&paths, |from, to| fs::rename(from, to)).unwrap();
+    commit_all(&paths, |from, to| fs::rename(from, to), |_, _| Ok(())).unwrap();
     for n in ["a", "b"] {
         let v = fs::read_to_string(dirs.path(&format!("{n}-target/v"))).unwrap();
         assert_eq!(v, "new");
@@ -141,14 +145,18 @@ fn a_copy_that_cannot_be_put_back_is_an_error_naming_it() {
     // (fails).
     let (dirs, paths) = pair("stuck");
     let calls = Cell::new(0);
-    let err = commit_all(&paths, |from, to| {
-        calls.set(calls.get() + 1);
-        if matches!(calls.get(), 3 | 4) {
-            Err(io::Error::other("injected"))
-        } else {
-            fs::rename(from, to)
-        }
-    })
+    let err = commit_all(
+        &paths,
+        |from, to| {
+            calls.set(calls.get() + 1);
+            if matches!(calls.get(), 3 | 4) {
+                Err(io::Error::other("injected"))
+            } else {
+                fs::rename(from, to)
+            }
+        },
+        |_, _| Ok(()),
+    )
     .unwrap_err();
     let crate::Error::Rollback { why, stuck } = &err else {
         panic!("{err}")
@@ -175,14 +183,18 @@ fn a_copy_whose_own_put_back_fails_is_put_back_by_the_rollback() {
     // (fails), then the rollback: a back, b back.
     let (dirs, paths) = pair("own-put-back");
     let calls = Cell::new(0);
-    commit_all(&paths, |from, to| {
-        calls.set(calls.get() + 1);
-        if matches!(calls.get(), 4 | 5) {
-            Err(io::Error::other("injected"))
-        } else {
-            fs::rename(from, to)
-        }
-    })
+    commit_all(
+        &paths,
+        |from, to| {
+            calls.set(calls.get() + 1);
+            if matches!(calls.get(), 4 | 5) {
+                Err(io::Error::other("injected"))
+            } else {
+                fs::rename(from, to)
+            }
+        },
+        |_, _| Ok(()),
+    )
     .unwrap_err();
     for n in ["a", "b"] {
         let v = fs::read_to_string(dirs.path(&format!("{n}-target/v"))).unwrap();
@@ -275,7 +287,7 @@ fn set_mode(path: &Path, mode: u32) {
 fn a_target_that_cannot_be_stated_stops_before_any_move() {
     let (dirs, paths) = pair("meta");
     set_mode(&dirs.root, 0);
-    let err = commit_all(&paths, |from, to| fs::rename(from, to)).unwrap_err();
+    let err = commit_all(&paths, |from, to| fs::rename(from, to), |_, _| Ok(())).unwrap_err();
     set_mode(&dirs.root, 0o755);
     assert!(err.to_string().contains("a-target"), "{err}");
     assert!(!dirs.root.join(".commit").exists());
@@ -320,6 +332,83 @@ fn removing_a_journal_that_is_a_directory_fails_naming_it() {
     let err = super::remove_journal(&dirs.root).unwrap_err();
     assert!(err.to_string().contains(".commit"), "{err}");
     assert!(dirs.root.join(".commit").is_dir());
+}
+
+#[test]
+fn the_step_runs_after_every_swap_at_each_target() {
+    let (dirs, paths) = pair("step-order");
+    let seen = std::cell::RefCell::new(Vec::new());
+    commit_all(
+        &paths,
+        |from, to| fs::rename(from, to),
+        |i, target| {
+            // Every swap is done, so each target already holds the new copy.
+            assert_eq!(
+                fs::read_to_string(target.join("v")).unwrap(),
+                "new",
+                "item {i} ran before its swap"
+            );
+            seen.borrow_mut().push(target.to_path_buf());
+            Ok(())
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        seen.borrow().as_slice(),
+        [dirs.path("a-target"), dirs.path("b-target")]
+    );
+}
+
+#[test]
+fn a_failed_swap_runs_no_step() {
+    let (_dirs, paths) = pair("no-run");
+    let calls = Cell::new(0);
+    commit_all(
+        &paths,
+        |_, _| Err(io::Error::other("injected")),
+        |_, _| {
+            calls.set(calls.get() + 1);
+            Ok(())
+        },
+    )
+    .unwrap_err();
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn a_failing_step_restores_every_target_and_leaves_no_journal() {
+    // The step fails on the first item, then on the second: either way both
+    // targets hold what they held before, with no backup, staged copy or
+    // journal left.
+    for fail_on in [0, 1] {
+        let (dirs, paths) = pair(&format!("step-fail-{fail_on}"));
+        let err = commit_all(
+            &paths,
+            |from, to| fs::rename(from, to),
+            |i, _| {
+                if i == fail_on {
+                    Err(crate::Error::InstallExited {
+                        name: "x".into(),
+                        why: "injected".into(),
+                    })
+                } else {
+                    Ok(())
+                }
+            },
+        )
+        .unwrap_err();
+        assert!(
+            matches!(err, crate::Error::InstallExited { .. }),
+            "the step's own error, not a rollback: {err}"
+        );
+        for n in ["a", "b"] {
+            let v = fs::read_to_string(dirs.path(&format!("{n}-target/v"))).unwrap();
+            assert_eq!(v, "old", "{n} after a step failing on {fail_on}");
+            assert!(!dirs.path(&format!("{n}-fresh")).exists(), "{n}");
+            assert!(!dirs.path(&format!("{n}-old")).exists(), "{n}");
+        }
+        assert!(!dirs.root.join(".commit").exists());
+    }
 }
 
 #[test]

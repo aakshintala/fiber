@@ -154,12 +154,19 @@ struct Step {
     had_old: bool,
 }
 
-/// Puts every staged copy in place, or none. The journal `extensions/.commit`
-/// is written first. A restore that fails leaves that journal; the next
-/// install, update, remove or list finishes it (`recover`).
+/// Puts every staged copy in place, then runs each item's step at its
+/// target, or puts nothing in place. `run` receives each staged item's
+/// index and target path, after every swap has succeeded and before the
+/// journal is marked committed. A swap failure and a step failure both roll
+/// every swapped copy back: each target is removed and its previous version
+/// moved back, so the install stays all or none. The journal
+/// `extensions/.commit` is written first. A restore that fails leaves that
+/// journal; the next install, update, remove or list finishes it
+/// (`recover`).
 pub(crate) fn commit_all(
     staged: &[Paths],
     rename: impl Fn(&Path, &Path) -> io::Result<()>,
+    run: impl Fn(usize, &Path) -> Result<(), Error>,
 ) -> Result<(), Error> {
     let Some(dir) = staged
         .first()
@@ -189,23 +196,15 @@ pub(crate) fn commit_all(
         // have failed.
         done.push(step.clone());
         if let Err(e) = swap(&p.fresh, &p.target, &p.old, &rename) {
-            let mut stuck = Vec::new();
-            for step in &done {
-                if abort_step(step, &rename).is_err() {
-                    stuck.push(step.target.clone());
-                }
-            }
-            for p in staged {
-                remove(&p.fresh).unwrap_or(());
-            }
-            if stuck.is_empty() {
-                remove_journal(&dir)?;
-                return Err(e);
-            }
-            return Err(Error::Rollback {
-                why: e.to_string(),
-                stuck,
-            });
+            return rollback(&dir, staged, &done, &rename, e);
+        }
+    }
+    // Every swap is done, so each step runs at the final path its files
+    // keep. A step that fails puts every swapped copy back, including the
+    // ones whose steps already ran.
+    for (i, p) in staged.iter().enumerate() {
+        if let Err(e) = run(i, &p.target) {
+            return rollback(&dir, staged, &steps, &rename, e);
         }
     }
     write_journal(&dir, true, &steps)?;
@@ -229,6 +228,37 @@ pub(crate) fn recover(dir: &Path) -> Result<(), Error> {
         }
     }
     remove_journal(dir)
+}
+
+/// Puts every swapped copy back after a failed swap or a failed step.
+/// `done` holds the steps that reached their target, including the one
+/// that failed. A step's own error is returned unchanged; only a restore
+/// that fails becomes [`Error::Rollback`], leaving the journal for the
+/// next operation.
+fn rollback(
+    dir: &Path,
+    staged: &[Paths],
+    done: &[Step],
+    rename: &impl Fn(&Path, &Path) -> io::Result<()>,
+    error: Error,
+) -> Result<(), Error> {
+    let mut stuck = Vec::new();
+    for step in done {
+        if abort_step(step, rename).is_err() {
+            stuck.push(step.target.clone());
+        }
+    }
+    for p in staged {
+        remove(&p.fresh).unwrap_or(());
+    }
+    if stuck.is_empty() {
+        remove_journal(dir)?;
+        return Err(error);
+    }
+    Err(Error::Rollback {
+        why: error.to_string(),
+        stuck,
+    })
 }
 
 fn abort_step(step: &Step, rename: &impl Fn(&Path, &Path) -> io::Result<()>) -> Result<(), Error> {
