@@ -139,7 +139,7 @@ pub(crate) fn wait_output(child: std::process::Child, what: &str) -> std::proces
 /// Parses ASCII digits into a number: nothing for an empty value,
 /// anything but digits, or an overflow.
 pub(crate) fn decimal(value: &[u8]) -> Option<usize> {
-    if value.is_empty() || !value.iter().all(|byte| byte.is_ascii_digit()) {
+    if !value.iter().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
     std::str::from_utf8(value).ok()?.parse().ok()
