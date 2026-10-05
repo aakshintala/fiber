@@ -4,6 +4,7 @@
 mod edit;
 mod files;
 mod guidelines;
+mod image;
 mod read;
 mod search;
 mod shell;

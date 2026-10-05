@@ -289,10 +289,9 @@ fn a_fifo_does_not_block() {
 }
 
 #[test]
-fn images_pdfs_binary_and_non_utf8_are_unsupported() {
+fn pdfs_binary_and_non_utf8_are_unsupported() {
     let dir = TempDir::new("fiber-read-types");
     let cases: &[(&str, &[u8], &str)] = &[
-        ("a.png", b"\x89PNG\r\n\x1a\nxx", "PNG"),
         ("a.pdf", b"%PDF-1.4", "PDF"),
         ("a.bin", b"hello\0world", "binary data"),
         ("a.dat", b"\xff\xfe", "not UTF-8 text"),
@@ -307,11 +306,8 @@ fn images_pdfs_binary_and_non_utf8_are_unsupported() {
             message.contains(&bytes.len().to_string()),
             "{name}: {message}"
         );
-        if *expect == "PNG" || *expect == "PDF" {
-            assert!(
-                message.contains("Images and PDFs are not read yet"),
-                "{message}"
-            );
+        if *expect == "PDF" {
+            assert!(message.contains("PDFs are not read yet"), "{message}");
         }
     }
 }
