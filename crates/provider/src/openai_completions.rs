@@ -15,14 +15,15 @@ use contract::events::{
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
-use crate::anthropic_messages::{MAX_MARKERS, MAX_STRICT_TOOLS, cache_control, complex_enum};
+use crate::anthropic_messages::{MAX_MARKERS, cache_control};
 use crate::http::{self, Cancel};
-use crate::{Endpoint, Error, sse, strict};
+use crate::{Endpoint, Error, sse};
 
 /// One model reached over `openai-completions`.
 #[derive(Debug, Clone)]
@@ -71,6 +72,10 @@ impl Provider for Completions {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         Box::new(self.request(request))
     }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        crate::openai_completions_tools::wire_tools(&self.endpoint, tools)
+    }
 }
 
 /// One `openai-completions` call, ready to send.
@@ -118,41 +123,11 @@ impl ModelCall for Call {
 /// Its objects serialise with their keys sorted, because serde_json's
 /// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
 fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime) {
-    let mut tools: Vec<_> = request.tools.iter().collect();
-    tools.sort_by(|a, b| a.name.cmp(&b.name));
-    let compat = &endpoint.compat;
-    // `strict` per tool (`docs/model-routing.md`, "Protocols and
-    // providers"). For an Anthropic model, Anthropic's limits apply too: no
-    // enum with an object or array value, and at most 20 strict tools
-    // (platform.claude.com/docs/en/build-with-claude/structured-outputs,
-    // "JSON Schema limitations"; `anthropic_messages`). OpenRouter forwards
-    // `strict` to Anthropic when the `structured-outputs-2025-11-13` beta
-    // header is sent, and strips it otherwise
-    // (openrouter.ai/docs/guides/routing/provider-selection, "Anthropic beta
-    // features").
-    // A model without deferral declares every tool in full (docs/tools.md,
-    // "Deferral is a property of the model"); Chat Completions has no
-    // defer_loading.
-    let mut strict_left = MAX_STRICT_TOOLS;
-    let tools: Vec<Value> = tools
+    let tools: Vec<Value> = crate::openai_completions_tools::wire_tools(endpoint, &request.tools)
         .into_iter()
-        .map(|tool| {
-            let mut strict = strict::fits(&tool.input_schema);
-            if compat.anthropic {
-                strict = strict && strict_left > 0 && !complex_enum(&tool.input_schema);
-                strict_left -= usize::from(strict);
-            }
-            json!({
-                "type": "function",
-                "function": {
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parameters": tool.input_schema,
-                    "strict": strict,
-                },
-            })
-        })
+        .map(Value::Object)
         .collect();
+    let compat = &endpoint.compat;
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));
     body.insert("messages".into(), Value::Array(messages(endpoint, request)));

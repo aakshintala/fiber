@@ -61,3 +61,42 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
     ]);
     assert_eq!(none.text(), "");
 }
+
+struct Fake;
+
+impl Provider for Fake {
+    fn call(&self, _request: &ModelRequest) -> Box<dyn ModelCall> {
+        panic!("Fake::call is not used")
+    }
+}
+
+#[test]
+fn default_wire_tools_is_each_definition_as_an_object_in_name_order() {
+    let tools = vec![
+        ToolDefinition {
+            name: "b".into(),
+            description: "second".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: false,
+        },
+        ToolDefinition {
+            name: "a".into(),
+            description: "first".into(),
+            input_schema: json!({"type": "object"}),
+            deferred: true,
+        },
+    ];
+    let wired = Fake.wire_tools(&tools);
+    let want: Vec<Map<String, Value>> = ["a", "b"]
+        .iter()
+        .map(|name| {
+            let tool = tools.iter().find(|t| &t.name == name).unwrap();
+            serde_json::to_value(tool)
+                .unwrap()
+                .as_object()
+                .unwrap()
+                .clone()
+        })
+        .collect();
+    assert_eq!(wired, want);
+}

@@ -14,6 +14,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/wire_tools.rs"]
+mod wire_tools;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -1382,4 +1385,38 @@ fn an_empty_text_block_is_not_logged() {
         reply.actions.as_slice(),
         [ReplyAction::Text(part)] if part.text == "B" && part.provider_item.is_none()
     ));
+}
+
+#[test]
+fn wire_tools_is_what_the_request_sends() {
+    let tools = wire_tools::wire_tools_fixture();
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let messages = Messages::new(endpoint(&server));
+    let wired: Vec<Value> = messages
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let mut request = request();
+    request.tools = tools;
+    run(Box::new(messages.request(&request))).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(Value::Array(wired), sent);
+    let strict: Vec<bool> = sent
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["strict"].as_bool().unwrap())
+        .collect();
+    assert_eq!(strict.iter().filter(|s| **s).count(), 20);
+    let by_name = |name: &str| {
+        sent.as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()["strict"]
+            .clone()
+    };
+    assert_eq!(by_name("a_loose"), json!(false));
+    assert_eq!(by_name("z_enum"), json!(false));
 }

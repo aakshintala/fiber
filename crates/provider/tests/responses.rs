@@ -14,6 +14,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/wire_tools.rs"]
+mod wire_tools;
+
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -1014,4 +1017,36 @@ fn a_message_item_replays_unchanged_to_its_model_and_as_text_to_another() {
         send("openai/gpt-6-luna")[1],
         json!({"role": "assistant", "content": "Hi."})
     );
+}
+
+#[test]
+fn wire_tools_is_what_the_request_sends() {
+    let tools = wire_tools::wire_tools_fixture();
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    let responses = Responses::new(endpoint(&server));
+    let wired: Vec<Value> = responses
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let mut request = request();
+    request.tools = tools;
+    run(Box::new(responses.request(&request))).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(Value::Array(wired), sent);
+    let by_name = |name: &str| {
+        sent.as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()["strict"]
+            .clone()
+    };
+    assert_eq!(by_name("a_loose"), json!(false));
+    assert_eq!(by_name("z_enum"), json!(true));
+    assert_eq!(sent.as_array().unwrap().len(), 24);
 }

@@ -13,6 +13,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/wire_tools.rs"]
+mod wire_tools;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -1325,4 +1328,45 @@ fn a_model_data_marker_mixed_with_fibers_markers_sends_one_lifetime() {
         4,
         "every marker sent carries the request's lifetime"
     );
+}
+
+#[test]
+fn wire_tools_is_what_the_request_sends() {
+    let tools = wire_tools::wire_tools_fixture();
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        compat: provider::Compat {
+            anthropic: true,
+            ..Default::default()
+        },
+        ..endpoint(&server)
+    };
+    let completions = Completions::new(endpoint.clone());
+    let wired: Vec<Value> = completions
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let mut request = request();
+    request.tools = tools;
+    send(endpoint, &request);
+    let sent = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(Value::Array(wired), sent);
+    let strict: Vec<bool> = sent
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["function"]["strict"].as_bool().unwrap())
+        .collect();
+    assert_eq!(strict.iter().filter(|s| **s).count(), 20);
+    let by_name = |name: &str| {
+        sent.as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["function"]["name"] == name)
+            .unwrap()["function"]["strict"]
+            .clone()
+    };
+    assert_eq!(by_name("a_loose"), json!(false));
+    assert_eq!(by_name("z_enum"), json!(false));
 }

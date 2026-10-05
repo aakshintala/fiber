@@ -13,6 +13,7 @@ use contract::events::{
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
@@ -79,6 +80,10 @@ impl Provider for Responses {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         Box::new(self.request(request))
     }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        wire_tools(tools)
+    }
 }
 
 /// One `openai-responses` call, ready to send.
@@ -123,13 +128,12 @@ impl ModelCall for Call {
     }
 }
 
-/// The request body. Its objects serialise with their keys sorted, because
-/// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
-/// "Bytes").
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
-    let mut tools: Vec<_> = request.tools.iter().collect();
-    tools.sort_by(|a, b| a.name.cmp(&b.name));
-    let tools: Vec<Value> = tools
+/// Each tool in Responses' shape, in name order. This is the tools Fiber
+/// builds, before `extra_body` is merged (see #509).
+fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    sorted
         .into_iter()
         .map(|tool| {
             // debt: deferred tools are sent in full until tool search is built
@@ -141,7 +145,20 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
                 "parameters": tool.input_schema,
                 "strict": strict::fits(&tool.input_schema),
             })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
         })
+        .collect()
+}
+
+/// The request body. Its objects serialise with their keys sorted, because
+/// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
+/// "Bytes").
+fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
+    let tools: Vec<Value> = wire_tools(&request.tools)
+        .into_iter()
+        .map(Value::Object)
         .collect();
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));

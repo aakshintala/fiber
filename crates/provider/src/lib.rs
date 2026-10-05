@@ -11,6 +11,7 @@ mod error;
 pub mod google_generative_ai;
 mod http;
 pub mod openai_completions;
+mod openai_completions_tools;
 pub mod openai_responses;
 mod sse;
 mod strict;

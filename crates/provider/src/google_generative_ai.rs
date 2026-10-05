@@ -15,6 +15,7 @@ use contract::events::{
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
@@ -87,6 +88,10 @@ impl Gemini {
 impl Provider for Gemini {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         Box::new(self.request(request))
+    }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        wire_tools(tools)
     }
 }
 
@@ -166,6 +171,30 @@ fn retry_info(error: Error) -> Error {
     }
 }
 
+/// Each tool in Gemini's shape, in name order.
+/// `parametersJsonSchema` takes the schema as written, `$ref` and
+/// `anyOf` included; `parameters` rejects `$ref`
+/// (`docs/model-routing.md`, "Google Generative AI wire facts").
+/// Nothing rewrites a schema. This is the tools Fiber builds, before
+/// `extra_body` is merged (see #509).
+fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
+    sorted
+        .into_iter()
+        .map(|tool| {
+            json!({
+                "name": tool.name,
+                "description": tool.description,
+                "parametersJsonSchema": tool.input_schema,
+            })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
+        })
+        .collect()
+}
+
 /// The request body. Its objects serialise with their keys sorted, because
 /// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
 /// "Bytes"). Gemini caches implicitly only, so the body carries no cache
@@ -184,19 +213,9 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     }
     body.insert("contents".into(), Value::Array(contents(endpoint, request)));
     if !tools.is_empty() {
-        // `parametersJsonSchema` takes the schema as written, `$ref` and
-        // `anyOf` included; `parameters` rejects `$ref`
-        // (`docs/model-routing.md`, "Google Generative AI wire facts").
-        // Nothing rewrites a schema.
-        let declarations: Vec<Value> = tools
-            .iter()
-            .map(|tool| {
-                json!({
-                    "name": tool.name,
-                    "description": tool.description,
-                    "parametersJsonSchema": tool.input_schema,
-                })
-            })
+        let declarations: Vec<Value> = wire_tools(&request.tools)
+            .into_iter()
+            .map(Value::Object)
             .collect();
         body.insert(
             "tools".into(),
