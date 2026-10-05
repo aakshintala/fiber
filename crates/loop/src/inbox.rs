@@ -53,6 +53,10 @@ pub(crate) enum Waited {
 }
 
 /// What [`Loop::recv_until`] took from the inbox.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a short-lived return value; boxing would allocate on every delivery"
+)]
 pub(crate) enum InboxRecv {
     /// A delivery was waiting, or arrived before the deadline.
     Delivery(Delivery),
@@ -267,6 +271,7 @@ impl Loop {
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Reply(..)
+            | Delivery::Job(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -306,7 +311,7 @@ impl Loop {
             Delivery::Close(ack) => self.take_close(ack),
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning while idle.
-            Delivery::Cancelled => {}
+            Delivery::Cancelled | Delivery::Job(_) => {}
         }
     }
 
@@ -337,7 +342,7 @@ impl Loop {
             Delivery::Close(ack) => self.take_close(ack),
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning at a drain.
-            Delivery::Cancelled => {}
+            Delivery::Cancelled | Delivery::Job(_) => {}
         }
         Ok(())
     }

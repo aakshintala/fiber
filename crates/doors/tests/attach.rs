@@ -206,6 +206,7 @@ fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)
         | Delivery::Reply(..)
+        | Delivery::Job(_)
         | Delivery::Cancelled => panic!("the prompt arrives as a prompt"),
     }
 }
@@ -401,6 +402,7 @@ fn a_prompt_rejected_busy_is_a_failure_printing_nothing() {
             | Delivery::SteerDrop(..)
             | Delivery::Reply(..)
             | Delivery::Cancelled
+            | Delivery::Job(_)
             | Delivery::Close(_) => panic!("the prompt arrives as a prompt"),
         }
         Ok(())

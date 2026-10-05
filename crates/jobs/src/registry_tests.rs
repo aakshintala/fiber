@@ -9,6 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::events::{JobCompleted, Outcome};
+use contract::inbox::Delivery;
 use contract::jobs::{JobRecord, OpenError, Opening, Stop};
 use contract::shapes::{Failure, Process};
 use contract::{ErrorCode, JobId};
@@ -86,6 +87,7 @@ fn open_without_the_registry_arc_records_nothing() {
         inner: Mutex::new(super::Inner {
             jobs: Vec::new(),
             seq: 0,
+            inbox: None,
         }),
         cv: Condvar::new(),
         me: Weak::new(),
@@ -253,4 +255,109 @@ fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
     };
     assert_eq!(completed.status, Outcome::Completed);
     assert_eq!(completed.job_id, JobId(waited));
+}
+
+fn ended_ok(id: &str) -> JobCompleted {
+    JobCompleted {
+        job_id: JobId(id.into()),
+        status: Outcome::Completed,
+        error: None,
+        process: Some(Process {
+            exit_code: Some(0),
+            signal: None,
+            timed_out: false,
+        }),
+        output_tail: None,
+    }
+}
+
+fn notice(rx: &mpsc::Receiver<Delivery>) -> contract::inbox::JobNotice {
+    let delivery = rx.try_recv().expect("the end sent a notice");
+    let Delivery::Job(notice) = delivery else {
+        panic!("the end sent {delivery:?}");
+    };
+    notice
+}
+
+#[test]
+fn an_unclaimed_end_sends_one_notice_whose_claim_holds_once() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    opened.end.end(ended_ok(&id));
+    let sent = notice(&rx);
+    assert!(rx.try_recv().is_err(), "one end sends one notice");
+    assert_eq!(sent.completed, ended_ok(&id));
+    assert!((sent.claim.0)(), "the notice claims the unclaimed end");
+    let cancel = CancelToken::new();
+    let answer = registry.wait(&id, 0, &cancel).unwrap();
+    assert!(answer.record.is_none(), "the notice already claimed it");
+    assert!(answer.text.contains("completed"), "{}", answer.text);
+}
+
+#[test]
+fn a_notice_after_a_wait_claimed_the_end_does_not_hold() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    opened.end.end(ended_ok(&id));
+    let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
+    let sent = notice(&rx);
+    assert!(!(sent.claim.0)(), "the wait claimed the end first");
+}
+
+#[test]
+fn a_second_end_report_sends_no_second_notice() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    registry.finish(ended_ok(&id));
+    registry.finish(ended_ok(&id));
+    let _first = notice(&rx);
+    assert!(rx.try_recv().is_err(), "a job ends once");
+    drop(opened.end);
+    assert!(rx.try_recv().is_err(), "a job ends once");
+}
+
+#[test]
+fn a_claim_after_the_registry_is_gone_does_not_hold() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    opened.end.end(ended_ok(&id));
+    drop(registry);
+    let sent = notice(&rx);
+    assert!(!(sent.claim.0)());
+}
+
+#[test]
+fn without_an_inbox_an_end_sends_nothing() {
+    let (_dir, registry) = world();
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    opened.end.end(ended_ok(&id));
+    let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
+}
+
+#[test]
+fn an_end_after_the_loop_is_gone_is_still_recorded() {
+    let (_dir, registry) = world();
+    let (tx, rx) = mpsc::channel();
+    registry.deliver_to(tx);
+    drop(rx);
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    opened.end.end(ended_ok(&id));
+    let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
 }
