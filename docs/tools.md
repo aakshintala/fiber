@@ -674,6 +674,10 @@ The model asks with `ask_user`. The question goes to whoever drives the
 session. A person answers it through a `form` interaction. A program answers
 by resuming the session.
 
+How a session started decides who drives it. A session the hub started is
+driven by a person until it is sent `close`. Every other session is driven by
+a program, such as a delegate (a fork included) or a `fiber ask` session.
+
 ### The call
 
 | Argument | Rule |
@@ -713,8 +717,8 @@ This is a session the hub started, which any client may answer.
 
 ### When a program drives the session
 
-This is a delegate, forks included, a `fiber ask` session, and a session that
-has been sent `close`.
+This is every session the hub did not start, such as a delegate (a fork
+included) or a `fiber ask` session, and a session that has been sent `close`.
 
 - The turn ends `completed`, with the questions on `turn_completed`. The
   call's result is one line saying the questions went to the driver.
@@ -879,7 +883,9 @@ The model names the session with `name_session`, so the session list, the
 terminal's header and its title show what the work is about rather than the
 first prompt.
 
-- Argument: `name`, at most 60 characters.
+- Argument: `name`, 1 to 60 characters. An empty name fails with
+  `invalid_arguments`; only the person clears a name, with the `name` command
+  and empty text (`docs/invocation.md`, "What each command does").
 - The description tells the model to name the session after the first
   prompt, and to rename it when the work's topic changes, a handoff included.
 - A name the person set with the `name` command pins it. While pinned, the
@@ -909,7 +915,11 @@ project. Messaging a session's own delegates is `delegate_message`
 
 **`session_list` shows running sessions only.** Each entry has the session's
 id, its name, its workspace, and its parent's id when it is a delegate. A
-session is running when its socket accepts a connection (`docs/invocation.md`, "Processes"). The tool declares `reads`.
+session is running when its socket accepts a connection (`docs/invocation.md`, "Processes"). The name, workspace and parent come from
+each session's latest `session_status`, read on a `summary` subscription to
+its socket (`docs/events.md`). The list includes the calling session, marked
+as itself, so the model can see its own id and name. The tool declares
+`reads`.
 
 **`session_message` addresses a session by its full id.** The model lists
 sessions first, so a name or a prefix would add ambiguity and save nothing.
@@ -944,7 +954,11 @@ and joins at the next step boundary. Between turns it starts a turn
 sender's id and its parent's id, so an extension can rewrite or refuse it, or
 refuse every message from outside its own tree. It is logged with `source` `session`
 (`docs/events.md`, "Where a message came from"). The model sees it framed
-with the sender's id and name.
+with the sender's id and name. The target reads the sender's name from the
+sender's latest `session_status`, as `session_list` does; when the sender has
+already exited, the framing gives its id alone. The framing is a fixed
+template in `crates/loop/prompt/messages.md` (`docs/system-prompt.md`, "The
+texts").
 
 **A session message is not the person's voice.** The target's reviewer never
 reads one as the person's instructions (`docs/permissions.md`, "The
