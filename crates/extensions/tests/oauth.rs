@@ -16,6 +16,7 @@ use std::io::{Read, Write};
 use std::net::{Ipv4Addr, TcpListener, TcpStream};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::mpsc;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -260,8 +261,25 @@ fn get(port: u16, request: &str) -> String {
     reply
 }
 
+/// Waits until `count` callbacks are parked at `deadline` on the extension
+/// threads. A caller waits at `deadline` while its call is queued or until
+/// the thread's notice that it parked, so that alone proves nothing. Once the
+/// caller waits a grace past it, only an extension thread can be at
+/// `deadline`, and a thread parks there after it has made the callback's
+/// host request: a listener is bound, a lock wait has begun.
+fn await_callbacks_parked(env: &Env, deadline: Instant, count: usize) {
+    assert!(
+        env.clock.await_parked_count(deadline + GRACE, count, WAIT),
+        "the callers never began waiting past their deadline"
+    );
+    assert!(
+        env.clock.await_parked_count(deadline, count, WAIT),
+        "the callbacks never parked"
+    );
+}
+
 /// Starts the `callback` command on `port` and waits until its listener is
-/// bound: the extension's thread is parked at the callback's deadline.
+/// bound and the callback is parked on it.
 fn listening(
     env: &Env,
     ext: &Arc<LuaExtension>,
@@ -269,10 +287,7 @@ fn listening(
 ) -> mpsc::Receiver<Result<String, Error>> {
     let deadline = env.clock.now() + TIMEOUT;
     let rx = start(ext, "callback", &port.to_string());
-    assert!(
-        env.clock.await_parked(deadline, WAIT),
-        "the callback never parked"
-    );
+    await_callbacks_parked(env, deadline, 1);
     rx
 }
 
@@ -419,6 +434,46 @@ fn callback_dropped_at_its_timeout_frees_the_port() {
             || idle.recv_timeout(Duration::from_millis(10)).is_ok()
     });
     assert!(freed, "the port was still held after {PORT_FREE_WITHIN:?}");
+}
+
+#[test]
+fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sending() {
+    let env = Env::new();
+    let ext = env.extension();
+    let port = free_port();
+    let rx = listening(&env, &ext, port);
+    // An incomplete head, a byte every 5 ms: no read ever times out.
+    let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    client.write_all(b"GET / HTTP/1.1\r\nX: ").unwrap();
+    let (dripped_tx, dripped) = mpsc::channel();
+    let sender = std::thread::spawn(move || {
+        // Never sent on: the pause between bytes is its timeout.
+        let (_keep, pause) = mpsc::channel::<()>();
+        for sent in 0..1000 {
+            if client.write_all(b"a").is_err() {
+                return;
+            }
+            if sent == 10 {
+                // Two of the listener's 20 ms accept polls have passed, so it
+                // is reading this head.
+                dripped_tx.send(()).unwrap();
+            }
+            match pause.recv_timeout(Duration::from_millis(5)) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    });
+    finish(&dripped);
+    env.clock.advance(TIMEOUT);
+    assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
+    let (_keep, idle) = mpsc::channel::<()>();
+    let attempts = PORT_FREE_WITHIN.as_millis() / 10;
+    let freed = (0..attempts).any(|_| {
+        TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+            || idle.recv_timeout(Duration::from_millis(10)).is_ok()
+    });
+    assert!(freed, "the port was still held after {PORT_FREE_WITHIN:?}");
+    sender.join().unwrap();
 }
 
 #[test]
@@ -659,33 +714,105 @@ fn a_function_that_returns_no_usable_credential_leaves_the_file() {
     }
 }
 
+/// A token endpoint that holds its first request until the test releases it,
+/// then answers every request with a token.
+struct Held {
+    url: String,
+    /// The first request has arrived.
+    arrived: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+    requests: Arc<AtomicUsize>,
+}
+
+fn held_endpoint() -> Held {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let (arrived_tx, arrived) = mpsc::channel();
+    let (release, released) = mpsc::channel::<()>();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let count = Arc::clone(&requests);
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let mut stream = stream.unwrap();
+            if count.fetch_add(1, Ordering::SeqCst) == 0 {
+                arrived_tx.send(()).unwrap();
+                released.recv().unwrap();
+            }
+            // The head, then the body it announces.
+            let mut seen = Vec::new();
+            let mut byte = [0_u8; 1];
+            while !seen.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                seen.push(byte[0]);
+            }
+            let head = String::from_utf8_lossy(&seen).to_ascii_lowercase();
+            let length = head
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .map_or(0, |n| n.trim().parse().unwrap());
+            stream.read_exact(&mut vec![0_u8; length]).unwrap();
+            let body = json!({ "access_token": "shared", "expires_in": 3600 }).to_string();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            )
+            .unwrap();
+        }
+    });
+    Held {
+        url,
+        arrived,
+        release,
+        requests,
+    }
+}
+
+/// Two refreshes race for one credential. The first is held on the wire with
+/// the lock; the second is started once the first has arrived, and is waiting
+/// on the lock once both callbacks are parked (the first on the wire, the
+/// second on the lock the first holds). Then the first is released: the second must find the first's credential.
+fn refresh_race(env: &Env, first: &Arc<LuaProvider>, second: &Arc<LuaProvider>, held: &Held) {
+    let deadline = env.clock.now() + TIMEOUT;
+    let a = start_token(first);
+    finish(&held.arrived);
+    let b = start_token(second);
+    assert!(
+        env.clock.await_parked_count(deadline + GRACE, 2, WAIT),
+        "the second refresh never waited on the lock"
+    );
+    assert_eq!(held.requests.load(Ordering::SeqCst), 1);
+    held.release.send(()).unwrap();
+    assert_eq!(finish(&a).unwrap(), "shared");
+    assert_eq!(finish(&b).unwrap(), "shared");
+    assert_eq!(held.requests.load(Ordering::SeqCst), 1);
+}
+
 #[test]
 fn two_sessions_refreshing_together_refresh_once() {
     let env = Env::new();
-    let server = OauthServer::start(vec![OauthReply::token("shared", "rt", 3600)]);
+    let held = held_endpoint();
+    env.secret("url", &held.url);
+    env.secret("mode", "ok");
     // Two extension instances on one home, as two sessions are.
     let (one, two) = (env.extension(), env.extension_with(INIT, "fixture"));
     let (first, second) = (
-        env.provider(&one, &server, "ok"),
+        LuaProvider::new(Arc::clone(&one), "acme"),
         LuaProvider::new(Arc::clone(&two), "acme"),
     );
-    let (a, b) = (start_token(&first), start_token(&second));
-    assert_eq!(finish(&a).unwrap(), "shared");
-    assert_eq!(finish(&b).unwrap(), "shared");
-    assert_eq!(server.request_count(), 1);
+    refresh_race(&env, &first, &second, &held);
 }
 
 #[test]
 fn two_callbacks_of_one_extension_refresh_once_without_deadlocking_the_vm() {
     let env = Env::new();
-    let server = OauthServer::start(vec![OauthReply::token("shared", "rt", 3600)]);
+    let held = held_endpoint();
+    env.secret("url", &held.url);
+    env.secret("mode", "ok");
     let ext = env.extension();
-    let first = env.provider(&ext, &server, "ok");
+    let first = LuaProvider::new(Arc::clone(&ext), "acme");
     let second = LuaProvider::new(Arc::clone(&ext), "acme");
-    let (a, b) = (start_token(&first), start_token(&second));
-    assert_eq!(finish(&a).unwrap(), "shared");
-    assert_eq!(finish(&b).unwrap(), "shared");
-    assert_eq!(server.request_count(), 1);
+    refresh_race(&env, &first, &second, &held);
 }
 
 #[test]

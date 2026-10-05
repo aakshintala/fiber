@@ -440,6 +440,11 @@ fn read_head(stream: &mut TcpStream, stop: &mpsc::Receiver<()>) -> Head {
     let mut byte = [0_u8; 1];
     let mut silent = 0;
     while !head.ends_with(b"\r\n\r\n") && !head.ends_with(b"\n\n") {
+        // Every pass, not only after a silent read: a client that keeps
+        // sending must not outlive the callback.
+        if matches!(stop.try_recv(), Err(TryRecvError::Disconnected)) {
+            return Head::Gone;
+        }
         if head.len() >= MAX_HEAD {
             return Head::TooLong;
         }
@@ -453,9 +458,7 @@ fn read_head(stream: &mut TcpStream, stop: &mpsc::Receiver<()>) -> Head {
                 ) =>
             {
                 silent += 1;
-                if silent >= SILENT_POLLS
-                    || matches!(stop.try_recv(), Err(TryRecvError::Disconnected))
-                {
+                if silent >= SILENT_POLLS {
                     return Head::Gone;
                 }
             }
