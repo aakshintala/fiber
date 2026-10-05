@@ -120,6 +120,17 @@ pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<(), Co
 /// directory, then holds `file.lock` until the caller renames over `file`
 /// (`docs/state.md`, "Concurrent access").
 pub(crate) fn locked(file: &Path) -> Result<File, ConfigError> {
+    let lock = open_lock(file, 0o666)?;
+    lock.lock().map_err(|source| ConfigError::Io {
+        file: file.to_path_buf(),
+        source,
+    })?;
+    Ok(lock)
+}
+
+/// Creates the parent directory and opens `file.lock` with `mode`, without
+/// locking it, so a caller chooses to wait or to try.
+pub(crate) fn open_lock(file: &Path, mode: u32) -> Result<File, ConfigError> {
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
@@ -127,14 +138,13 @@ pub(crate) fn locked(file: &Path) -> Result<File, ConfigError> {
     let mut lock_name = file.as_os_str().to_owned();
     lock_name.push(".lock");
     make_parent(file)?;
-    let lock = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
+        .mode(mode)
         .open(&lock_name)
-        .map_err(io)?;
-    lock.lock().map_err(io)?;
-    Ok(lock)
+        .map_err(io)
 }
 
 fn make_parent(file: &Path) -> Result<(), ConfigError> {

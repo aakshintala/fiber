@@ -8,6 +8,7 @@
 
 mod cache;
 mod credential;
+mod credential_file;
 mod error;
 mod extension;
 mod home;
@@ -27,6 +28,7 @@ use contract::events::Notice;
 use serde_json::{Map, Value};
 
 pub use cache::{read_model_cache, write_model_cache};
+pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
     Binary, Cost, Manifest, ModelData, Process, Protocol, ProviderData, Tier, read_manifest,
