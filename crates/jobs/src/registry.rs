@@ -306,6 +306,12 @@ impl Registry {
                 }
                 inner.seq
             };
+            #[cfg(test)]
+            BEFORE_PARK.with(|slot| {
+                if let Some(hook) = slot.borrow_mut().take() {
+                    hook();
+                }
+            });
             self.park_once(until, seen);
         }
     }
@@ -351,6 +357,15 @@ enum Parked {
     Ended,
     Timeout,
     Cancelled,
+}
+
+// One shot on the waiter, after it has read `seq` and before it waits.
+// The registry lock is not held. `wait_until` cannot host this: the lock
+// is already taken there, so ending the job from the clock would deadlock.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_PARK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
 }
 
 fn bump(inner: &mut Inner, cv: &Condvar) {

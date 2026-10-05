@@ -4,6 +4,9 @@
 
 use std::io::Write as _;
 use std::sync::Arc;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use contract::events::{JobCompleted, Outcome};
 use contract::jobs::{JobRecord, OpenError, Opening, Stop};
@@ -171,4 +174,39 @@ fn the_completion_is_claimed_once() {
     assert!(matches!(first.record, Some(JobRecord::Completed(_))));
     assert!(second.record.is_none());
     assert!(second.text.contains("cancelled"), "{}", second.text);
+}
+
+#[test]
+fn a_wake_after_the_sequence_snapshot_returns_the_wait() {
+    let (_dir, registry) = world();
+    let opened = registry.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.0.clone();
+    let waited = id.clone();
+    let (tx, rx) = mpsc::channel();
+    let waiting = Arc::clone(&registry);
+    let end = opened.end;
+    let reported = id.clone();
+    thread::spawn(move || {
+        super::BEFORE_PARK.with(|slot| {
+            *slot.borrow_mut() = Some(Box::new(move || {
+                end.end(JobCompleted {
+                    job_id: JobId(reported),
+                    status: Outcome::Completed,
+                    error: None,
+                    process: None,
+                    output_tail: None,
+                });
+            }));
+        });
+        let answer = waiting.wait(&id, 60_000, &CancelToken::new()).unwrap();
+        let _sent = tx.send(answer);
+    });
+    let answer = rx
+        .recv_timeout(Duration::from_secs(5))
+        .expect("the wait returned after a wake that landed before it parked");
+    let Some(JobRecord::Completed(completed)) = answer.record else {
+        panic!("the wait did not deliver the completion: {}", answer.text);
+    };
+    assert_eq!(completed.status, Outcome::Completed);
+    assert_eq!(completed.job_id, JobId(waited));
 }
