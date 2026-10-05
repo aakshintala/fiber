@@ -1534,13 +1534,23 @@ fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_ter
     );
     assert!(body.contains("jobs write"), "{body}");
     assert!(body.contains("Output so far:\nyes:/dev/"), "{body}");
-    assert!(body.contains(":controlling\r\n"), "{body}");
+    // The terminal may hand the line's end to the reader in a later read,
+    // so the receipt is checked for the line and the file for its end.
+    assert!(body.contains(":controlling"), "{body}");
     assert!(!body.contains("not a tty"), "{body}");
-    // The bytes also stay in the output file, as a pipe job's do.
+    // The bytes also stay in the output file, as a pipe job's do, with the
+    // terminal's `\r\n` line end. A line end read later goes out in a
+    // later delta once the clock has passed the pacing interval, and the
+    // reader writes the file before it hands bytes to a delta.
+    assert!(
+        jobs.deltas().wait_for_text(":controlling\r\n", DEADLINE),
+        "{:?}",
+        jobs.deltas().text()
+    );
     let file = job_output(dir.path(), &job);
     assert!(
-        file.contains("yes:/dev/") && file.contains(":controlling"),
-        "{file}"
+        file.contains("yes:/dev/") && file.contains(":controlling\r\n"),
+        "{file:?}"
     );
     assert!(group_alive(pgid));
     jobs.stop(&job.job_id);
