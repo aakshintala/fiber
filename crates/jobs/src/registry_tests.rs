@@ -697,3 +697,17 @@ fn write_cuts_a_multibyte_character_at_the_boundary_whole() {
     );
     drop(opened.end);
 }
+
+#[test]
+fn write_returns_exactly_sixteen_kib_whole() {
+    const EXACT: &[u8] = &[b'a'; 16 * 1024];
+    let (_dir, _clock, registry) = clocked_world();
+    let (id, opened, _typed) = open_tty(&registry, EXACT);
+    let answer = registry
+        .write(&id, "x", 0, &CancelToken::new())
+        .ok()
+        .unwrap();
+    assert!(!answer.text.contains("omitted"), "{}", answer.text.len());
+    assert_eq!(answer.text.lines().next().unwrap().len(), 16 * 1024);
+    drop(opened.end);
+}
