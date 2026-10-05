@@ -307,6 +307,11 @@ fn a_cancel_after_one_pipe_closed_stops_and_reaps_the_child() {
     cancel_stops_and_reaps("exec 2>&-\n");
 }
 
+#[test]
+fn a_cancel_after_both_pipes_closed_stops_and_reaps_the_child() {
+    cancel_stops_and_reaps("exec 1>&- 2>&-\n");
+}
+
 /// Starts a child that runs `prelude`, then sleeps, cancels once it is up,
 /// and checks the call ended and the child is gone.
 fn cancel_stops_and_reaps(prelude: &str) {

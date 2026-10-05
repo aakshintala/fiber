@@ -8,12 +8,10 @@ use std::hash::BuildHasher;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output as Collected, Stdio};
-use std::sync::Arc;
-use std::sync::mpsc::{self, Sender};
 use std::thread;
+use std::time::Duration;
 
 use contract::ErrorCode;
-use contract::clock::Wake;
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use serde_json::Value;
@@ -88,35 +86,27 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel)
     }
 }
 
-/// What the wait below hears about.
-enum Event {
-    Cancelled,
-    PipeEnded,
-}
+/// How often the wait looks for a cancel and for the child's exit. Picked,
+/// not measured: a cancel stops the child within one interval.
+const POLL: Duration = Duration::from_millis(50);
 
-/// Wakes the wait below on a cancel. A message sent before the wait starts
-/// stays queued, so none is lost.
-struct Signal(Sender<Event>);
-
-impl Wake for Signal {
-    fn wake(&self) {
-        // The receiver lives as long as the wait; a send after it is gone
-        // has nothing to wake.
-        drop(self.0.send(Event::Cancelled));
-    }
+/// Waits one [`POLL`] interval. A child's exit and a cancel are what it waits
+/// for, and an injected clock sees neither, so the wait is the thread's own.
+#[allow(
+    clippy::disallowed_methods,
+    reason = "nothing a clock can signal: the wait is for a child process's exit"
+)]
+fn pause() {
+    thread::sleep(POLL);
 }
 
 /// Reads a pipe to its end on its own thread, so neither pipe fills while
 /// the other is read.
-fn drain(
-    mut pipe: impl Read + Send + 'static,
-    ended: Sender<Event>,
-) -> thread::JoinHandle<Vec<u8>> {
+fn drain(mut pipe: impl Read + Send + 'static) -> thread::JoinHandle<Vec<u8>> {
     thread::spawn(move || {
         let mut bytes = Vec::new();
         // A read error ends the capture with what arrived.
         let _ended = pipe.read_to_end(&mut bytes);
-        drop(ended.send(Event::PipeEnded));
         bytes
     })
 }
@@ -143,16 +133,8 @@ fn run_child(
         Ok(process) => process,
         Err(error) => return Some(Err(error)),
     };
-    let (sender, receiver) = mpsc::channel();
-    let wake: Arc<dyn Wake> = Arc::new(Signal(sender.clone()));
-    cancel.subscribe(Arc::downgrade(&wake));
-    let out = process
-        .stdout
-        .take()
-        .map(|pipe| drain(pipe, sender.clone()));
-    let err = process.stderr.take().map(|pipe| drain(pipe, sender));
-    // Both pipes are piped above, so two drain threads run.
-    let mut open = 2_u8;
+    let out = process.stdout.take().map(drain);
+    let err = process.stderr.take().map(drain);
     let status = loop {
         if cancel.is_cancelled() {
             // `Child::kill` signals this one pid: the child is not a group
@@ -165,15 +147,10 @@ fn run_child(
             drop(process.wait());
             return None;
         }
-        if open == 0 {
-            // Both pipes closed: the child is exiting, and a pipe can close
-            // a moment before the child is waitable, so block on it.
-            break process.wait();
-        }
-        // Blocks until a cancel or a pipe end. `wake` holds a sender, so the
-        // channel never disconnects while this loop runs.
-        if let Ok(Event::PipeEnded) = receiver.recv() {
-            open -= 1;
+        match process.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => pause(),
+            Err(error) => break Err(error),
         }
     };
     let join = |handle: Option<thread::JoinHandle<Vec<u8>>>| {
