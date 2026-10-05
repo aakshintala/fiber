@@ -124,6 +124,9 @@ fn run() -> i32 {
                 Err(sentence) => ask_failed(usage(sentence)),
             }
         }
+        cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
+            cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
+        },
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
         cli::Invocation::Run(Some(cli::Commands::Login(args))) => {

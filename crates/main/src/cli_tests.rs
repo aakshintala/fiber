@@ -1,11 +1,12 @@
 use std::ffi::OsString;
 use std::os::unix::ffi::OsStringExt;
+use std::path::PathBuf;
 
 use clap::error::ContextValue;
 
 use super::{
-    Commands, ExtensionCommands, Invocation, MENU, command, parse_from, usage_sentence,
-    version_line,
+    Commands, ExtensionCommands, Invocation, MENU, SessionsCommands, command, parse_from,
+    usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -240,6 +241,52 @@ fn login_and_logout_take_as_and_logout_takes_all() {
     assert!(said.contains("cannot be used with"), "{said}");
     assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
     assert_eq!(said.lines().count(), 1, "{said}");
+}
+
+#[test]
+fn sessions_export_takes_an_id_and_an_optional_path() {
+    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Export { id, path }))) =
+        parse_from(["fiber", "sessions", "export", "s_abc"])
+    else {
+        panic!("export with an id");
+    };
+    assert_eq!(id, "s_abc");
+    assert_eq!(path, None);
+    let Invocation::Run(Some(Commands::Sessions(SessionsCommands::Export { id, path }))) =
+        parse_from(["fiber", "sessions", "export", "s_abc", "out"])
+    else {
+        panic!("export with an id and a path");
+    };
+    assert_eq!(id, "s_abc");
+    assert_eq!(path, Some(PathBuf::from("out")));
+    assert!(
+        sentence(&["fiber", "sessions", "export"])
+            .starts_with("The following required arguments were not provided: <id>"),
+        "{}",
+        sentence(&["fiber", "sessions", "export"])
+    );
+}
+
+#[test]
+fn sessions_alone_is_a_one_line_usage_sentence() {
+    assert_eq!(
+        sentence(&["fiber", "sessions"]),
+        "'fiber sessions' requires a subcommand but one was not provided [subcommands: export]. Run `fiber --help` for usage."
+    );
+}
+
+#[test]
+fn the_menu_lists_sessions_export_under_sessions() {
+    let menu = menu();
+    let sessions = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Sessions:"))
+        .unwrap();
+    assert!(
+        sessions.lines().any(|l|
+            l == "  sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>"),
+        "{sessions}"
+    );
 }
 
 #[test]
@@ -502,6 +549,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
         visible(),
         [
             "ask",
+            "sessions",
             "extension",
             "approve",
             "login",
@@ -562,6 +610,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
         visible(),
         [
             "ask",
+            "sessions",
             "extension",
             "approve",
             "login",
