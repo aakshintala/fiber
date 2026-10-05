@@ -456,6 +456,17 @@ pub(crate) fn steer(text: &str) -> Delivery {
     Delivery::Steer(message(text), ignore())
 }
 
+/// A person's `handoff` on the loop's inbox, with `instructions`.
+pub(crate) fn handoff(id: &str, instructions: Option<&str>) -> Delivery {
+    Delivery::Handoff(
+        CommandId(id.into()),
+        contract::commands::Handoff {
+            instructions: instructions.map(str::to_owned),
+        },
+        ignore(),
+    )
+}
+
 /// Standing rules in memory: `read` returns what the test set.
 pub(crate) struct FakeRules {
     rules: Mutex<Result<StandingRules, RulesError>>,
@@ -671,6 +682,15 @@ impl Session {
             tools,
             unpriced(),
         )
+    }
+
+    /// As [`Session::with_tools`], and the first model call sends `during`.
+    pub(crate) fn with_tools_injecting(
+        script: Vec<Scripted>,
+        during: Vec<Delivery>,
+        tools: Vec<Arc<dyn Tool>>,
+    ) -> Self {
+        Self::open(script, during, tools, unpriced())
     }
 
     /// As [`Session::new`], and the first model call sends `during`.

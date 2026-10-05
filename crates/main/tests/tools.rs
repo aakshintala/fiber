@@ -27,7 +27,7 @@ const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, and `main` pushes them in the same order.
-const TOOL_NAMES: [&str; 4] = ["edit", "read", "shell", "write"];
+const TOOL_NAMES: [&str; 5] = ["edit", "handoff", "read", "shell", "write"];
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on

@@ -24,7 +24,7 @@ type SessionTools = (
     Arc<dyn Fn() + Send + Sync>,
 );
 
-/// `edit`, `read`, `shell` and `write`, each registered by `builtin`.
+/// `edit`, `handoff`, `read`, `shell` and `write`, each registered by `builtin`.
 /// `read`, `write` and `edit` share one session's file state, which a
 /// handoff forgets, and `read` runs the image child (`fiber image`) into
 /// `artifacts`, the session's `artifacts/` directory. A failure to find the running binary is
@@ -58,6 +58,7 @@ pub(crate) fn with_binary(
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let built = [
         registered(files.edit())?,
+        registered(tools::Handoff)?,
         registered(files.read())?,
         registered(shell)?,
         registered(files.write())?,

@@ -15,9 +15,11 @@ mod support;
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::mpsc;
 use std::time::Duration;
 
-use contract::events::{TextCompleted, TurnOutcome};
+use contract::events::{Control, TextCompleted, TurnOutcome};
+use contract::inbox::{Ack, Answer, Delivery};
 use contract::provider::{Finish, Input, ReplyAction};
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode};
@@ -26,8 +28,8 @@ use r#loop::{HandoffSettings, Retry, rebuild};
 use serde_json::json;
 
 use support::{
-    MODEL, Session, TestTool, calls_reply, delivery, kinds, reasoning_reply, tool_call_reply,
-    with_tokens,
+    DEADLINE, MODEL, Session, TestTool, calls_reply, delivery, handoff, ignore, kinds,
+    reasoning_reply, tool_call_reply, with_tokens,
 };
 
 /// The trigger in these tests.
@@ -973,4 +975,780 @@ fn a_notes_reasoning_is_not_part_of_the_note() {
     );
 
     assert_eq!(session.requests()[2].conversation[2], user("The note."));
+}
+
+// A person's handoff (`docs/handoff.md`, "A person").
+
+/// The `handoff-note` text, to its last line.
+const NOTE_REQUEST_END: &str = "Reply with the note only, and make no tool calls.";
+
+/// The text of the note request, the last input of `request`.
+fn note_request(request: &contract::provider::ModelRequest) -> &str {
+    text_of(request.conversation.last().unwrap())
+}
+
+/// An acknowledgement that sends its answer on a channel.
+fn answered() -> (Ack, mpsc::Receiver<Answer>) {
+    let (tx, rx) = mpsc::channel();
+    (Ack(Box::new(move |answer| tx.send(answer).unwrap())), rx)
+}
+
+/// A session whose first model call sends `during`, with the weather tool.
+fn injected(script: Vec<Scripted>, during: Vec<Delivery>, settings: HandoffSettings) -> Session {
+    Session::with_tools_injecting(script, during, vec![weather()])
+        .handoff(settings)
+        .retry(no_wait())
+}
+
+/// The script of one handoff after a tool step: the call, the note, the
+/// answer.
+fn handed_after_a_call() -> Vec<Scripted> {
+    vec![called(100), Scripted::text("The note."), said("Done.", 50)]
+}
+
+#[test]
+fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
+    let (ack, answer) = answered();
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![Delivery::Handoff(
+            contract::CommandId("c_h".into()),
+            contract::commands::Handoff {
+                instructions: Some("focus on tests".into()),
+            },
+            ack,
+        )],
+        settings(),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    // Accepted when taken.
+    assert!(answer.recv_timeout(DEADLINE).unwrap().unwrap().is_none());
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "person"
+    );
+    let note_message = of_kind(&lines, "assistant_message_started")[1];
+    assert_eq!(
+        serde_json::Value::Object(of_kind(&lines, "handoff_completed")[0].payload.clone()),
+        json!({
+            "outcome": "completed",
+            "note": [note_message.action_id.as_ref().unwrap().0],
+            "tokens_before": 101,
+            "instructions": "focus on tests",
+        })
+    );
+    let requests = session.requests();
+    assert_eq!(requests.len(), 3);
+    let asked = note_request(&requests[1]);
+    assert!(asked.starts_with("Fiber is about to restart your context."));
+    assert!(
+        asked.ends_with(&format!(
+            "{NOTE_REQUEST_END}\n\nThe person asked that the next stretch of work focus on:\n\nfocus on tests"
+        )),
+        "{asked}"
+    );
+    // The request after the handoff starts from the note.
+    let next = &requests[2].conversation;
+    assert_eq!(next.len(), 3);
+    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[2], user("The note."));
+    assert_eq!(requests[2].previous_end, None);
+    // No line is written for the instruction, or for the command.
+    assert!(of_kind(&lines, "steering_queue").is_empty());
+}
+
+#[test]
+fn a_person_handoff_runs_with_automatic_handoff_off() {
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        HandoffSettings {
+            enabled: false,
+            ..settings()
+        },
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "person"
+    );
+}
+
+#[test]
+fn commands_before_one_boundary_make_one_handoff_with_their_instructions_joined() {
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![
+            handoff("c_1", Some("first")),
+            handoff("c_2", None),
+            handoff("c_3", Some("")),
+            handoff("c_4", Some("second")),
+        ],
+        settings(),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["instructions"],
+        "first\n\nsecond"
+    );
+    let requests = session.requests();
+    assert!(
+        note_request(&requests[1]).ends_with("focus on:\n\nfirst\n\nsecond"),
+        "{}",
+        note_request(&requests[1])
+    );
+}
+
+#[test]
+fn a_handoff_with_no_instructions_asks_for_the_note_only() {
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_1", None), handoff("c_2", Some(""))],
+        settings(),
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert!(
+        !of_kind(&lines, "handoff_completed")[0]
+            .payload
+            .contains_key("instructions")
+    );
+    let requests = session.requests();
+    let asked = note_request(&requests[1]);
+    assert!(asked.starts_with("Fiber is about to restart your context."));
+    assert!(asked.ends_with(NOTE_REQUEST_END), "{asked}");
+    assert!(!asked.contains("The person asked"));
+}
+
+#[test]
+fn a_handoff_held_at_the_end_of_the_turn_continues_the_turn() {
+    // The first reply calls no tool, and the command arrived while it was
+    // being written: the end-of-turn check finds it.
+    let mut session = injected(
+        vec![
+            said("Hello.", 100),
+            Scripted::text("The note."),
+            said("More.", 50),
+        ],
+        vec![handoff("c_h", Some("go on"))],
+        settings(),
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, REPLY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let requests = session.requests();
+    assert_eq!(requests.len(), 3);
+    // The note request holds the reply the turn had just ended on.
+    assert_eq!(text_of(&requests[1].conversation[2]), "Hello.");
+    assert_eq!(requests[2].conversation[1], user("hi"));
+    assert_eq!(requests[2].conversation[2], user("The note."));
+}
+
+#[test]
+fn a_person_handoff_on_the_automatic_boundary_runs_once_as_the_persons() {
+    let mut session = injected(
+        vec![
+            called(TRIGGER),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        vec![handoff("c_h", None)],
+        settings(),
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "person"
+    );
+}
+
+#[test]
+fn a_steer_drop_cannot_drop_a_handoff() {
+    let (ack, answer) = answered();
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![
+            handoff("c_h", None),
+            Delivery::SteerDrop(contract::CommandId("c_h".into()), ack),
+        ],
+        settings(),
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
+
+    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::StaleRequest);
+}
+
+#[test]
+fn a_steer_drop_between_turns_cannot_drop_a_handoff_either() {
+    let (ack, answer) = answered();
+    let mut session = session(vec![Scripted::text("The note.")], settings());
+    session.inbox.send(handoff("c_h", None)).unwrap();
+    session
+        .inbox
+        .send(Delivery::SteerDrop(contract::CommandId("c_h".into()), ack))
+        .unwrap();
+
+    let outcome = session.turn();
+    let lines = session.lines();
+    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::StaleRequest);
+}
+
+#[test]
+fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
+    let (ack, answer) = answered();
+    let mut session = session(
+        vec![Scripted::text("The note."), said("Next.", 50)],
+        settings(),
+    );
+    session
+        .inbox
+        .send(Delivery::Handoff(
+            contract::CommandId("c_h".into()),
+            contract::commands::Handoff {
+                instructions: Some("focus".into()),
+            },
+            ack,
+        ))
+        .unwrap();
+
+    let outcome = session.turn();
+    let lines = session.lines();
+    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert!(answer.recv_timeout(DEADLINE).unwrap().unwrap().is_none());
+    assert_eq!(
+        serde_json::Value::Object(of_kind(&lines, "turn_started")[0].payload.clone()),
+        json!({"input": [{"type": "handoff", "command_id": "c_h"}]})
+    );
+    assert_eq!(
+        of_kind(&lines, "handoff_started")[0].payload["trigger"],
+        "person"
+    );
+    // No request after the note.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 1);
+    // The opening message was all there was to hand off, and no reply
+    // measured it: its size is estimated at a token to four bytes.
+    let opening = text_of(&requests[0].conversation[0]);
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["tokens_before"],
+        opening.len().div_ceil(4)
+    );
+    assert_eq!(requests[0].conversation.len(), 2);
+    assert!(is_opening(&requests[0].conversation[0]));
+    assert!(note_request(&requests[0]).ends_with("focus on:\n\nfocus"));
+
+    // The next turn starts from the note.
+    let (outcome, second) = run(&mut session, "next");
+    assert_kinds(&second, &[&["turn_started"], STEP, REPLY, ENDED]);
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let requests = session.requests();
+    let next = &requests[1].conversation;
+    assert_eq!(next.len(), 3);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("The note."));
+    assert_eq!(next[2], user("next"));
+    // The live conversation is what a rebuild renders.
+    let rebuilt = rebuild(&[lines, second].concat(), MODEL).unwrap();
+    assert_eq!(rebuilt[..3], next[..]);
+}
+
+#[test]
+fn a_prompt_in_the_drain_of_a_handoff_is_carried_and_answered_after_it() {
+    for prompt_first in [false, true] {
+        let (prompt_ack, prompt_answer) = answered();
+        let mut session = session(
+            vec![Scripted::text("The note."), said("Answer.", 50)],
+            settings(),
+        );
+        let prompt = Delivery::Prompt(support::message("hi"), prompt_ack);
+        let command = handoff("c_h", None);
+        for delivery in if prompt_first {
+            [prompt, command]
+        } else {
+            [command, prompt]
+        } {
+            session.inbox.send(delivery).unwrap();
+        }
+
+        let outcome = session.turn();
+        let lines = session.lines();
+        assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, REPLY, ENDED]);
+
+        assert_eq!(outcome, Some(TurnOutcome::Completed));
+        assert!(prompt_answer.recv_timeout(DEADLINE).unwrap().is_ok());
+        let input = &of_kind(&lines, "turn_started")[0].payload["input"];
+        let types: Vec<&str> = input
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|item| item["type"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            types,
+            if prompt_first {
+                ["message", "handoff"]
+            } else {
+                ["handoff", "message"]
+            }
+        );
+        let requests = session.requests();
+        assert_eq!(requests.len(), 2);
+        // The note request holds the prompt, and the answer is asked from
+        // the note after it.
+        assert_eq!(requests[0].conversation[1], user("hi"));
+        assert_eq!(requests[1].conversation[1], user("hi"));
+        assert_eq!(requests[1].conversation[2], user("The note."));
+    }
+}
+
+#[test]
+fn a_failed_handoff_between_turns_still_ends_the_turn_without_a_request() {
+    let mut session = session(
+        vec![failed(ErrorCode::InvalidRequest), said("Never.", 1)],
+        settings(),
+    );
+    session.inbox.send(handoff("c_h", None)).unwrap();
+
+    let outcome = session.turn();
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_completed",
+                "handoff_completed",
+            ],
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["outcome"],
+        "failed"
+    );
+    assert_eq!(session.requests().len(), 1);
+}
+
+#[test]
+fn a_turn_a_job_started_goes_on_after_a_handoff() {
+    // The turn's input holds no message, but it did not begin as a handoff.
+    let notice = Delivery::Job(contract::inbox::JobNotice {
+        completed: contract::events::JobCompleted {
+            job_id: contract::JobId("j_1".into()),
+            status: contract::events::Outcome::Completed,
+            error: None,
+            process: None,
+            output_tail: None,
+        },
+        claim: contract::inbox::Claim(Box::new(|| true)),
+    });
+    let mut session = injected(
+        handed_after_a_call(),
+        vec![handoff("c_h", None)],
+        settings(),
+    );
+    session.inbox.send(notice).unwrap();
+
+    let outcome = session.turn();
+    let lines = session.lines();
+    assert_kinds(
+        &lines,
+        &[
+            &[
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ],
+            STEP,
+            &["job_completed"],
+            CALL_BODY,
+            STEP,
+            HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_eq!(session.requests().len(), 3);
+}
+
+#[test]
+fn a_handoff_is_refused_closing_once_close_was_taken_with_nothing_to_start() {
+    let (ack, answer) = answered();
+    let mut session = session(vec![said("Never.", 1)], settings());
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    session
+        .inbox
+        .send(Delivery::Handoff(
+            contract::CommandId("c_h".into()),
+            contract::commands::Handoff { instructions: None },
+            ack,
+        ))
+        .unwrap();
+
+    assert_eq!(session.turn(), None);
+
+    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::Closing);
+    assert!(session.requests().is_empty());
+}
+
+#[test]
+fn a_handoff_after_close_joins_a_turn_that_already_has_input() {
+    let (ack, answer) = answered();
+    let mut session = session(
+        vec![Scripted::text("The note."), said("Done.", 50)],
+        settings(),
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    session
+        .inbox
+        .send(Delivery::Handoff(
+            contract::CommandId("c_h".into()),
+            contract::commands::Handoff { instructions: None },
+            ack,
+        ))
+        .unwrap();
+
+    let outcome = session.turn();
+    let lines = session.lines();
+    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, REPLY, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert!(answer.recv_timeout(DEADLINE).unwrap().is_ok());
+}
+
+// A tool's handoff (`docs/handoff.md`, "A tool").
+
+/// A tool that returns no content and `control.handoff` of `note`.
+fn wrapping(name: &'static str, note: &str) -> Arc<TestTool> {
+    let mut tool = TestTool::reads(name, "");
+    tool.output.content = Vec::new();
+    tool.output.control = Some(Control {
+        handoff: note.into(),
+    });
+    Arc::new(tool)
+}
+
+/// A reply of `names` called, each with its own arguments, with `tokens` in
+/// its prompt.
+fn calling(names: &[&str], tokens: u64) -> Scripted {
+    let calls: Vec<(&str, serde_json::Value)> = names
+        .iter()
+        .enumerate()
+        .map(|(index, name)| (*name, json!({"city": format!("city {index}")})))
+        .collect();
+    with_tokens(calls_reply("", &calls), tokens, 0)
+}
+
+fn tool_session(script: Vec<Scripted>, tools: Vec<Arc<TestTool>>) -> Session {
+    Session::with_tools(
+        script,
+        None,
+        tools
+            .into_iter()
+            .map(|tool| tool as Arc<dyn contract::tool::Tool>)
+            .collect(),
+    )
+    .handoff(settings())
+    .retry(no_wait())
+}
+
+/// A reply of calls with no sibling: the calls' lines, their starts and
+/// completions.
+fn call_lines(count: usize) -> Vec<&'static str> {
+    let mut kinds = vec!["assistant_message_started", "assistant_message_delta"];
+    kinds.extend(std::iter::repeat_n("tool_call_arguments_delta", count));
+    kinds.extend(std::iter::repeat_n("tool_call_requested", count));
+    kinds.extend(["usage_recorded", "assistant_message_completed"]);
+    kinds.extend(std::iter::repeat_n("tool_call_started", count));
+    kinds.extend(std::iter::repeat_n("tool_call_completed", count));
+    kinds
+}
+
+#[test]
+fn a_call_that_sets_control_handoff_restarts_the_context_from_its_note() {
+    let mut session = tool_session(
+        vec![calling(&["wrapup"], 500), said("Done.", 50)],
+        vec![wrapping("wrapup", "Tool note.")],
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(1),
+            &["handoff_completed", "opening_message"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let call = of_kind(&lines, "tool_call_requested")[0];
+    assert_eq!(
+        serde_json::Value::Object(of_kind(&lines, "handoff_completed")[0].payload.clone()),
+        json!({
+            "outcome": "completed",
+            "note": [call.action_id.as_ref().unwrap().0],
+            "tokens_before": 500,
+        })
+    );
+    // No note request: the tool's argument was the note.
+    assert!(of_kind(&lines, "handoff_started").is_empty());
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let next = &requests[1].conversation;
+    assert_eq!(next.len(), 3);
+    assert!(is_opening(&next[0]));
+    assert_eq!(next[1], user("hi"));
+    assert_eq!(next[2], user("Tool note."));
+    assert_eq!(requests[1].previous_end, None);
+}
+
+#[test]
+fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
+    let mut session = tool_session(
+        vec![
+            calling(&["get_weather", "wrapup", "get_weather"], 500),
+            said("Done.", 50),
+        ],
+        vec![weather(), wrapping("wrapup", "Tool note.")],
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(3),
+            &["handoff_completed", "opening_message"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    let ids: Vec<&str> = of_kind(&lines, "tool_call_requested")
+        .iter()
+        .map(|line| line.action_id.as_ref().unwrap().0.as_str())
+        .collect();
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["note"],
+        json!([ids[1]])
+    );
+    // The prompt tokens, and the two one-token results written after the
+    // reply that measured them.
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["tokens_before"],
+        502
+    );
+    let requests = session.requests();
+    let next = &requests[1].conversation;
+    assert_eq!(next.len(), 7);
+    assert_eq!(next[2], user("Tool note."));
+    // The calls in call order, then their results in the same order.
+    let called: Vec<&str> = next[3..5]
+        .iter()
+        .map(|input| {
+            let Input::ToolCall { action_id, .. } = input else {
+                panic!("a call: {input:?}");
+            };
+            action_id.0.as_str()
+        })
+        .collect();
+    assert_eq!(called, [ids[0], ids[2]]);
+    let results: Vec<(&str, &str)> = next[5..]
+        .iter()
+        .map(|input| {
+            let Input::ToolResult {
+                action_id, text, ..
+            } = input
+            else {
+                panic!("a result: {input:?}");
+            };
+            (action_id.0.as_str(), text.as_str())
+        })
+        .collect();
+    assert_eq!(results, [(ids[0], "abcd"), (ids[2], "abcd")]);
+    // The live conversation is what a rebuild renders.
+    let rebuilt = rebuild(&lines, MODEL).unwrap();
+    assert_eq!(rebuilt[..7], next[..]);
+}
+
+#[test]
+fn two_calls_that_set_control_handoff_join_their_notes_in_call_order() {
+    // Call order, not name order.
+    let mut session = tool_session(
+        vec![
+            calling(&["wrap_b", "get_weather", "wrap_a"], 500),
+            said("Done.", 50),
+        ],
+        vec![
+            wrapping("wrap_a", "A note."),
+            wrapping("wrap_b", "B note."),
+            weather(),
+        ],
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(3),
+            &["handoff_completed", "opening_message"],
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    let ids: Vec<&str> = of_kind(&lines, "tool_call_requested")
+        .iter()
+        .map(|line| line.action_id.as_ref().unwrap().0.as_str())
+        .collect();
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["note"],
+        json!([ids[0], ids[2]])
+    );
+    let next = &session.requests()[1].conversation;
+    assert_eq!(next[2], user("B note.\n\nA note."));
+    // Only the weather call is left to follow the note.
+    assert_eq!(next.len(), 5);
+    assert!(matches!(&next[3], Input::ToolCall { action_id, .. } if action_id.0 == ids[1]));
+    assert!(matches!(&next[4], Input::ToolResult { action_id, .. } if action_id.0 == ids[1]));
+    assert_eq!(rebuild(&lines, MODEL).unwrap()[..5], next[..]);
+}
+
+#[test]
+fn the_loop_acts_on_the_field_and_never_on_the_tool_name() {
+    // A tool named `handoff` that sets nothing does not hand off.
+    let mut session = tool_session(
+        vec![calling(&["handoff"], 500), said("Done.", 50)],
+        vec![Arc::new(TestTool::reads("handoff", "Not a note."))],
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, &call_lines(1), STEP, REPLY, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert!(of_kind(&lines, "handoff_completed").is_empty());
+}
+
+#[test]
+fn a_call_that_failed_does_not_hand_off_whatever_it_set() {
+    let mut tool = TestTool::failing("wrapup", ErrorCode::ToolError);
+    tool.output.control = Some(Control {
+        handoff: "Never.".into(),
+    });
+    let mut session = tool_session(
+        vec![calling(&["wrapup"], 500), said("Done.", 50)],
+        vec![Arc::new(tool)],
+    );
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, &call_lines(1), STEP, REPLY, ENDED]);
+
+    assert!(of_kind(&lines, "handoff_completed").is_empty());
+}
+
+#[test]
+fn a_held_person_handoff_still_runs_at_the_boundary_after_a_tool_handoff() {
+    let mut session = Session::with_tools_injecting(
+        vec![
+            calling(&["wrapup"], 500),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        vec![handoff("c_h", Some("focus"))],
+        vec![wrapping("wrapup", "Tool note.")],
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            &call_lines(1),
+            &["handoff_completed", "opening_message"],
+            STEP,
+            HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    // The person's handoff asked for its note from the context the tool's
+    // handoff made.
+    let requests = session.requests();
+    assert_eq!(requests[1].conversation[2], user("Tool note."));
+    assert_eq!(requests[2].conversation[2], user("The note."));
 }

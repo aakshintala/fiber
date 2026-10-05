@@ -10,7 +10,7 @@ use contract::events::{Event, InputItem, JobCompleted, Outcome};
 use contract::inbox::{JobNotice, Message};
 use contract::provider::Input;
 use contract::shapes::Failure;
-use contract::{Envelope, ErrorCode, JobId, TurnId};
+use contract::{CommandId, Envelope, ErrorCode, JobId, TurnId};
 
 use crate::prompt::{body, fill};
 use crate::{Error, Loop};
@@ -28,6 +28,10 @@ pub(crate) enum Queued {
     /// Written as `job_completed` with no action; named in a `jobs` item
     /// when it starts a turn.
     Job(JobCompleted),
+    /// A person's `handoff`: named in a `handoff` item when it starts a
+    /// turn, and run at the next step boundary (`docs/handoff.md`, "A
+    /// person"); no line is written for it.
+    Handoff(CommandId, Option<String>),
 }
 
 /// The notice's completion, when its claim holds: no `jobs wait` or `stop`
@@ -59,6 +63,13 @@ impl Loop {
                     sender: message.sender,
                     changed_by: None,
                 }),
+                Queued::Handoff(command_id, instructions) => {
+                    input.push(InputItem::Handoff {
+                        command_id: command_id.clone(),
+                    });
+                    self.queued
+                        .push_back(Queued::Handoff(command_id, instructions));
+                }
                 Queued::Job(completed) => {
                     let id = completed.job_id.clone();
                     self.queued.push_back(Queued::Job(completed));
@@ -89,6 +100,11 @@ impl Loop {
                     })
                 }
                 Queued::Job(completed) => Event::JobCompleted(completed),
+                // Held for the step's handoff check, which runs it.
+                Queued::Handoff(_, instructions) => {
+                    self.handoff.held.push(instructions);
+                    continue;
+                }
             };
             self.append(&event, turn, None)?;
         }

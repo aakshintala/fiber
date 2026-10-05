@@ -150,3 +150,26 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         "new\n"
     );
 }
+
+#[test]
+fn builtin_registers_the_tools_in_name_order_with_handoff_among_them() {
+    let root = fakes::TempDir::new("fiber-names");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (tools, infos, _driver, _forget) = super::builtin(root.path(), &clock).unwrap();
+
+    let names: Vec<String> = tools
+        .iter()
+        .map(|(by, tool)| {
+            assert_eq!(by, "builtin");
+            tool.definition().name
+        })
+        .collect();
+    assert_eq!(names, ["edit", "handoff", "read", "shell", "write"]);
+    assert_eq!(
+        infos
+            .iter()
+            .map(|info| info.name.as_str())
+            .collect::<Vec<_>>(),
+        ["edit", "handoff", "read", "shell", "write"]
+    );
+}

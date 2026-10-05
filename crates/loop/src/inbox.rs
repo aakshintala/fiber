@@ -222,7 +222,7 @@ impl Loop {
                         content: message.content.clone(),
                         sender: message.sender.clone(),
                     }),
-                    Queued::Job(_) => None,
+                    Queued::Job(_) | Queued::Handoff(..) => None,
                 })
                 .collect(),
         });
@@ -268,6 +268,7 @@ impl Loop {
             other @ (Delivery::Prompt(..)
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
+            | Delivery::Handoff(..)
             | Delivery::Reply(..)
             | Delivery::Job(_)
             | Delivery::Cancelled) => {
@@ -303,6 +304,17 @@ impl Loop {
                     accept(ack);
                 } else {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
+                }
+            }
+            // Like a steer, a handoff starts a turn while idle: one
+            // `handoff` item per command, run at the turn's first step
+            // boundary.
+            Delivery::Handoff(id, args, ack) => {
+                if self.closing && input.pieces.is_empty() {
+                    reject(ack, ErrorCode::Closing, CLOSING);
+                } else {
+                    accept(ack);
+                    input.pieces.push(Queued::Handoff(id, args.instructions));
                 }
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
@@ -344,6 +356,13 @@ impl Loop {
                 } else {
                     reject(ack, ErrorCode::StaleRequest, STALE_STEER);
                 }
+            }
+            // Held until the next step boundary; not listed on
+            // `steering_queue`, which holds steering messages only.
+            Delivery::Handoff(id, args, ack) => {
+                accept(ack);
+                self.queued
+                    .push_back(Queued::Handoff(id, args.instructions));
             }
             Delivery::Reply(_, ack) => reject(ack, ErrorCode::StaleRequest, STALE_REPLY),
             Delivery::Close(ack) => self.take_close(ack),
@@ -397,7 +416,7 @@ fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
             Queued::Steer(message) => {
                 !std::mem::take(&mut prompt) && message.sender.command_id == *id
             }
-            Queued::Job(_) => false,
+            Queued::Job(_) | Queued::Handoff(..) => false,
         })
         .map(|index| input.pieces.remove(index))
         .is_some()
