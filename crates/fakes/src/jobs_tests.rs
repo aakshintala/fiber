@@ -100,20 +100,30 @@ fn stop_calls_that_jobs_stop_and_end_is_delivered() {
         .unwrap();
     let id = opened.started.job_id.clone();
     assert!(jobs.ended(Duration::from_millis(1)).is_none());
-    jobs.stop(&JobId("j_missing".into()));
+    assert!(!jobs.stop(&JobId("j_missing".into())));
     assert!(
         fired_rx.try_recv().is_err(),
         "an unknown id called this job's stop"
     );
-    jobs.stop(&id);
+    assert!(jobs.stop(&id));
     assert!(
         fired_rx.recv_timeout(DEADLINE).is_ok(),
         "waited {DEADLINE:?} for the job's stop"
     );
-    jobs.stop(&id);
+    assert!(jobs.stop(&id), "a second stop of a running job is true");
+    let racers: Vec<_> = (0..2)
+        .map(|_| {
+            let jobs = Arc::clone(&jobs);
+            let id = id.clone();
+            std::thread::spawn(move || jobs.stop(&id))
+        })
+        .collect();
+    for racer in racers {
+        assert!(racer.join().unwrap());
+    }
     assert!(
-        fired_rx.recv_timeout(DEADLINE).is_ok(),
-        "a second stop did not call the closure"
+        fired_rx.try_recv().is_err(),
+        "a later stop called the closure again"
     );
     let done = completed(&id.0, Outcome::Completed);
     opened.end.end(JobCompleted {
@@ -183,4 +193,56 @@ fn open_into_a_missing_directory_is_io() {
 
 fn fakes_temp() -> crate::TempDir {
     crate::TempDir::new("fiber-fake-jobs")
+}
+
+#[test]
+fn stop_after_the_end_is_false_and_calls_nothing() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let (fired_tx, fired_rx) = mpsc::channel();
+    let opened = jobs
+        .open(opening(
+            "echo hi",
+            Stop(Box::new(move || fired_tx.send(()).unwrap())),
+        ))
+        .unwrap();
+    let id = opened.started.job_id.clone();
+    opened.end.end(completed(&id.0, Outcome::Completed));
+    assert!(!jobs.stop(&id));
+    assert!(
+        fired_rx.try_recv().is_err(),
+        "an ended job's stop was called"
+    );
+}
+
+#[test]
+fn background_asks_each_live_call_and_counts_the_ones_that_move() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    assert_eq!(jobs.background(), 0);
+    let moving: std::sync::Arc<dyn Fn() -> bool + Send + Sync> = std::sync::Arc::new(|| true);
+    let staying: std::sync::Arc<dyn Fn() -> bool + Send + Sync> = std::sync::Arc::new(|| false);
+    let gone: std::sync::Arc<dyn Fn() -> bool + Send + Sync> = std::sync::Arc::new(|| true);
+    for call in [&moving, &staying, &gone] {
+        jobs.foreground(contract::jobs::Foreground(std::sync::Arc::downgrade(call)));
+    }
+    drop(gone);
+    assert_eq!(jobs.background(), 1);
+    drop(moving);
+    assert_eq!(jobs.background(), 0);
+    drop(staying);
+    assert_eq!(jobs.background(), 0);
+}
+
+#[test]
+fn registering_forgets_the_calls_that_are_gone() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    for _ in 0..3 {
+        let call: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| true);
+        jobs.foreground(contract::jobs::Foreground(Arc::downgrade(&call)));
+    }
+    let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| true);
+    jobs.foreground(contract::jobs::Foreground(Arc::downgrade(&live)));
+    assert_eq!(super::lock(&jobs.inner).foreground.len(), 1);
 }

@@ -10,7 +10,7 @@ use std::time::Duration;
 
 use contract::events::{JobCompleted, Outcome};
 use contract::inbox::Delivery;
-use contract::jobs::{JobRecord, OpenError, Opening, Stop};
+use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opening, Stop};
 use contract::shapes::{Failure, Process};
 use contract::{ErrorCode, JobId};
 use fakes::clock::FakeClock;
@@ -88,6 +88,7 @@ fn open_without_the_registry_arc_records_nothing() {
             jobs: Vec::new(),
             seq: 0,
             inbox: None,
+            foreground: Vec::new(),
         }),
         cv: Condvar::new(),
         me: Weak::new(),
@@ -360,4 +361,95 @@ fn an_end_after_the_loop_is_gone_is_still_recorded() {
     opened.end.end(ended_ok(&id));
     let answer = registry.wait(&id, 0, &CancelToken::new()).unwrap();
     assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
+}
+
+fn counted_stop(
+    registry: &Arc<Registry>,
+) -> (
+    JobId,
+    Arc<std::sync::atomic::AtomicUsize>,
+    contract::jobs::Opened,
+) {
+    let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let seen = Arc::clone(&calls);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "sleep".into(),
+            stop: Stop(Box::new(move || {
+                seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            })),
+        })
+        .unwrap();
+    (opened.started.job_id.clone(), calls, opened)
+}
+
+#[test]
+fn stop_through_the_trait_sends_the_stop_once_and_reports_running() {
+    let (_dir, registry) = world();
+    let (id, calls, opened) = counted_stop(&registry);
+    assert!(Jobs::stop(registry.as_ref(), &id));
+    assert!(
+        Jobs::stop(registry.as_ref(), &id),
+        "a second stop is still running"
+    );
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 1);
+    drop(opened);
+}
+
+#[test]
+fn stop_through_the_trait_on_an_ended_or_unknown_job_is_false() {
+    let (_dir, registry) = world();
+    let (id, calls, opened) = counted_stop(&registry);
+    opened.end.end(ended_ok(&id.0));
+    assert!(!Jobs::stop(registry.as_ref(), &id));
+    assert!(!Jobs::stop(registry.as_ref(), &JobId("j_missing".into())));
+    assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+}
+
+#[test]
+fn background_asks_each_live_call_once_and_counts_the_ones_that_move() {
+    let (_dir, registry) = world();
+    let asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let moves = |moves: bool| {
+        let asked = Arc::clone(&asked);
+        let call: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+            asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            moves
+        });
+        registry.foreground(Foreground(Arc::downgrade(&call)));
+        call
+    };
+    let first = moves(true);
+    let second = moves(false);
+    let dropped = moves(true);
+    drop(dropped);
+    assert_eq!(registry.background(), 1);
+    assert_eq!(
+        asked.load(std::sync::atomic::Ordering::SeqCst),
+        2,
+        "each live call is asked once; a dropped one is not"
+    );
+    drop(first);
+    assert_eq!(registry.background(), 0);
+    drop(second);
+    assert_eq!(registry.background(), 0);
+}
+
+#[test]
+fn background_with_no_calls_is_zero() {
+    let (_dir, registry) = world();
+    assert_eq!(registry.background(), 0);
+}
+
+#[test]
+fn registering_forgets_the_calls_that_are_gone() {
+    let (_dir, registry) = world();
+    for _ in 0..3 {
+        let call: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| true);
+        registry.foreground(Foreground(Arc::downgrade(&call)));
+    }
+    let live: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| true);
+    registry.foreground(Foreground(Arc::downgrade(&live)));
+    assert_eq!(super::lock(&registry.inner).foreground.len(), 1);
 }

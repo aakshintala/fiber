@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use contract::ErrorCode;
 use contract::clock::Wake;
 use contract::events::{JobStarted, Outcome};
-use contract::jobs::JobRecord;
+use contract::jobs::{JobRecord, Jobs as _};
 use contract::shapes::{ContentPart, Process};
 use contract::tool::{Cancel, Tool};
 use fakes::children::{Ready, escapes_group, ignores_sigterm, leaves_descendants};
@@ -937,6 +937,132 @@ fn a_command_moves_after_thirty_seconds_without_being_restarted() {
 }
 
 #[test]
+fn the_background_command_moves_a_running_call_before_thirty_seconds() {
+    let dir = fakes::TempDir::new("fiber-shell-commanded");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "BEFORE", "AFTER"),
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_secs(30), DEADLINE),
+        "the run did not park at 30 seconds"
+    );
+    assert_eq!(jobs.background(), 1);
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    assert!(
+        text(&output).starts_with("Moved to the background by the `background` command.\n"),
+        "{}",
+        text(&output)
+    );
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.process.is_none());
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    assert!(group_alive(pgid), "the command stopped the group");
+    assert_eq!(jobs.background(), 0, "a moved call was counted again");
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(600_000), DEADLINE),
+        "the job did not keep the timeout from the command's start"
+    );
+    release_block(ready.path());
+    let ended = jobs.ended(DEADLINE).expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    assert_eq!(job_output(dir.path(), &job), "BEFORE\nAFTER\n");
+    assert_eq!(jobs.started().len(), 1, "the command moved twice");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_finished_call_is_not_registered_as_foreground() {
+    let dir = fakes::TempDir::new("fiber-shell-finished");
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        "echo done".to_owned(),
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let output = running.output.recv_timeout(DEADLINE).expect("the result");
+    assert!(output.jobs.is_empty());
+    assert_eq!(jobs.background(), 0);
+    assert!(jobs.started().is_empty());
+}
+
+#[test]
+fn a_call_that_moved_by_thirty_seconds_is_not_moved_again() {
+    let dir = fakes::TempDir::new("fiber-shell-moved-once");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "BEFORE", "AFTER"),
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_secs(30), DEADLINE),
+        "the run did not park at 30 seconds"
+    );
+    running.clock.advance(Duration::from_secs(30));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    assert!(
+        text(&output).starts_with("Still running after 30 seconds"),
+        "{}",
+        text(&output)
+    );
+    assert_eq!(jobs.background(), 0);
+    assert_eq!(jobs.started().len(), 1);
+    release_block(ready.path());
+    jobs.ended(DEADLINE).expect("the job to finish");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_run_in_background_call_is_not_registered_as_foreground() {
+    let dir = fakes::TempDir::new("fiber-shell-bg-unregistered");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "a", "b"),
+        None,
+        true,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    running.output.recv_timeout(DEADLINE).expect("the receipt");
+    assert_eq!(jobs.background(), 0);
+    release_block(ready.path());
+    jobs.ended(DEADLINE).expect("the job to finish");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn a_timeout_at_thirty_seconds_stops_in_the_foreground() {
     let dir = fakes::TempDir::new("fiber-shell-thirty-timeout");
     let ready = Ready::new(dir.path());
@@ -1135,6 +1261,46 @@ fn stopping_a_job_cancels_it_and_a_turn_cancel_does_not() {
     assert!(ended.error.is_none());
     assert!(ended.output_tail.is_none());
     assert!(!group_alive(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_background_command_whose_open_fails_leaves_no_registration() {
+    let dir = fakes::TempDir::new("fiber-shell-commanded-open-fails");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::failing();
+    let running = start_jobs(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "BEFORE", "AFTER"),
+        None,
+        false,
+        Arc::clone(&jobs),
+        CancelToken::new(),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_secs(30), DEADLINE),
+        "the run did not park at 30 seconds"
+    );
+    assert_eq!(jobs.background(), 1);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(600_000), DEADLINE),
+        "the command did not fall back to the foreground"
+    );
+    assert_eq!(jobs.background(), 0, "a fallen-back call stayed registered");
+    release_block(ready.path());
+    let output = running.output.recv_timeout(DEADLINE).expect("the result");
+    assert!(
+        text(&output).contains("It could not move to the background"),
+        "{}",
+        text(&output)
+    );
     watchdog.stand_down(DEADLINE);
 }
 

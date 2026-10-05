@@ -26,6 +26,7 @@ use contract::events::{
     SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted,
 };
 use contract::inbox::{Delivery, Message};
+use contract::jobs::{Foreground, Jobs, Opening, Stop};
 use contract::provider::ToolDefinition;
 use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
@@ -33,6 +34,7 @@ use contract::{CommandId, ErrorCode, SessionId};
 use doors::{Session, mint};
 use fakes::Client;
 use fakes::clock::FakeClock;
+use fakes::jobs::FakeJobs;
 use log::Log;
 use serde_json::{Map, Value};
 
@@ -429,9 +431,14 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             );
 
             for name in [
-                "message", "job_stop", "background", "reload", "model", "credential",
+                "message",
+                "reload",
+                "model",
+                "credential",
                 "name",
-                "handoff", "rewind", "command",
+                "handoff",
+                "rewind",
+                "command",
             ] {
                 send(
                     &client,
@@ -1510,4 +1517,210 @@ fn shell_without_a_process_is_invalid_arguments() {
         })
         .unwrap();
     opened.close();
+}
+
+fn job_stop_line(id: &str, job_id: &str) -> String {
+    format!(r#"{{"id":"{id}","command":"job_stop","args":{{"job_id":"{job_id}"}}}}"#)
+}
+
+/// Opens a job on `jobs` whose stop signals `fired`.
+fn open_job(jobs: &FakeJobs, fired: mpsc::Sender<()>) -> contract::jobs::Opened {
+    jobs.open(Opening {
+        tool: "shell".into(),
+        description: "sleep 60".into(),
+        stop: Stop(Box::new(move || fired.send(()).unwrap())),
+    })
+    .unwrap()
+}
+
+#[test]
+fn job_stop_is_answered_on_the_reader_thread_while_the_loop_is_blocked() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let (fired_tx, fired_rx) = mpsc::channel();
+    let job = open_job(&jobs, fired_tx);
+    let job_id = job.started.job_id.0.clone();
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(jobs.clone());
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            // This body is the loop's side: it drains nothing until the
+            // stop has been sent, so the reader thread answered alone.
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_stop_line("c_stop", &job_id));
+            let accepted = response(&client, "c_stop");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_stop"));
+            assert!(
+                fired_rx.recv_timeout(DEADLINE).is_ok(),
+                "the job's stop was not sent"
+            );
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "job_stop waited for the drain"
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    drop(job);
+    opened.close();
+}
+
+#[test]
+fn job_stop_for_an_unknown_or_ended_job_is_rejected_stale() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let (fired_tx, fired_rx) = mpsc::channel();
+    let job = open_job(&jobs, fired_tx);
+    let ended_id = job.started.job_id.0.clone();
+    job.end.end(contract::events::JobCompleted {
+        job_id: job.started.job_id.clone(),
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+    });
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(jobs.clone());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            for (id, job_id) in [("c_1", "j_5e10c0ffee123456"), ("c_2", ended_id.as_str())] {
+                send(&client, &job_stop_line(id, job_id));
+                let rejected = response(&client, id);
+                assert_eq!(
+                    rejection(&rejected),
+                    ("stale_request", "That job is not running.")
+                );
+                assert_eq!(command_id(&rejected), Some(id));
+            }
+            assert!(
+                fired_rx.try_recv().is_err(),
+                "a stale stop called a job's stop"
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn job_stop_and_background_without_jobs_are_rejected_stale() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &job_stop_line("c_1", "j_5e10c0ffee123456"));
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                ("stale_request", "That job is not running.")
+            );
+            send(&client, r#"{"id":"c_2","command":"background"}"#);
+            let rejected = response(&client, "c_2");
+            assert_eq!(
+                rejection(&rejected),
+                ("stale_request", "No shell call is running.")
+            );
+            assert_eq!(command_id(&rejected), Some("c_2"));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn job_stop_with_a_malformed_job_id_is_invalid_arguments() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"job_stop"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                ("invalid_arguments", UNFIT)
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn background_asks_the_running_foreground_calls_and_writes_nothing() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let asked = Arc::new(AtomicBool::new(false));
+    let seen = Arc::clone(&asked);
+    let call: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(move || {
+        seen.store(true, Ordering::SeqCst);
+        true
+    });
+    jobs.foreground(Foreground(Arc::downgrade(&call)));
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(jobs.clone());
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"background"}"#);
+            let accepted = response(&client, "c_1");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert_eq!(command_id(&accepted), Some("c_1"));
+            assert!(
+                asked.load(Ordering::SeqCst),
+                "the call was not asked to move"
+            );
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "background waited for the drain"
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    drop(call);
+}
+
+#[test]
+fn background_with_no_call_moving_is_rejected_stale() {
+    let temp = Temp::new();
+    let jobs = FakeJobs::new(&temp.0);
+    let staying: Arc<dyn Fn() -> bool + Send + Sync> = Arc::new(|| false);
+    jobs.foreground(Foreground(Arc::downgrade(&staying)));
+    let opened = Opened::open(vec![]);
+    opened.session.jobs(jobs.clone());
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, r#"{"id":"c_1","command":"background"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_1")),
+                ("stale_request", "No shell call is running.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+    drop(staying);
 }

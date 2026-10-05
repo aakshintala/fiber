@@ -12,7 +12,7 @@ use std::time::Duration;
 
 use contract::clock::{Clock, Wake};
 use contract::events::{JobStarted, Outcome};
-use contract::jobs::Stop;
+use contract::jobs::{Jobs as _, Stop};
 use contract::shapes::ContentPart;
 use contract::tool::Cancel;
 use contract::{ErrorCode, JobId};
@@ -22,7 +22,7 @@ use fakes::kill_pid;
 
 use super::super::command::{Finished, MoveReason, StopKind};
 use super::{
-    JobCancel, PS_BOUND, align_char_boundary, description_of, format_rows, group_members,
+    JobCancel, MoveAsk, PS_BOUND, align_char_boundary, description_of, format_rows, group_members,
     output_tail, parse_ps, receipt, shell_sentence, to_completed,
 };
 
@@ -400,4 +400,57 @@ impl Wake for Hits {
     fn wake(&self) {
         self.0.fetch_add(1, Ordering::SeqCst);
     }
+}
+
+struct CountWake(AtomicUsize);
+
+impl Wake for CountWake {
+    fn wake(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+}
+
+#[test]
+fn a_move_request_sets_asked_and_wakes_the_drive_loop() {
+    let dir = fakes::TempDir::new("fiber-ask");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let waker = Arc::new(CountWake(AtomicUsize::new(0)));
+    let wake: Arc<dyn Wake> = waker.clone();
+    let (ask, request) = MoveAsk::register(jobs.as_ref(), Arc::downgrade(&wake));
+    assert!(!ask.asked(), "asked before any request");
+    assert_eq!(waker.0.load(Ordering::SeqCst), 0);
+    assert_eq!(jobs.background(), 1);
+    assert!(ask.asked());
+    assert_eq!(waker.0.load(Ordering::SeqCst), 1);
+    drop(request);
+    assert_eq!(jobs.background(), 0, "the jobs kept a finished call alive");
+}
+
+#[test]
+fn a_request_after_the_call_left_the_foreground_moves_nothing() {
+    let dir = fakes::TempDir::new("fiber-ask-over");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let waker = Arc::new(CountWake(AtomicUsize::new(0)));
+    let wake: Arc<dyn Wake> = waker.clone();
+    let (ask, _request) = MoveAsk::register(jobs.as_ref(), Arc::downgrade(&wake));
+    ask.end();
+    assert_eq!(jobs.background(), 0);
+    assert!(!ask.asked(), "a request after the end counted");
+    assert_eq!(
+        waker.0.load(Ordering::SeqCst),
+        0,
+        "a request after the end woke the loop"
+    );
+}
+
+#[test]
+fn a_request_after_it_was_asked_still_counts_until_the_end() {
+    let dir = fakes::TempDir::new("fiber-ask-twice");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let wake: Arc<dyn Wake> = Arc::new(CountWake(AtomicUsize::new(0)));
+    let (ask, _request) = MoveAsk::register(jobs.as_ref(), Arc::downgrade(&wake));
+    assert_eq!(jobs.background(), 1);
+    assert_eq!(jobs.background(), 1);
+    ask.end();
+    assert!(!ask.asked(), "an ended ask still reads as asked");
 }

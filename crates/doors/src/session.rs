@@ -61,6 +61,9 @@ pub(crate) struct Gate {
     cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
     driver_shell: Mutex<Option<Arc<dyn Tool>>>,
+    /// The session's jobs, which `job_stop` and `background` reach. None
+    /// leaves both with nothing to act on.
+    jobs: Mutex<Option<Arc<dyn contract::jobs::Jobs>>>,
     /// Driver shells running now, and whether `close` has stopped new ones.
     /// Both sit under this lock, so a shell that registers after `close`
     /// cannot miss the snapshot.
@@ -173,6 +176,13 @@ impl Session {
     /// With none set, `shell` stays an unknown command.
     pub fn shell(&self, tool: Arc<dyn Tool>) {
         *lock(&self.gate.driver_shell) = Some(tool);
+    }
+
+    /// The session's jobs, which the `job_stop` and `background` driver
+    /// commands act on (`docs/invocation.md`, "Driver commands"). With none
+    /// set, both are rejected `stale_request`: no job or call is running.
+    pub fn jobs(&self, jobs: Arc<dyn contract::jobs::Jobs>) {
+        *lock(&self.gate.jobs) = Some(jobs);
     }
 
     /// Ends the door side: stops accepting, unlinks the socket, drops `log`
@@ -297,6 +307,10 @@ impl Gate {
             shells.running.clone()
         };
         cancel_each(&running);
+    }
+
+    pub(crate) fn jobs(&self) -> Option<Arc<dyn contract::jobs::Jobs>> {
+        lock(&self.jobs).clone()
     }
 
     pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
@@ -473,6 +487,7 @@ fn open_in(
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
         driver_shell: Mutex::new(None),
+        jobs: Mutex::new(None),
         shells: Mutex::new(RunningShells {
             stopped: false,
             running: Vec::new(),
