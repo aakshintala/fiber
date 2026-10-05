@@ -91,9 +91,10 @@ pub(crate) fn post(
     url: &str,
     headers: &[(String, String)],
     body: &[u8],
+    direct: bool,
     cancel: &Arc<Cancel>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
-    post_signed(url, headers, body, None, cancel)
+    post_signed(url, headers, body, None, direct, cancel)
 }
 
 /// [`post`], with the headers `signer` adds for this request.
@@ -104,6 +105,7 @@ pub(crate) fn post_signed(
     headers: &[(String, String)],
     body: &[u8],
     signer: Option<&dyn Signer>,
+    direct: bool,
     cancel: &Arc<Cancel>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
     post_with(
@@ -112,7 +114,11 @@ pub(crate) fn post_signed(
         body,
         signer,
         cancel,
-        ureq::Proxy::try_from_env(),
+        if direct {
+            None
+        } else {
+            ureq::Proxy::try_from_env()
+        },
     )
 }
 

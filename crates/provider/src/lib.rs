@@ -43,6 +43,11 @@ pub struct Endpoint {
     pub max_output_tokens: Option<u64>,
     /// Extra request body fields, added last.
     pub extra_body: Map<String, Value>,
+    /// Connect without a proxy even when the environment names one. False
+    /// by default, so production behaviour is unchanged; tests set it to
+    /// reach a local server directly whatever the shell names
+    /// (`docs/dependencies.md`, "Proxies").
+    pub direct: bool,
 }
 
 impl Endpoint {

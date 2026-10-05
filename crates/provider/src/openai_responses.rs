@@ -71,6 +71,7 @@ impl Responses {
             headers,
             body: body(endpoint, request),
             provider: endpoint.provider.clone(),
+            direct: endpoint.direct,
             cancel: Arc::default(),
         }
     }
@@ -93,26 +94,39 @@ pub struct Call {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     provider: String,
+    direct: bool,
     cancel: Arc<Cancel>,
 }
 
 impl Call {
     /// Sends the request and returns the reply's bytes, unread.
     pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        http::post(&self.url, &self.headers, &self.body, &self.cancel).map(|(body, _)| body)
+        http::post(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.direct,
+            &self.cancel,
+        )
+        .map(|(body, _)| body)
     }
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (reply, should_retry) =
-            match http::post(&self.url, &self.headers, &self.body, &self.cancel) {
-                Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
-                Err(e) => {
-                    let should_retry = e.should_retry();
-                    (Err(e), should_retry)
-                }
-            };
+        let (reply, should_retry) = match http::post(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.direct,
+            &self.cancel,
+        ) {
+            Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
+            Err(e) => {
+                let should_retry = e.should_retry();
+                (Err(e), should_retry)
+            }
+        };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
@@ -245,6 +259,12 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 "name": call.name,
                 "arguments": arguments_text(&call.arguments),
             })),
+            // The flag is ignored: OpenAI's Responses API defines no error
+            // field on a function-call output (openai-openapi
+            // `FunctionCallOutputItemParam` / `FunctionToolCallOutput`:
+            // `type, call_id, output, id, name, namespace, caller, status`,
+            // where `status` is item progress, not tool failure), so a
+            // failed result sends the same bytes as a success.
             Input::ToolResult {
                 action_id, text, ..
             } => Some(json!({

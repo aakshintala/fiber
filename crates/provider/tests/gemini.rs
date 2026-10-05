@@ -70,6 +70,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         model: "gemini-3.1-flash-lite".into(),
         base_url: format!("{}/v1beta", server.url()),
         key: Some("AIza-secret".into()),
+        direct: true,
         ..Endpoint::default()
     }
 }
@@ -939,6 +940,7 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     listener.set_nonblocking(true).unwrap();
     let endpoint = Endpoint {
         base_url: format!("http://{}", listener.local_addr().unwrap()),
+        direct: true,
         ..Endpoint::default()
     };
     let call = Gemini::new(endpoint).request(&request());
@@ -988,6 +990,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let (url, _hold) = stalling_server();
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let call: Arc<dyn ModelCall> = Arc::from(Gemini::new(endpoint).call(&request()));
@@ -1378,4 +1381,50 @@ fn wire_tools_is_what_the_request_sends() {
     sorted.sort();
     assert_eq!(names, sorted);
     assert_eq!(names.len(), 24);
+}
+
+#[test]
+fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
+    // A failed call sends the documented `error` key in place of `output`
+    // (googleapis `google/ai/generativelanguage/v1beta/content.proto`,
+    // `FunctionResponse.response`: "if the function call failed to execute,
+    // the response can have an \"error\" key"). Gemini defines no boolean flag.
+    let conversation = |is_error: bool| {
+        vec![
+            Input::ToolCall {
+                action_id: ActionId("a_1".into()),
+                call: ToolCallRequested {
+                    name: "plot".into(),
+                    arguments: json!({"city": "Paris"}),
+                    provider_id: Some(ProviderCallId("c1".into())),
+                    repair: None,
+                    ran_by: None,
+                },
+            },
+            Input::ToolResult {
+                action_id: ActionId("a_1".into()),
+                text: "boom".into(),
+                is_error,
+            },
+        ]
+    };
+    let part = |is_error: bool| {
+        let server = ProviderServer::start([completed_reply()]).unwrap();
+        let request = ModelRequest {
+            conversation: conversation(is_error),
+            ..request()
+        };
+        run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+            .0
+            .unwrap();
+        sent_body(&server, 0)["contents"][1]["parts"][0].clone()
+    };
+    assert_eq!(
+        part(true),
+        json!({"functionResponse": {"name": "plot", "id": "c1", "response": {"error": "boom"}}})
+    );
+    assert_eq!(
+        part(false),
+        json!({"functionResponse": {"name": "plot", "id": "c1", "response": {"output": "boom"}}})
+    );
 }

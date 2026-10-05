@@ -80,6 +80,7 @@ impl Gemini {
             headers,
             body: body(endpoint, request),
             provider: endpoint.provider.clone(),
+            direct: endpoint.direct,
             cancel: Arc::default(),
         }
     }
@@ -102,19 +103,25 @@ pub struct Call {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     provider: String,
+    direct: bool,
     cancel: Arc<Cancel>,
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (reply, should_retry) =
-            match http::post(&self.url, &self.headers, &self.body, &self.cancel) {
-                Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
-                Err(e) => {
-                    let should_retry = e.should_retry();
-                    (Err(retry_info(e)), should_retry)
-                }
-            };
+        let (reply, should_retry) = match http::post(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.direct,
+            &self.cancel,
+        ) {
+            Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
+            Err(e) => {
+                let should_retry = e.should_retry();
+                (Err(retry_info(e)), should_retry)
+            }
+        };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
@@ -358,14 +365,26 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 );
             }
             Input::ToolResult {
-                action_id, text, ..
+                action_id,
+                text,
+                is_error,
             } => {
                 park(&mut out, &mut signature);
                 let call = calls.get(action_id);
+                // A failed call sends the documented `error` key in place
+                // of `output` (googleapis
+                // `google/ai/generativelanguage/v1beta/content.proto`,
+                // `FunctionResponse.response`: "if the function call failed
+                // to execute, the response can have an \"error\" key").
+                let result = if *is_error {
+                    json!({"error": text})
+                } else {
+                    json!({"output": text})
+                };
                 let response = with(
                     json!({
                         "name": call.map_or("", |c| c.name.as_str()),
-                        "response": {"output": text},
+                        "response": result,
                     }),
                     call.and_then(|c| c.provider_id.as_ref())
                         .map(|id| json!({"id": id.0})),
