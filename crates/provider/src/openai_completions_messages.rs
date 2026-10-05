@@ -214,10 +214,11 @@ fn mark(message: &mut Map<String, Value>, lifetime: &CacheLifetime) {
 }
 
 /// Pushes one user message carrying the run's images, each as an `image_url`
-/// part with no text part, after the run's last tool message. The run's
-/// last tool result's `ends` entry moves to cover it, so `previous_end`
-/// lands where the previous request's last marker was. Nothing is pushed
-/// when the run held no image.
+/// part with no text part, after the run's last tool message. Every `ends`
+/// entry from the run's last tool result to the end moves to cover it,
+/// so `previous_end` lands where the previous request's last marker was,
+/// including when a dropped input sits between the result and the flush.
+/// Nothing is pushed when the run held no image.
 fn flush_images(
     out: &mut Vec<Map<String, Value>>,
     ends: &mut [usize],
@@ -234,8 +235,10 @@ fn flush_images(
         })
         .collect();
     out.push(message(json!({"role": "user", "content": parts})));
-    if let Some(end) = last_tool.and_then(|last| ends.get_mut(last)) {
-        *end = out.len();
+    if let Some(last) = last_tool {
+        for end in ends.iter_mut().skip(last) {
+            *end = out.len();
+        }
     }
 }
 

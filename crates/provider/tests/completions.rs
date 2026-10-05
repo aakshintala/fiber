@@ -1685,3 +1685,44 @@ fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
     assert_eq!(previous_end["messages"][4]["content"], marked_image(&hour));
     assert_eq!(previous_end["messages"][3]["content"], "18 C, clear");
 }
+
+#[test]
+fn a_dropped_input_after_a_tool_result_does_not_break_the_previous_end() {
+    // A reasoning input for another model reference adds no message, so its
+    // `ends` entry still points at the tool message when the image message
+    // is flushed. The previous-end marker must land on the image message
+    // the run ends with, not the tool message.
+    let session = image_session();
+    let mut conversation = image_turn(
+        "a_1",
+        "call_1",
+        "18 C, clear",
+        vec![png_ref("artifacts/i_1.png")],
+    );
+    conversation.push(Input::Reasoning {
+        model: "openai/gpt-6-luna".into(),
+        text: "another model's thoughts".into(),
+        provider_item: Some(json!({"reasoning_content": "other"})),
+    });
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(
+        Endpoint {
+            base_url: endpoint(&server).base_url,
+            ..markers()
+        },
+        &ModelRequest {
+            conversation,
+            session_dir: session.path().to_path_buf(),
+            previous_end: Some(3),
+            ..request()
+        },
+    );
+    let messages = sent_body(&server, 0)["messages"].clone();
+    assert_eq!(messages[2]["content"], "18 C, clear");
+    assert_eq!(
+        messages[3]["content"],
+        json!([{"type": "image_url",
+            "image_url": {"url": "data:image/png;base64,YWJjZA=="},
+            "cache_control": {"type": "ephemeral"}}])
+    );
+}
