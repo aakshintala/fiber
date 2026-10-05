@@ -1,7 +1,11 @@
 //! Sending a request over HTTP, on a socket Fiber owns so another thread can
 //! close it (`docs/architecture.md`, "Cancellation"). ureq runs behind a
 //! connector that keeps a handle to each `TcpStream` it opens; shutting that
-//! handle down ends a read blocked inside ureq, under TLS too. A provider
+//! handle down ends a read blocked inside ureq, under TLS too. The chain
+//! tunnels through the proxy the environment names (`docs/dependencies.md`,
+//! "Proxies"): the proxy step runs first and re-runs the chain to open the
+//! proxy socket, which this connector then keeps like any other, so a cancel
+//! still closes it. A provider
 //! that signs its requests is asked for its headers on every send, a retry
 //! included (`docs/model-routing.md`, "Signing a request").
 
@@ -15,7 +19,8 @@ use ureq::config::Config;
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::DefaultResolver;
 use ureq::unversioned::transport::{
-    Buffers, ConnectionDetails, Connector, LazyBuffers, NextTimeout, RustlsConnector, Transport,
+    Buffers, ConnectProxyConnector, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout,
+    RustlsConnector, Transport,
 };
 
 use crate::Error;
@@ -101,6 +106,27 @@ pub(crate) fn post_signed(
     signer: Option<&dyn Signer>,
     cancel: &Arc<Cancel>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
+    post_with(
+        url,
+        headers,
+        body,
+        signer,
+        cancel,
+        ureq::Proxy::try_from_env(),
+    )
+}
+
+/// [`post_signed`], with the proxy chosen by the caller: `None` connects
+/// directly, `Some` tunnels through it. `post_signed` passes what the
+/// environment names, so tests pass an explicit value instead.
+fn post_with(
+    url: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    signer: Option<&dyn Signer>,
+    cancel: &Arc<Cancel>,
+    proxy: Option<ureq::Proxy>,
+) -> Result<(impl Read + use<>, Option<bool>), Error> {
     // A call cancelled before it starts never resolves or connects.
     if cancel.is_cancelled() {
         return Err(Error::Connection("the call was cancelled".into()));
@@ -126,13 +152,18 @@ pub(crate) fn post_signed(
         .build();
     let config = Config::builder()
         .tls_config(tls)
+        .proxy(proxy)
         .http_status_as_error(false)
         .max_redirects(0)
         .build();
     // One agent per call, so its connector keeps this call's socket.
     // debt: builds the TLS config per call; share one agent with a
     // per-call socket slot if the handshake setup shows in a profile.
-    let connector = KeepSocket(Arc::clone(cancel)).chain(RustlsConnector::default());
+    // The proxy step runs before the socket step: it opens the proxy
+    // connection by re-running the chain, so the socket this connector
+    // keeps is the proxy's, and a cancel still closes the tunnel.
+    let connector = ConnectProxyConnector::default().chain(KeepSocket(Arc::clone(cancel)));
+    let connector = connector.chain(RustlsConnector::default());
     let agent = Agent::with_parts(config, connector, DefaultResolver::default());
     let mut request = agent.post(url);
     for (name, value) in headers.iter().chain(&signed) {
@@ -165,22 +196,27 @@ pub(crate) fn post_signed(
     Ok((response.into_body().into_reader(), should_retry))
 }
 
-/// The connector that opens the socket and keeps a handle to it.
+/// The connector that opens the socket and keeps a handle to it. A tunnel
+/// the proxy step opened passes through untouched: the socket kept while
+/// opening the proxy connection is already the one a cancel must close.
 #[derive(Debug)]
 struct KeepSocket(Arc<Cancel>);
 
-impl Connector<()> for KeepSocket {
-    type Out = Socket;
+impl Connector<Either<(), Box<dyn Transport>>> for KeepSocket {
+    type Out = Either<Box<dyn Transport>, Socket>;
 
     fn connect(
         &self,
         details: &ConnectionDetails,
-        _chained: Option<()>,
-    ) -> Result<Option<Socket>, ureq::Error> {
+        chained: Option<Either<(), Box<dyn Transport>>>,
+    ) -> Result<Option<Self::Out>, ureq::Error> {
         // debt: a connect blocked on an unreachable address is not
         // cancellable; the cancel lands as soon as it returns. Connect with a
         // timeout or from a cancellable thread if a cancel stuck on connect is
         // reported.
+        if let Some(Either::B(tunnel)) = chained {
+            return Ok(Some(Either::A(tunnel)));
+        }
         let addrs: Vec<_> = details.addrs.iter().copied().collect();
         let stream = TcpStream::connect(addrs.as_slice())?;
         if details.config.no_delay() {
@@ -191,11 +227,11 @@ impl Connector<()> for KeepSocket {
             details.config.input_buffer_size(),
             details.config.output_buffer_size(),
         );
-        Ok(Some(Socket {
+        Ok(Some(Either::B(Socket {
             stream,
             buffers,
             open: true,
-        }))
+        })))
     }
 }
 

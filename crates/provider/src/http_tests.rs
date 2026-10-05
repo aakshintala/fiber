@@ -1,5 +1,7 @@
 use std::io::Write;
 use std::net::{TcpListener, TcpStream};
+use std::sync::mpsc;
+use std::thread;
 
 use ureq::Timeout;
 use ureq::unversioned::transport::time::Duration;
@@ -213,4 +215,332 @@ fn retry_after_is_kept_only_when_finite_and_non_negative() {
         };
         assert_eq!(retry_after, expected, "retry-after: {header}");
     }
+}
+
+/// How long the test waits for the server to see the call.
+const REQUEST_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long the test waits for a cancelled call's thread to return.
+const CALL_WITHIN: std::time::Duration = std::time::Duration::from_secs(5);
+
+#[test]
+fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
+    let server = fakes::ProviderServer::start([fakes::Response::stream("data: {}\n\n")]).unwrap();
+    server.hold();
+    let url = format!("{}/v1", server.url());
+    let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    let (done, finished) = mpsc::channel();
+    let worker = std::sync::Arc::clone(&cancel);
+    thread::spawn(move || {
+        // An explicit direct connection, so the test holds without a proxy
+        // whatever the developer's shell names: `post` would read it.
+        let result = super::post_with(&url, &[], b"{}", None, &worker, None).map(|_| ());
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    assert!(
+        server.await_requests(1, REQUEST_WITHIN),
+        "the server saw the call before it was cancelled"
+    );
+    cancel.cancel();
+    let result = finished
+        .recv_timeout(CALL_WITHIN)
+        .expect("the cancelled call returns");
+    assert!(
+        matches!(result, Err(crate::Error::Connection(_))),
+        "a cancelled call fails to connect: {result:?}"
+    );
+}
+
+/// How long a test waits for the proxy to record a CONNECT.
+const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// How long a test waits for the proxy to see a tunnel close.
+const CLOSE_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+/// A proxy value pointing at `proxy`, bypassing nothing.
+fn proxy_through(proxy: &fakes::ConnectProxy) -> ureq::Proxy {
+    ureq::Proxy::builder(ureq::ProxyProtocol::Http)
+        .host("127.0.0.1")
+        .port(proxy.port())
+        .build()
+        .unwrap()
+}
+
+/// The `host:port` the proxy records for a call to `server`.
+fn target_of(server: &fakes::ProviderServer) -> String {
+    let url = server.url();
+    let port = url.rsplit(':').next().unwrap();
+    format!("127.0.0.1:{port}")
+}
+
+#[test]
+fn a_call_with_a_proxy_value_tunnels_through_the_proxy() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let target = target_of(&server);
+    let url = format!("{}/v1", server.url());
+    let (mut body, _) = super::post_with(
+        &url,
+        &[],
+        b"{}",
+        None,
+        &std::sync::Arc::default(),
+        Some(proxy_through(&proxy)),
+    )
+    .unwrap();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+    assert_eq!(text, "{}");
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    assert_eq!(proxy.connects(), [target]);
+    assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn a_call_past_no_proxy_bypasses_the_proxy() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let bypass = ureq::Proxy::builder(ureq::ProxyProtocol::Http)
+        .host("127.0.0.1")
+        .port(proxy.port())
+        .no_proxy("127.0.0.1")
+        .build()
+        .unwrap();
+    let url = format!("{}/v1", server.url());
+    let (mut body, _) = super::post_with(
+        &url,
+        &[],
+        b"{}",
+        None,
+        &std::sync::Arc::default(),
+        Some(bypass),
+    )
+    .unwrap();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+    assert_eq!(text, "{}");
+    assert!(
+        proxy.connects().is_empty(),
+        "nothing went through the proxy"
+    );
+    assert_eq!(server.requests().len(), 1);
+}
+
+/// How long the test waits for the origin to see the handshake bytes.
+const HANDSHAKE_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+#[test]
+fn tls_runs_end_to_end_inside_the_tunnel() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let (heard, first) = mpsc::channel();
+    let origin = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        stream.set_read_timeout(Some(HANDSHAKE_WITHIN)).unwrap();
+        let mut byte = [0; 1];
+        std::io::Read::read_exact(&mut stream, &mut byte).unwrap();
+        heard.send(byte[0]).unwrap();
+    });
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let target = format!("127.0.0.1:{port}");
+    let (done, finished) = mpsc::channel();
+    let through = proxy_through(&proxy);
+    thread::spawn(move || {
+        let result = super::post_with(
+            &format!("https://127.0.0.1:{port}/"),
+            &[],
+            b"{}",
+            None,
+            &std::sync::Arc::default(),
+            Some(through),
+        )
+        .map(|_| ());
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    assert_eq!(
+        first
+            .recv_timeout(HANDSHAKE_WITHIN)
+            .expect("the origin saw the handshake"),
+        0x16,
+        "a TLS ClientHello opens the tunnelled bytes"
+    );
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    let result = finished
+        .recv_timeout(CALL_WITHIN)
+        .expect("the tunnelled call returns");
+    assert!(
+        matches!(result, Err(crate::Error::Connection(_))),
+        "a tunnel to nowhere fails to connect: {result:?}"
+    );
+    origin.join().unwrap();
+}
+
+#[test]
+fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
+    let server = fakes::ProviderServer::start([fakes::Response::stream("data: {}\n\n")]).unwrap();
+    server.hold();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let target = target_of(&server);
+    let url = format!("{}/v1", server.url());
+    let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    let (done, finished) = mpsc::channel();
+    let worker = std::sync::Arc::clone(&cancel);
+    let through = proxy_through(&proxy);
+    thread::spawn(move || {
+        let result = super::post_with(&url, &[], b"{}", None, &worker, Some(through)).map(|_| ());
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
+    });
+    assert!(
+        server.await_requests(1, REQUEST_WITHIN),
+        "the server saw the tunnelled call before it was cancelled"
+    );
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    cancel.cancel();
+    let result = finished
+        .recv_timeout(CALL_WITHIN)
+        .expect("the cancelled tunnelled call returns");
+    assert!(
+        matches!(result, Err(crate::Error::Connection(_))),
+        "a cancelled tunnelled call fails to connect: {result:?}"
+    );
+    assert!(
+        proxy.await_closed(1, CLOSE_WITHIN),
+        "the proxy saw the tunnel close"
+    );
+}
+
+#[test]
+fn a_call_cancelled_before_it_starts_never_connects_to_the_proxy() {
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let cancel: std::sync::Arc<super::Cancel> = std::sync::Arc::default();
+    cancel.cancel();
+    let result = super::post_with(
+        &format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        &cancel,
+        Some(proxy_through(&proxy)),
+    )
+    .map(|_| ());
+    assert!(
+        matches!(result, Err(crate::Error::Connection(_))),
+        "a pre-cancelled call fails before connecting: {result:?}"
+    );
+    assert!(
+        proxy.connects().is_empty(),
+        "nothing went through the proxy"
+    );
+    assert!(server.requests().is_empty());
+}
+
+#[test]
+fn a_proxy_that_refuses_connect_fails_the_call() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let refused = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut head = String::new();
+        let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+        loop {
+            let mut line = String::new();
+            std::io::BufRead::read_line(&mut reader, &mut line).unwrap();
+            head.push_str(&line);
+            if line.trim().is_empty() {
+                break;
+            }
+        }
+        assert!(
+            head.starts_with("CONNECT"),
+            "the client sent CONNECT: {head:?}"
+        );
+        stream
+            .write_all(b"HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n")
+            .unwrap();
+    });
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let denied = ureq::Proxy::builder(ureq::ProxyProtocol::Http)
+        .host("127.0.0.1")
+        .port(port)
+        .build()
+        .unwrap();
+    let result = super::post_with(
+        &format!("{}/v1", server.url()),
+        &[],
+        b"{}",
+        None,
+        &std::sync::Arc::default(),
+        Some(denied),
+    )
+    .map(|_| ());
+    let Err(crate::Error::Connection(why)) = result else {
+        panic!("a refused CONNECT was not a connection failure: {result:?}");
+    };
+    assert!(why.contains("403"), "the refusal names its status: {why}");
+    refused.join().unwrap();
+}
+
+/// Present in the re-executed child, absent in the parent.
+const PROXY_CHILD: &str = "FIBER_TEST_PROXY_CHILD";
+
+/// The server URL, passed to the child on its environment.
+const PROXY_CHILD_SERVER: &str = "FIBER_TEST_PROXY_SERVER";
+
+#[test]
+fn the_proxy_environment_reaches_model_calls() {
+    if std::env::var_os(PROXY_CHILD).is_some() {
+        let url = std::env::var(PROXY_CHILD_SERVER).unwrap();
+        let (mut body, _) = super::post_signed(
+            &format!("{url}/v1"),
+            &[],
+            b"{}",
+            None,
+            &std::sync::Arc::default(),
+        )
+        .unwrap();
+        let mut text = String::new();
+        std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+        assert_eq!(text, "{}");
+        return;
+    }
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let target = target_of(&server);
+    let proxy_url = proxy.url();
+    let server_url = server.url();
+    let output = fakes::rerun(
+        "http::tests::the_proxy_environment_reaches_model_calls",
+        &[
+            (PROXY_CHILD, "1"),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            (PROXY_CHILD_SERVER, server_url.as_str()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "the proxy-env child called through the proxy:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        proxy.await_connects(1, CONNECT_WITHIN),
+        "the proxy recorded CONNECT {target}"
+    );
+    assert_eq!(proxy.connects(), [target]);
 }
