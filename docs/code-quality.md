@@ -108,7 +108,9 @@ continues from the log, which is fsynced around every side effect
 unwind, a panic inside a function that a Lua extension calls unwinds through
 Lua's frames, past the extension's `pcall`, to the Rust caller, and leaves any
 mutex the callback held poisoned. Abort ends the process at the panic, so no
-code runs on half-changed state. Probed with mlua 0.12 on Linux x86_64
+code runs on half-changed state. It also means no design can rely on code
+running after a panic: cleanup on drop, `catch_unwind` and lock-poison
+recovery never run on one. Probed with mlua 0.12 on Linux x86_64
 ([research/extension-runtime/linux-containment](../research/extension-runtime/linux-containment/README.md)).
 The lints above make code that can panic fail to compile, so the bar holds
 for host callbacks along with everything else.

@@ -317,7 +317,8 @@ waits for a generic sign that things have settled, because "the screen stopped
 changing" is not "the server is listening".
 
 Every wait has a deadline. On expiry the test fails with an assertion naming
-what it waited for. nextest's per-test timeout is at least twice the sum of the
+what it waited for. Calling code that blocks is a wait too, so the test runs
+it on a thread and receives its result with a deadline. nextest's per-test timeout is at least twice the sum of the
 test's own deadlines, so a hang reports which wait expired, not a harness kill.
 
 A test advances a fake clock only after a signal that the code under test is
