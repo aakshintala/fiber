@@ -171,7 +171,12 @@ fn dollar_anchor_ahead(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> 
 /// Translates the bracket expression whose opening `[` was just read:
 /// consumes through the closer from `chars`. Backslashes inside are
 /// escaped, a leading `]` is kept, and `[:class:]` names pass through.
-/// Nothing when no closer follows.
+/// Nothing when no closer follows, when a nested `[` opens a character
+/// class, a collating element or an equivalence element instead of a
+/// member, or when `--` appears: an invalid class errors in GNU, a valid
+/// element has no escaping that keeps GNU's reading, and a `--` there is
+/// a range or an error in GNU, never set difference, so the system grep
+/// decides each case.
 ///
 /// Rust reads `&&`, `~~`, `--` and a nested `[` as set operators while
 /// GNU reads them as members, so `&` and `~` escape, a `[` outside
@@ -216,6 +221,13 @@ fn translate_class(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opti
                 }
                 continue;
             }
+            // A `[` opening a character class (`[:`), a collating
+            // element (`[.`) or an equivalence element (`[=`) never reads
+            // as a member: the system reports an invalid one and runs a
+            // valid element, so it decides either way.
+            if matches!(chars.peek(), Some(':') | Some('.') | Some('=')) {
+                return None;
+            }
             // Any other `[` is a member in GNU but opens a set in Rust:
             // escape it.
             text.push_str("\\[");
@@ -247,8 +259,8 @@ fn translate_class(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opti
 
 /// The `:...:]` opening after a `[` inside a bracket expression, through
 /// its closer: consumes nothing unless the closer follows, when the
-/// consumed text is returned. A `[` with no `:]` after it stays an
-/// ordinary member.
+/// consumed text is returned. A `[` with no `:]` after it is left for the
+/// caller: an ordinary member, unless it opens a class or an element.
 fn class_chunk(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
     if chars.peek() != Some(&':') {
         return None;
@@ -275,11 +287,13 @@ fn class_chunk(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<S
 
 /// Translates GNU extensions in an extended regular expression: `\<` and
 /// `\>` become word boundaries, `\1` to `\9` fall back. The rest is already
-/// ripgrep's syntax, except inside `[...]`: there Rust reads `&&`, `~~`,
+/// ripgrep's syntax, except inside `[...]`: there a backslash is an
+/// ordinary member, only the first `^` negates, and Rust reads `&&`, `~~`,
 /// `--` and a nested `[` as set operators while GNU reads members, so
 /// `&` and `~` escape, a `[` outside `[:...:]` escapes, and a class
 /// holding `--` hands over to the system grep, as
-/// [`translate_class`] does for basic expressions.
+/// [`translate_class`] does for basic expressions. An unterminated class
+/// hands over too: the system reports it.
 ///
 /// `` \` `` and `\'` pass through untouched: ripgrep reads them as literal
 /// characters where GNU anchors, a corner too rare to hand over.
@@ -288,13 +302,26 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
     let mut out = String::new();
     // Whether the scan stands inside a bracket expression.
     let mut class = false;
-    // Whether only `^` and a leading `]` were read in the class: a `]`
-    // here is a member, not the closer.
+    // Whether no member was read in the class yet: only there `^` negates.
+    let mut first = false;
+    // Whether only the negation was read in the class: a `]` here is a
+    // member, not the closer.
     let mut fresh = false;
     // The previous raw char in the class, for `--`.
     let mut prev = '\0';
     while let Some(current) = chars.next() {
         if current == '\\' {
+            if class {
+                // Inside brackets a backslash is an ordinary member, as
+                // the runner's grep reads it: keep it, and read what
+                // follows as a member on its own pass. A trailing one
+                // leaves the bracket open, handing over below.
+                out.push_str(r"\\");
+                first = false;
+                fresh = false;
+                prev = '\\';
+                continue;
+            }
             let next = chars.next()?;
             match next {
                 '<' => out.push_str(r"\b{start}"),
@@ -305,10 +332,6 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
                     out.push(next);
                 }
             }
-            if class {
-                fresh = false;
-                prev = next;
-            }
             continue;
         }
         if class {
@@ -316,14 +339,18 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
                 out.push(']');
                 if fresh {
                     fresh = false;
+                    first = false;
                     prev = ']';
                 } else {
                     class = false;
                 }
                 continue;
             }
-            if current == '^' && fresh {
+            if current == '^' && first {
+                // Only the first caret negates: a later one is a member,
+                // while a `]` stays leading after the negation (`[^]]`).
                 out.push('^');
+                first = false;
                 prev = '^';
                 continue;
             }
@@ -339,10 +366,17 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
                         }
                         prev = member;
                     }
+                    first = false;
                     fresh = false;
                     continue;
                 }
+                // As in [`translate_class`]: a class or element opener
+                // never reads as a member, so the system decides.
+                if matches!(chars.peek(), Some(':') | Some('.') | Some('=')) {
+                    return None;
+                }
                 out.push_str(r"\[");
+                first = false;
                 fresh = false;
                 prev = '[';
                 continue;
@@ -350,6 +384,7 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
             if current == '&' || current == '~' {
                 out.push('\\');
                 out.push(current);
+                first = false;
                 fresh = false;
                 prev = current;
                 continue;
@@ -358,6 +393,7 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
                 return None;
             }
             out.push(current);
+            first = false;
             fresh = false;
             prev = current;
             continue;
@@ -365,11 +401,16 @@ pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
         if current == '[' {
             out.push('[');
             class = true;
+            first = true;
             fresh = true;
             prev = '[';
             continue;
         }
         out.push(current);
+    }
+    // An open bracket never closed hands over: the system reports it.
+    if class {
+        return None;
     }
     Some(out)
 }

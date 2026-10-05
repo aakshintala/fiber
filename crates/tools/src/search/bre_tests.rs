@@ -157,6 +157,288 @@ fn ere_double_dash_in_a_class_hands_over() {
 }
 
 #[test]
+fn bre_second_caret_is_a_member() {
+    // Only the first caret negates; the runner's grep reads `[^^]` as
+    // every character but `^`.
+    assert_eq!(bre("[^^]"), Some("[^^]".to_owned()));
+    assert_eq!(bre("[^^][ab]"), Some("[^^][ab]".to_owned()));
+    assert_eq!(bre("[^]^]"), Some("[^]^]".to_owned()));
+}
+
+#[test]
+fn ere_second_caret_is_a_member() {
+    // The repeated `^` left `fresh` set, so `[^^][ab]` translated to
+    // `[^^]\[ab]` and missed `xa`: only the first caret negates now.
+    assert_eq!(translate_ere("[^^]"), Some("[^^]".to_owned()));
+    assert_eq!(translate_ere("[^^][ab]"), Some("[^^][ab]".to_owned()));
+    assert_eq!(translate_ere("[^]^]"), Some("[^]^]".to_owned()));
+    assert_eq!(translate_ere("[a^]"), Some("[a^]".to_owned()));
+}
+
+#[test]
+fn ere_backslash_is_a_member_in_a_class() {
+    // Inside brackets a backslash is ordinary, as the runner's grep
+    // reads it: `\d` there is a backslash or `d`, never a digit class.
+    assert_eq!(translate_ere("[\\]"), Some("[\\\\]".to_owned()));
+    assert_eq!(translate_ere("[\\d]"), Some("[\\\\d]".to_owned()));
+    assert_eq!(translate_ere("[a\\-z]"), Some("[a\\\\-z]".to_owned()));
+    assert_eq!(translate_ere("[a\\]]"), Some("[a\\\\]]".to_owned()));
+}
+
+#[test]
+fn ere_unterminated_class_hands_over() {
+    // An open bracket never closed hands over before anything is read:
+    // the system reports it.
+    assert_eq!(translate_ere("[a"), None);
+    assert_eq!(translate_ere("[]"), None);
+    assert_eq!(translate_ere("[^]"), None);
+    assert_eq!(translate_ere("[a\\"), None);
+}
+
+#[test]
+fn class_and_element_openers_hand_over() {
+    // A `[` opening a character class (`[:`), a collating element (`[.`)
+    // or an equivalence element (`[=`) never reads as a member: the
+    // runner's grep errors on an invalid one and runs a valid element,
+    // neither of which an escaping keeps, so the system decides.
+    for pattern in ["[[.a.]]", "[[=a=]]", "[a[.b]", "[a[=b]", "[a[:b]"] {
+        assert_eq!(bre(pattern), None, "{pattern:?}");
+        assert_eq!(translate_ere(pattern), None, "{pattern:?}");
+    }
+}
+
+/// One bracket pattern and its pinned translations: `None` hands over to
+/// the system grep before anything is read.
+struct BracketCase {
+    /// The pattern as given.
+    pattern: &'static str,
+    /// The BRE translation, or nothing for the handover.
+    bre: Option<&'static str>,
+    /// The ERE translation, or nothing for the handover.
+    ere: Option<&'static str>,
+}
+
+/// Every position-dependent bracket rule in one table: negation and a
+/// repeated caret, a leading `]` with and without negation, a trailing
+/// caret, a literal `[`, a lone `]` class, edge dashes, POSIX classes,
+/// set operators, a literal backslash, and the invalid or unsupported
+/// classes that hand over. Each runs through BRE and ERE against the
+/// same input corpus below.
+const BRACKETS: &[BracketCase] = &[
+    BracketCase {
+        pattern: "[^^]",
+        bre: Some("[^^]"),
+        ere: Some("[^^]"),
+    },
+    BracketCase {
+        pattern: "[^]]",
+        bre: Some("[^]]"),
+        ere: Some("[^]]"),
+    },
+    BracketCase {
+        pattern: "[]a]",
+        bre: Some("[]a]"),
+        ere: Some("[]a]"),
+    },
+    BracketCase {
+        pattern: "[^]a]",
+        bre: Some("[^]a]"),
+        ere: Some("[^]a]"),
+    },
+    BracketCase {
+        pattern: "[a^]",
+        bre: Some("[a^]"),
+        ere: Some("[a^]"),
+    },
+    BracketCase {
+        pattern: "[^]^]",
+        bre: Some("[^]^]"),
+        ere: Some("[^]^]"),
+    },
+    BracketCase {
+        pattern: "[[]",
+        bre: Some("[\\[]"),
+        ere: Some("[\\[]"),
+    },
+    BracketCase {
+        pattern: "[]]",
+        bre: Some("[]]"),
+        ere: Some("[]]"),
+    },
+    BracketCase {
+        pattern: "[a-]",
+        bre: Some("[a-]"),
+        ere: Some("[a-]"),
+    },
+    BracketCase {
+        pattern: "[-a]",
+        bre: Some("[-a]"),
+        ere: Some("[-a]"),
+    },
+    BracketCase {
+        pattern: "[[:alpha:][:digit:]]",
+        bre: Some("[[:alpha:][:digit:]]"),
+        ere: Some("[[:alpha:][:digit:]]"),
+    },
+    BracketCase {
+        pattern: "[a&&b]",
+        bre: Some("[a\\&\\&b]"),
+        ere: Some("[a\\&\\&b]"),
+    },
+    BracketCase {
+        pattern: "[a~~b]",
+        bre: Some("[a\\~\\~b]"),
+        ere: Some("[a\\~\\~b]"),
+    },
+    BracketCase {
+        pattern: "[a[b]",
+        bre: Some("[a\\[b]"),
+        ere: Some("[a\\[b]"),
+    },
+    BracketCase {
+        pattern: "[\\]",
+        bre: Some("[\\\\]"),
+        ere: Some("[\\\\]"),
+    },
+    BracketCase {
+        pattern: "[a\\]]",
+        bre: Some("[a\\\\]]"),
+        ere: Some("[a\\\\]]"),
+    },
+    BracketCase {
+        pattern: "[\\d]",
+        bre: Some("[\\\\d]"),
+        ere: Some("[\\\\d]"),
+    },
+    BracketCase {
+        pattern: "[a\\-z]",
+        bre: Some("[a\\\\-z]"),
+        ere: Some("[a\\\\-z]"),
+    },
+    BracketCase {
+        pattern: "[^^][ab]",
+        bre: Some("[^^][ab]"),
+        ere: Some("[^^][ab]"),
+    },
+    BracketCase {
+        pattern: "[!ab]",
+        bre: Some("[\\!ab]"),
+        ere: Some("[!ab]"),
+    },
+    BracketCase {
+        pattern: "[a--b]",
+        bre: None,
+        ere: None,
+    },
+    BracketCase {
+        pattern: "[[.a.]]",
+        bre: None,
+        ere: None,
+    },
+    BracketCase {
+        pattern: "[[=a=]]",
+        bre: None,
+        ere: None,
+    },
+    BracketCase {
+        pattern: "[a[.b]",
+        bre: None,
+        ere: None,
+    },
+    BracketCase {
+        pattern: "[a[=b]",
+        bre: None,
+        ere: None,
+    },
+    BracketCase {
+        pattern: "[a[:b]",
+        bre: None,
+        ere: None,
+    },
+    BracketCase {
+        pattern: "[a",
+        bre: None,
+        ere: None,
+    },
+];
+
+/// Checks one bracket translation against the system grep on the bracket
+/// corpus: the engine prints the same lines with the same exit code.
+/// Only where the runner's grep is GNU; elsewhere the pinned table
+/// above carries it.
+fn bracket_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]) {
+    if !gnu_grep() {
+        return;
+    }
+    let corpus = [
+        "^", "^^", "^a", "a^", "xa", "xb", "a", "b", "c", "d", "1", "[", "]", "[]", "[]a]",
+        "[^]a]", "[ab]", "&", "~", "-", "a&b", "a~b", "a-b", "-a", "a-", "a]", "\\", "a\\b",
+        "alpha", "a.a", "a1", " ",
+    ];
+    let matcher = RegexMatcherBuilder::new().build(translated).unwrap();
+    let mut searcher = SearcherBuilder::new().build();
+    let mut engine: Vec<&str> = Vec::new();
+    for line in corpus {
+        let mut hit = Hit(false);
+        searcher
+            .search_slice(&matcher, format!("{line}\n").as_bytes(), &mut hit)
+            .unwrap();
+        if hit.0 {
+            engine.push(line);
+        }
+    }
+    let engine_code = if engine.is_empty() { 1 } else { 0 };
+    let dir = fakes::TempDir::new("fiber-search-brackets");
+    let file = dir.path().join("corpus.txt");
+    fs::write(&file, corpus.join("\n") + "\n").unwrap();
+    let child = Command::new("grep")
+        .env("LC_ALL", "C")
+        .args(grep_args)
+        .arg("-e")
+        .arg(pattern)
+        .arg(&file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = super::super::wait_output(child, &format!("grep -e {pattern:?}"));
+    let system_text = String::from_utf8(output.stdout).unwrap();
+    let system: Vec<&str> = system_text.lines().collect();
+    assert_eq!(engine, system, "bracket {pattern:?} as {translated:?}");
+    assert_eq!(
+        engine_code,
+        output.status.code().unwrap_or(99),
+        "bracket {pattern:?} exit"
+    );
+}
+
+#[test]
+fn bracket_table_matches_grep_in_both_modes() {
+    for case in BRACKETS {
+        assert_eq!(
+            translate_bre(case.pattern).as_deref(),
+            case.bre,
+            "BRE {:?}",
+            case.pattern
+        );
+        assert_eq!(
+            translate_ere(case.pattern).as_deref(),
+            case.ere,
+            "ERE {:?}",
+            case.pattern
+        );
+        if let Some(translated) = case.bre {
+            bracket_matches_like_grep(case.pattern, translated, &[]);
+        }
+        if let Some(translated) = case.ere {
+            bracket_matches_like_grep(case.pattern, translated, &["-E"]);
+        }
+    }
+}
+
+#[test]
 fn ere_keeps_everything_but_the_gnu_extensions() {
     assert_eq!(translate_ere("a+b"), Some("a+b".to_owned()));
     assert_eq!(translate_ere("(a|b)"), Some("(a|b)".to_owned()));

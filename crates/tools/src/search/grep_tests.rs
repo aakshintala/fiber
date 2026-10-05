@@ -1481,6 +1481,56 @@ fn rough_edges_match_grep_byte_for_byte() {
 }
 
 #[test]
+fn brackets_match_grep_byte_for_byte() {
+    // The bracket table in `super::bre` through the whole search: the
+    // built-in prints what the system grep prints with the same exit.
+    // Every pattern matches, so no skipped-directory notice follows.
+    let files = BTreeMap::from([(
+        "brackets.txt",
+        b"xa\nxb\n^\n^^\n^a\na^\na\nb\nd\n1\n[\n]\n[]\n[]a]\na&b\na~b\na-b\n-\n\\\na\\b\nalpha\na.a\n \n".as_slice(),
+    )]);
+    let cases: &[&[&str]] = &[
+        &["[^^][ab]", "brackets.txt"],
+        &["-E", "[^^][ab]", "brackets.txt"],
+        &["[^^]", "brackets.txt"],
+        &["-E", "[^^]", "brackets.txt"],
+        &["[^]]", "brackets.txt"],
+        &["-E", "[^]]", "brackets.txt"],
+        &["[^]a]", "brackets.txt"],
+        &["-E", "[^]a]", "brackets.txt"],
+        &["[]a]", "brackets.txt"],
+        &["-E", "[]a]", "brackets.txt"],
+        &["[a^]", "brackets.txt"],
+        &["-E", "[a^]", "brackets.txt"],
+        &["[[]", "brackets.txt"],
+        &["-E", "[[]", "brackets.txt"],
+        &["[]]", "brackets.txt"],
+        &["-E", "[]]", "brackets.txt"],
+        &["[-a]", "brackets.txt"],
+        &["-E", "[a-]", "brackets.txt"],
+        &["[a&&b]", "brackets.txt"],
+        &["-E", "[a&&b]", "brackets.txt"],
+        &["[a~~b]", "brackets.txt"],
+        &["-E", "[a~~b]", "brackets.txt"],
+        &["[a[b]", "brackets.txt"],
+        &["-E", "[a[b]", "brackets.txt"],
+        &["[\\d]", "brackets.txt"],
+        &["-E", "[\\d]", "brackets.txt"],
+        &["[a\\-z]", "brackets.txt"],
+        &["-E", "[a\\-z]", "brackets.txt"],
+        &["[a\\]]", "brackets.txt"],
+        &["-E", "[a\\]]", "brackets.txt"],
+        &["[[:alpha:]]", "brackets.txt"],
+        &["-E", "[[:alpha:]]", "brackets.txt"],
+        &["[!ab]", "brackets.txt"],
+        &["-E", "[!ab]", "brackets.txt"],
+    ];
+    for args in cases {
+        matches_like_grep(&files, args, None, &[], Some(b""), false);
+    }
+}
+
+#[test]
 fn errors_match_grep_exit_codes() {
     let files = corpus();
     // Standard error prose differs; standard output and the code do not.
