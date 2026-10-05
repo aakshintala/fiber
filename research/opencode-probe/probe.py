@@ -1,11 +1,11 @@
-"""OpenCode Go and Zen probe. Reads the key from ~/.config/probe-keys/opencode-key and never prints it.
+"""OpenCode Go and Zen probe. Reads the key from OPENCODE_API_KEY and never prints it.
 
 Usage: python3 probe.py <step>   (steps below; each appends to raw/<step>.json)
 """
 import os
 import json, sys, time, urllib.request, urllib.error, uuid
 
-KEY = open(os.path.expanduser('~/.config/probe-keys/opencode-key')).read().strip()
+KEY = os.environ['OPENCODE_API_KEY']
 GO = 'https://opencode.ai/zen/go'
 ZEN = 'https://opencode.ai/zen'
 SESSION = 'fiber-probe-' + uuid.uuid4().hex[:8]

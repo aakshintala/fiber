@@ -1,7 +1,7 @@
-"""Gemini probes for #136. Key read from ~/.config/probe-keys/gemini-key, never written. Hard request cap and spend cap."""
+"""Gemini probes for #136. Key read from GEMINI_API_KEY, never written. Hard request cap and spend cap."""
 import os
 import json, re, sys, base64, zlib, struct, urllib.request, urllib.error, time
-KEY = open(os.path.expanduser('~/.config/probe-keys/gemini-key')).read().strip()
+KEY = os.environ['GEMINI_API_KEY']
 BASE = 'https://generativelanguage.googleapis.com/v1beta/models/'
 RAW = 'research/google-generative-ai-probe/raw/'
 PRICE = {'gemini-2.5-flash-lite': (0.10, 0.40), 'gemini-3.1-flash-lite': (0.25, 1.50), 'gemini-2.5-flash': (0.30, 2.50)}

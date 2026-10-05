@@ -1,7 +1,7 @@
 import os
 # Probe #132: Anthropic Messages facts pi and rig disagree on. Usage: python3 probe.py stream|beta|choice|caller|cache
 import json, sys, copy, urllib.request, urllib.error, http.client
-KEY=open(os.path.expanduser('~/.config/probe-keys/anthropic-key')).read().strip()
+KEY=os.environ['ANTHROPIC_API_KEY']
 BASE='https://api.anthropic.com/v1/messages'
 M='claude-sonnet-5-5'; PIN,POUT=2/1e6,10/1e6; CAP=1.00
 spend=0.0; RAW=[]

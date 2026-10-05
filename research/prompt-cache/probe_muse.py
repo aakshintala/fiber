@@ -1,6 +1,6 @@
 import os
 import json, urllib.request, time, uuid, copy
-KEY=open(os.path.expanduser('~/.config/probe-keys/muse-key')).read().strip()
+KEY=os.environ['MUSE_API_KEY']
 URL='https://api.meta.ai/v1/responses'
 M1,M2='muse-spark-1.3-contributor','muse-spark-1.2-contributor'
 def call(body):

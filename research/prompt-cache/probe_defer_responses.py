@@ -3,7 +3,7 @@ import os
 # through OpenRouter on GPT-6 Luna, what does a deferred tool cost, and does
 # loading one keep the cache? Usage: python3 probe_defer_responses.py
 import json, urllib.request, time, uuid, copy
-KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
+KEY=os.environ['OPENROUTER_API_KEY']
 URL='https://openrouter.ai/api/v1/responses'
 MODEL='openai/gpt-6-luna'
 def call(body):
