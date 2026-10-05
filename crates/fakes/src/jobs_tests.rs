@@ -437,10 +437,7 @@ fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
     (lines.0)(line("one"));
     (lines.0)(line("two"));
     opened.end.end(completed(&id.0, Outcome::Completed));
-    assert_eq!(
-        jobs.lines().wait_for(2, DEADLINE),
-        vec![line("one"), line("two")]
-    );
+    assert_eq!(jobs.lines().lines(), vec![line("one"), line("two")]);
     for text in ["one", "two"] {
         let delivery = rx.try_recv().unwrap();
         let contract::inbox::Delivery::JobLine(sent) = delivery else {

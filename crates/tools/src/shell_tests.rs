@@ -11,7 +11,7 @@ use fakes::{CancelToken, Recorder};
 use rustix::process::Signal;
 use serde_json::{Map, Value, json};
 
-use super::{Shell, bare_wait, exit_line, from_spawn, signal_name, timeout_line};
+use super::{Mode, Shell, bare_wait, exit_line, from_spawn, parse, signal_name, timeout_line};
 
 fn shell() -> Shell {
     Shell::new(std::env::temp_dir(), FakeClock::new())
@@ -631,4 +631,45 @@ fn a_monitor_is_classified_as_its_command() {
     let plain = shell.effects(&args("ls")).unwrap();
     let monitored = shell.effects(&monitor_args("ls")).unwrap();
     assert_eq!(plain, monitored);
+}
+
+#[test]
+fn the_flags_parse_to_one_mode_and_only_run_in_background_skips_the_bare_wait() {
+    let cases = [
+        (false, false, false, Some(Mode::Foreground)),
+        (true, false, false, Some(Mode::Background)),
+        (
+            false,
+            true,
+            false,
+            Some(Mode::Terminal {
+                run_in_background: false,
+            }),
+        ),
+        (
+            true,
+            true,
+            false,
+            Some(Mode::Terminal {
+                run_in_background: true,
+            }),
+        ),
+        (false, false, true, Some(Mode::Monitor)),
+        (true, false, true, None),
+        (false, true, true, None),
+        (true, true, true, None),
+    ];
+    for (background, tty, monitor, expected) in cases {
+        let mut arguments = args("ls");
+        arguments.insert("run_in_background".into(), json!(background));
+        arguments.insert("tty".into(), json!(tty));
+        arguments.insert("monitor".into(), json!(monitor));
+        let mode = parse(&arguments, Path::new("/"), 1_800_000)
+            .ok()
+            .map(|parsed| parsed.mode);
+        assert_eq!(mode, expected, "{background} {tty} {monitor}");
+        if let Some(mode) = mode {
+            assert_eq!(mode.in_background(), background, "{mode:?}");
+        }
+    }
 }

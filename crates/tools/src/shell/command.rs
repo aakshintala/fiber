@@ -378,8 +378,9 @@ impl Moved {
     }
 
     /// Writes a monitor's held standard error to `file` and points its
-    /// reader there. Nothing for any other command.
-    pub(crate) fn attach_errors(&self, file: File) {
+    /// reader there; with no file, its standard error is dropped from now
+    /// on. Nothing for any other command.
+    pub(crate) fn attach_errors(&self, file: Option<File>) {
         if let Some(errors) = lock(&self.progress.shared.inner).errors.as_mut() {
             errors.attach(file, self.cap);
         }

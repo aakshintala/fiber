@@ -202,13 +202,27 @@ fn standard_error_is_held_then_written_to_its_file_up_to_the_cap() {
         let mut inner = lock(&shared.inner);
         let errors = inner.errors.as_mut().unwrap();
         assert!(errors.eof);
-        errors.attach(std::fs::File::create(&path).unwrap(), 5);
+        errors.attach(Some(std::fs::File::create(&path).unwrap()), 5);
         errors.sink(b"cdef");
         errors.sink(b"g");
     }
     // Past the cap the bytes are dropped; nothing stops.
     assert_eq!(std::fs::read(&path).unwrap(), b"abcde");
     assert!(!lock(&shared.inner).cap_fired);
+}
+
+#[test]
+fn standard_error_with_no_file_is_dropped_after_the_move() {
+    let shared = Shared::default();
+    lock(&shared.inner).errors = Some(Errors::default());
+    read_errors(Chunks(vec![b"before".to_vec()]), &shared);
+    let mut inner = lock(&shared.inner);
+    let errors = inner.errors.as_mut().unwrap();
+    assert_eq!(errors.held, b"before", "held until the move");
+    errors.attach(None, 5);
+    errors.sink(b"after");
+    assert!(errors.held.is_empty(), "nothing is held past the move");
+    assert_eq!(errors.written, 0);
 }
 
 #[test]

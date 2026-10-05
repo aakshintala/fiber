@@ -196,10 +196,10 @@ impl Tool for Shell {
             Ok(parsed) => parsed,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        if (parsed.run_in_background || parsed.tty || parsed.monitor) && self.jobs.is_none() {
+        if parsed.mode != Mode::Foreground && self.jobs.is_none() {
             return failed(ErrorCode::InvalidArguments, NO_JOBS.to_owned());
         }
-        if !parsed.run_in_background && bare_wait(&parsed.command) {
+        if !parsed.mode.in_background() && bare_wait(&parsed.command) {
             return failed(ErrorCode::InvalidArguments, BARE_WAIT.to_owned());
         }
         // The functions reach only the model's own command line: `classify`
@@ -209,16 +209,16 @@ impl Tool for Shell {
             None => parsed.command.clone(),
         };
         let program = shell_program();
-        let policy = match (&self.jobs, parsed.run_in_background, parsed.tty) {
-            (None, _, _) => command::MovePolicy::Stay,
-            (Some(_), _, _) if parsed.monitor => command::MovePolicy::Monitor,
-            (Some(_), _, true) => command::MovePolicy::Terminal,
-            (Some(_), false, false) => command::MovePolicy::Foreground,
-            (Some(_), true, false) => command::MovePolicy::Background,
+        let policy = match (&self.jobs, parsed.mode) {
+            (None, _) => command::MovePolicy::Stay,
+            (Some(_), Mode::Foreground) => command::MovePolicy::Foreground,
+            (Some(_), Mode::Background) => command::MovePolicy::Background,
+            (Some(_), Mode::Terminal { .. }) => command::MovePolicy::Terminal,
+            (Some(_), Mode::Monitor) => command::MovePolicy::Monitor,
         };
         let limit = Limit {
             ms: parsed.timeout_ms,
-            monitor: parsed.monitor,
+            monitor: parsed.mode == Mode::Monitor,
         };
         match command::execute(
             program,
@@ -239,7 +239,7 @@ impl Tool for Shell {
                     Arc::clone(&self.clock),
                     &parsed.command,
                     limit,
-                    parsed.tty,
+                    matches!(parsed.mode, Mode::Terminal { .. }),
                     cancel,
                     emit,
                 ),
@@ -269,9 +269,35 @@ struct Parsed {
     workdir: PathBuf,
     /// The command's timeout: `timeout_ms`, or a monitor's deadline.
     timeout_ms: u64,
-    run_in_background: bool,
-    tty: bool,
-    monitor: bool,
+    mode: Mode,
+}
+
+/// How a call runs: the arguments `run_in_background`, `tty` and `monitor`,
+/// validated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Mode {
+    /// None of them: moves only after 30 seconds or a shell exit.
+    Foreground,
+    /// `run_in_background`.
+    Background,
+    /// `tty`, with `run_in_background` or without.
+    Terminal { run_in_background: bool },
+    /// `monitor`, alone.
+    Monitor,
+}
+
+impl Mode {
+    /// The call set `run_in_background`, the one mode a bare wait may use
+    /// (`docs/tools.md`, "Running a command").
+    fn in_background(self) -> bool {
+        matches!(
+            self,
+            Self::Background
+                | Self::Terminal {
+                    run_in_background: true
+                }
+        )
+    }
 }
 
 /// How long a command may run, and whether it is a monitor's deadline,
@@ -317,12 +343,16 @@ fn parse(
     let run_in_background = flag(arguments, "run_in_background")?;
     let tty = flag(arguments, "tty")?;
     let monitor = flag(arguments, "monitor")?;
-    let timeout_ms = if monitor {
+    let mode = match (monitor, tty, run_in_background) {
+        (true, false, false) => Mode::Monitor,
+        (true, _, _) => return Err(MONITOR_ALONE.to_owned()),
+        (false, true, run_in_background) => Mode::Terminal { run_in_background },
+        (false, false, true) => Mode::Background,
+        (false, false, false) => Mode::Foreground,
+    };
+    let timeout_ms = if mode == Mode::Monitor {
         if given_timeout.is_some() {
             return Err(MONITOR_TIMEOUT.to_owned());
-        }
-        if run_in_background || tty {
-            return Err(MONITOR_ALONE.to_owned());
         }
         let deadline = given_deadline.unwrap_or(DEFAULT_DEADLINE_MS);
         if deadline > max_deadline_ms {
@@ -341,9 +371,7 @@ fn parse(
         command,
         workdir,
         timeout_ms,
-        run_in_background,
-        tty,
-        monitor,
+        mode,
     })
 }
 

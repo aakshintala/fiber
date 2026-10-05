@@ -48,7 +48,6 @@ pub struct FakeJobs {
 #[derive(Default)]
 pub struct JobLines {
     lines: Mutex<Vec<JobLine>>,
-    changed: Condvar,
 }
 
 impl JobLines {
@@ -57,20 +56,8 @@ impl JobLines {
         lock(&self.lines).clone()
     }
 
-    /// Waits, at most `within` of real time, until at least `count` batches
-    /// arrived, and returns every batch so far.
-    pub fn wait_for(&self, count: usize, within: Duration) -> Vec<JobLine> {
-        let lines = lock(&self.lines);
-        let (lines, _) = self
-            .changed
-            .wait_timeout_while(lines, within, |lines| lines.len() < count)
-            .unwrap_or_else(PoisonError::into_inner);
-        lines.clone()
-    }
-
     fn push(&self, line: JobLine) {
         lock(&self.lines).push(line);
-        self.changed.notify_all();
     }
 }
 

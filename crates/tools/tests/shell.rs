@@ -1899,6 +1899,63 @@ fn a_monitor_moves_at_once_with_its_receipt() {
 }
 
 #[test]
+fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_discarded() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-no-errors");
+    // The first job's errors file is a directory, so it cannot be created.
+    let errors = dir.path().join("j_0000000000000001.stderr.log");
+    std::fs::create_dir(&errors).unwrap();
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let block = block_of(ready.path());
+    let command = format!(
+        "echo $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\necho err >&2\necho out\n",
+        ready = quote(ready.path()),
+        block = quote(&block),
+    );
+    let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    assert!(output.error.is_none(), "{}", text(&output));
+    let job = started(&output);
+    assert_eq!(errors_file(dir.path(), &job), errors);
+    let receipt = text(&output);
+    let prefix = format!(
+        "Started a monitor.\nJob {id}. Output: {out}. Its standard error is discarded: {err} could not be created (",
+        id = job.job_id.0,
+        out = dir.path().join(&job.output_path).display(),
+        err = errors.display(),
+    );
+    assert!(receipt.starts_with(&prefix), "{receipt}");
+    assert!(
+        receipt.ends_with(
+            "). Lines it prints reach you in batches; its deadline is 300000 ms.\n"
+        ),
+        "{receipt}"
+    );
+    assert!(!receipt.contains("Errors:"), "{receipt}");
+    let path = ready.path().to_path_buf();
+    let (released, release) = mpsc::channel();
+    thread::spawn(move || {
+        release_block(&path);
+        let _sent = released.send(());
+    });
+    release.recv_timeout(DEADLINE).expect("the release");
+    let ended = jobs.ended(DEADLINE).expect("the monitor to end");
+    assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
+    let texts: Vec<String> = jobs
+        .lines()
+        .lines()
+        .into_iter()
+        .map(|line| line.lines)
+        .collect();
+    assert_eq!(texts, ["out"]);
+    assert!(errors.is_dir());
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
 fn a_monitor_with_a_zero_deadline_times_out_in_the_foreground() {
     let dir = fakes::TempDir::new("fiber-shell-monitor-zero");
     let jobs = FakeJobs::new(dir.path());

@@ -248,14 +248,21 @@ fn hand_off(
     let end = opened.end;
     let stream = JobStream::new(job_id.clone(), opened.emit);
     let errors = errors_path(&opened.path);
+    // A monitor's standard error file, or why it could not be created.
+    let mut sink = None;
     let feed = opened.lines.map(|lines| {
-        // debt: a stderr file that cannot be created drops the monitor's standard error unreported, until docs/errors.md has a code for lost output
-        if let Ok(file) = File::create(&errors) {
-            moved.attach_errors(file);
-        }
+        sink = Some(match File::create(&errors) {
+            Ok(file) => {
+                moved.attach_errors(Some(file));
+                Ok(())
+            }
+            Err(error) => {
+                moved.attach_errors(None);
+                Err(error)
+            }
+        });
         Feed::new(job_id.clone(), lines, job_cancel.stop(), clock.now())
     });
-    let monitor = feed.is_some();
     let job_clock = Arc::clone(&clock);
     // The job's thread starts before the receipt lists the group, so its
     // timeout and stop hold while `ps` runs.
@@ -263,8 +270,8 @@ fn hand_off(
         let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream, feed);
         end.end(to_completed(job_id, &path, finished, limit));
     });
-    if monitor {
-        return monitor_receipt(&opened.started, &opened.path, &errors, limit.ms);
+    if let Some(sink) = sink {
+        return monitor_receipt(&opened.started, &opened.path, &errors, &sink, limit.ms);
     }
     // The receipt carries what the terminal printed in its first 250 ms.
     let first = terminal.then(|| {
@@ -333,12 +340,24 @@ fn errors_path(output: &Path) -> std::path::PathBuf {
 }
 
 /// A monitor's receipt: its files, and how its lines reach the model.
-fn monitor_receipt(started: &JobStarted, path: &Path, errors: &Path, deadline_ms: u64) -> Output {
+fn monitor_receipt(
+    started: &JobStarted,
+    path: &Path,
+    errors: &Path,
+    sink: &std::io::Result<()>,
+    deadline_ms: u64,
+) -> Output {
+    let errors = match sink {
+        Ok(()) => format!("Errors: {}.", errors.display()),
+        Err(error) => format!(
+            "Its standard error is discarded: {} could not be created ({error}).",
+            errors.display()
+        ),
+    };
     let text = format!(
-        "Started a monitor.\nJob {id}. Output: {path}. Errors: {errors}. Lines it prints reach you in batches; its deadline is {deadline_ms} ms.\n",
+        "Started a monitor.\nJob {id}. Output: {path}. {errors} Lines it prints reach you in batches; its deadline is {deadline_ms} ms.\n",
         id = started.job_id.0,
         path = path.display(),
-        errors = errors.display(),
     );
     Output {
         content: vec![ContentPart::Text { text }],

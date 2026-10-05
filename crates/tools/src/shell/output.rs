@@ -48,11 +48,14 @@ pub(super) struct Inner {
 
 /// A monitor's standard error: held until the move, then written to its own
 /// file, which stops growing past the cap without stopping the job
-/// (`docs/tools.md`, "Background jobs").
+/// (`docs/tools.md`, "Background jobs"). With no file after the move, the
+/// bytes are dropped, so nothing is held past it.
 #[derive(Default)]
 pub(super) struct Errors {
     /// Bytes read before the move.
     held: Vec<u8>,
+    /// The monitor moved: bytes go to `file`, or are dropped without one.
+    moved: bool,
     /// The stderr file, after the move.
     file: Option<File>,
     /// Bytes in the file.
@@ -65,17 +68,21 @@ pub(super) struct Errors {
 
 impl Errors {
     /// Writes what was held to `file` and makes it the sink. Bytes past
-    /// `cap` are dropped.
-    pub(super) fn attach(&mut self, file: File, cap: u64) {
-        self.file = Some(file);
+    /// `cap` are dropped, and every byte is dropped when `file` is `None`.
+    pub(super) fn attach(&mut self, file: Option<File>, cap: u64) {
+        self.moved = true;
+        self.file = file;
         self.cap = cap;
         let held = std::mem::take(&mut self.held);
         self.sink(&held);
     }
 
     fn sink(&mut self, bytes: &[u8]) {
-        let Some(file) = self.file.as_mut() else {
+        if !self.moved {
             self.held.extend_from_slice(bytes);
+            return;
+        }
+        let Some(file) = self.file.as_mut() else {
             return;
         };
         let room = usize::try_from(self.cap.saturating_sub(self.written)).unwrap_or(usize::MAX);
@@ -168,60 +175,24 @@ impl Wake for Shared {
     }
 }
 
-pub(super) fn read_output(mut read: impl Read, shared: &Shared) {
-    let mut buf = [0_u8; 8192];
-    loop {
-        match read.read(&mut buf) {
-            Ok(0) => {
-                note_eof(shared);
-                return;
-            }
-            Ok(n) => {
-                let bytes = buf.get(..n).unwrap_or(&[]);
-                let mut inner = lock(&shared.inner);
-                // Past the drain bound the bytes are dropped and the read
-                // continues, so the program never blocks on the pipe.
-                if !inner.discard {
-                    if inner.file.is_some() {
-                        inner.sink(bytes);
-                    } else {
-                        inner.output.extend_from_slice(bytes);
-                    }
-                }
-                // The drive loop streams every chunk: it wakes on this.
-                bump(&mut inner);
-                drop(inner);
-                shared.cv.notify_all();
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => {
-                note_eof(shared);
-                return;
-            }
+pub(super) fn read_output(read: impl Read, shared: &Shared) {
+    read_into(read, shared, |inner, bytes| {
+        if inner.file.is_some() {
+            inner.sink(bytes);
+        } else {
+            inner.output.extend_from_slice(bytes);
         }
-    }
+    });
+    note_eof(shared);
 }
 
-/// Reads a monitor's standard error into [`Errors`]. Past the drain bound
-/// the bytes are dropped and the read continues, as for standard output.
-pub(super) fn read_errors(mut read: impl Read, shared: &Shared) {
-    let mut buf = [0_u8; 8192];
-    loop {
-        match read.read(&mut buf) {
-            Ok(0) => break,
-            Ok(n) => {
-                let bytes = buf.get(..n).unwrap_or(&[]);
-                let mut inner = lock(&shared.inner);
-                if !inner.discard
-                    && let Some(errors) = inner.errors.as_mut()
-                {
-                    errors.sink(bytes);
-                }
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => break,
+/// Reads a monitor's standard error into [`Errors`], then marks it closed.
+pub(super) fn read_errors(read: impl Read, shared: &Shared) {
+    read_into(read, shared, |inner, bytes| {
+        if let Some(errors) = inner.errors.as_mut() {
+            errors.sink(bytes);
         }
-    }
+    });
     let mut inner = lock(&shared.inner);
     if let Some(errors) = inner.errors.as_mut() {
         errors.eof = true;
@@ -230,6 +201,32 @@ pub(super) fn read_errors(mut read: impl Read, shared: &Shared) {
     bump(&mut inner);
     drop(inner);
     shared.cv.notify_all();
+}
+
+/// Reads `read` until it closes or fails, handing each chunk to `sink`
+/// under the lock and waking the drive loop. Past the drain bound the bytes
+/// are dropped and the read continues, so the program never blocks on the
+/// pipe.
+fn read_into(mut read: impl Read, shared: &Shared, sink: fn(&mut Inner, &[u8])) {
+    let mut buf = [0_u8; 8192];
+    loop {
+        match read.read(&mut buf) {
+            Ok(0) => return,
+            Ok(n) => {
+                let bytes = buf.get(..n).unwrap_or(&[]);
+                let mut inner = lock(&shared.inner);
+                if !inner.discard {
+                    sink(&mut inner, bytes);
+                }
+                // The drive loop streams every chunk: it wakes on this.
+                bump(&mut inner);
+                drop(inner);
+                shared.cv.notify_all();
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
+    }
 }
 
 pub(super) fn note_eof(shared: &Shared) {
