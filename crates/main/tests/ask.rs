@@ -88,6 +88,15 @@ impl Setup {
         );
     }
 
+    /// Disables retries for the next run: `retry.attempts` 0, so a
+    /// retryable failure fails at once, with no backoff to sleep through.
+    fn no_retry(&self) {
+        write(
+            &self.home().join("config.json"),
+            &json!({"model": "fake/m", "retry": {"attempts": 0}}),
+        );
+    }
+
     /// Runs `fiber` with `args`, `stdin` piped in (closed when `None`) and
     /// `FIBER_HOME` set to `home`.
     fn fiber_with_home(&self, home: &str, args: &[&str], stdin: Option<&str>) -> Run {
@@ -605,6 +614,7 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
     let setup = Setup::new();
     let server = ProviderServer::start([Response::status(503, "{}")]).unwrap();
     setup.provider(&server);
+    setup.no_retry();
 
     let run = setup.fiber(&["ask", "hi"], None);
 

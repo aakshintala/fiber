@@ -186,3 +186,31 @@ fn unusable_signed_headers_are_never_sent() {
         assert!(server.requests().is_empty());
     }
 }
+
+#[test]
+fn retry_after_is_kept_only_when_finite_and_non_negative() {
+    for (header, expected) in [
+        ("7", Some(7.0)),
+        ("1.5", Some(1.5)),
+        ("0", Some(0.0)),
+        ("abc", None),
+        ("NaN", None),
+        ("inf", None),
+        ("-1", None),
+        ("-0.5", None),
+    ] {
+        let server = fakes::ProviderServer::start([
+            fakes::Response::status(429, "{}").header("retry-after", header)
+        ])
+        .unwrap();
+        let Err(crate::Error::Status { retry_after, .. }) = super::post(
+            &format!("{}/v1", server.url()),
+            &[],
+            b"{}",
+            &std::sync::Arc::default(),
+        ) else {
+            panic!("a 429 with retry-after: {header} was not a status failure");
+        };
+        assert_eq!(retry_after, expected, "retry-after: {header}");
+    }
+}

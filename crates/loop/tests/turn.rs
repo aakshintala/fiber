@@ -498,8 +498,8 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
 #[test]
 fn a_failed_model_call_fails_the_turn_with_its_code() {
     let failure = Failure {
-        code: ErrorCode::ConnectionFailed,
-        message: "The connection to the provider failed.".into(),
+        code: ErrorCode::InvalidRequest,
+        message: "The provider rejected the request.".into(),
         retry_after: None,
         provider: None,
     };
@@ -521,7 +521,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
     let call = &lines[4].payload;
     assert_eq!(call["outcome"], "failed");
     assert_eq!(call["attempt"], 1);
-    assert_eq!(call["error"]["code"], "connection_failed");
+    assert_eq!(call["error"]["code"], "invalid_request");
     assert_eq!(lines[5].payload["outcome"], "failed");
     assert_eq!(lines[5].payload["error"], call["error"]);
     // A failed call sends nothing to the model.
@@ -1003,8 +1003,8 @@ fn queued(line: &contract::Envelope) -> Vec<&str> {
 #[test]
 fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
     let failure = Failure {
-        code: ErrorCode::ConnectionFailed,
-        message: "The connection to the provider failed.".into(),
+        code: ErrorCode::InvalidRequest,
+        message: "The provider rejected the request.".into(),
         retry_after: None,
         provider: None,
     };

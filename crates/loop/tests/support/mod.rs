@@ -538,6 +538,49 @@ impl Provider for FireCancel {
     }
 }
 
+/// A provider that advances the clock by `by` while its first call runs,
+/// then answers from its scripted provider, ignoring cancel: the advance
+/// lands during the failing call, before any backoff wait starts.
+struct AdvanceClock {
+    inner: Arc<ScriptedProvider>,
+    clock: Arc<FakeClock>,
+    by: Duration,
+    calls: AtomicUsize,
+}
+
+impl Provider for AdvanceClock {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        let first = self.calls.fetch_add(1, Ordering::SeqCst) == 0;
+        Box::new(AdvanceCall {
+            inner: self.inner.call(request),
+            clock: Arc::clone(&self.clock),
+            by: self.by,
+            first,
+        })
+    }
+}
+
+/// The call that advances the clock while it runs.
+struct AdvanceCall {
+    inner: Box<dyn ModelCall>,
+    clock: Arc<FakeClock>,
+    by: Duration,
+    first: bool,
+}
+
+impl ModelCall for AdvanceCall {
+    fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
+        if self.first {
+            self.clock.advance(self.by);
+        }
+        self.inner.run(sink)
+    }
+
+    fn cancel(&self) {
+        self.inner.cancel();
+    }
+}
+
 /// The call that fires the cancel once its reply is in hand.
 struct FireAfterReply {
     inner: Box<dyn ModelCall>,
@@ -667,13 +710,55 @@ impl Session {
         scripted: Arc<ScriptedProvider>,
         cancel: Arc<TurnCancel>,
     ) -> Self {
+        Self::assemble_with(
+            provider,
+            during,
+            tools,
+            model,
+            scripted,
+            cancel,
+            FakeClock::new(),
+        )
+    }
+
+    /// A session whose first model call advances the clock by `by` while it
+    /// runs, then answers from `script`: the advance lands during the
+    /// failing call, before any backoff wait starts.
+    pub(crate) fn advancing(script: Vec<Scripted>, by: Duration) -> Self {
+        let clock = FakeClock::new();
+        let inner = Arc::new(ScriptedProvider::new(script));
+        let provider: Arc<dyn Provider> = Arc::new(AdvanceClock {
+            inner: Arc::clone(&inner),
+            clock: Arc::clone(&clock),
+            by,
+            calls: AtomicUsize::new(0),
+        });
+        Self::assemble_with(
+            provider,
+            Vec::new(),
+            Vec::new(),
+            unpriced(),
+            inner,
+            Arc::new(TurnCancel::default()),
+            clock,
+        )
+    }
+
+    fn assemble_with(
+        provider: Arc<dyn Provider>,
+        during: Vec<Delivery>,
+        tools: Vec<Arc<dyn Tool>>,
+        model: Model,
+        scripted: Arc<ScriptedProvider>,
+        cancel: Arc<TurnCancel>,
+        clock: Arc<FakeClock>,
+    ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
         std::fs::create_dir_all(&workspace).unwrap();
         let credentials = home.0.join("credentials");
         std::fs::create_dir_all(&credentials).unwrap();
         let id = SessionId("s_test".into());
-        let clock: Arc<FakeClock> = FakeClock::new();
         let log = Arc::new(Log::create(&home.0, id.clone(), clock.clone()).unwrap());
         let mut watcher = log.watch();
         let (forward, lines) = mpsc::channel();
@@ -777,6 +862,12 @@ impl Session {
     /// Caps the session's billed spend at `usd` US dollars.
     pub(crate) fn budget(mut self, usd: Option<f64>) -> Self {
         self.looped = self.looped.take().map(|looped| looped.budget(usd));
+        self
+    }
+
+    /// Retries a failed model call with `retry`.
+    pub(crate) fn retry(mut self, retry: r#loop::Retry) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.retry(retry));
         self
     }
 

@@ -151,7 +151,9 @@ pub(crate) fn post_signed(
     let should_retry = header("x-should-retry").and_then(|v| v.parse::<bool>().ok());
     let status = response.status().as_u16();
     if !(200..300).contains(&status) {
-        let retry_after = header("retry-after").and_then(|v| v.parse::<f64>().ok());
+        let retry_after = header("retry-after")
+            .and_then(|v| v.parse::<f64>().ok())
+            .filter(|wait| wait.is_finite() && *wait >= 0.0);
         let body = response.into_body().read_to_string().unwrap_or_default();
         return Err(Error::Status {
             status,
