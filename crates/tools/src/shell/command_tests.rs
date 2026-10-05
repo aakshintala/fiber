@@ -10,10 +10,12 @@ use fakes::Recorder;
 use fakes::clock::FakeClock;
 
 use super::super::background::{Step, running_step, wait_deadline};
+use super::super::output::{
+    Inner, Shared, bump, complete_prefix, lock, note_eof, read_output, stream_output,
+};
 use super::{
-    Inner, MovePolicy, MoveReason, Moved, Phase, Run, Shared, StopKind, already_woken, bump,
-    complete_prefix, exit_code_of, finish, group_alive, lock, note_eof, park, poll_while_occupied,
-    read_output, refused_group, stream_output, suppress_term,
+    MovePolicy, MoveReason, Moved, Phase, Run, StopKind, already_woken, exit_code_of, finish,
+    group_alive, park, poll_while_occupied, refused_group, suppress_term,
 };
 
 #[test]
