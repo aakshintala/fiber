@@ -137,6 +137,7 @@ fn text(line: &Envelope) -> &str {
 fn kinds_with(middle: &[&str]) -> Vec<String> {
     let mut kinds = vec![
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",

@@ -47,6 +47,12 @@ pub trait Tool: Send + Sync {
     fn bound(&self) -> Bound {
         Bound::DEFAULT
     }
+
+    /// Guideline lines for the system prompt, if any
+    /// (`docs/system-prompt.md`, "Tool guidelines").
+    fn guidelines(&self) -> Option<String> {
+        None
+    }
 }
 
 /// What a call declares before it runs (`docs/permissions.md`, "Effects" and
@@ -121,18 +127,5 @@ impl Bound {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::EffectsError;
-
-    #[test]
-    fn an_effects_error_reads_as_its_message() {
-        assert_eq!(
-            EffectsError::Arguments("no such path".into()).to_string(),
-            "no such path"
-        );
-        assert_eq!(
-            EffectsError::Tool("lua: boom".into()).to_string(),
-            "lua: boom"
-        );
-    }
-}
+#[path = "tool_tests.rs"]
+mod tests;

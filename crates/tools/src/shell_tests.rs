@@ -381,3 +381,16 @@ fn already_cancelled_starts_nothing() {
     assert_eq!(text(&output), "Cancelled before it started.\n");
     assert!(!marker.exists());
 }
+
+#[test]
+fn guidelines_are_the_shell_section() {
+    let shell = Shell::new(std::env::temp_dir(), FakeClock::new());
+    let text = shell.guidelines().unwrap();
+    assert_eq!(text, crate::guidelines::of("shell").unwrap());
+    assert!(!text.is_empty(), "{text}");
+    let md = include_str!("../prompt/guidelines.md");
+    let rest = &md[md.find("## shell\n").unwrap() + "## shell\n".len()..];
+    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
+    assert_eq!(text, rest[..end].trim(), "{text}");
+    assert!(text.contains("Commands run with no terminal"), "{text}");
+}

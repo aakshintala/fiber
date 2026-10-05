@@ -3,6 +3,7 @@
 
 mod edit;
 mod files;
+mod guidelines;
 mod read;
 mod shell;
 mod write;

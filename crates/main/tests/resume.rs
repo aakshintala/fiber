@@ -357,6 +357,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -381,6 +382,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
         second.kinds(),
         [
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -442,6 +444,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
         run.kinds(),
         [
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -485,6 +488,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
             "tool_call_started",
             "tool_call_requested",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -540,6 +544,7 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
         run.kinds(),
         [
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -601,6 +606,7 @@ fn a_held_session_fails_session_held() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -642,6 +648,7 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
         [
             "session_started",
             "fiber_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -915,4 +922,34 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     );
     // The attach sent no provider request of its own.
     assert_eq!(server.requests().len(), 1);
+}
+
+#[test]
+fn a_changed_append_system_changes_the_resumed_request() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+    let prefix = &id[..8];
+
+    fs::write(setup.home().join("APPEND_SYSTEM.md"), "Be terse.\n").unwrap();
+    let second = setup.fiber(&["ask", "--resume", prefix, "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let first_body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    let second_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
+    assert_ne!(first_body["instructions"], second_body["instructions"]);
+    assert!(
+        second_body["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("Be terse."),
+        "{}",
+        second_body["instructions"]
+    );
 }

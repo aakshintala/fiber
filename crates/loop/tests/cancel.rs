@@ -40,6 +40,7 @@ fn cancel_mid_stream_writes_no_completion_and_ends_interrupted() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -107,6 +108,7 @@ fn a_cancel_landing_between_steps_sends_no_request() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -219,6 +221,7 @@ fn a_running_call_completes_cancelled_and_a_denied_call_behind_it_does_too() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -299,6 +302,7 @@ fn a_call_returning_an_error_after_cancel_keeps_failed() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -353,6 +357,7 @@ fn a_pending_approval_is_denied_by_cancel_and_later_calls_never_start() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -436,6 +441,7 @@ fn a_cancelled_review_completes_cancelled() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -500,6 +506,7 @@ fn an_approved_call_cancelled_while_a_later_call_waits_never_starts() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -592,6 +599,7 @@ fn a_reply_queued_ahead_of_the_cancel_wake_is_rejected() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -633,6 +641,7 @@ fn a_cancel_after_the_last_reply_interrupts_the_turn() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -667,6 +676,7 @@ fn a_cancel_after_a_failed_reply_leaves_the_turn_failed() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -720,6 +730,7 @@ fn a_stale_cancel_wake_does_not_end_a_later_approval() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -789,6 +800,7 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
         kinds(&first),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",

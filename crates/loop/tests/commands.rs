@@ -101,6 +101,7 @@ fn allow_with_feedback() -> ReplyAnswer {
 fn plain() -> Vec<&'static str> {
     vec![
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -136,6 +137,7 @@ fn applied(middle: &[&str]) -> Vec<String> {
 fn tool_turn(middle: &[&str]) -> Vec<String> {
     let mut out = vec![
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -260,6 +262,7 @@ fn asked(after: &[&str]) -> Vec<String> {
 fn denied_pair() -> Vec<String> {
     [
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -295,6 +298,7 @@ fn denied_pair() -> Vec<String> {
 fn continued() -> Vec<&'static str> {
     vec![
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -321,6 +325,7 @@ fn continued() -> Vec<&'static str> {
 fn closed_and_steered() -> Vec<&'static str> {
     vec![
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -347,6 +352,7 @@ fn closed_and_steered() -> Vec<&'static str> {
 fn applied_then_dropped() -> Vec<String> {
     [
         "session_started",
+        "preamble_built",
         "turn_started",
         "step_started",
         "assistant_message_started",
@@ -506,7 +512,7 @@ fn two_prompts_waiting_while_idle_start_one_turn_and_the_second_is_busy() {
     assert_eq!(take(&second_answers), rejected(ErrorCode::Busy, BUSY));
     let lines = session.lines();
     assert_eq!(kinds(&lines), plain());
-    assert_eq!(lines[1].payload["input"].as_array().unwrap().len(), 1);
+    assert_eq!(lines[2].payload["input"].as_array().unwrap().len(), 1);
 }
 
 #[test]
@@ -557,7 +563,7 @@ fn a_steer_while_idle_starts_a_turn() {
     assert_eq!(take(&answers), accepted());
     let lines = session.lines();
     assert_eq!(kinds(&lines), plain());
-    assert_eq!(lines[1].payload["input"][0]["content"][0]["text"], "hello");
+    assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], "hello");
     assert!(
         lines.iter().all(|line| line.kind != "steering_applied"),
         "an idle steer is the turn's input"
@@ -581,7 +587,7 @@ fn a_steer_dropped_while_idle_is_not_the_turns_input() {
     assert!(saw);
     let lines = session.lines();
     assert_eq!(kinds(&lines), plain());
-    assert_eq!(lines[1].payload["input"][0]["content"][0]["text"], "go");
+    assert_eq!(lines[2].payload["input"][0]["content"][0]["text"], "go");
 }
 
 #[test]
@@ -598,7 +604,7 @@ fn a_drop_while_idle_removes_only_its_steer_after_the_prompt() {
     assert_eq!(session.turn(), Some(TurnOutcome::Completed));
     assert_eq!(take(&drop_answers), accepted());
     let lines = session.lines();
-    let input = &lines[1].payload["input"];
+    let input = &lines[2].payload["input"];
     assert_eq!(input.as_array().unwrap().len(), 2);
     assert_eq!(input[0]["content"][0]["text"], "go");
     assert_eq!(input[1]["content"][0]["text"], "one");

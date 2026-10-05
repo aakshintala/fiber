@@ -10,6 +10,7 @@
 
 mod cli;
 mod clock;
+mod prompt_files;
 mod resume;
 
 #[cfg(test)]
@@ -51,6 +52,7 @@ struct Parts {
     project: config::ProjectKey,
     provider: Arc<dyn Provider>,
     model: Model,
+    prompt: r#loop::PromptInputs,
     /// Who judges step 7's calls; `Err` leaves every reviewed call to a
     /// person (`docs/permissions.md`, "How it runs").
     reviewer: Result<r#loop::Reviewer, Failure>,
@@ -337,6 +339,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     let Parts {
         provider,
         model,
+        prompt: prompt_inputs,
         reviewer,
         limits,
         budget,
@@ -377,7 +380,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 Arc::clone(&log),
                 provider,
                 model,
-                SYSTEM_PROMPT.to_owned(),
+                prompt_inputs,
                 inbox,
                 Vec::new(),
                 permissions,
@@ -396,11 +399,6 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     session.close(log);
     code
 }
-
-/// The system prompt every `ask` session gets.
-// debt: weakens docs/system-prompt.md, "Two parts"; fixed by #304. The
-// system prompt is empty.
-const SYSTEM_PROMPT: &str = "";
 
 /// What an `ask` loop judges with: the workspace the session keeps, the
 /// credentials beside it, and the standing rules.
@@ -476,8 +474,6 @@ fn run_turn(
 /// `usage_recorded` uses `--model`, then the configured default as a new
 /// session does. A recorded model that no longer resolves fails with the
 /// resolver's own failure, before any session line is written.
-/// debt: weakens docs/model-routing.md "Choosing the model" only until
-/// #304 writes preamble_built; fixed by #304.
 fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let workspace = std::env::current_dir()
@@ -516,12 +512,22 @@ fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Fa
     let reviewer = choose_reviewer(&providers, &config, &model);
     let limits = block_limits(&config);
     let retry = retry_policy(&config);
+    // debt: extension prompt texts and the model's addendum arrive empty;
+    // filled by #510.
+    let prompt = r#loop::PromptInputs {
+        system: prompt_files::system(&home, &project),
+        append: prompt_files::append(&home, &project),
+        addendum: None,
+        extensions: Vec::new(),
+        context_window: model.model.context_window,
+    };
     Ok(Parts {
         sessions,
         home,
         workspace,
         project,
         provider,
+        prompt,
         model: Model {
             reference: model.reference(),
             cost: model.model.cost.clone().map(declared_cost),

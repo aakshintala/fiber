@@ -62,6 +62,7 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -73,21 +74,30 @@ fn messages_waiting_together_start_one_turn_in_arrival_order() {
             "turn_completed",
         ]
     );
-    let input: Vec<&str> = lines[1].payload["input"]
+    let input: Vec<&str> = lines[2].payload["input"]
         .as_array()
         .unwrap()
         .iter()
         .map(|item| item["content"][0]["text"].as_str().unwrap())
         .collect();
     assert_eq!(input, ["one", "two", "three"]);
-    assert_eq!(lines[1].payload["input"][0]["command_id"], "c_one");
+    assert_eq!(lines[2].payload["input"][0]["command_id"], "c_one");
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].conversation,
         [user("one"), user("two"), user("three")]
     );
-    assert_eq!(requests[0].system_prompt, "You are terse.");
+    assert!(
+        requests[0].system_prompt.contains("operating inside Fiber"),
+        "{}",
+        requests[0].system_prompt
+    );
+    assert!(
+        requests[0].system_prompt.contains("fake/model-1"),
+        "{}",
+        requests[0].system_prompt
+    );
 }
 
 #[test]
@@ -96,9 +106,9 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let turn = lines[1].turn_id.clone().unwrap();
-    let action = lines[3].action_id.clone().unwrap();
-    for line in &lines[1..] {
+    let turn = lines[2].turn_id.clone().unwrap();
+    let action = lines[4].action_id.clone().unwrap();
+    for line in &lines[2..] {
         assert_eq!(line.turn_id.as_ref(), Some(&turn), "{}", line.kind);
     }
     let deltas: Vec<_> = lines
@@ -136,7 +146,7 @@ fn a_step_writes_its_events_and_ephemeral_deltas_carry_no_seq() {
     let durable: Vec<_> = lines.into_iter().filter(|l| l.seq.is_some()).collect();
     assert_eq!(log::read(&session.dir).unwrap(), durable);
     let seqs: Vec<Seq> = durable.iter().map(|l| l.seq.unwrap()).collect();
-    assert_eq!(seqs, (0..8).map(Seq).collect::<Vec<_>>());
+    assert_eq!(seqs, (0..9).map(Seq).collect::<Vec<_>>());
 }
 
 #[test]
@@ -152,6 +162,7 @@ fn a_message_sent_during_the_final_reply_continues_the_turn() {
         durable(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -355,7 +366,7 @@ fn reasoning_is_logged_and_goes_back_only_to_the_model_that_produced_it() {
     assert_eq!(delta.payload["text"], "Think.");
     assert_eq!(delta.action_id, started.action_id);
     assert_eq!(completed.action_id, started.action_id);
-    assert_ne!(started.action_id, lines[3].action_id);
+    assert_ne!(started.action_id, lines[4].action_id);
     assert_eq!(completed.payload["provider_item"], reasoning_item("Think."));
 
     session.inbox.send(delivery("two")).unwrap();
@@ -446,6 +457,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         durable(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -465,7 +477,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         .iter()
         .find(|l| l.kind == "tool_call_arguments_delta")
         .unwrap();
-    assert_eq!(arguments.action_id, lines[3].action_id);
+    assert_eq!(arguments.action_id, lines[4].action_id);
     assert_eq!(arguments.seq, None);
     let requested = lines
         .iter()
@@ -476,7 +488,7 @@ fn a_tool_call_with_no_tool_fails_unknown_tool_and_the_turn_continues() {
         .find(|l| l.kind == "tool_call_completed")
         .unwrap();
     assert_eq!(requested.payload["name"], "get_weather");
-    assert_ne!(requested.action_id, lines[3].action_id);
+    assert_ne!(requested.action_id, lines[4].action_id);
     assert_eq!(completed.action_id, requested.action_id);
     assert_eq!(completed.payload["status"], "failed");
     assert_eq!(completed.payload["error"]["code"], "unknown_tool");
@@ -511,6 +523,7 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -518,12 +531,12 @@ fn a_failed_model_call_fails_the_turn_with_its_code() {
             "turn_completed",
         ]
     );
-    let call = &lines[4].payload;
+    let call = &lines[5].payload;
     assert_eq!(call["outcome"], "failed");
     assert_eq!(call["attempt"], 1);
     assert_eq!(call["error"]["code"], "invalid_request");
-    assert_eq!(lines[5].payload["outcome"], "failed");
-    assert_eq!(lines[5].payload["error"], call["error"]);
+    assert_eq!(lines[6].payload["outcome"], "failed");
+    assert_eq!(lines[6].payload["error"], call["error"]);
     // A failed call sends nothing to the model.
     assert_eq!(
         rebuild(&log::read(&session.dir).unwrap(), MODEL).unwrap(),
@@ -634,7 +647,7 @@ fn the_loop_runs_turns_until_every_sender_is_gone() {
     let (done, finished) = std::sync::mpsc::channel();
     let ran = std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
     let lines = session.lines();
-    assert_eq!(lines[1].payload["input"].as_array().unwrap().len(), 2);
+    assert_eq!(lines[2].payload["input"].as_array().unwrap().len(), 2);
     session.inbox.send(delivery("bye")).unwrap();
     assert_eq!(
         session.lines().last().unwrap().payload["outcome"],
@@ -935,6 +948,7 @@ fn a_zero_budget_refuses_the_first_request() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "turn_completed",
@@ -1019,6 +1033,7 @@ fn a_steer_arriving_during_a_failed_reply_starts_the_next_turn() {
         kinds(&failed),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1081,6 +1096,7 @@ fn queued_steers_are_each_applied_in_order_and_listed_while_queued() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1151,6 +1167,7 @@ fn a_dropped_steer_leaves_the_queue_listing() {
         kinds(&lines),
         [
             "session_started",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",

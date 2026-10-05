@@ -246,7 +246,7 @@ fn live_reviewer() {
             cost: None,
             subscription: false,
         },
-        String::new(),
+        r#loop::PromptInputs::default(),
         rx,
         vec![("builtin".to_owned(), Arc::new(Shell) as Arc<dyn Tool>)],
         r#loop::Permissions {

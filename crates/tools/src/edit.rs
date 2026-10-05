@@ -148,6 +148,10 @@ impl Tool for Edit {
         self.shared.set_seen(&path, hash_bytes(&applied.bytes));
         written(&path, &text, &applied)
     }
+
+    fn guidelines(&self) -> Option<String> {
+        crate::guidelines::of("edit")
+    }
 }
 
 fn blocks(arguments: &Map<String, Value>) -> Result<Vec<Block>, String> {

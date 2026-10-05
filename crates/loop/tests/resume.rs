@@ -634,7 +634,7 @@ impl History {
             &lines,
             Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
             Self::model(),
-            "You are terse.".into(),
+            r#loop::PromptInputs::default(),
             self.inbox_rx.take().unwrap(),
             tools,
             r#loop::Permissions {
@@ -747,6 +747,7 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -779,6 +780,7 @@ fn resume_writes_no_session_started_and_seq_continues() {
             "session_started",
             "turn_started",
             "tool_call_requested",
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -864,6 +866,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -901,7 +904,15 @@ fn budget_counts_spend_from_before_the_resume() {
     assert_eq!(outcome, contract::events::TurnOutcome::Failed);
     assert!(history.provider.requests().is_empty());
     let kinds = history.new_kinds();
-    assert_eq!(kinds, ["turn_started", "step_started", "turn_completed"]);
+    assert_eq!(
+        kinds,
+        [
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "turn_completed"
+        ]
+    );
     let completed = history
         .new_lines()
         .into_iter()
@@ -958,7 +969,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         &lines,
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
-        "You are terse.".into(),
+        r#loop::PromptInputs::default(),
         rx,
         vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
         r#loop::Permissions {
@@ -989,6 +1000,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1058,7 +1070,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         &lines,
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
-        "You are terse.".into(),
+        r#loop::PromptInputs::default(),
         rx,
         vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
         r#loop::Permissions {
@@ -1088,6 +1100,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1146,7 +1159,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
         &lines,
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
-        "You are terse.".into(),
+        r#loop::PromptInputs::default(),
         rx,
         vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
         r#loop::Permissions {
@@ -1174,6 +1187,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1239,6 +1253,7 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1248,6 +1263,25 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
             "turn_completed",
         ]
     );
+}
+
+#[test]
+fn a_resume_builds_the_preamble_with_reason_resume() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    history.run(looped, "two");
+
+    let new = history.new_lines();
+    assert_eq!(new[0].kind, "preamble_built");
+    assert_eq!(new[0].payload["reason"], "resume");
+    assert_eq!(new[0].payload["model"], support::MODEL);
+    // The resumed request carries the rebuilt prompt.
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(new[0].payload["system_prompt"], requests[0].system_prompt);
 }
 
 #[test]
@@ -1266,6 +1300,7 @@ fn no_request_before_the_resume_leaves_previous_end_absent() {
     assert_eq!(
         history.new_kinds(),
         [
+            "preamble_built",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1369,7 +1404,7 @@ fn resume_fails_log_corrupt_on_a_log_with_no_session_started() {
         &lines,
         Arc::new(ScriptedProvider::new(vec![])) as Arc<dyn Provider>,
         History::model(),
-        String::new(),
+        r#loop::PromptInputs::default(),
         rx,
         Vec::new(),
         r#loop::Permissions {
