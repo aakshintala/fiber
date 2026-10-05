@@ -382,3 +382,62 @@ exit 3"#,
         message(&output)
     );
 }
+
+const OK_CHILD: &str =
+    r#"printf '{"file":"%s.png","mime_type":"image/png","width":1,"height":1}\n' "$4""#;
+
+/// A `write` of `a.png` through the same `Files` that read it.
+fn write_png(files: &Files) -> Output {
+    let Value::Object(arguments) = json!({"path": "a.png", "content": "new"}) else {
+        panic!("an object");
+    };
+    files
+        .write()
+        .run(&arguments, &CancelToken::new(), &Recorder::default())
+}
+
+#[test]
+fn a_read_image_is_seen_so_a_later_write_is_not_stale() {
+    let dir = workspace();
+    let fiber = stub(dir.path(), OK_CHILD);
+    let files =
+        Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
+    let Value::Object(arguments) = json!({"path": "a.png"}) else {
+        panic!("an object");
+    };
+    let read = files
+        .read()
+        .run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&read), None);
+    assert_eq!(code(&write_png(&files)), None);
+}
+
+#[test]
+fn an_image_changed_after_the_read_is_stale_and_a_refused_read_sees_nothing() {
+    let dir = workspace();
+    let fiber = stub(dir.path(), OK_CHILD);
+    let files =
+        Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
+    let Value::Object(arguments) = json!({"path": "a.png"}) else {
+        panic!("an object");
+    };
+    files
+        .read()
+        .run(&arguments, &CancelToken::new(), &Recorder::default());
+    fs::write(
+        dir.path().join("a.png"),
+        [PNG, b" changed".as_slice()].concat(),
+    )
+    .unwrap();
+    assert_eq!(code(&write_png(&files)), Some(ErrorCode::StaleFile));
+
+    let refusing = workspace();
+    let fiber = stub(refusing.path(), "echo refused >&2\nexit 1");
+    let files = Files::new(refusing.path().to_path_buf())
+        .with_images(fiber, refusing.path().join("artifacts"));
+    let failed = files
+        .read()
+        .run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&failed), Some(ErrorCode::UnsupportedFile));
+    assert_eq!(code(&write_png(&files)), Some(ErrorCode::StaleFile));
+}

@@ -63,6 +63,8 @@ pub(crate) enum Inspected {
         kind: &'static str,
         /// Size in bytes.
         size: u64,
+        /// The hash of the bytes read, for the stale-file check.
+        hash: u64,
     },
 }
 
@@ -208,7 +210,10 @@ pub(crate) fn inspect(path: &Path) -> Result<Inspected, InspectError> {
         ))
     })?;
     match magic(&bytes) {
-        Some(Magic::Image(kind)) => return Ok(Inspected::Image { kind, size }),
+        Some(Magic::Image(kind)) => {
+            let hash = hash_bytes(&bytes);
+            return Ok(Inspected::Image { kind, size, hash });
+        }
         Some(Magic::Pdf) => return Ok(unsupported("a PDF", size, PDF_HINT)),
         None => {}
     }

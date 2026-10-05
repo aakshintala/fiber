@@ -109,8 +109,13 @@ impl Tool for Read {
         let text = match inspect(&path) {
             Ok(Inspected::Text { text }) => text,
             // `offset` and `limit` do not apply to an image.
-            Ok(Inspected::Image { .. }) => {
-                return crate::image::read(self.shared.images(), &path, cancel);
+            Ok(Inspected::Image { hash, .. }) => {
+                let output = crate::image::read(self.shared.images(), &path, cancel);
+                // Seen for a later `write`: the bytes this read took in.
+                if output.error.is_none() {
+                    self.shared.set_seen(&path, hash);
+                }
+                return output;
             }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
                 return failed(

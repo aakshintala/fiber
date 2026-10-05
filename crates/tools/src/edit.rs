@@ -121,7 +121,7 @@ impl Tool for Edit {
         }
         let text = match inspect(&path) {
             Ok(Inspected::Text { text }) => text,
-            Ok(Inspected::Image { kind, size }) => {
+            Ok(Inspected::Image { kind, size, .. }) => {
                 return failed(
                     ErrorCode::UnsupportedFile,
                     unsupported_message(&path, kind, size, "Edit changes text files only."),

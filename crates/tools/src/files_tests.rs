@@ -210,7 +210,7 @@ fn recognised_magic_nul_and_invalid_utf8_are_typed() {
         let path = dir.path().join(name);
         fs::write(&path, bytes).unwrap();
         match inspect(&path).unwrap() {
-            Inspected::Image { kind, size } => {
+            Inspected::Image { kind, size, .. } => {
                 assert!(kind.contains(expect), "{name}: {kind}");
                 assert_eq!(size, u64::try_from(bytes.len()).unwrap(), "{name}");
             }
