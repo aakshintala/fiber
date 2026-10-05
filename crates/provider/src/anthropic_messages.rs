@@ -346,7 +346,13 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
     let mut out: Vec<(&'static str, Vec<Value>)> = Vec::new();
     let mut positions: Vec<Option<(usize, usize)>> = Vec::with_capacity(request.conversation.len());
     for input in &request.conversation {
-        let Some(block) = block_of(input, &reference, &call_ids, &request.session_dir) else {
+        let Some(block) = block_of(
+            input,
+            &reference,
+            &call_ids,
+            &request.session_dir,
+            endpoint.text_only,
+        ) else {
             positions.push(None);
             continue;
         };
@@ -401,6 +407,7 @@ fn block_of(
     reference: &str,
     call_ids: &BTreeMap<&ActionId, &str>,
     session_dir: &Path,
+    text_only: bool,
 ) -> Option<Value> {
     match input {
         Input::User { text } => Some(json!({"type": "text", "text": text})),
@@ -434,7 +441,7 @@ fn block_of(
             let mut result = json!({
                 "type": "tool_result",
                 "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "content": crate::anthropic_images::content(text, images, session_dir),
+                "content": crate::images::anthropic_content(crate::images::prepare(text, images, session_dir, text_only)),
             });
             if *is_error && let Some(map) = result.as_object_mut() {
                 map.insert("is_error".into(), json!(true));

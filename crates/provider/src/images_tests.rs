@@ -1,10 +1,10 @@
-//! Tests beside [`super::content`]: the exact blocks, and what a file that
-//! cannot be read does.
+//! Tests beside [`super::prepare`]: the exact shapes, what a file that
+//! cannot be read does, and what a model that cannot take images gets.
 
 use contract::provider::ImageRef;
 use serde_json::json;
 
-use super::content;
+use super::{anthropic_content, data_url, prepare};
 
 fn image(path: &str) -> ImageRef {
     ImageRef {
@@ -15,12 +15,22 @@ fn image(path: &str) -> ImageRef {
     }
 }
 
+/// The `anthropic-messages` content for a model that takes images.
+fn content(text: &str, images: &[ImageRef], session_dir: &std::path::Path) -> serde_json::Value {
+    anthropic_content(prepare(text, images, session_dir, false))
+}
+
 #[test]
 fn no_image_leaves_the_content_a_plain_string() {
     assert_eq!(
         content("done\n", &[], std::path::Path::new("/nowhere")),
         json!("done\n")
     );
+    // ... for either value of `text_only`.
+    let prepared = prepare("done\n", &[], std::path::Path::new("/nowhere"), true);
+    assert_eq!(prepared.text, "done\n");
+    assert!(prepared.images.is_empty());
+    assert_eq!(anthropic_content(prepared), json!("done\n"));
 }
 
 #[test]
@@ -96,4 +106,71 @@ fn a_path_that_leaves_the_session_directory_is_not_read() {
     );
     let absolute = content("t\n", &[image(outside.to_str().unwrap())], &inner);
     assert!(absolute.is_string());
+}
+
+#[test]
+fn text_only_sends_no_image_and_says_the_image_was_left_out() {
+    let dir = fakes::TempDir::new("fiber-anthropic-image");
+    std::fs::create_dir(dir.path().join("artifacts")).unwrap();
+    std::fs::write(dir.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let prepared = prepare(
+        "Image: 2x1 image/png.\n",
+        &[image("artifacts/i_1.png")],
+        dir.path(),
+        true,
+    );
+    assert!(prepared.images.is_empty());
+    assert_eq!(
+        anthropic_content(prepared),
+        json!(
+            "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"
+        )
+    );
+}
+
+#[test]
+fn text_only_never_reads_the_filesystem() {
+    // The file is missing, yet the line says it was left out, not that it
+    // could not be read: the file was never opened.
+    let dir = fakes::TempDir::new("fiber-anthropic-image");
+    let prepared = prepare(
+        "no newline",
+        &[image("artifacts/gone.png")],
+        dir.path(),
+        true,
+    );
+    assert!(prepared.images.is_empty());
+    assert_eq!(
+        prepared.text,
+        "no newline\n[Image artifacts/gone.png left out: this model does not take images.]"
+    );
+}
+
+#[test]
+fn text_only_leaves_out_each_image_in_order() {
+    let dir = fakes::TempDir::new("fiber-anthropic-image");
+    std::fs::write(dir.path().join("ok.png"), b"abcd").unwrap();
+    let prepared = prepare(
+        "t\n",
+        &[image("gone.png"), image("ok.png")],
+        dir.path(),
+        true,
+    );
+    assert!(prepared.images.is_empty());
+    assert_eq!(
+        prepared.text,
+        "t\n[Image gone.png left out: this model does not take images.]\n[Image ok.png left out: this model does not take images.]"
+    );
+}
+
+#[test]
+fn a_data_url_holds_the_mime_type_and_the_base64() {
+    let dir = fakes::TempDir::new("fiber-anthropic-image");
+    std::fs::write(dir.path().join("i.png"), b"abcd").unwrap();
+    let prepared = prepare("t\n", &[image("i.png")], dir.path(), false);
+    assert_eq!(prepared.images.len(), 1);
+    assert_eq!(
+        data_url(&prepared.images[0]),
+        "data:image/png;base64,YWJjZA=="
+    );
 }

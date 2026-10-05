@@ -368,25 +368,39 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 action_id,
                 text,
                 is_error,
-                ..
+                images,
             } => {
                 park(&mut out, &mut signature);
                 let call = calls.get(action_id);
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
                 // A failed call sends the documented `error` key in place
                 // of `output` (googleapis
                 // `google/ai/generativelanguage/v1beta/content.proto`,
                 // `FunctionResponse.response`: "if the function call failed
                 // to execute, the response can have an \"error\" key").
                 let result = if *is_error {
-                    json!({"error": text})
+                    json!({"error": prepared.text})
                 } else {
-                    json!({"output": text})
+                    json!({"output": prepared.text})
                 };
+                let mut response = json!({
+                    "name": call.map_or("", |c| c.name.as_str()),
+                    "response": result,
+                });
+                // An image rides in `parts`, beside the `response` the
+                // model read (`docs/model-routing.md`, "Google Generative
+                // AI wire facts").
+                if !prepared.images.is_empty() {
+                    let parts: Vec<Value> = prepared.images.iter().map(|image| {
+                        json!({"inlineData": {"mimeType": image.mime_type, "data": image.data}})
+                    }).collect();
+                    if let Some(map) = response.as_object_mut() {
+                        map.insert("parts".into(), Value::Array(parts));
+                    }
+                }
                 let response = with(
-                    json!({
-                        "name": call.map_or("", |c| c.name.as_str()),
-                        "response": result,
-                    }),
+                    response,
                     call.and_then(|c| c.provider_id.as_ref())
                         .map(|id| json!({"id": id.0})),
                 );

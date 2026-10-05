@@ -1112,3 +1112,140 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
     );
     assert_eq!(input(true), input(false));
 }
+
+/// A conversation whose one tool result carries `images`.
+fn image_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.png"}),
+                provider_id: Some(ProviderCallId("call_1".into())),
+                repair: None,
+                ran_by: None,
+            },
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: text.into(),
+            is_error: false,
+            images,
+        },
+    ]
+}
+
+fn png_ref(path: &str) -> contract::provider::ImageRef {
+    contract::provider::ImageRef {
+        path: path.into(),
+        mime_type: "image/png".into(),
+        width: 2,
+        height: 1,
+    }
+}
+
+fn image_output(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["type"] == "function_call_output")
+        .unwrap()["output"]
+        .clone()
+}
+
+#[test]
+fn a_stored_image_is_sent_as_input_image_parts_after_the_text() {
+    let session = fakes::TempDir::new("fiber-responses-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([Response::stream(stream(&[completed(
+        "completed",
+        json!({}),
+    )]))])
+    .unwrap();
+    run(Box::new(
+        Responses::new(endpoint(&server)).request(&request),
+    ))
+    .0
+    .unwrap();
+    assert_eq!(
+        image_output(&server),
+        json!([
+            {"type": "input_text", "text": "Image: 2x1 image/png.\n"},
+            {"type": "input_image", "image_url": "data:image/png;base64,YWJjZA=="},
+        ])
+    );
+}
+
+#[test]
+fn empty_text_sends_no_input_text_part_and_an_unreadable_image_sends_no_part() {
+    let session = fakes::TempDir::new("fiber-responses-request-image");
+    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
+    let imaged = |text: &str, path: &str| {
+        let request = ModelRequest {
+            conversation: image_conversation(text, vec![png_ref(path)]),
+            session_dir: session.path().to_path_buf(),
+            ..request()
+        };
+        let server = ProviderServer::start([Response::stream(stream(&[completed(
+            "completed",
+            json!({}),
+        )]))])
+        .unwrap();
+        run(Box::new(
+            Responses::new(endpoint(&server)).request(&request),
+        ))
+        .0
+        .unwrap();
+        image_output(&server)
+    };
+    let output = imaged("", "i.png");
+    assert_eq!(output.as_array().map(Vec::len), Some(1));
+    assert_eq!(output[0]["type"], "input_image");
+    assert_eq!(
+        imaged("Image: 2x1 image/png.\n", "artifacts/gone.png"),
+        json!("Image: 2x1 image/png.\n[Image artifacts/gone.png could not be read.]")
+    );
+}
+
+#[test]
+fn a_text_only_model_gets_a_string_output_saying_the_image_was_left_out() {
+    let session = fakes::TempDir::new("fiber-responses-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let reply = || Response::stream(stream(&[completed("completed", json!({}))]));
+    let server = ProviderServer::start([reply(), reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    let responses = Responses::new(endpoint);
+    for _ in 0..2 {
+        run(Box::new(responses.request(&request))).0.unwrap();
+    }
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        image_output(&server),
+        json!(
+            "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"
+        )
+    );
+}

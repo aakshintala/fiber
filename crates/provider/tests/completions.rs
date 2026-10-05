@@ -1427,3 +1427,302 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
     );
     assert_eq!(messages(true), messages(false));
 }
+
+/// A call and its result, the result carrying `images`.
+fn image_turn(
+    action: &str,
+    call_id: &str,
+    text: &str,
+    images: Vec<contract::provider::ImageRef>,
+) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId(action.into()),
+            call: ToolCallRequested {
+                name: "get_weather".into(),
+                arguments: json!({"city": "Paris"}),
+                provider_id: Some(ProviderCallId(call_id.into())),
+                repair: None,
+                ran_by: None,
+            },
+        },
+        Input::ToolResult {
+            action_id: ActionId(action.into()),
+            text: text.into(),
+            is_error: false,
+            images,
+        },
+    ]
+}
+
+fn png_ref(path: &str) -> contract::provider::ImageRef {
+    contract::provider::ImageRef {
+        path: path.into(),
+        mime_type: "image/png".into(),
+        width: 2,
+        height: 1,
+    }
+}
+
+fn image_session() -> fakes::TempDir {
+    let session = fakes::TempDir::new("fiber-completions-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    // "abcd" is `YWJjZA==`, "wxyz" is `d3h5eg==`.
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    std::fs::write(session.path().join("artifacts/i_2.png"), b"wxyz").unwrap();
+    session
+}
+
+fn image_url(data: &str) -> Value {
+    json!({"type": "image_url", "image_url": {"url": format!("data:image/png;base64,{data}")}})
+}
+
+#[test]
+fn a_tool_results_image_goes_in_a_user_message_after_the_tool_message() {
+    let session = image_session();
+    let mut conversation = vec![Input::User {
+        text: "What is the weather in Paris?".into(),
+    }];
+    conversation.extend(image_turn(
+        "a_1",
+        "call_1",
+        "Image: 2x1 image/png.\n",
+        vec![png_ref("artifacts/i_1.png")],
+    ));
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let endpoint = endpoint(&server);
+    send(endpoint.clone(), &request);
+    send(endpoint, &request);
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Image: 2x1 image/png.\n"},
+            {"role": "user", "content": [image_url("YWJjZA==")]},
+        ])
+    );
+}
+
+#[test]
+fn images_from_parallel_results_share_one_user_message_in_order() {
+    let session = image_session();
+    // Two parallel calls, then their results: one run of tool messages.
+    let (first, second) = (
+        image_turn(
+            "a_1",
+            "call_1",
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        image_turn(
+            "a_2",
+            "call_2",
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_2.png")],
+        ),
+    );
+    let conversation = vec![
+        first[0].clone(),
+        second[0].clone(),
+        first[1].clone(),
+        second[1].clone(),
+    ];
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request);
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([
+            {"role": "system", "content": "You are terse."},
+            {"role": "assistant", "tool_calls": [
+                {"id": "call_1", "type": "function",
+                 "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}},
+                {"id": "call_2", "type": "function",
+                 "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "Image: 2x1 image/png.\n"},
+            {"role": "tool", "tool_call_id": "call_2", "content": "Image: 2x1 image/png.\n"},
+            {"role": "user", "content": [image_url("YWJjZA=="), image_url("d3h5eg==")]},
+        ])
+    );
+}
+
+#[test]
+fn a_user_turn_after_a_tool_result_comes_after_the_image_message() {
+    let session = image_session();
+    let mut conversation = vec![Input::User {
+        text: "What is the weather in Paris?".into(),
+    }];
+    conversation.extend(image_turn(
+        "a_1",
+        "call_1",
+        "Image: 2x1 image/png.\n",
+        vec![png_ref("artifacts/i_1.png")],
+    ));
+    conversation.push(Input::User {
+        text: "And Rome?".into(),
+    });
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(endpoint(&server), &request);
+    let messages = sent_body(&server, 0)["messages"].clone();
+    let roles: Vec<&str> = messages
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["role"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        roles,
+        ["system", "user", "assistant", "tool", "user", "user"]
+    );
+    assert_eq!(messages[3]["content"], "Image: 2x1 image/png.\n");
+    assert_eq!(messages[4]["content"], json!([image_url("YWJjZA==")]));
+    assert_eq!(messages[5]["content"], "And Rome?");
+}
+
+#[test]
+fn a_text_only_model_sends_no_image_message_and_the_result_says_so() {
+    let session = image_session();
+    let mut conversation = vec![Input::User {
+        text: "What is the weather in Paris?".into(),
+    }];
+    conversation.extend(image_turn(
+        "a_1",
+        "call_1",
+        "Image: 2x1 image/png.\n",
+        vec![png_ref("artifacts/i_1.png")],
+    ));
+    let request = ModelRequest {
+        conversation,
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    send(endpoint, &request);
+    assert_eq!(
+        sent_body(&server, 0)["messages"],
+        json!([
+            {"role": "system", "content": "You are terse."},
+            {"role": "user", "content": "What is the weather in Paris?"},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1",
+             "content": "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"},
+        ])
+    );
+}
+
+#[test]
+fn the_image_message_carries_the_cache_marker_as_the_new_and_previous_end() {
+    let session = image_session();
+    let mut conversation = vec![Input::User {
+        text: "What is the weather in Paris?".into(),
+    }];
+    conversation.extend(image_turn(
+        "a_1",
+        "call_1",
+        "18 C, clear",
+        vec![png_ref("artifacts/i_1.png")],
+    ));
+    let hour = json!({"type": "ephemeral", "ttl": "1h"});
+    let marked_image = |lifetime: &Value| {
+        json!([{"type": "image_url",
+            "image_url": {"url": "data:image/png;base64,YWJjZA=="},
+            "cache_control": lifetime}])
+    };
+    let send_with = |server: &ProviderServer, previous_end: Option<usize>| {
+        send(
+            Endpoint {
+                base_url: endpoint(server).base_url,
+                ..markers()
+            },
+            &ModelRequest {
+                conversation: conversation.clone(),
+                session_dir: session.path().to_path_buf(),
+                previous_end,
+                cache_lifetime: CacheLifetime::OneHour,
+                ..request()
+            },
+        );
+    };
+    // As the last message, the image message carries the new end's marker
+    // on its last part.
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    send_with(&server, None);
+    send_with(&server, Some(3));
+    let new_end = sent_body(&server, 0);
+    assert_eq!(
+        new_end["messages"][4]["content"],
+        marked_image(&hour),
+        "the image message is the last message"
+    );
+    assert_eq!(new_end["messages"][3]["content"], "18 C, clear");
+    // With `previous_end` on the tool result, the marker lands on the image
+    // message the run ends with, not the tool message.
+    let previous_end = sent_body(&server, 1);
+    assert_eq!(previous_end["messages"][4]["content"], marked_image(&hour));
+    assert_eq!(previous_end["messages"][3]["content"], "18 C, clear");
+}
+
+#[test]
+fn a_dropped_input_after_a_tool_result_does_not_break_the_previous_end() {
+    // A reasoning input for another model reference adds no message, so its
+    // `ends` entry still points at the tool message when the image message
+    // is flushed. The previous-end marker must land on the image message
+    // the run ends with, not the tool message.
+    let session = image_session();
+    let mut conversation = image_turn(
+        "a_1",
+        "call_1",
+        "18 C, clear",
+        vec![png_ref("artifacts/i_1.png")],
+    );
+    conversation.push(Input::Reasoning {
+        model: "openai/gpt-6-luna".into(),
+        text: "another model's thoughts".into(),
+        provider_item: Some(json!({"reasoning_content": "other"})),
+    });
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    send(
+        Endpoint {
+            base_url: endpoint(&server).base_url,
+            ..markers()
+        },
+        &ModelRequest {
+            conversation,
+            session_dir: session.path().to_path_buf(),
+            previous_end: Some(3),
+            ..request()
+        },
+    );
+    let messages = sent_body(&server, 0)["messages"].clone();
+    assert_eq!(messages[2]["content"], "18 C, clear");
+    assert_eq!(
+        messages[3]["content"],
+        json!([{"type": "image_url",
+            "image_url": {"url": "data:image/png;base64,YWJjZA=="},
+            "cache_control": {"type": "ephemeral"}}])
+    );
+}

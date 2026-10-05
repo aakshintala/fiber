@@ -1616,3 +1616,27 @@ fn a_result_without_an_image_keeps_a_string_content() {
         "Image: 2x1 image/png.\n"
     );
 }
+
+#[test]
+fn a_text_only_model_gets_no_image_part_and_the_result_says_so() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    run(Box::new(Messages::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"][1]["content"][0]["content"],
+        "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"
+    );
+}

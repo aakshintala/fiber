@@ -1431,3 +1431,121 @@ fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
         json!({"functionResponse": {"name": "plot", "id": "c1", "response": {"output": "boom"}}})
     );
 }
+
+/// A conversation whose one tool result carries `images`.
+fn image_conversation(
+    is_error: bool,
+    text: &str,
+    images: Vec<contract::provider::ImageRef>,
+) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.png"}),
+                provider_id: Some(ProviderCallId("c1".into())),
+                repair: None,
+                ran_by: None,
+            },
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: text.into(),
+            is_error,
+            images,
+        },
+    ]
+}
+
+fn png_ref(path: &str) -> contract::provider::ImageRef {
+    contract::provider::ImageRef {
+        path: path.into(),
+        mime_type: "image/png".into(),
+        width: 2,
+        height: 1,
+    }
+}
+
+fn function_response(server: &ProviderServer) -> Value {
+    sent_body(server, 0)["contents"][1]["parts"][0]["functionResponse"].clone()
+}
+
+#[test]
+fn a_stored_image_is_sent_as_inline_data_parts_beside_the_response() {
+    let session = fakes::TempDir::new("fiber-gemini-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            false,
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    for _ in 0..2 {
+        run(Box::new(gemini.request(&request))).0.unwrap();
+    }
+    let bodies: Vec<Vec<u8>> = server.requests().into_iter().map(|r| r.body).collect();
+    assert_eq!(bodies[0], bodies[1], "a resume sends the same bytes");
+    assert_eq!(
+        function_response(&server),
+        json!({"name": "read", "id": "c1",
+            "response": {"output": "Image: 2x1 image/png.\n"},
+            "parts": [{"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}}]})
+    );
+}
+
+#[test]
+fn a_failed_result_with_an_image_keeps_the_error_key_and_still_has_parts() {
+    let session = fakes::TempDir::new("fiber-gemini-request-image");
+    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(true, "boom", vec![png_ref("i.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Gemini::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        function_response(&server),
+        json!({"name": "read", "id": "c1",
+            "response": {"error": "boom"},
+            "parts": [{"inlineData": {"mimeType": "image/png", "data": "YWJjZA=="}}]})
+    );
+}
+
+#[test]
+fn a_text_only_model_gets_no_parts_and_the_response_says_so() {
+    let session = fakes::TempDir::new("fiber-gemini-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(
+            false,
+            "Image: 2x1 image/png.\n",
+            vec![png_ref("artifacts/i_1.png")],
+        ),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let endpoint = Endpoint {
+        text_only: true,
+        ..endpoint(&server)
+    };
+    run(Box::new(Gemini::new(endpoint).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        function_response(&server),
+        json!({"name": "read", "id": "c1",
+            "response": {"output": "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"}})
+    );
+}

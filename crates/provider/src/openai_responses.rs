@@ -266,14 +266,39 @@ fn input(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             // where `status` is item progress, not tool failure), so a
             // failed result sends the same bytes as a success.
             Input::ToolResult {
-                action_id, text, ..
-            } => Some(json!({
-                "type": "function_call_output",
-                "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-                "output": text,
-            })),
+                action_id,
+                text,
+                images,
+                ..
+            } => {
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
+                Some(json!({
+                    "type": "function_call_output",
+                    "call_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
+                    "output": output(prepared),
+                }))
+            }
         })
         .collect()
+}
+
+/// A `function_call_output`'s `output`: the plain text when no image is
+/// sent, otherwise an array holding one `input_text` part, when the text
+/// is non-empty, then one `input_image` part per image, each carrying a
+/// data URL (`docs/tools.md`, "read").
+fn output(prepared: crate::images::Prepared) -> Value {
+    if prepared.images.is_empty() {
+        return json!(prepared.text);
+    }
+    let mut parts = Vec::new();
+    if !prepared.text.is_empty() {
+        parts.push(json!({"type": "input_text", "text": prepared.text}));
+    }
+    for image in &prepared.images {
+        parts.push(json!({"type": "input_image", "image_url": crate::images::data_url(image)}));
+    }
+    Value::Array(parts)
 }
 
 /// Arguments as the text Responses carries: a raw string as it was, an

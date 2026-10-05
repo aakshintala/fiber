@@ -6,12 +6,13 @@
 //! A protocol is native Rust here; a provider is data an extension declares,
 //! which arrives as an [`Endpoint`].
 
-mod anthropic_images;
 pub mod anthropic_messages;
 mod error;
 pub mod google_generative_ai;
 mod http;
+mod images;
 pub mod openai_completions;
+mod openai_completions_messages;
 mod openai_completions_tools;
 pub mod openai_responses;
 mod sse;
@@ -49,6 +50,12 @@ pub struct Endpoint {
     /// reach a local server directly whatever the shell names
     /// (`docs/dependencies.md`, "Proxies").
     pub direct: bool,
+    /// True when the model's declared `input` lacks `image`
+    /// (`docs/model-routing.md`, "What a provider extension declares").
+    /// A request for such a model carries no image part on any protocol;
+    /// each left-out image gets one text line saying so (`docs/tools.md`,
+    /// "read"). False by default, so images are sent unchanged.
+    pub text_only: bool,
 }
 
 impl Endpoint {
