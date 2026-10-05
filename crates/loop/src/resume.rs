@@ -126,10 +126,11 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
     let Some((request, turn, action)) = found else {
         return Ok(None);
     };
-    for line in lines.iter().filter(|l| l.is_durable()) {
-        if line.kind == "turn_completed" && line.turn_id.as_ref() == Some(&turn) {
-            return Ok(None);
-        }
+    if lines
+        .iter()
+        .any(|l| l.is_durable() && l.kind == "turn_completed" && l.turn_id.as_ref() == Some(&turn))
+    {
+        return Ok(None);
     }
     let completed = crate::conversation::completed_actions(lines)?;
     let start = lines

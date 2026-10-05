@@ -149,13 +149,12 @@ impl Loop {
             if kept > 0 {
                 // The queue moved into `turn_started`.
                 self.emit_queue(None)?;
-                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
-                    self.admit_idle(delivery, &mut input);
-                }
-            } else if held {
-                // Held deliveries are already admitted above; what arrived
+            }
+            if kept > 0 || held {
+                // Kept steers moved into `turn_started`, and held
+                // deliveries are already admitted above: what arrived
                 // since is drained without blocking or re-announcing the
-                // queue, which did not move.
+                // queue, which did not move again.
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
                     self.admit_idle(delivery, &mut input);
                 }

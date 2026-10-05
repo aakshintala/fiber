@@ -1717,6 +1717,23 @@ fn an_open_batch_gets_no_fixed_result() {
             | Input::Reasoning { .. } => None,
         })
         .collect();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(calls, ["a_1", "a_2"]);
     for input in conversation {
         if let Input::ToolResult { text, .. } = input {
@@ -1763,6 +1780,20 @@ fn without_a_suspend_the_same_batch_gets_fixed_results() {
             | Input::Reasoning { .. } => None,
         })
         .collect();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(fixed.len(), 2);
     assert_eq!(fixed[0].0, "a_1");
     assert_eq!(fixed[1].0, "a_2");
@@ -1808,6 +1839,23 @@ fn a_call_outside_the_open_batch_still_gets_its_fixed_result() {
             | Input::Reasoning { .. } => None,
         })
         .collect();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(fixed, ["a_0"]);
 }
 
@@ -1832,6 +1880,20 @@ fn no_suspended_on_resumes_as_a_cut_short_turn() {
     let _ = looped;
 
     // Part 1's behaviour: no re-raise, the call keeps its fixed result.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert!(
         !history
             .new_kinds()
@@ -1876,6 +1938,20 @@ fn a_suspended_on_naming_an_unknown_request_resumes_as_cut_short() {
             .iter()
             .any(|k| k == "permission_requested")
     );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -1899,6 +1975,20 @@ fn a_suspended_on_naming_an_interaction_resumes_as_cut_short() {
     let _ = looped;
 
     // Only approvals re-raise.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert!(
         !history
             .new_kinds()
@@ -1936,6 +2026,20 @@ fn an_already_resolved_request_resumes_as_cut_short() {
             .count(),
         0
     );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -1970,6 +2074,20 @@ fn a_line_after_fiber_exited_resumes_as_cut_short() {
             .iter()
             .any(|k| k == "permission_requested")
     );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -1998,6 +2116,20 @@ fn a_completed_turn_resumes_as_cut_short() {
             .new_kinds()
             .iter()
             .any(|k| k == "permission_requested")
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 
@@ -2028,6 +2160,20 @@ fn a_request_outside_the_batch_resumes_as_cut_short() {
             .new_kinds()
             .iter()
             .any(|k| k == "permission_requested")
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 
@@ -2187,6 +2333,31 @@ fn a_three_call_batch_completes_in_request_order() {
         ]
     );
     assert!(!new.iter().any(|l| l.kind == "tool_call_started"));
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -2223,6 +2394,22 @@ fn a_review_request_re_raises_with_its_escalation_and_offer() {
     assert_eq!(new[2].payload["step"], "review");
     assert!(new[2].payload.get("escalation").is_some());
     assert!(new[2].payload.get("rule").is_some());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -2260,6 +2447,30 @@ fn a_tool_called_in_the_finishing_turn_runs() {
         .collect();
     // The suspended call denied, the new one completed.
     assert_eq!(ran, ["denied", "completed"]);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -2291,6 +2502,22 @@ fn a_completed_call_in_the_window_is_not_in_the_batch() {
         .map(|l| l.action_id.as_ref().unwrap().0.as_str())
         .collect();
     assert_eq!(completions, ["a_1"]);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let results: Vec<(&str, &str)> = requests[0]
