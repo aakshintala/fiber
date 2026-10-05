@@ -387,11 +387,13 @@ fn serve(listener: &TcpListener, stop: &mpsc::Receiver<()>) -> Option<Query> {
                     return Some(result);
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::WouldBlock => match stop.recv_timeout(POLL) {
+            // Nothing waiting, or an accept that failed: either way the
+            // listener waits a poll and tries again, and the callback's own
+            // timeout bounds one that keeps failing.
+            Err(_) => match stop.recv_timeout(POLL) {
                 Err(RecvTimeoutError::Timeout) => {}
                 Ok(()) | Err(RecvTimeoutError::Disconnected) => return None,
             },
-            Err(e) => return Some(Err(format!("host.oauth.callback: {e}"))),
         }
     }
 }
@@ -429,13 +431,13 @@ fn answer(mut stream: TcpStream, stop: &mpsc::Receiver<()>) -> Option<Query> {
 enum Head {
     Complete(Vec<u8>),
     TooLong,
-    /// Closed, silent for [`SILENT_POLLS`], or cancelled.
+    /// Closed, silent or failing for [`SILENT_POLLS`] reads, or cancelled.
     Gone,
 }
 
 /// Reads through the blank line that ends the head, so closing the socket
 /// leaves nothing unread for the kernel to reset the reply over.
-fn read_head(stream: &mut TcpStream, stop: &mpsc::Receiver<()>) -> Head {
+fn read_head(stream: &mut impl Read, stop: &mpsc::Receiver<()>) -> Head {
     let mut head = Vec::new();
     let mut byte = [0_u8; 1];
     let mut silent = 0;
@@ -451,19 +453,15 @@ fn read_head(stream: &mut TcpStream, stop: &mpsc::Receiver<()>) -> Head {
         match stream.read(&mut byte) {
             Ok(0) => return Head::Gone,
             Ok(_) => head.push(byte[0]),
-            Err(e)
-                if matches!(
-                    e.kind(),
-                    io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                ) =>
-            {
+            // A read that times out is one silent poll. Any other error
+            // counts as one too, so a connection that keeps failing ends
+            // within the same bound.
+            Err(_) => {
                 silent += 1;
                 if silent >= SILENT_POLLS {
                     return Head::Gone;
                 }
             }
-            Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-            Err(_) => return Head::Gone,
         }
     }
     Head::Complete(head)

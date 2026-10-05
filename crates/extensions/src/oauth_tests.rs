@@ -150,3 +150,35 @@ fn due_judges_a_stored_credential_by_the_clock() {
     assert!(held.due(&serde_json::json!({ "token": "t", "expires_at": 1.5 })));
     assert!(held.due(&serde_json::json!("t")));
 }
+
+/// A connection that fails `silent` reads, as one that times out does, then
+/// sends `head`.
+struct Silent {
+    silent: u32,
+    head: io::Cursor<Vec<u8>>,
+}
+
+impl Read for Silent {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if self.silent > 0 {
+            self.silent -= 1;
+            return Err(io::ErrorKind::WouldBlock.into());
+        }
+        self.head.read(buf)
+    }
+}
+
+fn head_after(silent: u32) -> Head {
+    let (_keep, stop) = mpsc::channel();
+    let mut stream = Silent {
+        silent,
+        head: io::Cursor::new(b"GET /?code=ok HTTP/1.1\r\n\r\n".to_vec()),
+    };
+    read_head(&mut stream, &stop)
+}
+
+#[test]
+fn a_connection_silent_for_the_bound_is_dropped_and_one_poll_less_is_read() {
+    assert!(matches!(head_after(SILENT_POLLS), Head::Gone));
+    assert!(matches!(head_after(SILENT_POLLS - 1), Head::Complete(_)));
+}

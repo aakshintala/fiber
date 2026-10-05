@@ -261,19 +261,21 @@ fn get(port: u16, request: &str) -> String {
     reply
 }
 
-/// Waits until `count` callbacks are parked at `deadline` on the extension
-/// threads. A caller waits at `deadline` while its call is queued or until
-/// the thread's notice that it parked, so that alone proves nothing. Once the
-/// caller waits a grace past it, only an extension thread can be at
-/// `deadline`, and a thread parks there after it has made the callback's
-/// host request: a listener is bound, a lock wait has begun.
-fn await_callbacks_parked(env: &Env, deadline: Instant, count: usize) {
+/// Waits until `callers` callers wait past `deadline` and `threads` extension
+/// threads are parked at it. A caller waits at `deadline` while its call is
+/// queued, and a grace past it once the call has started, so the first wait
+/// proves every call started. A thread wakes to start a call, and parks at
+/// `deadline` again only once that callback has made its host request: a
+/// listener is bound, a lock wait has begun. One thread parks once for all
+/// the callbacks it holds.
+fn await_callbacks_parked(env: &Env, deadline: Instant, callers: usize, threads: usize) {
     assert!(
-        env.clock.await_parked_count(deadline + GRACE, count, WAIT),
+        env.clock
+            .await_parked_count(deadline + GRACE, callers, WAIT),
         "the callers never began waiting past their deadline"
     );
     assert!(
-        env.clock.await_parked_count(deadline, count, WAIT),
+        env.clock.await_parked_count(deadline, threads, WAIT),
         "the callbacks never parked"
     );
 }
@@ -287,7 +289,7 @@ fn listening(
 ) -> mpsc::Receiver<Result<String, Error>> {
     let deadline = env.clock.now() + TIMEOUT;
     let rx = start(ext, "callback", &port.to_string());
-    await_callbacks_parked(env, deadline, 1);
+    await_callbacks_parked(env, deadline, 1, 1);
     rx
 }
 
@@ -387,7 +389,7 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
     let rx = listening(&env, &ext, port);
     let junk = get(port, "not http\r\n\r\n");
     assert!(junk.starts_with("HTTP/1.1 400"), "{junk}");
-    let huge = format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(20 * 1024));
+    let huge = format!("GET / HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(9000));
     let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
     stream.set_read_timeout(Some(WAIT)).unwrap();
     // The listener answers once the head passes its bound and closes; the
@@ -404,6 +406,19 @@ fn callback_skips_a_connection_that_is_not_a_request_and_a_head_that_is_too_larg
         "{reply}"
     );
     get(port, "GET /?code=ok HTTP/1.1\r\n\r\n");
+    let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
+    assert_eq!(query, json!({ "code": "ok" }));
+}
+
+#[test]
+fn callback_serves_a_2000_byte_head() {
+    let env = Env::new();
+    let ext = env.extension();
+    let port = free_port();
+    let rx = listening(&env, &ext, port);
+    let request = format!("GET /?code=ok HTTP/1.1\r\nX: {}\r\n\r\n", "a".repeat(2000));
+    let reply = get(port, &request);
+    assert!(reply.starts_with("HTTP/1.1 200 OK"), "{reply}");
     let query: Value = serde_json::from_str(&finish(&rx).unwrap()).unwrap();
     assert_eq!(query, json!({ "code": "ok" }));
 }
@@ -442,28 +457,31 @@ fn callback_dropped_at_its_timeout_frees_the_port_from_a_client_that_keeps_sendi
     let ext = env.extension();
     let port = free_port();
     let rx = listening(&env, &ext, port);
+    // The listener accepts in the order clients connect. `first` is queued
+    // before `client`, so once `first` has its answer the listener takes
+    // `client` next, with no wait between: from then on it is reading
+    // `client`'s head.
+    let mut first = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
+    first.set_read_timeout(Some(WAIT)).unwrap();
     // An incomplete head, a byte every 5 ms: no read ever times out.
     let mut client = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
     client.write_all(b"GET / HTTP/1.1\r\nX: ").unwrap();
-    let (dripped_tx, dripped) = mpsc::channel();
     let sender = std::thread::spawn(move || {
         // Never sent on: the pause between bytes is its timeout.
         let (_keep, pause) = mpsc::channel::<()>();
-        for sent in 0..1000 {
+        for _ in 0..1000 {
             if client.write_all(b"a").is_err() {
                 return;
-            }
-            if sent == 10 {
-                // Two of the listener's 20 ms accept polls have passed, so it
-                // is reading this head.
-                dripped_tx.send(()).unwrap();
             }
             match pause.recv_timeout(Duration::from_millis(5)) {
                 Ok(()) | Err(_) => {}
             }
         }
     });
-    finish(&dripped);
+    first.write_all(b"not http\r\n\r\n").unwrap();
+    let mut junk = String::new();
+    first.read_to_string(&mut junk).unwrap();
+    assert!(junk.starts_with("HTTP/1.1 400"), "{junk}");
     env.clock.advance(TIMEOUT);
     assert!(matches!(finish(&rx), Err(Error::Timeout { .. })));
     let (_keep, idle) = mpsc::channel::<()>();
@@ -768,19 +786,23 @@ fn held_endpoint() -> Held {
     }
 }
 
-/// Two refreshes race for one credential. The first is held on the wire with
-/// the lock; the second is started once the first has arrived, and is waiting
-/// on the lock once both callbacks are parked (the first on the wire, the
-/// second on the lock the first holds). Then the first is released: the second must find the first's credential.
-fn refresh_race(env: &Env, first: &Arc<LuaProvider>, second: &Arc<LuaProvider>, held: &Held) {
+/// Two refreshes race for one credential, on `threads` extension threads.
+/// The first is held on the wire with the lock. The second starts once the
+/// first has arrived, and is suspended on the lock once both callers wait
+/// past the deadline and the threads are parked at it. Only then is the
+/// first released: the second must find the first's credential.
+fn refresh_race(
+    env: &Env,
+    first: &Arc<LuaProvider>,
+    second: &Arc<LuaProvider>,
+    threads: usize,
+    held: &Held,
+) {
     let deadline = env.clock.now() + TIMEOUT;
     let a = start_token(first);
     finish(&held.arrived);
     let b = start_token(second);
-    assert!(
-        env.clock.await_parked_count(deadline + GRACE, 2, WAIT),
-        "the second refresh never waited on the lock"
-    );
+    await_callbacks_parked(env, deadline, 2, threads);
     assert_eq!(held.requests.load(Ordering::SeqCst), 1);
     held.release.send(()).unwrap();
     assert_eq!(finish(&a).unwrap(), "shared");
@@ -800,7 +822,7 @@ fn two_sessions_refreshing_together_refresh_once() {
         LuaProvider::new(Arc::clone(&one), "acme"),
         LuaProvider::new(Arc::clone(&two), "acme"),
     );
-    refresh_race(&env, &first, &second, &held);
+    refresh_race(&env, &first, &second, 2, &held);
 }
 
 #[test]
@@ -812,7 +834,7 @@ fn two_callbacks_of_one_extension_refresh_once_without_deadlocking_the_vm() {
     let ext = env.extension();
     let first = LuaProvider::new(Arc::clone(&ext), "acme");
     let second = LuaProvider::new(Arc::clone(&ext), "acme");
-    refresh_race(&env, &first, &second, &held);
+    refresh_race(&env, &first, &second, 1, &held);
 }
 
 #[test]
