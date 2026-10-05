@@ -527,9 +527,12 @@ extension state ("State") and adds only what is new.
 extension adds at start is not lost when the conversation restarts. Extension
 state carries across a handoff but the model's context does not, so an
 extension that keeps what it delivered sees `handoff` and delivers it again,
-as it is now. Its context follows the new opening message, before the turn's
-input (`docs/handoff.md`, "What the model sees after a handoff"). `turn_start`
-does not run again, because the turn has not restarted.
+as it is now. The hook sees the reason, as at every other start, and not the
+handoff note. Its context follows the new opening message, before the turn's
+input and the note (`docs/handoff.md`, "What the model sees after a
+handoff"). A `non-blocking` hook that fails there has its context dropped with
+a `notice`, and the handoff completes ("When a hook fails"). `turn_start` does
+not run again, because the turn has not restarted.
 
 **`before_message`** covers every message a person or a driver sends, so a
 secret pasted into a prompt can be removed before anything records it. A
@@ -647,7 +650,8 @@ What a `blocking` failure stops, at each point:
 
 | Hook point | What happens |
 |---|---|
-| `session_start` | The session does not start. Fiber exits with error `hook_failed`, naming the extension. At a handoff, the handoff completes `failed` with code `hook_failed` instead, as for `before_handoff`, and the session goes on. |
+| `session_start` | The session does not start. Fiber exits with error `hook_failed`, naming the extension. |
+| `session_start` at a handoff | The handoff completes `failed` with code `hook_failed`, as for `before_handoff`. The session does not exit. |
 | `before_message` | The message is neither logged nor sent, and the sender gets `hook_failed`. |
 | `turn_start` | The turn completes `failed` with code `hook_failed`, before any model request. |
 | `before_tool` | The call completes `failed` with code `hook_failed` and never starts. |

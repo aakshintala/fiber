@@ -206,7 +206,8 @@ a breaking change.
   the normal retry rules. If it still fails, `handoff_completed` records the
   failure, the context stays as it was, and the turn continues. A `blocking`
   `session_start` hook that fails at the handoff ends it the same way, with
-  code `hook_failed` (`docs/extensions.md`, "When a hook fails"). The automatic
+  code `hook_failed`. A `non-blocking` one only loses its context, with a
+  `notice` (`docs/extensions.md`, "When a hook fails"). The automatic
   trigger does not fire again in that turn, so the turn goes on until it ends
   or the overflow rule applies.
 - `cancelled` means a person cancelled the turn while the note request ran. The
