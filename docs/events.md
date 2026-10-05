@@ -68,7 +68,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends three lines of its own, only on a connection to the hub and
+The hub sends four lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -83,6 +83,9 @@ is about the hub or names its session in the payload:
   `change` (`paired` or `revoked`, a closed set), `device` (string), the
   device paired or revoked, and `by` (string), the device whose client asked,
   or `local` for the hub's machine.
+- `session_left`, on the feed when a session's process ends: `payload` holds
+  `session_id` (string) and `how`, `exited` or `crashed`, a closed set
+  (`docs/invocation.md`, "The hub").
 
 ## Durable and ephemeral
 

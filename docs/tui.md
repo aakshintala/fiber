@@ -201,8 +201,7 @@ on the left in the state's colour:
 Text on each side keeps the same margin from the card's edge. Below a 30-column
 rail the bar goes and the spend and percentage stay. The session on screen
 has a brighter tint than the others. Hover brightens a card and shows one
-line at the rail's foot with the full name, workspace, model and thinking
-level.
+line at the rail's foot with the full name, workspace and model.
 
 Cards keep the order their sessions started, and a card keeps its number
 for its whole life: numbers never move when a session starts or stops waiting,
@@ -283,7 +282,9 @@ the panel.
 The branch and status come from the person's shell command
 (`docs/invocation.md`, `shell`): `git --no-optional-locks status` when the
 person clicks for it, and `git rev-parse --abbrev-ref HEAD` on attach and
-after each turn. Nothing polls.
+after each turn. Nothing polls. A rail card's branch comes instead from that
+session's `session_status` (`docs/events.md`), which the session updates when
+it starts and after each turn.
 
 ### Swapped views
 
