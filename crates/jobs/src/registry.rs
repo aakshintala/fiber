@@ -515,8 +515,7 @@ impl contract::jobs::Jobs for Registry {
         // The closures run with the lock released: each takes its call's
         // own lock.
         let calls: Vec<_> = {
-            let mut inner = lock(&self.inner);
-            inner.foreground.retain(|call| call.strong_count() > 0);
+            let inner = lock(&self.inner);
             inner.foreground.iter().filter_map(Weak::upgrade).collect()
         };
         calls.iter().filter(|call| call()).count()

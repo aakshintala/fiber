@@ -17,6 +17,8 @@ struct Inner {
     stops: Vec<(JobId, Arc<dyn Fn() + Send + Sync>)>,
     /// Jobs whose end was reported.
     ended: Vec<JobId>,
+    /// Jobs whose stop was sent.
+    stopped: Vec<JobId>,
     foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
 }
 
@@ -51,6 +53,7 @@ impl FakeJobs {
                 started: Vec::new(),
                 stops: Vec::new(),
                 ended: Vec::new(),
+                stopped: Vec::new(),
                 foreground: Vec::new(),
             })),
             completed_tx,
@@ -122,28 +125,36 @@ impl Jobs for FakeJobs {
         })
     }
 
-    /// Calls the [`contract::jobs::Stop`] the opener gave for `job_id`, every
-    /// time it is asked. False, and no call, when the id is unknown or its
-    /// end was reported.
+    /// Calls the [`contract::jobs::Stop`] the opener gave for `job_id`, once.
+    /// True while the job runs; false, and no call, when the id is unknown
+    /// or its end was reported.
     fn stop(&self, job_id: &JobId) -> bool {
         let stop = {
-            let inner = lock(&self.inner);
+            let mut inner = lock(&self.inner);
             if inner.ended.contains(job_id) {
                 return false;
             }
-            inner
+            let Some(stop) = inner
                 .stops
                 .iter()
                 .find(|(id, _)| id == job_id)
                 .map(|(_, stop)| Arc::clone(stop))
+            else {
+                return false;
+            };
+            if inner.stopped.contains(job_id) {
+                return true;
+            }
+            inner.stopped.push(job_id.clone());
+            stop
         };
-        stop.inspect(|stop| stop()).is_some()
+        stop();
+        true
     }
 
     fn background(&self) -> usize {
         let calls: Vec<_> = {
-            let mut inner = lock(&self.inner);
-            inner.foreground.retain(|call| call.strong_count() > 0);
+            let inner = lock(&self.inner);
             inner.foreground.iter().filter_map(Weak::upgrade).collect()
         };
         calls.iter().filter(|call| call()).count()
