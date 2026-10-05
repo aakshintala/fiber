@@ -663,16 +663,14 @@ impl Loop {
     /// artifact cannot be written stays inline; the log holds it in full.
     fn moved_results(&self) -> Vec<Input> {
         let mut conversation = self.conversation.clone();
-        let from = conversation
-            .iter()
-            .rposition(|input| {
-                matches!(
-                    input,
-                    Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. }
-                )
-            })
-            .map_or(0, |last| last + 1);
-        for input in conversation.iter_mut().skip(from) {
+        // From the end back to the last reply input: what followed the reply.
+        let after_reply = conversation.iter_mut().rev().take_while(|input| {
+            !matches!(
+                input,
+                Input::Assistant { .. } | Input::Reasoning { .. } | Input::ToolCall { .. }
+            )
+        });
+        for input in after_reply {
             if let Input::ToolResult {
                 action_id, text, ..
             } = input

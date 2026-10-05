@@ -2078,6 +2078,35 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
 }
 
 #[test]
+fn a_result_before_the_last_reply_stays_in_the_note_request() {
+    // The first turn's call and its text reply, then a second turn whose
+    // first request overflows: its last step called no tool, and the
+    // first turn's result is not the last step's.
+    let mut session = session(
+        vec![
+            called(100),
+            said("Hello.", 100),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        settings(),
+    );
+    let (_, first) = run(&mut session, "hi");
+    assert_kinds(&first, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
+    let (outcome, lines) = run(&mut session, "more");
+
+    assert_kinds(
+        &lines,
+        &[&["turn_started"], STEP, REJECTED, HANDED_OFF, REPLY, ENDED],
+    );
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let requests = session.requests();
+    let asked = &requests[3].conversation;
+    assert_eq!(asked[..asked.len() - 1], requests[2].conversation[..]);
+}
+
+#[test]
 fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
     let mut session = session(
         vec![
