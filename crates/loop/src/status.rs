@@ -17,7 +17,7 @@ use contract::events::{
     WaitingKind,
 };
 use contract::shapes::{ContentPart, Usage};
-use contract::{ActionId, Envelope, JobId, RequestId, SessionId};
+use contract::{ActionId, Envelope, JobId, SessionId};
 use log::{Injector, Log};
 
 use crate::Loop;
@@ -31,13 +31,6 @@ const LIVE: &str = "status_live";
 /// The control line that ends the thread. Both control lines are internal:
 /// they go to this watcher alone, never to a client or the log.
 const STOP: &str = "status_stop";
-
-/// What a pending request is, in the order requested.
-struct Pending {
-    request_id: RequestId,
-    kind: WaitingKind,
-    summary: String,
-}
 
 /// What a state is, for deciding when `since` restarts: the state's kind,
 /// and the tool name or request id it names.
@@ -62,7 +55,8 @@ pub(crate) struct Fold {
     tools: BTreeMap<ActionId, String>,
     /// Started calls not yet completed, in start order.
     running_calls: Vec<ActionId>,
-    pending: Vec<Pending>,
+    /// Requests waiting on a person, in the order requested.
+    pending: Vec<Waiting>,
     turn_running: bool,
     retrying: bool,
     context: Option<u64>,
@@ -191,7 +185,7 @@ impl Fold {
             }
             Event::PermissionRequested(asked) => {
                 let summary = self.tool_of(line.action_id.as_ref());
-                self.pending.push(Pending {
+                self.pending.push(Waiting {
                     request_id: asked.request_id.clone(),
                     kind: WaitingKind::Approval,
                     summary,
@@ -216,7 +210,7 @@ impl Fold {
                 } else {
                     text
                 };
-                self.pending.push(Pending {
+                self.pending.push(Waiting {
                     request_id: asked.request_id.clone(),
                     kind: WaitingKind::Question,
                     summary: one_line(&summary),
@@ -309,11 +303,7 @@ impl Fold {
     fn state(&self) -> SessionState {
         if let Some(first) = self.pending.first() {
             return SessionState::Waiting {
-                waiting: Waiting {
-                    request_id: first.request_id.clone(),
-                    kind: first.kind,
-                    summary: first.summary.clone(),
-                },
+                waiting: first.clone(),
             };
         }
         if let Some(call) = self.running_calls.last() {
@@ -444,7 +434,7 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
     injector.push_kept(control(LIVE));
     let jobs = looped.ending.jobs.clone();
     let workspace = looped.workspace.clone();
-    let mut fold = Fold::new(
+    let fold = Fold::new(
         looped.workspace_label.clone(),
         looped.model.reference.clone(),
         looped.prompt.context_window,
@@ -454,21 +444,27 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
     let thread = Builder::new()
         .name("status".to_owned())
         .spawn(move || {
-            let mut live = false;
-            let mut last: Option<SessionStatus> = None;
+            let mut observer = Observer {
+                fold,
+                log,
+                live: false,
+                last: None,
+            };
             while let Ok(Some(line)) = watcher.recv() {
-                let changed = match line.kind.as_str() {
-                    STOP => return,
-                    LIVE => {
-                        live = true;
-                        fold.go_live();
-                        true
+                match observer.line(&line) {
+                    Flow::Go => {}
+                    Flow::Stop => {
+                        // The stop line is kept, so it can come before durable
+                        // lines a lagging watcher has not read yet: fold every
+                        // one already written before the last status.
+                        while let Ok(Some(line)) = watcher.try_recv() {
+                            if matches!(observer.line(&line), Flow::Gone) {
+                                return;
+                            }
+                        }
+                        return;
                     }
-                    "session_status" => continue,
-                    _ => fold.observe(&line),
-                };
-                if live && changed && !emit(&log, &fold, &mut last) {
-                    return;
+                    Flow::Gone => return,
                 }
             }
         })
@@ -476,20 +472,56 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
     Some(Status { injector, thread })
 }
 
-/// Emits the fold's status when it differs from the last one emitted. False
-/// once the log is gone.
-fn emit(log: &Weak<Log>, fold: &Fold, last: &mut Option<SessionStatus>) -> bool {
-    let status = fold.status();
-    if last.as_ref() == Some(&status) {
-        return true;
+/// What the thread does after a line.
+enum Flow {
+    Go,
+    /// The stop line.
+    Stop,
+    /// The log is gone.
+    Gone,
+}
+
+/// The thread's state: the fold and what was last emitted.
+struct Observer {
+    fold: Fold,
+    log: Weak<Log>,
+    live: bool,
+    last: Option<SessionStatus>,
+}
+
+impl Observer {
+    fn line(&mut self, line: &Envelope) -> Flow {
+        let changed = match line.kind.as_str() {
+            STOP => return Flow::Stop,
+            LIVE => {
+                self.live = true;
+                self.fold.go_live();
+                true
+            }
+            "session_status" => return Flow::Go,
+            _ => self.fold.observe(line),
+        };
+        if self.live && changed && !self.emit() {
+            return Flow::Gone;
+        }
+        Flow::Go
     }
-    // The log is held only while the line is written.
-    let Some(log) = log.upgrade() else {
-        return false;
-    };
-    log.emit(&Event::SessionStatus(status.clone()));
-    *last = Some(status);
-    true
+
+    /// Emits the fold's status when it differs from the last one emitted.
+    /// False once the log is gone.
+    fn emit(&mut self) -> bool {
+        let status = self.fold.status();
+        if self.last.as_ref() == Some(&status) {
+            return true;
+        }
+        // The log is held only while the line is written.
+        let Some(log) = self.log.upgrade() else {
+            return false;
+        };
+        log.emit(&Event::SessionStatus(status.clone()));
+        self.last = Some(status);
+        true
+    }
 }
 
 /// The workspace's branch: `HEAD` is a detached head, and a failed or

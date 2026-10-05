@@ -16,15 +16,22 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::thread;
 
-use contract::Envelope;
+use std::collections::BTreeMap;
+
+use contract::events::{
+    Empty, Event, InputItem, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+};
 use contract::inbox::Delivery;
+use contract::jobs::{Foreground, Jobs, OpenError, Opened, Opening};
 use contract::provider::Provider;
+use contract::shapes::{ContentPart, Origin, Sender, Tokens};
 use contract::tool::Tool;
+use contract::{CommandId, Envelope, GenerationId, JobId, TurnId};
 use fakes::Scripted;
 use log::Log;
 use r#loop::{Loop, Model};
 
-use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, tool_call_reply};
+use support::{DEADLINE, Gate, MODEL, Session, TestTool, delivery, ignore, tool_call_reply};
 
 /// Every line the log emits from now on, on a channel: the watcher blocks
 /// without a deadline, so each receive below carries [`DEADLINE`].
@@ -209,4 +216,108 @@ fn a_resumed_session_writes_one_status_for_its_history() {
         .unwrap();
     // One status for the whole history, and none after it.
     assert!(lines.try_iter().all(|line| line.kind != "session_status"));
+}
+
+/// A job registry whose `running` waits at a gate: the observer, which reads
+/// it as it goes live, cannot read its queue until the test opens the gate.
+struct Gated(Arc<Gate>);
+
+impl Jobs for Gated {
+    fn open(&self, _: Opening) -> Result<Opened, OpenError> {
+        Err(OpenError::Io {
+            path: "unused".into(),
+            source: std::io::Error::other("a gated registry opens nothing"),
+        })
+    }
+
+    fn stop(&self, _: &JobId) -> bool {
+        false
+    }
+
+    fn background(&self) -> usize {
+        0
+    }
+
+    fn foreground(&self, _: Foreground) {}
+
+    fn running(&self) -> Vec<JobId> {
+        self.0.wait();
+        Vec::new()
+    }
+
+    fn deliver_to(&self, _: mpsc::Sender<Delivery>) {}
+}
+
+/// The observer's queue overflows while it is held, and the stop line, which
+/// is kept, comes before the durable lines the queue dropped. The observer
+/// still folds those lines before it ends: the last status is the final one.
+#[test]
+fn a_lagging_observer_folds_every_written_line_before_it_stops() {
+    let gate = Arc::new(Gate::default());
+    let mut session = Session::new(Vec::new(), None);
+    session.looped = session
+        .looped
+        .take()
+        .map(|looped| looped.jobs(Arc::new(Gated(Arc::clone(&gate)))));
+    let lines = tap(&session.log);
+    let finished = run(session.looped.take().unwrap());
+
+    let append = |event: Event| {
+        session
+            .log
+            .append(&event, Some(TurnId("t_x".into())), None)
+            .unwrap();
+    };
+    append(Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text { text: "go".into() }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            changed_by: None,
+        }],
+    }));
+    // More lines than a watcher's queue holds, so the rest are dropped.
+    for _ in 0..2_000 {
+        append(Event::StepStarted(Empty {}));
+    }
+    append(Event::UsageRecorded(UsageRecorded {
+        generation_id: GenerationId("g_1".into()),
+        model: MODEL.into(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: BTreeMap::new(),
+            output: 3,
+        },
+        web_searches: None,
+        cost: Some(1.5),
+        subscription: None,
+        extension: None,
+        origin_session_id: None,
+    }));
+    append(Event::TurnCompleted(TurnCompleted {
+        outcome: TurnOutcome::Completed,
+        error: None,
+        questions: None,
+    }));
+
+    gate.open();
+    session.inbox.send(Delivery::Close(ignore())).unwrap();
+    finished
+        .recv_timeout(DEADLINE)
+        .expect("close ended the loop")
+        .unwrap();
+    gate.check("the observer's registry read");
+
+    let last = lines
+        .try_iter()
+        .filter(|line| line.kind == "session_status")
+        .last()
+        .expect("a session_status");
+    assert_eq!(last.payload["state"], "idle");
+    assert_eq!(last.payload["name"], "go");
+    assert_eq!(last.payload["spend"]["cost"], 1.5);
+    assert_eq!(last.payload["spend"]["tokens"]["input"], 10);
 }
