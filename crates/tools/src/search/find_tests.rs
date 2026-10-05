@@ -211,6 +211,51 @@ fn a_closed_pipe_stops_the_walk_before_a_later_error() {
     assert!(stderr.is_empty());
 }
 
+/// A pipe that closes on flush: writes go nowhere, the flush reports the
+/// closed pipe, so the run after the loop reads as broken with nothing
+/// printed.
+struct FlushClosed;
+
+impl Write for FlushClosed {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Err(io::Error::new(io::ErrorKind::BrokenPipe, "closed"))
+    }
+}
+
+#[test]
+fn a_closed_pipe_flush_with_no_match_stays_quiet_despite_skipped_directories() {
+    let dir = tree(&BTreeMap::from([
+        (".gitignore", "skipped_dir/\n"),
+        ("skipped_dir/hay.txt", "hay"),
+        ("kept_hay.txt", "hay"),
+    ]));
+    let owned: Vec<OsString> = [
+        OsString::from("."),
+        OsString::from("-name"),
+        OsString::from("no_such_name"),
+    ]
+    .to_vec();
+    let mut stdout = FlushClosed;
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut stdout, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    // Ruling 13 on #298: a broken pipe ends the process quietly with
+    // the exit it had so far. The flush breaks the pipe with nothing
+    // printed, so the skipped-directory notice never prints.
+    assert_eq!(code, 0);
+    assert!(
+        stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+}
+
 fn filtered(dir: &fakes::TempDir, args: &[&str]) -> (i32, Vec<String>, String) {
     let (code, stdout, stderr) = listing(dir, args);
     let lines = stdout.lines().map(str::to_owned).collect();

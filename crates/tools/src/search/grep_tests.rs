@@ -745,6 +745,39 @@ fn a_closed_pipe_stops_later_paths_before_their_complaints() {
     assert!(stderr.is_empty());
 }
 
+#[test]
+fn a_closed_pipe_with_a_zero_count_stays_quiet_despite_skipped_directories() {
+    let dir = text_tree(&BTreeMap::from([
+        (".gitignore", "skipped_dir/\n"),
+        ("skipped_dir/needle.txt", "x\n"),
+        ("kept.txt", "x\n"),
+    ]));
+    let owned: Vec<OsString> = [
+        OsString::from("-r"),
+        OsString::from("-c"),
+        OsString::from("absent"),
+        OsString::from("."),
+    ]
+    .to_vec();
+    let mut input = Cursor::new(Vec::new());
+    let mut closed = Closed { writes: 0 };
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut input, &mut closed, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    // Ruling 13 on #298: a broken pipe ends the process quietly with
+    // the exit it had so far. The zero counts break the pipe with no
+    // match, so the exit stays 1 and the skipped-directory notice never
+    // prints.
+    assert_eq!(code, 1);
+    assert!(
+        stderr.is_empty(),
+        "stderr: {}",
+        String::from_utf8_lossy(&stderr)
+    );
+}
+
 /// Whether the runner's grep speaks GNU: only then do outputs compare.
 fn gnu_grep() -> bool {
     use std::os::unix::process::CommandExt;

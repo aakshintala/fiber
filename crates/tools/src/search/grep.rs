@@ -194,7 +194,7 @@ pub(crate) fn run(
         writeln!(stderr, "grep: writing output: {error}").unwrap_or(());
         failed = true;
     }
-    if !matched && !failed {
+    if !out.broken() && !matched && !failed {
         // Computed only on no match: the second walk costs nothing
         // otherwise.
         let mut skipped = Vec::new();

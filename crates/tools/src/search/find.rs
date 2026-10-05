@@ -71,7 +71,7 @@ pub(crate) fn run(
         writeln!(stderr, "find: writing output: {error}").unwrap_or(());
         failed = true;
     }
-    if !printed && !failed {
+    if !out.broken() && !printed && !failed {
         // Computed only when nothing printed: the second walk costs
         // nothing otherwise.
         let mut skipped = Vec::new();
