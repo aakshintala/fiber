@@ -1929,9 +1929,7 @@ fn a_monitor_whose_errors_file_cannot_be_created_says_its_standard_error_is_disc
     );
     assert!(receipt.starts_with(&prefix), "{receipt}");
     assert!(
-        receipt.ends_with(
-            "). Lines it prints reach you in batches; its deadline is 300000 ms.\n"
-        ),
+        receipt.ends_with("). Lines it prints reach you in batches; its deadline is 300000 ms.\n"),
         "{receipt}"
     );
     assert!(!receipt.contains("Errors:"), "{receipt}");

@@ -1316,7 +1316,10 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
     assert_eq!(batch["payload"]["lines"], "one\ntwo");
     assert!(batch["payload"].get("suppressed").is_none());
     assert!(batch.get("action_id").is_none_or(Value::is_null));
-    let completed = &lines[kinds.iter().position(|kind| *kind == "job_completed").unwrap()];
+    let completed = &lines[kinds
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .unwrap()];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
 }
