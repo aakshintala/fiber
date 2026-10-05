@@ -667,12 +667,13 @@ The kinds are `docs/events.md`.
   a restart. A shutdown stops every job (`docs/invocation.md`, "Shutdown"); a
   crash stops none, and the jobs keep running unwatched.
 - When a session is about to end with jobs still running — a non-interactive
-  run whose model has given its final answer, `close`, the idle delay
-  passing, or a delegate finishing its task — Fiber wakes the model
-  once with a notice listing the running jobs, telling it to stop the ones it
+  run whose model has given its final answer, `close`, or a delegate
+  finishing its task — Fiber wakes the model once with a notice listing the running jobs, telling it to stop the ones it
   does not need and that the rest will be waited for. Whatever is still
   running after that is waited for, whatever its kind, and each completion
   wakes the model. The session ends when it is idle with no jobs running.
+  A running job keeps a session from being idle, so the idle delay never
+  ends a session that has one (`docs/invocation.md`, "Lifecycle").
   There is no cap on this wait: a hang is bounded at the command that hangs
   (the shell tool's timeout, "Timeout") and by the caller's SIGTERM
   (`docs/invocation.md`, "Shutdown"),
