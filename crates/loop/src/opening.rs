@@ -171,7 +171,7 @@ fn civil_from_days(days: u64) -> (u64, u64, u64) {
 /// in a repository, each directory from its top level down to `workspace`;
 /// outside one, `workspace` alone. The top level is the directory holding
 /// `.git`. All paths are canonical, as `workspace` is.
-fn repo_chain(workspace: &Path) -> (Vec<PathBuf>, Option<Git>) {
+pub(crate) fn repo_chain(workspace: &Path) -> (Vec<PathBuf>, Option<Git>) {
     let mut up = vec![workspace.to_path_buf()];
     let mut dir = workspace;
     loop {
@@ -235,24 +235,50 @@ fn gitdir_target(dotgit: &Path, dir: &Path) -> Option<PathBuf> {
     })
 }
 
-/// The instruction file `dir` holds: `AGENTS.md`, or `CLAUDE.md` when
-/// there is no `AGENTS.md`. A file that cannot be read is left out and a
-/// notice names it; an empty file is sent as it is.
-fn read_dir_file(dir: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut Vec<Notice>) {
-    if read_candidate(&dir.join("AGENTS.md"), files, notices) {
-        return;
-    }
-    let claude = dir.join("CLAUDE.md");
-    match std::fs::read(&claude) {
-        Ok(bytes) => {
-            // A `CLAUDE.md` whose only content points at `AGENTS.md` is
-            // never read.
-            if String::from_utf8_lossy(&bytes).trim() != AGENTS_POINTER {
-                files.push(sent(&claude, &bytes));
+/// The instruction file `dir` contributes, if any: `AGENTS.md`, or
+/// `CLAUDE.md` when there is no `AGENTS.md`. A `CLAUDE.md` whose only
+/// content points at `AGENTS.md` counts as no file. A path that is
+/// present but cannot be read still counts: reading it names the
+/// failure. An absent `CLAUDE.md` counts too, so the read below tells a
+/// file deleted after the check from an unreadable one: gone is silence,
+/// unreadable is a notice. The one precedence the opening message and
+/// the change check share.
+pub(crate) fn candidate(dir: &Path) -> Option<PathBuf> {
+    let agents = dir.join("AGENTS.md");
+    match std::fs::metadata(&agents) {
+        Ok(_) => Some(agents),
+        // Absent: `CLAUDE.md` may stand in. Unreadable: the file is
+        // there, so it stays the candidate and the read names it.
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let claude = dir.join("CLAUDE.md");
+            match std::fs::read(&claude) {
+                // A `CLAUDE.md` whose only content points at
+                // `AGENTS.md` is never read.
+                Ok(bytes) if String::from_utf8_lossy(&bytes).trim() != AGENTS_POINTER => {
+                    Some(claude)
+                }
+                // Holding only the pointer: no file. Absent, or present
+                // but unreadable: the read below names the failure or
+                // stays silent.
+                Ok(_) => None,
+                Err(_) => Some(claude),
             }
         }
+        Err(_) => Some(agents),
+    }
+}
+
+/// The instruction file `dir` holds: [`candidate`], read in full. Gone
+/// after the check is left out silently; present but unreadable is left
+/// out and a notice names it; an empty file is sent as it is.
+fn read_dir_file(dir: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut Vec<Notice>) {
+    let Some(path) = candidate(dir) else {
+        return;
+    };
+    match std::fs::read(&path) {
+        Ok(bytes) => files.push(sent(&path, &bytes)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-        Err(e) => notices.push(io_failed(&claude, &e)),
+        Err(e) => notices.push(io_failed(&path, &e)),
     }
 }
 
@@ -287,7 +313,7 @@ fn sent(path: &Path, bytes: &[u8]) -> InstructionFileSent {
 }
 
 /// An unreadable instruction file's notice: it names the path.
-fn io_failed(path: &Path, error: &std::io::Error) -> Notice {
+pub(crate) fn io_failed(path: &Path, error: &std::io::Error) -> Notice {
     Notice {
         code: ErrorCode::IoFailed,
         message: format!(
@@ -360,7 +386,7 @@ fn cut_skills(template: &str) -> String {
 }
 
 /// `path` with symlinks resolved, or as is when it cannot be read.
-fn canonical(path: &Path) -> PathBuf {
+pub(crate) fn canonical(path: &Path) -> PathBuf {
     std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
 }
 

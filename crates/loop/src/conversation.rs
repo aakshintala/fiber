@@ -4,14 +4,20 @@
 //! it writes it, and a resume renders the log the same way, so the two never
 //! differ.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
+use std::path::Path;
 
-use contract::events::{CallStatus, Event, InputItem};
+use contract::events::{
+    CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent,
+};
 use contract::provider::Input;
 use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope};
 
 use crate::Error;
+use crate::prompt::{body, fill};
+
+const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
 
 /// A call with no `tool_call_completed`, which only a crash can leave
 /// (`docs/events.md`, "Resume"), is sent with a fixed result: it never
@@ -77,6 +83,9 @@ pub(crate) fn rebuild_and_sent(
 struct Rendered {
     conversation: Vec<Input>,
     pending: Vec<Pending>,
+    /// The content the model last had per instruction file path: a diff
+    /// renders from this and the line's content, both in the log.
+    had: BTreeMap<String, String>,
 }
 
 struct Pending {
@@ -132,9 +141,11 @@ impl Rendered {
             Event::TurnStarted(_)
             | Event::SteeringApplied(_)
             | Event::OpeningMessage(_)
+            | Event::InstructionFile(_)
+            | Event::DateChanged(_)
             | Event::AssistantMessageStarted(_) => {
                 self.flush();
-                render(&mut self.conversation, event, action, model);
+                render(&mut self.conversation, event, action, model, &mut self.had);
             }
             // Every other kind either continues the batch or adds nothing.
             // Each is listed, so a new kind does not compile until it is
@@ -169,8 +180,6 @@ impl Rendered {
             | Event::Notice(_)
             | Event::PreambleBuilt(_)
             | Event::ModelChanged(_)
-            | Event::InstructionFile(_)
-            | Event::DateChanged(_)
             | Event::SkillsChanged(_)
             | Event::SkillsResent(_)
             | Event::HandoffStarted(_)
@@ -194,7 +203,7 @@ impl Rendered {
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
-                render(&mut self.conversation, event, action, model);
+                render(&mut self.conversation, event, action, model, &mut self.had);
             }
         }
     }
@@ -230,6 +239,7 @@ pub(crate) fn render(
     event: &Event,
     action: Option<&ActionId>,
     model: &str,
+    had: &mut BTreeMap<String, String>,
 ) {
     match event {
         Event::TurnStarted(started) => {
@@ -253,6 +263,25 @@ pub(crate) fn render(
         Event::OpeningMessage(message) => {
             conversation.push(Input::User {
                 text: crate::opening::render(message),
+            });
+            crate::changes::apply(had, event);
+        }
+        // An instruction file change appends what the model was sent:
+        // a diff, the full text, or one line for a deletion. An own edit
+        // and `sent: none` render nothing but still update what the model
+        // has, so a later diff renders identically on resume.
+        Event::InstructionFile(file) => {
+            if let Some(text) = changed_message(file, had) {
+                conversation.push(Input::User { text });
+            }
+            crate::changes::apply(had, event);
+        }
+        Event::DateChanged(changed) => {
+            conversation.push(Input::User {
+                text: fill(
+                    &body(MESSAGES_MD, "date"),
+                    &[("date", changed.date.as_str())],
+                ),
             });
         }
         Event::ReasoningCompleted(reasoning) => conversation.push(Input::Reasoning {
@@ -316,8 +345,6 @@ pub(crate) fn render(
         | Event::Notice(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
-        | Event::InstructionFile(_)
-        | Event::DateChanged(_)
         | Event::SkillsChanged(_)
         | Event::SkillsResent(_)
         | Event::HandoffStarted(_)
@@ -344,6 +371,58 @@ pub(crate) fn render(
     }
 }
 
+/// What an `instruction_file` line appends to the conversation, if
+/// anything: `own_edit` and `sent: none` render nothing. A diff renders
+/// from the content the model last had and the file's content now, both
+/// in the log (`docs/system-prompt.md`, "Recording").
+fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Option<String> {
+    let content = file.content.as_deref().unwrap_or("");
+    let text = match (&file.reason, &file.sent) {
+        (InstructionReason::Changed, InstructionSent::Diff) => {
+            let old = had.get(&file.path).map(String::as_str).unwrap_or("");
+            let diff = crate::changes::unified_diff(old, content, &file.path);
+            fill(
+                &body(MESSAGES_MD, "diff-file"),
+                &[("path", file.path.as_str()), ("diff", diff.as_str())],
+            )
+        }
+        (InstructionReason::Changed, InstructionSent::Full) => fill(
+            &body(MESSAGES_MD, "replaced-file"),
+            &[("path", file.path.as_str()), ("content", content)],
+        ),
+        (InstructionReason::Created, InstructionSent::Full) => fill(
+            &body(MESSAGES_MD, "created-file"),
+            &[
+                ("path", file.path.as_str()),
+                ("dir", dir_of(&file.path).as_str()),
+                ("content", content),
+            ],
+        ),
+        (InstructionReason::Subdirectory, InstructionSent::Full) => fill(
+            &body(MESSAGES_MD, "subdirectory-file"),
+            &[
+                ("path", file.path.as_str()),
+                ("dir", dir_of(&file.path).as_str()),
+                ("content", content),
+            ],
+        ),
+        (InstructionReason::Deleted, InstructionSent::Deleted) => fill(
+            &body(MESSAGES_MD, "deleted-file"),
+            &[("path", file.path.as_str())],
+        ),
+        _ => return None,
+    };
+    Some(text)
+}
+
+/// The file's parent directory: `{dir}` for every section that has it.
+fn dir_of(path: &str) -> String {
+    Path::new(path)
+        .parent()
+        .map(|parent| parent.display().to_string())
+        .unwrap_or_default()
+}
+
 /// A message as the model reads it.
 fn user(content: &[ContentPart]) -> Input {
     Input::User {
@@ -362,3 +441,7 @@ pub(crate) fn text(content: &[ContentPart]) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+
+#[cfg(test)]
+#[path = "conversation_tests.rs"]
+mod tests;

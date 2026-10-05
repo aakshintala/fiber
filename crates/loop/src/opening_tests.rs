@@ -131,6 +131,9 @@ fn environment_holds_date_platform_shell_workspace_and_log() {
     );
     assert!(message.instruction_files.is_empty());
     assert!(message.skills.is_empty());
+    // Absent everywhere is silence, not a notice: a flipped
+    // `NotFound` guard would name the absent files instead.
+    assert!(collected(&home, &workspace, &fake).notices.is_empty());
 }
 
 #[test]
@@ -226,6 +229,19 @@ fn no_repository_reports_no_git() {
     let message = collected(&home, &workspace, &fake).message;
     assert!(message.environment.git.is_none());
     assert!(render(&message).contains("- Git: no"));
+}
+
+#[test]
+fn empty_directories_collect_nothing_silently() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // Neither directory holds any candidate: no file is sent, and no
+    // failure is named for the files that are not there.
+    let fake = clock();
+    let collected = collected(&home, &workspace, &fake);
+    assert!(collected.message.instruction_files.is_empty());
+    assert!(collected.notices.is_empty());
 }
 
 #[test]
@@ -579,11 +595,13 @@ fn live_and_resumed_conversations_render_the_same_opening() {
     let message = collected(&home, &workspace, &fake).message;
     let rendered = render(&message);
     let mut live = Vec::new();
+    let mut had = std::collections::BTreeMap::new();
     crate::conversation::render(
         &mut live,
         &Event::OpeningMessage(message.clone()),
         None,
         "fake/model-1",
+        &mut had,
     );
     assert!(matches!(&live[0], Input::User { text } if text == &rendered));
     let line = Envelope {

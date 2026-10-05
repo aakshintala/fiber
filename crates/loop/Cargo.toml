@@ -11,6 +11,7 @@ publish.workspace = true
 contract = { path = "../contract" }
 log = { path = "../log" }
 serde_json.workspace = true
+similar.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

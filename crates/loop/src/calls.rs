@@ -38,7 +38,12 @@ enum State {
     /// Decided without running: its completion is written in request order.
     Ready(Box<ToolCallCompleted>),
     /// Running on its own thread, streaming through its call's emitter.
-    Running { bound: Bound, stream: Arc<Stream> },
+    /// `declared` rides along for the change check at completion.
+    Running {
+        bound: Bound,
+        stream: Arc<Stream>,
+        declared: DeclaredEffects,
+    },
     /// Its completion is written.
     Done,
 }
@@ -181,7 +186,7 @@ impl Loop {
                     Ok((tool, arguments, declared)) => {
                         self.append(
                             &Event::ToolCallStarted(ToolCallStarted {
-                                declared,
+                                declared: declared.clone(),
                                 arguments: None,
                                 changed_by: None,
                             }),
@@ -197,7 +202,11 @@ impl Loop {
                                 tool.run(&arguments, call_cancel.as_ref(), thread_stream.as_ref());
                             thread_stream.finish(output);
                         });
-                        State::Running { bound, stream }
+                        State::Running {
+                            bound,
+                            stream,
+                            declared,
+                        }
                     }
                 };
                 running.push(Running { id, state });
@@ -681,8 +690,21 @@ impl Loop {
                 None => return Ok(false),
             },
         };
+        let declared = match &call.state {
+            State::Running { declared, .. } => Some(declared.clone()),
+            State::Ready(_) | State::Done => None,
+        };
         call.state = State::Done;
         self.append(&Event::ToolCallCompleted(*completed), turn, Some(&call.id))?;
+        // The session's own edits and subdirectory files: a call that ran
+        // re-reads each declared path that is a tracked instruction file,
+        // and queues each new subdirectory file for the next step start.
+        // A call that never ran touches nothing, so it checks nothing.
+        if let Some(declared) = declared {
+            for file in self.changes.call_completed(&self.workspace, &declared) {
+                self.append(&Event::InstructionFile(file), turn, Some(&call.id))?;
+            }
+        }
         Ok(true)
     }
 }
