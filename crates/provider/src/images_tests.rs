@@ -15,8 +15,7 @@ fn image(path: &str) -> ImageRef {
     }
 }
 
-/// Today's `content` output through the new API, for a model that takes
-/// images.
+/// The `anthropic-messages` content for a model that takes images.
 fn content(text: &str, images: &[ImageRef], session_dir: &std::path::Path) -> serde_json::Value {
     anthropic_content(prepare(text, images, session_dir, false))
 }

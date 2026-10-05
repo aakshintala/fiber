@@ -40,12 +40,6 @@ pub(crate) fn prepare(
     session_dir: &Path,
     text_only: bool,
 ) -> Prepared {
-    if images.is_empty() {
-        return Prepared {
-            text: text.to_owned(),
-            images: Vec::new(),
-        };
-    }
     let mut text = text.to_owned();
     let mut encoded = Vec::new();
     for image in images {
