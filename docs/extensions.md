@@ -1155,6 +1155,13 @@ fetches or reads while it runs is not pinned: a server started with `npx -y`
 can run different code later under the same approval, and a hook script that
 reads other files of the repository reads them as they are now.
 
+Approval pins the declaration and the repository files that a `command` or
+`args` entry names, and nothing else. A script that finds a file beside itself
+by its own path, such as `$(dirname "$0")/lib.sh`, does not find it in the
+pinned copy, because only the files named were copied. A path relative to the
+workspace reads the live file. A package extension pins all its files, so it
+has no such gap.
+
 **Every approved version is kept.** All worktrees of a repository are one
 project, but each branch can carry its own version of a package. Each session
 loads the version that matches its own worktree's files, so two sessions on
@@ -1187,6 +1194,15 @@ A person can still install a repository's package as their own, with
 `fiber extension install ./tools/fiber-lint`. That is an ordinary install,
 global unless `--project` is given, and does not follow the repository's
 copy.
+
+**The same extension, declared and installed.** When a repository declares an
+extension that the person also installed, under the same name and so the same
+git address, the repository's approved, pinned copy loads in that project and
+the personal install loads everywhere else. The order is the one skills use:
+repository before personal ("Skills" in `docs/system-prompt.md`). It holds for
+first-party extensions too. A `notice` with code `extension_shadowed` names both
+versions, so a personal install that is newer than the repository's copy is
+visible.
 
 **An extension can be scoped to projects.** `fiber extension install --project`
 installs it for the current project only: it loads in that project's sessions

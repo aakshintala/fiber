@@ -71,6 +71,9 @@ codes! {
     ExtensionNotFound,
     /// A required extension failed to start.
     ExtensionRequiredFailed,
+    /// A repository's approved copy of an extension replaced the personal
+    /// install of the same name in that project.
+    ExtensionShadowed,
     /// A repository's required extension is not approved.
     ExtensionUnapproved,
     /// The extension providing the tool died twice.
