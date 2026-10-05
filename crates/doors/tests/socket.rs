@@ -774,9 +774,10 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                 r#"{"id":"c_handoff","command":"handoff","args":{"instructions":"focus on tests"}}"#,
             );
             send(&sender, r#"{"id":"c_bare","command":"handoff","args":{}}"#);
+            send(&sender, r#"{"id":"c_noargs","command":"handoff"}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
             assert_eq!(
-                (0..7).map(|_| take(&inbox)).collect::<Vec<_>>(),
+                (0..8).map(|_| take(&inbox)).collect::<Vec<_>>(),
                 vec![
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
@@ -784,6 +785,7 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                     "reply r_1".to_owned(),
                     "handoff c_handoff Some(\"focus on tests\")".to_owned(),
                     "handoff c_bare None".to_owned(),
+                    "handoff c_noargs None".to_owned(),
                     "close".to_owned(),
                 ]
             );
@@ -799,6 +801,7 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                     "c_reply",
                     "c_handoff",
                     "c_bare",
+                    "c_noargs",
                     "c_close"
                 ]
             );

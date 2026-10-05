@@ -171,6 +171,16 @@ fn a_missing_args_is_read_as_an_empty_object() {
 }
 
 #[test]
+fn args_that_are_present_are_never_replaced_by_an_empty_object() {
+    // Every key of `handoff` is optional, so only a present `args` that does
+    // not fit can be refused.
+    assert!(parse(r#"{"id":"c","command":"handoff","args":{"future":1}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"handoff","args":"x"}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"rewind","args":{"seq":"7"}}"#).is_err());
+    assert!(parse(r#"{"id":"c","args":{}}"#).is_err());
+}
+
+#[test]
 fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
     for command in [
         "subscribe",
