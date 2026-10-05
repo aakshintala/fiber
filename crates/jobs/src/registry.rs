@@ -4,6 +4,7 @@
 use std::collections::hash_map::RandomState;
 use std::fs::File;
 use std::hash::BuildHasher;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
@@ -48,9 +49,13 @@ struct Job {
     path: PathBuf,
     phase: Phase,
     stop: Arc<dyn Fn() + Send + Sync>,
+    /// Types into the job's terminal; `None` unless it started with `tty`.
+    input: Option<Typer>,
     stop_sent: bool,
     claimed: bool,
 }
+
+type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
 enum Phase {
     Running,
@@ -65,6 +70,18 @@ pub(crate) struct Answer {
     pub(crate) text: String,
     /// The completion, the first time it is delivered.
     pub(crate) record: Option<JobRecord>,
+}
+
+/// `write` could not reach the job.
+pub(crate) enum WriteError {
+    /// No job has this id.
+    Unknown,
+    /// The job was not started with `tty`.
+    NotTty,
+    /// The job had already ended, with this status.
+    Ended(Outcome),
+    /// Writing to the terminal failed.
+    Io(std::io::Error),
 }
 
 /// `stop` could not ask the job to stop.
@@ -147,6 +164,7 @@ impl Registry {
             path: path.clone(),
             phase: Phase::Running,
             stop: Arc::from(opening.stop.0),
+            input: opening.input.map(|input| Arc::from(input.0)),
             stop_sent: false,
             claimed: false,
         });
@@ -234,6 +252,58 @@ impl Registry {
         }
     }
 
+    /// Types `input` into `id`'s terminal, then returns the output that
+    /// arrives until `wait_ms` passes on the clock, the job ends, or
+    /// `cancel` fires. The output is the file's bytes from its length
+    /// before the write. An ended job's final state follows the output and
+    /// is claimed as `wait` claims it.
+    pub(crate) fn write(
+        self: &Arc<Self>,
+        id: &str,
+        input: &str,
+        wait_ms: u64,
+        cancel: &dyn Cancel,
+    ) -> Result<Answer, WriteError> {
+        let (typer, path) = self.typer_of(id)?;
+        // Read before the write, so output the write causes is after it.
+        let from = std::fs::metadata(&path).map_or(0, |meta| meta.len());
+        let written =
+            typer(input.as_bytes(), self.clock.as_ref(), cancel).map_err(WriteError::Io)?;
+        let until = self.clock.now().checked_add(Duration::from_millis(wait_ms));
+        let parked = self.park_until(id, until, cancel);
+        // A cancel stops the typing between chunks.
+        let mut text = if written < input.len() {
+            format!("Wrote {written} of {} bytes.\n", input.len())
+        } else {
+            String::new()
+        };
+        text.push_str(&since_text(&path, from));
+        let state = match parked {
+            Parked::Ended => self.answer_if_ended(id).unwrap_or_else(|| self.running(id)),
+            Parked::Timeout | Parked::Cancelled => self.running(id),
+        };
+        text.push_str(&state.text);
+        Ok(Answer {
+            text,
+            record: state.record,
+        })
+    }
+
+    /// The job's typing closure and output file.
+    fn typer_of(&self, id: &str) -> Result<(Typer, PathBuf), WriteError> {
+        let inner = lock(&self.inner);
+        let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
+            return Err(WriteError::Unknown);
+        };
+        if let Phase::Ended(completed) = &job.phase {
+            return Err(WriteError::Ended(completed.status));
+        }
+        match &job.input {
+            Some(typer) => Ok((Arc::clone(typer), job.path.clone())),
+            None => Err(WriteError::NotTty),
+        }
+    }
+
     /// The stop closure, when this call is the one that sends it. `None`
     /// when a stop was already sent. `Err` when the job is unknown or has
     /// ended.
@@ -301,6 +371,8 @@ impl Registry {
             let running = matches!(job.phase, Phase::Running);
             if running {
                 job.phase = Phase::Ended(Box::new(completed.clone()));
+                // The terminal closes with the job.
+                job.input = None;
                 if let Some(inbox) = &inner.inbox {
                     let registry = Weak::clone(&self.me);
                     let id = completed.job_id.0.clone();
@@ -458,6 +530,31 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
     }
+}
+
+/// The file's bytes from `from`, decoded lossily and ending in a newline
+/// when there are any. `from` can fall inside a character, so a start past
+/// the file's beginning drops the continuation bytes it begins with.
+fn since_text(path: &Path, from: u64) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(from)).is_ok() {
+        let _read = file.read_to_end(&mut bytes);
+    }
+    if from > 0 {
+        let begin = bytes
+            .iter()
+            .position(|byte| byte & 0b1100_0000 != 0b1000_0000)
+            .unwrap_or(bytes.len());
+        bytes.drain(..begin);
+    }
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 fn running_text(id: &str, path: &Path) -> String {

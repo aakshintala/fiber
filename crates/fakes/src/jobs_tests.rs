@@ -21,6 +21,7 @@ fn opening(description: &str, stop: Stop) -> Opening {
         tool: "shell".into(),
         description: description.into(),
         stop,
+        input: None,
     }
 }
 
@@ -70,6 +71,51 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
         dropped.error.as_ref().map(|error| error.code.clone()),
         Some(ErrorCode::ToolError)
     );
+}
+
+#[test]
+fn type_into_reaches_the_input_of_a_tty_job_only_and_an_end_drops_it() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let clock = crate::clock::FakeClock::new();
+    let cancel = crate::CancelToken::new();
+    let (typed_tx, typed_rx) = mpsc::channel();
+    let held = std::sync::Arc::new(());
+    let in_closure = std::sync::Arc::clone(&held);
+    let mut tty = opening("cat", Stop(Box::new(|| {})));
+    tty.input = Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
+        let _held = &in_closure;
+        typed_tx.send(bytes.to_vec()).unwrap();
+        Ok(bytes.len())
+    })));
+    let tty = jobs.open(tty).unwrap();
+    let plain = jobs.open(opening("ls", Stop(Box::new(|| {})))).unwrap();
+    let id = tty.started.job_id.clone();
+    assert_eq!(
+        jobs.type_into(&id, b"hi\n", clock.as_ref(), &cancel)
+            .unwrap()
+            .unwrap(),
+        3
+    );
+    assert_eq!(typed_rx.try_recv().unwrap(), b"hi\n");
+    assert!(
+        jobs.type_into(&plain.started.job_id, b"x", clock.as_ref(), &cancel)
+            .is_none()
+    );
+    assert!(
+        jobs.type_into(&JobId("j_missing".into()), b"x", clock.as_ref(), &cancel)
+            .is_none()
+    );
+    assert!(typed_rx.try_recv().is_err());
+    assert_eq!(std::sync::Arc::strong_count(&held), 2);
+    tty.end.end(completed(&id.0, Outcome::Completed));
+    assert_eq!(
+        std::sync::Arc::strong_count(&held),
+        1,
+        "the ended job kept its input"
+    );
+    assert!(jobs.type_into(&id, b"x", clock.as_ref(), &cancel).is_none());
+    drop(plain.end);
 }
 
 #[test]

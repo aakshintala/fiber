@@ -1401,3 +1401,377 @@ fn a_failed_open_leaves_the_command_running_in_the_foreground() {
     );
     watchdog.stand_down(DEADLINE);
 }
+
+// `tty`: the command runs in a pseudo-terminal and moves to the background
+// at once (`docs/tools.md`, "Terminal (`tty`)").
+
+fn start_tty(
+    dir: PathBuf,
+    command: String,
+    timeout_ms: Option<u64>,
+    jobs: Arc<FakeJobs>,
+) -> JobRun {
+    let clock = FakeClock::new();
+    let start = clock.origin();
+    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+        .with_jobs(jobs.clone());
+    let mut arguments = args(&command);
+    if let Some(timeout_ms) = timeout_ms {
+        arguments.insert("timeout_ms".into(), json!(timeout_ms));
+    }
+    arguments.insert("tty".into(), json!(true));
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
+            .unwrap();
+    });
+    JobRun {
+        clock,
+        start,
+        output: rx,
+        jobs,
+        recorder,
+    }
+}
+
+/// Writes the group id to `ready` first, then runs `body`.
+fn on_terminal(ready: &Path, body: &str) -> String {
+    format!("echo $$ > {}\n{body}", quote(ready))
+}
+
+#[test]
+fn tty_is_a_boolean_and_needs_jobs() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-args");
+    let marker = dir.path().join("marker");
+    let touch = format!("touch {}", quote(&marker));
+    let schema = Shell::new(dir.path().to_path_buf(), FakeClock::new())
+        .definition()
+        .input_schema;
+    assert_eq!(schema["properties"]["tty"]["type"], "boolean");
+    let with_jobs =
+        Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(FakeJobs::new(dir.path()));
+    let without = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    for value in [json!("yes"), json!(1)] {
+        let mut arguments = args(&touch);
+        arguments.insert("tty".into(), value);
+        let output = with_jobs.run(&arguments, &CancelToken::new(), &Recorder::default());
+        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+        assert!(
+            text(&output).contains("`tty` must be a boolean"),
+            "{}",
+            text(&output)
+        );
+    }
+    let mut arguments = args(&touch);
+    arguments.insert("tty".into(), json!(true));
+    let output = without.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(
+        text(&output).contains("Background jobs are not available in this session."),
+        "{}",
+        text(&output)
+    );
+    assert!(!marker.exists(), "a refused call started its command");
+}
+
+#[test]
+fn a_tty_command_has_a_terminal_for_all_three_streams_and_as_its_controlling_terminal() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-terminal");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let block = block_of(ready.path());
+    // The command prints once the test has seen the call park for its first
+    // output, which it does only after the job moved, so the output is
+    // `job_delta` text and is in the file when the delta arrives.
+    // One write, so one `job_delta`: the next is held until the fake clock
+    // moves.
+    let body = format!(
+        "mkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\n\
+         c=none\n{{ : </dev/tty; }} 2>/dev/null && c=controlling\n\
+         test -t 0 && test -t 1 && test -t 2 && printf 'yes:%s:%s\\n' \"$(tty)\" $c\nread x\n",
+        block = quote(&block),
+        ready = quote(ready.path()),
+    );
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        on_terminal(ready.path(), &body),
+        None,
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(250), DEADLINE),
+        "the call did not park for the first output"
+    );
+    let block = ready.path().to_path_buf();
+    let (released, release) = mpsc::channel();
+    thread::spawn(move || {
+        release_block(&block);
+        let _sent = released.send(());
+    });
+    release
+        .recv_timeout(DEADLINE)
+        .expect("waited for the command's read of the block fifo");
+    assert!(
+        jobs.deltas().wait_for_text("yes:/dev/", DEADLINE),
+        "the output did not arrive: {:?}",
+        jobs.deltas().text()
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    let body = text(&output);
+    assert!(output.error.is_none(), "{body}");
+    assert!(
+        body.starts_with("Started in a terminal and moved to the background.\n"),
+        "{body}"
+    );
+    assert!(body.contains("jobs write"), "{body}");
+    assert!(body.contains("Output so far:\nyes:/dev/"), "{body}");
+    // The terminal may hand the line's end to the reader in a later read,
+    // so the receipt is checked for the line and the file for its end.
+    assert!(body.contains(":controlling"), "{body}");
+    assert!(!body.contains("not a tty"), "{body}");
+    // The bytes also stay in the output file, as a pipe job's do, with the
+    // terminal's `\r\n` line end. A line end read later goes out in a
+    // later delta once the clock has passed the pacing interval, and the
+    // reader writes the file before it hands bytes to a delta.
+    assert!(
+        jobs.deltas().wait_for_text(":controlling\r\n", DEADLINE),
+        "{:?}",
+        jobs.deltas().text()
+    );
+    let file = job_output(dir.path(), &job);
+    assert!(
+        file.contains("yes:/dev/") && file.contains(":controlling\r\n"),
+        "{file:?}"
+    );
+    assert!(group_alive(pgid));
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_command_that_ends_at_once_on_a_terminal_still_returns_its_output() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-quick");
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        "test -t 0 && echo quick".to_owned(),
+        None,
+        jobs,
+    );
+    // Moved or finished, the output is in the result: the call raced the
+    // command's exit.
+    let output = running.output.recv_timeout(DEADLINE).expect("the result");
+    assert!(text(&output).contains("quick"), "{}", text(&output));
+    assert!(output.error.is_none(), "{}", text(&output));
+}
+
+#[test]
+fn the_receipt_waits_250_ms_for_output_on_the_clock() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-250");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        on_terminal(ready.path(), "read x\n"),
+        None,
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let due = running.start + Duration::from_millis(250);
+    assert!(
+        running.clock.await_parked(due, DEADLINE),
+        "the call did not park for the first output"
+    );
+    assert!(
+        matches!(running.output.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "the receipt returned before 250 ms"
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    assert!(
+        !text(&output).contains("Output so far"),
+        "{}",
+        text(&output)
+    );
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-write");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        on_terminal(ready.path(), "read line\necho got:$line\n"),
+        None,
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let due = running.start + Duration::from_millis(250);
+    assert!(running.clock.await_parked(due, DEADLINE));
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    assert!(
+        running
+            .jobs
+            .type_into(
+                &job.job_id,
+                b"hi\n",
+                running.clock.as_ref(),
+                &CancelToken::new()
+            )
+            .expect("a terminal to type into")
+            .is_ok()
+    );
+    let ended = jobs.ended(DEADLINE).expect("the job to finish");
+    assert_eq!(ended.status, Outcome::Completed);
+    let file = job_output(dir.path(), &job);
+    assert!(file.contains("got:hi"), "{file:?}");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-timeout");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        on_terminal(ready.path(), "echo partial\nread x\n"),
+        Some(5_000),
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let timeout_at = running.start + Duration::from_secs(5);
+    assert!(
+        running.clock.await_parked(timeout_at, DEADLINE),
+        "the job did not park at its timeout"
+    );
+    assert!(group_alive(pgid), "stopped before the deadline");
+    running.clock.advance(Duration::from_millis(4_750));
+    let ended = jobs.ended(DEADLINE).expect("the job to time out");
+    assert_eq!(ended.status, Outcome::Failed);
+    assert_eq!(
+        ended.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::Timeout)
+    );
+    assert!(ended.process.as_ref().unwrap().timed_out);
+    assert!(!group_alive(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-cancel-write");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let block = block_of(ready.path());
+    // Raw mode with no echo, so the terminal's input queue fills and does
+    // not drop what does not fit; the program then waits on a fifo.
+    let body = format!(
+        "stty raw -echo\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\n",
+        block = quote(&block),
+        ready = quote(ready.path()),
+    );
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        on_terminal(ready.path(), &body),
+        None,
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let input = vec![b'x'; 1 << 20];
+    let (done, written) = mpsc::channel();
+    let (typing_jobs, typing_clock, typing_cancel) =
+        (Arc::clone(&jobs), Arc::clone(&clock), cancel.clone());
+    let id = job.job_id.clone();
+    let length = input.len();
+    thread::spawn(move || {
+        let _sent = done.send(
+            typing_jobs
+                .type_into(&id, &input, typing_clock.as_ref(), &typing_cancel)
+                .expect("a terminal to type into"),
+        );
+    });
+    // Parked on the clock: the queue is full and the program does not read.
+    assert!(
+        clock.await_parked(clock.origin() + Duration::from_millis(10), DEADLINE),
+        "the write did not wait for room"
+    );
+    assert!(matches!(written.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    cancel.cancel();
+    let count = written
+        .recv_timeout(DEADLINE)
+        .expect("the cancelled write to return")
+        .unwrap();
+    assert!(count < length, "the whole input fit: {count}");
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_tty_command_is_not_a_bare_wait() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-sleep");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    // The first part is `sleep 30`, which a call that waits is refused for.
+    let command = format!("sleep 30 & echo $$ > {}; wait", quote(ready.path()));
+    let running = start_tty(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    assert!(output.error.is_none(), "{}", text(&output));
+    let job = started(&output);
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    watchdog.stand_down(DEADLINE);
+}

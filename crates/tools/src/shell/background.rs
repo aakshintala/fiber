@@ -21,6 +21,7 @@ use contract::{ErrorCode, JobId};
 use super::assemble;
 use super::command::{Finished, MovePolicy, MoveReason, Moved, StopKind};
 use super::output::JobStream;
+use super::tty;
 
 /// A description longer than this is cut, with `…` as the last character.
 /// Picked, not measured.
@@ -43,6 +44,7 @@ const CAPPED: &str = "The output passed 5 GB and the job was stopped.";
 
 const AFTER_THIRTY: &str = "Still running after 30 seconds, so it moved to the background.";
 const STARTED: &str = "Started in the background.";
+const IN_TERMINAL: &str = "Started in a terminal and moved to the background.";
 const COMMANDED: &str = "Moved to the background by the `background` command.";
 
 /// What the running phase does on this pass. Timeout wins over a move at
@@ -81,10 +83,10 @@ pub(crate) fn running_step(
     }
     match policy {
         MovePolicy::Stay => Step::Park,
-        MovePolicy::Foreground | MovePolicy::Background => {
+        MovePolicy::Foreground | MovePolicy::Background | MovePolicy::Terminal => {
             if let Some(code) = shell_exit {
                 Step::Move(MoveReason::ShellExited { code })
-            } else if policy == MovePolicy::Background {
+            } else if matches!(policy, MovePolicy::Background | MovePolicy::Terminal) {
                 Step::Move(MoveReason::StartedInBackground)
             } else if asked && policy == MovePolicy::Foreground {
                 Step::Move(MoveReason::BackgroundCommand)
@@ -103,7 +105,7 @@ pub(crate) fn wait_deadline(
     move_at: Option<Instant>,
 ) -> Option<Instant> {
     match policy {
-        MovePolicy::Stay | MovePolicy::Background => timeout_at,
+        MovePolicy::Stay | MovePolicy::Background | MovePolicy::Terminal => timeout_at,
         MovePolicy::Foreground => match (timeout_at, move_at) {
             (Some(timeout_at), Some(move_at)) => Some(timeout_at.min(move_at)),
             (Some(instant), None) | (None, Some(instant)) => Some(instant),
@@ -180,13 +182,19 @@ fn lock_state(state: &Mutex<Ask>) -> MutexGuard<'_, Ask> {
 }
 
 /// Opens the job and either returns its receipt or, when open fails, the
-/// foreground result with one line naming the failure.
+/// foreground result with one line naming the failure. `terminal` is a
+/// `tty` command: its receipt waits for the first output.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the moved command, the jobs, the clock and the call's own cancel and emit are one hand-off"
+)]
 pub(crate) fn take(
     moved: Moved,
     jobs: Arc<dyn Jobs>,
     clock: Arc<dyn Clock>,
     command: &str,
     timeout_ms: u64,
+    terminal: bool,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
 ) -> Output {
@@ -195,8 +203,11 @@ pub(crate) fn take(
         tool: "shell".to_owned(),
         description: description_of(command),
         stop: job_cancel.stop(),
+        input: moved.take_input(),
     }) {
-        Ok(opened) => hand_off(moved, opened, job_cancel, clock, timeout_ms),
+        Ok(opened) => hand_off(
+            moved, opened, job_cancel, clock, timeout_ms, terminal, cancel,
+        ),
         Err(error) => {
             let finished = moved.resume(clock.as_ref(), cancel, emit);
             note_open_failure(assemble(timeout_ms, finished), &error)
@@ -210,8 +221,11 @@ fn hand_off(
     job_cancel: Arc<JobCancel>,
     clock: Arc<dyn Clock>,
     timeout_ms: u64,
+    terminal: bool,
+    cancel: &dyn Cancel,
 ) -> Output {
     let pgid = moved.pgid();
+    let shared = moved.shared();
     let reason = moved.reason.clone();
     moved.attach_output(opened.file);
     // Armed before the call's cancel is detached, so a stop that arrives
@@ -229,13 +243,60 @@ fn hand_off(
         let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream);
         end.end(to_completed(job_id, &path, finished, timeout_ms));
     });
+    // The receipt carries what the terminal printed in its first 250 ms.
+    let first = terminal.then(|| {
+        tty::wait_first_output(&shared, clock.as_ref(), cancel);
+        tty::output_so_far(&opened.path)
+    });
     let members = match reason {
         MoveReason::ShellExited { .. } => group_members(Path::new("ps"), pgid, clock.as_ref()),
         MoveReason::AfterThirtySeconds
         | MoveReason::StartedInBackground
         | MoveReason::BackgroundCommand => None,
     };
-    receipt(&opened.started, &opened.path, &reason, members.as_deref())
+    match first {
+        Some(first) => terminal_receipt(
+            &opened.started,
+            &opened.path,
+            &reason,
+            members.as_deref(),
+            &first,
+        ),
+        None => receipt(&opened.started, &opened.path, &reason, members.as_deref()),
+    }
+}
+
+/// A `tty` command's receipt: how to type into it, and `first`, what the
+/// terminal printed before the receipt.
+fn terminal_receipt(
+    started: &JobStarted,
+    path: &Path,
+    reason: &MoveReason,
+    members: Option<&str>,
+    first: &str,
+) -> Output {
+    let why = if matches!(reason, MoveReason::StartedInBackground) {
+        IN_TERMINAL.to_owned()
+    } else {
+        sentence(reason, members)
+    };
+    let mut text = format!(
+        "{why}\nJob {id}. Output: {path}. Type into it with `jobs write`; `jobs wait` waits for it.\n",
+        id = started.job_id.0,
+        path = path.display(),
+    );
+    if !first.is_empty() {
+        text.push_str("Output so far:\n");
+        text.push_str(first);
+        if !first.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    Output {
+        content: vec![ContentPart::Text { text }],
+        jobs: vec![JobRecord::Started(started.clone())],
+        ..Output::default()
+    }
 }
 
 /// `assemble`'s text always ends with a newline, so the line goes after it.

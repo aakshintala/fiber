@@ -29,6 +29,9 @@ mod output;
 #[path = "shell/prelude.rs"]
 mod prelude;
 
+#[path = "shell/tty.rs"]
+mod tty;
+
 #[path = "shell/read_only.rs"]
 mod read_only;
 
@@ -120,6 +123,10 @@ impl Tool for Shell {
                     "run_in_background": {
                         "type": "boolean",
                         "description": "Start the command as a job and return its receipt at once."
+                    },
+                    "tty": {
+                        "type": "boolean",
+                        "description": "Run the command in a pseudo-terminal, as a job, and return its receipt with the first 250 ms of output. Type into it with `jobs` `write`."
                     }
                 },
                 "required": ["command"],
@@ -149,10 +156,10 @@ impl Tool for Shell {
             Ok(parsed) => parsed,
             Err(message) => return failed(ErrorCode::InvalidArguments, message),
         };
-        if parsed.run_in_background && self.jobs.is_none() {
+        if (parsed.run_in_background || parsed.tty) && self.jobs.is_none() {
             return failed(ErrorCode::InvalidArguments, NO_JOBS.to_owned());
         }
-        if !parsed.run_in_background && bare_wait(&parsed.command) {
+        if !parsed.run_in_background && !parsed.tty && bare_wait(&parsed.command) {
             return failed(ErrorCode::InvalidArguments, BARE_WAIT.to_owned());
         }
         // The functions reach only the model's own command line: `classify`
@@ -162,10 +169,11 @@ impl Tool for Shell {
             None => parsed.command.clone(),
         };
         let program = shell_program();
-        let policy = match (&self.jobs, parsed.run_in_background) {
-            (None, _) => command::MovePolicy::Stay,
-            (Some(_), false) => command::MovePolicy::Foreground,
-            (Some(_), true) => command::MovePolicy::Background,
+        let policy = match (&self.jobs, parsed.run_in_background, parsed.tty) {
+            (None, _, _) => command::MovePolicy::Stay,
+            (Some(_), _, true) => command::MovePolicy::Terminal,
+            (Some(_), false, false) => command::MovePolicy::Foreground,
+            (Some(_), true, false) => command::MovePolicy::Background,
         };
         match command::execute(
             program,
@@ -186,6 +194,7 @@ impl Tool for Shell {
                     Arc::clone(&self.clock),
                     &parsed.command,
                     parsed.timeout_ms,
+                    parsed.tty,
                     cancel,
                     emit,
                 ),
@@ -215,6 +224,7 @@ struct Parsed {
     workdir: PathBuf,
     timeout_ms: u64,
     run_in_background: bool,
+    tty: bool,
 }
 
 fn parse(arguments: &Map<String, Value>, workspace: &Path) -> Result<Parsed, String> {
@@ -233,11 +243,17 @@ fn parse(arguments: &Map<String, Value>, workspace: &Path) -> Result<Parsed, Str
         Some(Value::Bool(value)) => *value,
         Some(_) => return Err("`run_in_background` must be a boolean.".to_owned()),
     };
+    let tty = match arguments.get("tty") {
+        None => false,
+        Some(Value::Bool(value)) => *value,
+        Some(_) => return Err("`tty` must be a boolean.".to_owned()),
+    };
     Ok(Parsed {
         command,
         workdir,
         timeout_ms,
         run_in_background,
+        tty,
     })
 }
 

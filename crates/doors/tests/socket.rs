@@ -1529,6 +1529,7 @@ fn open_job(jobs: &FakeJobs, fired: mpsc::Sender<()>) -> contract::jobs::Opened 
         tool: "shell".into(),
         description: "sleep 60".into(),
         stop: Stop(Box::new(move || fired.send(()).unwrap())),
+        input: None,
     })
     .unwrap()
 }
