@@ -155,7 +155,8 @@ fn without_the_forget_callback_the_same_write_goes_through() {
 fn builtin_registers_the_tools_in_name_order_with_handoff_among_them() {
     let root = fakes::TempDir::new("fiber-names");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let (tools, infos, _driver, _forget) = super::builtin(root.path(), &clock).unwrap();
+    let (tools, infos, _driver, _forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
 
     let names: Vec<String> = tools
         .iter()
