@@ -19,7 +19,7 @@ use contract::shapes::{DeclaredEffects, Effect};
 use contract::{Envelope, Seq, SessionId};
 use fakes::clock::FakeClock;
 
-use super::{State, apply, clean, send_as_diff, unified_diff};
+use super::{State, apply, clean, unified_diff};
 use crate::opening;
 use crate::prompt::PromptInputs;
 
@@ -106,14 +106,6 @@ fn unified_diff_headers_name_the_path_on_both_sides() {
 #[test]
 fn unified_diff_of_identical_text_is_empty() {
     assert_eq!(unified_diff("a\n", "a\n", "/w/AGENTS.md"), "");
-}
-
-#[test]
-fn send_as_diff_is_full_only_when_the_diff_is_longer() {
-    assert_eq!(send_as_diff(5, 10), InstructionSent::Diff);
-    // Exactly as long is not longer: still a diff.
-    assert_eq!(send_as_diff(7, 7), InstructionSent::Diff);
-    assert_eq!(send_as_diff(10, 5), InstructionSent::Full);
 }
 
 #[test]
@@ -424,21 +416,28 @@ fn unreadable_tracked_file_notices_once_per_stat_change() {
 }
 
 #[test]
-fn unreadable_untracked_candidate_is_silent() {
+fn unreadable_untracked_candidate_is_named_once_per_stat_change() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let fake = clock();
     let mut state = initial(&home, &workspace, &fake);
-    // A directory where a new file would be: nothing was ever sent, so
-    // there is no change to report, and the next check meets it again.
+    // A directory where a new file would be: nothing was ever sent, but
+    // the failure is still named, once per change of size and time.
     std::fs::create_dir(workspace.join("AGENTS.md")).unwrap();
     let out = state.check(&*fake);
     assert!(out.files.is_empty());
-    assert!(out.notices.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(
+        out.notices[0]
+            .message
+            .contains(&canon(&workspace).join("AGENTS.md").display().to_string())
+    );
+    // Same size and time: the notice does not repeat.
     let out = state.check(&*fake);
     assert!(out.files.is_empty());
     assert!(out.notices.is_empty());
+    std::fs::remove_dir(workspace.join("AGENTS.md")).unwrap();
 }
 
 #[test]
@@ -750,4 +749,557 @@ fn resumed_state_forgets_subdirectories_that_held_no_file() {
     // `lonely/` was checked before the resume but never sent a file, so
     // the log cannot restore it: touching it again checks it.
     assert!(!state.dirs.contains(&workspace.join("lonely")));
+}
+
+#[test]
+fn queued_file_edited_by_a_later_call_is_dropped() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    write(&workspace.join("sub/AGENTS.md"), "Queued rules.\n");
+    // The first call's completion queues the subdirectory file; the
+    // second call of the same batch edits it.
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    write(&workspace.join("sub/AGENTS.md"), "Revised by the call.\n");
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/AGENTS.md"])));
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].reason, InstructionReason::OwnEdit);
+    for line in &own {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // The queued snapshot is stale: what the model had already matches
+    // what is in force, so nothing is emitted, and the sizes moved on.
+    assert!(state.take_queued().is_empty());
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    // A later outside change is still seen: the cached sizes did not
+    // stick at the stale snapshot.
+    write(&workspace.join("sub/AGENTS.md"), "Revised outside.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+}
+
+#[test]
+fn queued_file_written_before_the_subdirectory_call_is_queued_fresh() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    // The edit lands before the subdirectory call completes: its
+    // completion finds nothing tracked to record, and the later queue
+    // reads what is in force now.
+    write(&workspace.join("sub/AGENTS.md"), "Written first.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/AGENTS.md"])))
+            .is_empty()
+    );
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(line) = &queued[0] else {
+        panic!("queued a subdirectory line");
+    };
+    assert_eq!(line.content.as_deref(), Some("Written first.\n"));
+}
+
+#[test]
+fn queued_file_deleted_by_a_later_call_is_dropped() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    write(&workspace.join("sub/AGENTS.md"), "Queued rules.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    // Deleted by the next call of the batch: never sent, so no farewell.
+    std::fs::remove_file(workspace.join("sub/AGENTS.md")).unwrap();
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/AGENTS.md"])));
+    assert!(own.is_empty());
+    assert!(state.take_queued().is_empty());
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn queued_file_deleted_before_the_subdirectory_call_queues_nothing() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    write(&workspace.join("sub/AGENTS.md"), "Gone before the queue.\n");
+    std::fs::remove_file(workspace.join("sub/AGENTS.md")).unwrap();
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    assert!(state.take_queued().is_empty());
+}
+
+#[test]
+fn queued_file_changed_outside_before_flush_goes_out_fresh() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    write(&workspace.join("sub/AGENTS.md"), "Queued rules.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    // No own edit in between: the flush carries what is in force now.
+    write(
+        &workspace.join("sub/AGENTS.md"),
+        "Changed before the flush.\n",
+    );
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(line) = &queued[0] else {
+        panic!("queued a subdirectory line");
+    };
+    assert_eq!(line.content.as_deref(), Some("Changed before the flush.\n"));
+}
+
+#[test]
+fn queued_file_unreadable_at_flush_is_named() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    write(&workspace.join("sub/AGENTS.md"), "Queued rules.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    // A directory where the queued file was: the stale creation is
+    // dropped and the failure named instead.
+    std::fs::remove_file(workspace.join("sub/AGENTS.md")).unwrap();
+    std::fs::create_dir(workspace.join("sub/AGENTS.md")).unwrap();
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::Notice(notice) = &queued[0] else {
+        panic!("queued a notice, got {queued:?}");
+    };
+    assert!(
+        notice
+            .message
+            .contains(&workspace.join("sub/AGENTS.md").display().to_string())
+    );
+    std::fs::remove_dir(workspace.join("sub/AGENTS.md")).unwrap();
+}
+
+#[test]
+fn failing_stat_on_a_tracked_file_is_named_at_once() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    // Tracked through the subdirectory queue, then its directory is
+    // replaced by a file: neither the sizes nor the read succeed.
+    write(&workspace.join("sub/AGENTS.md"), "Sub rules.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    assert_eq!(state.take_queued().len(), 1);
+    std::fs::remove_dir_all(workspace.join("sub")).unwrap();
+    std::fs::write(workspace.join("sub"), "not a directory").unwrap();
+    // Even with unknown sizes the first failure is named: `None` (no
+    // notice yet) differs from `Some(None)` (noticed with unknown sizes).
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(
+        out.notices[0]
+            .message
+            .contains(&workspace.join("sub/AGENTS.md").display().to_string())
+    );
+    // Same unknown sizes: the notice does not repeat.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn failing_stat_on_an_untracked_candidate_is_named() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    // A file where a checked directory should be: the directory joins
+    // the checked set first, then no sizes and no read succeed.
+    std::fs::create_dir_all(workspace.join("sub")).unwrap();
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/x"])))
+            .is_empty()
+    );
+    assert!(state.take_queued().is_empty());
+    std::fs::remove_dir(workspace.join("sub")).unwrap();
+    std::fs::write(workspace.join("sub"), "not a directory").unwrap();
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(
+        out.notices[0]
+            .message
+            .contains(&workspace.join("sub/AGENTS.md").display().to_string())
+    );
+}
+
+#[test]
+fn permission_denied_tracked_file_is_named_once_per_stat_change() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    set_mtime(&file, 2_000);
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    // New sizes so the shortcut does not skip the read, then unreadable.
+    set_mtime(&file, 3_000);
+    deny(&file);
+    // A user that can still read the file (root) cannot make it fail:
+    // the notice case below needs the read to fail.
+    if std::fs::read(&file).is_ok() {
+        allow(&file);
+        return;
+    }
+    let out = state.check(&*fake);
+    allow(&file);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(out.notices[0].message.contains(&file.display().to_string()));
+}
+
+#[test]
+fn permission_denied_untracked_candidate_is_named() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    deny(&file);
+    if std::fs::read(&file).is_ok() {
+        allow(&file);
+        return;
+    }
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let out = state.check(&*fake);
+    allow(&file);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(out.notices[0].message.contains(&file.display().to_string()));
+    // Still unreadable with the same sizes: no repeat.
+    deny(&file);
+    let out = state.check(&*fake);
+    allow(&file);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+/// Makes `path` unreadable while its sizes stay readable.
+fn deny(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
+}
+
+/// Makes `path` readable again after [`deny`].
+fn allow(path: &Path) {
+    use std::os::unix::fs::PermissionsExt as _;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
+}
+
+#[test]
+fn home_file_appears_changes_and_is_deleted() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    assert!(state.check(&*fake).files.is_empty());
+    // Appears: `<home>/AGENTS.md` is the home candidate.
+    write(&home.join("AGENTS.md"), "Global.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(
+        out.files[0].path,
+        canon(&home.join("AGENTS.md")).display().to_string()
+    );
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    for line in &out.files {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // Changes: a diff against what the model had.
+    write(&home.join("AGENTS.md"), "Global, revised.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    for line in &out.files {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // Deleted: one line saying its instructions no longer apply.
+    std::fs::remove_file(home.join("AGENTS.md")).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Deleted);
+}
+
+#[test]
+fn home_ignores_claude_md() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    // The global file is `<home>/AGENTS.md` only: a home `CLAUDE.md`
+    // beside no global file is not adopted.
+    write(&home.join("CLAUDE.md"), "Claude rules.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn subdirectory_adopts_claude_md() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    // Below home any directory follows the shared precedence: with no
+    // `AGENTS.md`, `CLAUDE.md` stands in.
+    write(&workspace.join("sub/CLAUDE.md"), "Claude rules.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::InstructionFile(line) = &queued[0] else {
+        panic!("queued a subdirectory line");
+    };
+    assert_eq!(
+        line.path,
+        workspace.join("sub/CLAUDE.md").display().to_string()
+    );
+}
+
+#[test]
+fn recreated_identical_file_is_still_created() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    write(&file, "First.\n");
+    set_mtime(&file, 2_000);
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    std::fs::remove_file(&file).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    for line in &out.files {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // Back with the same bytes at the same size and time: only the
+    // recorded tracking tells it apart from unchanged, so the deletion
+    // must have moved the sizes on.
+    write(&file, "First.\n");
+    set_mtime(&file, 2_000);
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+}
+
+#[test]
+fn changed_then_quiet_without_further_change() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    write(&file, "Leaf, revised.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    for line in &out.files {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // Nothing further changed: the recorded sizes match, so no re-read.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn own_call_on_unreadable_tracked_file_records_nothing() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    // A directory where the tracked file was: the read fails with more
+    // than absence, so the call records no deletion.
+    std::fs::remove_file(&file).unwrap();
+    std::fs::create_dir(&file).unwrap();
+    let own = state.call_completed(&workspace, &declared(Some(&["AGENTS.md"])));
+    assert!(own.is_empty());
+    assert!(state.take_queued().is_empty());
+    std::fs::remove_dir(&file).unwrap();
+}
+
+#[test]
+fn touch_records_exactly_the_checked_set() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    let home_canon = canon(&home);
+    // A declared file touches its ancestors strictly below the
+    // workspace; the workspace itself and everything above stay out.
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["a/b/c.txt"])))
+            .is_empty()
+    );
+    assert_eq!(
+        state.dirs,
+        [
+            home_canon.clone(),
+            workspace.clone(),
+            workspace.join("a"),
+            workspace.join("a/b")
+        ]
+        .into_iter()
+        .collect::<std::collections::BTreeSet<_>>()
+    );
+    // A declared directory touches itself too.
+    std::fs::create_dir_all(workspace.join("plain")).unwrap();
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["plain"])))
+            .is_empty()
+    );
+    assert!(state.dirs.contains(&workspace.join("plain")));
+    // The workspace itself, an outside path and an unresolvable one
+    // touch nothing new.
+    let before = state.dirs.clone();
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["."])))
+            .is_empty()
+    );
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["../outside.txt"])))
+            .is_empty()
+    );
+    assert!(
+        state
+            .call_completed(
+                &workspace,
+                &declared(Some(&["../../../../../../../../../../x"]))
+            )
+            .is_empty()
+    );
+    assert_eq!(state.dirs, before);
+    assert!(state.take_queued().is_empty());
+}
+
+#[test]
+fn unreadable_subdirectory_file_queues_a_notice() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    // A directory where the subdirectory file should be: the touch names
+    // the failure, and the flush passes the notice through as is.
+    std::fs::create_dir_all(workspace.join("sub/AGENTS.md")).unwrap();
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    let queued = state.take_queued();
+    assert_eq!(queued.len(), 1);
+    let Event::Notice(notice) = &queued[0] else {
+        panic!("queued a notice, got {queued:?}");
+    };
+    assert!(
+        notice
+            .message
+            .contains(&workspace.join("sub/AGENTS.md").display().to_string())
+    );
+    // Named with these sizes: the next turn-start check stays silent.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    std::fs::remove_dir(workspace.join("sub/AGENTS.md")).unwrap();
+}
+
+#[test]
+fn unreadable_home_file_is_named() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    // A directory where the global file should be: the home candidate
+    // stays the file, so the read names it instead of silence.
+    std::fs::create_dir(home.join("AGENTS.md")).unwrap();
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(
+        out.notices[0]
+            .message
+            .contains(&canon(&home).join("AGENTS.md").display().to_string())
+    );
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    std::fs::remove_dir(home.join("AGENTS.md")).unwrap();
 }

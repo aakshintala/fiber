@@ -90,6 +90,40 @@ fn users(conversation: &[Input]) -> usize {
         .count()
 }
 
+/// A first turn answering with text: session setup, the opening message,
+/// one step with a two-delta reply, and the turn's end.
+fn first_text_turn() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
+/// A later turn answering with text and no changes.
+fn later_text_turn() -> Vec<&'static str> {
+    vec![
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+    ]
+}
+
 #[test]
 fn a_first_turn_has_no_change() {
     let mut session = Session::new(vec![Scripted::text("Done.")], None);
@@ -97,9 +131,9 @@ fn a_first_turn_has_no_change() {
     std::fs::write(session.workspace.join("AGENTS.md"), "Leaf.\n").unwrap();
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    let lines = session.lines();
-    assert!(!kinds(&lines).contains(&"instruction_file"));
-    assert!(!kinds(&lines).contains(&"date_changed"));
+    // The complete turn, in order: nothing changed, so no
+    // `instruction_file` and no `date_changed`.
+    assert_eq!(kinds(&session.lines()), first_text_turn());
 }
 
 #[test]
@@ -107,20 +141,15 @@ fn a_new_instruction_file_is_created_at_the_next_turn_start() {
     let mut session = Session::new(vec![Scripted::text("One."), Scripted::text("Two.")], None);
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    assert!(
-        session
-            .lines()
-            .iter()
-            .all(|line| line.kind != "instruction_file")
-    );
+    assert_eq!(kinds(&session.lines()), first_text_turn());
     std::fs::write(session.workspace.join("AGENTS.md"), "Leaf.\n").unwrap();
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    let kinds = kinds(&lines);
     // After the first turn's opening message, before the turn starts.
-    assert_eq!(kinds[0], "instruction_file");
-    assert_eq!(kinds[1], "turn_started");
+    let mut created = vec!["instruction_file"];
+    created.extend(later_text_turn());
+    assert_eq!(kinds(&lines), created);
     let created = lines
         .iter()
         .find(|line| line.kind == "instruction_file")
@@ -153,13 +182,15 @@ fn a_changed_file_sends_a_diff_then_a_deletion() {
     std::fs::write(session.workspace.join("AGENTS.md"), &old).unwrap();
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    session.lines();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
     let new = old.replace("line 50\n", "line fifty\n");
     std::fs::write(session.workspace.join("AGENTS.md"), &new).unwrap();
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines)[0], "instruction_file");
+    let mut changed = vec!["instruction_file"];
+    changed.extend(later_text_turn());
+    assert_eq!(kinds(&lines), changed);
     assert_eq!(lines[0].payload["reason"], "changed");
     assert_eq!(lines[0].payload["sent"], "diff");
     assert_eq!(lines[0].payload["content"], new);
@@ -176,7 +207,9 @@ fn a_changed_file_sends_a_diff_then_a_deletion() {
     session.inbox.send(delivery("once more")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines)[0], "instruction_file");
+    let mut deleted = vec!["instruction_file"];
+    deleted.extend(later_text_turn());
+    assert_eq!(kinds(&lines), deleted);
     assert_eq!(lines[0].payload["reason"], "deleted");
     assert_eq!(lines[0].payload["sent"], "deleted");
     assert!(lines[0].payload.get("content").is_none());
@@ -200,16 +233,36 @@ fn an_own_edit_is_recorded_after_the_call_and_sends_nothing() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let kinds = kinds(&lines);
-    let completed = kinds
-        .iter()
-        .position(|kind| *kind == "tool_call_completed")
-        .unwrap();
-    let edited = kinds
-        .iter()
-        .position(|kind| *kind == "instruction_file")
-        .unwrap();
-    assert!(edited > completed, "{kinds:?}");
+    // The complete turn, in order: the own edit lands with its call's
+    // completion, before the next step starts.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let own = lines
         .iter()
         .find(|line| line.kind == "instruction_file")
@@ -246,7 +299,36 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
-    let kinds = kinds(&lines);
+    // The complete turn, in order: queued at completion, written at the
+    // next step start, after the result and under a later `step_started`.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "instruction_file",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let opening = lines
         .iter()
         .find(|line| line.kind == "opening_message")
@@ -255,22 +337,6 @@ fn a_subdirectory_file_is_queued_for_the_next_step() {
         opening.payload["instruction_files"],
         serde_json::Value::Array(Vec::new())
     );
-    let completed = kinds
-        .iter()
-        .position(|kind| *kind == "tool_call_completed")
-        .unwrap();
-    let found = kinds
-        .iter()
-        .position(|kind| *kind == "instruction_file")
-        .unwrap();
-    // Queued at completion, written at the next step start: after the
-    // result, under a later `step_started`.
-    assert!(found > completed, "{kinds:?}");
-    let stepped = kinds[..found]
-        .iter()
-        .rposition(|kind| *kind == "step_started")
-        .unwrap();
-    assert!(stepped > completed, "{kinds:?}");
     let sub = lines
         .iter()
         .find(|line| line.kind == "instruction_file")
@@ -294,13 +360,15 @@ fn a_later_date_appends_one_line() {
     let mut session = Session::new(vec![Scripted::text("One."), Scripted::text("Two.")], None);
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
-    session.lines();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
     // The fake clock reads 2023-11-14T22:13:20Z: two hours on is the 15th.
     session.clock.advance(Duration::from_secs(2 * 3_600));
     session.inbox.send(delivery("again")).unwrap();
     session.turn();
     let lines = session.lines();
-    assert_eq!(kinds(&lines)[0], "date_changed");
+    let mut dated = vec!["date_changed"];
+    dated.extend(later_text_turn());
+    assert_eq!(kinds(&lines), dated);
     assert_eq!(lines[0].payload["date"], "2023-11-15");
     let requests = session.requests();
     assert!(
@@ -450,9 +518,23 @@ fn a_resume_detects_an_outside_change_with_a_diff() {
     let outcome = session.drive(looped, &tx2, "again");
     assert!(matches!(outcome, TurnOutcome::Completed));
     let lines = session.new_lines();
-    // The resumed loop rebuilds its preamble, then checks: the change
-    // lands between `preamble_built` and `turn_started`.
-    assert_eq!(lines[0].kind, "preamble_built");
+    // The complete resumed turn, in order: the rebuilt preamble, then
+    // the check, with the change between `preamble_built` and
+    // `turn_started`.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "preamble_built",
+            "instruction_file",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(lines[0].payload["reason"], "resume");
     assert_eq!(lines[1].kind, "instruction_file");
     assert_eq!(lines[1].payload["reason"], "changed");

@@ -39,10 +39,14 @@ fn stat_of(path: &str) -> Option<Stat> {
 /// when last read, and the size and time of the last `io_failed` notice
 /// naming it. The content the model last had lives beside it in
 /// [`State::had`], updated as instruction lines render.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
 struct Tracked {
     stat: Option<Stat>,
-    noticed: Option<Stat>,
+    /// The failing size and time of the last `io_failed` notice naming
+    /// the path: `Some(None)` when even the sizes could not be read.
+    /// `None` means no notice yet, which differs from a failure whose
+    /// sizes are unknown, so the first failure is always named.
+    noticed: Option<Option<Stat>>,
 }
 
 /// The instruction files the model was sent and the directories checked,
@@ -101,14 +105,12 @@ impl State {
     /// checked, and the date given. The baseline the next turn's check
     /// compares against.
     pub(crate) fn initial(message: &OpeningMessage, workspace: &Path, home: &Path) -> Self {
-        let home = opening::canonical(home);
         let workspace = opening::canonical(workspace);
         let (chain, _) = opening::repo_chain(&workspace);
-        let mut dirs = BTreeSet::from([home.clone()]);
-        dirs.extend(chain);
-        let mut files = BTreeMap::new();
+        let mut state = Self::empty(home);
+        state.dirs.extend(chain);
         for file in &message.instruction_files {
-            files.insert(
+            state.files.insert(
                 file.path.clone(),
                 Tracked {
                     stat: stat_of(&file.path),
@@ -116,14 +118,8 @@ impl State {
                 },
             );
         }
-        Self {
-            files,
-            dirs,
-            date: message.environment.date.clone(),
-            home,
-            had: BTreeMap::new(),
-            queued: Vec::new(),
-        }
+        state.date = message.environment.date.clone();
+        state
     }
 
     /// The state the log's lines describe: the content fold gives what the
@@ -138,17 +134,9 @@ impl State {
         workspace: &Path,
         home: &Path,
     ) -> Result<Self, Error> {
-        let home = opening::canonical(home);
         let workspace = opening::canonical(workspace);
         let (chain, _) = opening::repo_chain(&workspace);
-        let mut state = Self {
-            files: BTreeMap::new(),
-            dirs: BTreeSet::from([home.clone()]),
-            date: String::new(),
-            home,
-            had: BTreeMap::new(),
-            queued: Vec::new(),
-        };
+        let mut state = Self::empty(home);
         state.dirs.extend(chain);
         for line in lines.iter().filter(|l| l.is_durable()) {
             let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
@@ -159,17 +147,11 @@ impl State {
             if let Event::OpeningMessage(message) = &event {
                 state.date = message.environment.date.clone();
                 for file in &message.instruction_files {
-                    state.files.entry(file.path.clone()).or_insert(Tracked {
-                        stat: None,
-                        noticed: None,
-                    });
+                    state.files.entry(file.path.clone()).or_default();
                 }
             }
             if let Event::InstructionFile(file) = &event {
-                state.files.entry(file.path.clone()).or_insert(Tracked {
-                    stat: None,
-                    noticed: None,
-                });
+                state.files.entry(file.path.clone()).or_default();
                 if let Some(parent) = Path::new(&file.path).parent() {
                     state.dirs.insert(parent.to_path_buf());
                 }
@@ -236,11 +218,18 @@ impl State {
                 out.files.push(match old {
                     Some(old) => {
                         let diff = unified_diff(&old, &content, path);
+                        // The full text when the diff is longer in bytes
+                        // than the new file.
+                        let sent = if diff.len() > content.len() {
+                            InstructionSent::Full
+                        } else {
+                            InstructionSent::Diff
+                        };
                         InstructionFile {
                             path: path.to_owned(),
                             reason: InstructionReason::Changed,
                             content: Some(content.clone()),
-                            sent: send_as_diff(diff.len(), content.len()),
+                            sent,
                         }
                     }
                     None => InstructionFile {
@@ -266,10 +255,12 @@ impl State {
             }
             Err(e) => {
                 // Left as it was, with an `io_failed` notice naming it:
-                // once per change of size and time.
-                if self.files.get(path).and_then(|file| file.noticed) != now {
+                // once per change of size and time. `None` (no notice
+                // yet) differs from `Some(None)` (noticed with unknown
+                // sizes), so the first failure is always named.
+                if self.files.get(path).and_then(|file| file.noticed) != Some(now) {
                     if let Some(file) = self.files.get_mut(path) {
-                        file.noticed = now;
+                        file.noticed = Some(now);
                     }
                     out.notices.push(opening::io_failed(Path::new(path), &e));
                 }
@@ -278,10 +269,30 @@ impl State {
     }
 
     /// One checked directory's candidate: a path not yet tracked is
-    /// `created` with the full text. A candidate that cannot be read is
-    /// neither tracked nor named: nothing was ever sent, so there is no
-    /// change to report, and the next check meets it again.
+    /// `created` with the full text, and one that cannot be read is
+    /// named once per change of size and time.
     fn check_dir(&mut self, dir: &Path, out: &mut Check) {
+        let (file, notice) = self.adopt(dir, InstructionReason::Created);
+        if let Some(file) = file {
+            out.files.push(file);
+        }
+        if let Some(notice) = notice {
+            out.notices.push(notice);
+        }
+    }
+
+    /// Reads `dir`'s candidate into tracking: the global file is
+    /// `<home>/AGENTS.md` only, elsewhere [`opening::candidate`]. A
+    /// path already tracked, or with no candidate, gives nothing. A
+    /// readable candidate gives its `reason` line with the full text;
+    /// one that is gone gives nothing, and one that cannot be read is
+    /// tracked with its failing sizes and gives an `io_failed` notice
+    /// naming it.
+    fn adopt(
+        &mut self,
+        dir: &Path,
+        reason: InstructionReason,
+    ) -> (Option<InstructionFile>, Option<Notice>) {
         let candidate = if dir == self.home.as_path() {
             // The global file is `<home>/AGENTS.md` only.
             home_candidate(dir)
@@ -289,27 +300,44 @@ impl State {
             opening::candidate(dir)
         };
         let Some(candidate) = candidate else {
-            return;
+            return (None, None);
         };
         let path = candidate.display().to_string();
         if self.files.contains_key(&path) {
-            return;
+            return (None, None);
         }
-        if let Ok(bytes) = std::fs::read(&candidate) {
-            let content = String::from_utf8_lossy(&bytes).into_owned();
-            self.files.insert(
-                path.clone(),
-                Tracked {
-                    stat: stat_of(&path),
-                    noticed: None,
-                },
-            );
-            out.files.push(InstructionFile {
-                path,
-                reason: InstructionReason::Created,
-                content: Some(content),
-                sent: InstructionSent::Full,
-            });
+        match std::fs::read(&candidate) {
+            Ok(bytes) => {
+                let content = String::from_utf8_lossy(&bytes).into_owned();
+                self.files.insert(
+                    path.clone(),
+                    Tracked {
+                        stat: stat_of(&path),
+                        noticed: None,
+                    },
+                );
+                (
+                    Some(InstructionFile {
+                        path,
+                        reason,
+                        content: Some(content),
+                        sent: InstructionSent::Full,
+                    }),
+                    None,
+                )
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => (None, None),
+            Err(e) => {
+                let now = stat_of(&path);
+                self.files.insert(
+                    path,
+                    Tracked {
+                        stat: now,
+                        noticed: Some(now),
+                    },
+                );
+                (None, Some(opening::io_failed(&candidate, &e)))
+            }
         }
     }
 
@@ -335,19 +363,20 @@ impl State {
         let Some(paths) = declared.paths.as_ref() else {
             return Vec::new();
         };
+        // Resolved once against the workspace and lexically normalised:
+        // paths outside it, or that do not resolve, change nothing here.
+        let resolved: Vec<PathBuf> = paths
+            .iter()
+            .filter_map(|declared_path| clean(&workspace.join(declared_path)))
+            .filter(|resolved| resolved.strip_prefix(workspace).is_ok())
+            .collect();
         let mut own = Vec::new();
-        for declared_path in paths {
-            let Some(resolved) = clean(&workspace.join(declared_path)) else {
-                continue;
-            };
-            if resolved.strip_prefix(workspace).is_err() {
-                continue;
-            }
+        for resolved in &resolved {
             let key = resolved.display().to_string();
             if !self.files.contains_key(&key) {
                 continue;
             }
-            match std::fs::read(&resolved) {
+            match std::fs::read(resolved) {
                 Ok(bytes) => {
                     let content = String::from_utf8_lossy(&bytes).into_owned();
                     self.track(&key, stat_of(&key));
@@ -379,7 +408,7 @@ impl State {
                 Err(_) => {}
             }
         }
-        self.touch_subdirs(workspace, paths);
+        self.touch_subdirs(workspace, &resolved);
         own
     }
 
@@ -387,15 +416,9 @@ impl State {
     /// ancestors strictly below the workspace up to each path's parent, and
     /// the path itself when it is a directory. A new directory holding a
     /// candidate file queues one `subdirectory` line with the full text.
-    fn touch_subdirs(&mut self, workspace: &Path, paths: &[String]) {
+    fn touch_subdirs(&mut self, workspace: &Path, paths: &[PathBuf]) {
         let mut fresh = BTreeSet::new();
-        for declared_path in paths {
-            let Some(resolved) = clean(&workspace.join(declared_path)) else {
-                continue;
-            };
-            if resolved.strip_prefix(workspace).is_err() {
-                continue;
-            }
+        for resolved in paths {
             let mut parent = resolved.parent();
             while let Some(dir) = parent {
                 if dir == workspace || dir.strip_prefix(workspace).is_err() {
@@ -407,59 +430,66 @@ impl State {
                 parent = dir.parent();
             }
             // A shell search declaring `sub/` reaches `sub/AGENTS.md`.
-            if resolved.is_dir() && !self.dirs.contains(&resolved) {
+            if resolved.is_dir() && !self.dirs.contains(resolved) {
                 fresh.insert(resolved.clone());
             }
         }
         // `BTreeSet` order: the queued lines read in path order.
         for dir in fresh {
             self.dirs.insert(dir.clone());
-            let candidate = if dir == self.home {
-                home_candidate(&dir)
-            } else {
-                opening::candidate(&dir)
-            };
-            let Some(candidate) = candidate else {
-                continue;
-            };
-            let path = candidate.display().to_string();
-            if self.files.contains_key(&path) {
-                continue;
+            let (file, notice) = self.adopt(&dir, InstructionReason::Subdirectory);
+            if let Some(file) = file {
+                self.queued.push(Event::InstructionFile(file));
             }
-            // Unreadable is neither tracked nor named here: the next
-            // turn-start check meets it again.
-            if let Ok(bytes) = std::fs::read(&candidate) {
-                let content = String::from_utf8_lossy(&bytes).into_owned();
-                self.files.insert(
-                    path.clone(),
-                    Tracked {
-                        stat: stat_of(&path),
-                        noticed: None,
-                    },
-                );
-                self.queued.push(Event::InstructionFile(InstructionFile {
-                    path,
-                    reason: InstructionReason::Subdirectory,
-                    content: Some(content),
-                    sent: InstructionSent::Full,
-                }));
+            if let Some(notice) = notice {
+                self.queued.push(Event::Notice(notice));
             }
         }
     }
 
-    /// The subdirectory lines queued since the last step start.
+    /// The subdirectory lines queued since the last step start, re-read
+    /// before they are emitted: a later call in the same batch may have
+    /// edited or deleted a queued file, and its own edit already moved
+    /// what the model had. A file matching what the model had, or gone,
+    /// is dropped; a changed one goes out with its content now; one that
+    /// cannot be read is named once per change of size and time.
     pub(crate) fn take_queued(&mut self) -> Vec<Event> {
-        std::mem::take(&mut self.queued)
-    }
-}
-
-/// Whether a change goes out as a diff: the full text when the diff is
-/// longer in bytes than the new file.
-fn send_as_diff(diff_len: usize, new_len: usize) -> InstructionSent {
-    if diff_len > new_len {
-        InstructionSent::Full
-    } else {
-        InstructionSent::Diff
+        let mut out = Vec::new();
+        for event in std::mem::take(&mut self.queued) {
+            let Event::InstructionFile(file) = event else {
+                out.push(event);
+                continue;
+            };
+            match std::fs::read(&file.path) {
+                Ok(bytes) => {
+                    let content = String::from_utf8_lossy(&bytes).into_owned();
+                    self.track(&file.path, stat_of(&file.path));
+                    if self.had.get(&file.path) == Some(&content) {
+                        // An own edit already moved what the model had.
+                        continue;
+                    }
+                    out.push(Event::InstructionFile(InstructionFile {
+                        content: Some(content),
+                        ..file
+                    }));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    self.track(&file.path, None);
+                    // Gone: an own deletion already recorded it, and a
+                    // file never sent needs no farewell.
+                }
+                Err(e) => {
+                    let now = stat_of(&file.path);
+                    if self.files.get(&file.path).and_then(|file| file.noticed) != Some(now) {
+                        if let Some(tracked) = self.files.get_mut(&file.path) {
+                            tracked.noticed = Some(now);
+                        }
+                        out.push(Event::Notice(opening::io_failed(Path::new(&file.path), &e)));
+                    }
+                }
+            }
+        }
+        out
     }
 }
 

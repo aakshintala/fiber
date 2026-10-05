@@ -131,6 +131,9 @@ fn environment_holds_date_platform_shell_workspace_and_log() {
     );
     assert!(message.instruction_files.is_empty());
     assert!(message.skills.is_empty());
+    // Absent everywhere is silence, not a notice: a flipped
+    // `NotFound` guard would name the absent files instead.
+    assert!(collected(&home, &workspace, &fake).notices.is_empty());
 }
 
 #[test]

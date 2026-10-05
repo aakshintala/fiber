@@ -123,7 +123,13 @@ fn created_renders_the_new_file() {
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
     assert!(text.contains("a new instruction file appeared"), "{text}");
-    assert!(text.contains("/w"), "{text}");
+    // `{dir}` is the file's parent directory, byte for byte: neither an
+    // empty nor a wrong directory reads the same.
+    assert!(
+        text.contains("It applies to /w and everything below it."),
+        "{text}"
+    );
+    assert!(text.contains("### /w/AGENTS.md"), "{text}");
     assert!(text.contains("Leaf.\n"), "{text}");
     assert_eq!(had.get("/w/AGENTS.md"), Some(&"Leaf.\n".to_owned()));
 }
@@ -147,7 +153,16 @@ fn subdirectory_renders_the_reached_file() {
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
     assert!(text.contains("has its own instruction file"), "{text}");
-    assert!(text.contains("/w/sub"), "{text}");
+    // Both `{dir}` slots name the reached directory, byte for byte.
+    assert!(
+        text.contains("you worked in /w/sub, which has its own instruction file."),
+        "{text}"
+    );
+    assert!(
+        text.contains("It applies to /w/sub and everything below it"),
+        "{text}"
+    );
+    assert!(text.contains("### /w/sub/AGENTS.md"), "{text}");
     assert_eq!(had.get("/w/sub/AGENTS.md"), Some(&"Sub.\n".to_owned()));
 }
 
