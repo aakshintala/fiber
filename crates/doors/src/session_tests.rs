@@ -17,18 +17,21 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
+use contract::emit::Emit;
 use contract::events::{
     CommandAccepted, Empty, Event, ExtensionsLoaded, FiberExited, LoadedExtension, Notice,
     SessionState, SessionStatus,
 };
 use contract::inbox::Delivery;
-use contract::shapes::{Tokens, Usage};
+use contract::provider::ToolDefinition;
+use contract::shapes::{ContentPart, Process, Tokens, Usage};
+use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, ErrorCode};
 use fakes::Client;
 use fakes::clock::FakeClock;
 use log::Log;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{Gate, Session};
 
@@ -1017,4 +1020,134 @@ fn a_clock_move_delivers_cancelled_and_nothing_before() {
         })
         .unwrap();
     close_within(opened.session, opened.log);
+}
+
+/// Longer than [`DEADLINE`], so a shell that misses its cancel holds `close`
+/// past the test's own wait.
+const SHELL_LIMIT: Duration = Duration::from_secs(30);
+
+struct LateFlag {
+    ready: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Wake for LateFlag {
+    fn wake(&self) {
+        *lock(&self.ready) = true;
+        self.cv.notify_all();
+    }
+}
+
+struct LateShell {
+    saw: Arc<AtomicBool>,
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl Tool for LateShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        let flag = Arc::new(LateFlag {
+            ready: Mutex::new(false),
+            cv: Condvar::new(),
+        });
+        let wake: Arc<dyn Wake> = flag.clone();
+        cancel.subscribe(Arc::downgrade(&wake));
+        let cancelled = cancel.is_cancelled();
+        self.saw.store(cancelled, Ordering::Relaxed);
+        if let Some(sender) = self.entered.lock().expect("the entered lock").take() {
+            sender.send(()).expect("the test is waiting");
+        }
+        if !cancelled {
+            let guard = flag.ready.lock().expect("the flag lock");
+            let _wait = flag
+                .cv
+                .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled());
+        }
+        Output {
+            content: vec![ContentPart::Text {
+                text: "stopped".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: None,
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+}
+
+#[test]
+fn a_shell_registered_after_close_is_cancelled() {
+    let opened = open();
+    let clock = Arc::clone(&opened.clock);
+    let gate = Arc::clone(&opened.session.gate);
+    let socket = opened.socket.clone();
+    let saw = Arc::new(AtomicBool::new(false));
+    let (entered_tx, entered_rx) = mpsc::channel();
+    opened.session.shell(Arc::new(LateShell {
+        saw: Arc::clone(&saw),
+        entered: Mutex::new(Some(entered_tx)),
+    }));
+    let (client_tx, client_rx) = mpsc::channel();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_late", "full");
+            let _ack = recv(&client);
+            client_tx.send(client).unwrap();
+            Ok(())
+        })
+        .unwrap();
+    let client = client_rx
+        .recv_timeout(DEADLINE)
+        .expect("the client connected");
+
+    let watcher = opened.log.watch();
+    opened.log.append(&notice(), None, None).unwrap();
+    let held = Held::new(Hold::Wait);
+    attach_held(&gate, &held, watcher);
+    held.wait_blocked();
+
+    let until = clock.now() + super::GRACE;
+    let (done_tx, done_rx) = mpsc::channel();
+    let session = opened.session;
+    let log = opened.log;
+    thread::spawn(move || {
+        session.close(log);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    assert!(
+        clock.await_parked(until, DEADLINE),
+        "close is past the shell snapshot and waiting out the grace"
+    );
+    client
+        .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
+        .unwrap();
+    entered_rx
+        .recv_timeout(DEADLINE)
+        .expect("the shell registered after close");
+    assert!(saw.load(Ordering::Relaxed), "the tool saw its cancel");
+    clock.advance(super::GRACE);
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("close returned without the tool's timeout");
 }

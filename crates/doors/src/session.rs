@@ -61,9 +61,10 @@ pub(crate) struct Gate {
     cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
     /// The tool a driver `shell` runs. None leaves `shell` unknown.
     driver_shell: Mutex<Option<Arc<dyn Tool>>>,
-    /// Driver shells running now. `cancel` stops each, then the entry
-    /// leaves on the command's way out.
-    shells: Mutex<Vec<Arc<crate::shell::ShellCancel>>>,
+    /// Driver shells running now, and whether `close` has stopped new ones.
+    /// Both sit under this lock, so a shell that registers after `close`
+    /// cannot miss the snapshot.
+    shells: Mutex<RunningShells>,
     stop: AtomicBool,
     clients: Mutex<u32>,
     /// Paired with [`Gate::conns`].
@@ -278,7 +279,7 @@ impl Gate {
     /// can remove its entry without waiting on this call.
     pub(crate) fn stop_running(&self) -> Stopped {
         let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
-        let shells = lock(&self.shells).clone();
+        let shells = lock(&self.shells).running.clone();
         cancel_each(&shells);
         Stopped {
             turn,
@@ -286,10 +287,16 @@ impl Gate {
         }
     }
 
-    /// Cancels every driver shell still registered. Closing the socket does
-    /// not stop a tool blocked in `run`.
+    /// Marks the gate so a shell that registers later is cancelled at once,
+    /// and cancels the shells already running. Closing the socket does not
+    /// stop a tool blocked in `run`.
     fn cancel_shells(&self) {
-        cancel_each(&lock(&self.shells).clone());
+        let running = {
+            let mut shells = lock(&self.shells);
+            shells.stopped = true;
+            shells.running.clone()
+        };
+        cancel_each(&running);
     }
 
     pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
@@ -297,11 +304,25 @@ impl Gate {
     }
 
     pub(crate) fn track_shell(&self, cancel: Arc<crate::shell::ShellCancel>) {
-        lock(&self.shells).push(cancel);
+        let stopped = {
+            let mut shells = lock(&self.shells);
+            if shells.stopped {
+                true
+            } else {
+                shells.running.push(Arc::clone(&cancel));
+                false
+            }
+        };
+        // After the lock: `cancel` wakes the tool, which must not need this lock.
+        if stopped {
+            cancel.cancel();
+        }
     }
 
     pub(crate) fn untrack_shell(&self, cancel: &Arc<crate::shell::ShellCancel>) {
-        lock(&self.shells).retain(|tracked| !Arc::ptr_eq(tracked, cancel));
+        lock(&self.shells)
+            .running
+            .retain(|tracked| !Arc::ptr_eq(tracked, cancel));
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -410,6 +431,11 @@ impl Wake for Gate {
     }
 }
 
+struct RunningShells {
+    stopped: bool,
+    running: Vec<Arc<crate::shell::ShellCancel>>,
+}
+
 fn cancel_each(shells: &[Arc<crate::shell::ShellCancel>]) {
     for shell in shells {
         shell.cancel();
@@ -447,7 +473,10 @@ fn open_in(
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
         driver_shell: Mutex::new(None),
-        shells: Mutex::new(Vec::new()),
+        shells: Mutex::new(RunningShells {
+            stopped: false,
+            running: Vec::new(),
+        }),
         stop: AtomicBool::new(false),
         clients: Mutex::new(0),
         writers: Condvar::new(),

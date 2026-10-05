@@ -435,6 +435,16 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
     earlier.append(&resolved("r_early"), Some("a_1"));
     let (_, exited) = earlier.exit(Ok(()));
     assert_eq!(exited["suspended_on"], "r_late");
+    assert_eq!(
+        kinds(&earlier),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_requested",
+            "permission_resolved",
+            "fiber_exited",
+        ]
+    );
 
     let later = Session::new();
     fiber_started(&later.log, "1.2.3", false).unwrap();
@@ -443,6 +453,16 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
     later.append(&resolved("r_late"), Some("a_2"));
     let (_, exited) = later.exit(Ok(()));
     assert_eq!(exited["suspended_on"], "r_early");
+    assert_eq!(
+        kinds(&later),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_requested",
+            "permission_resolved",
+            "fiber_exited",
+        ]
+    );
 }
 
 fn kinds(session: &Session) -> Vec<String> {

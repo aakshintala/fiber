@@ -170,6 +170,21 @@ fn the_delay_restarts_after_a_turn() {
         finished.try_recv().is_err(),
         "the restarted delay has not passed"
     );
+    assert_eq!(
+        durable(&session),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     // Dropping the sender ends the wait, so the thread can finish.
     drop(session.inbox);
     let ran = finished
@@ -225,6 +240,7 @@ fn a_rejected_reply_a_steer_drop_and_a_wake_do_not_move_the_deadline() {
         finished.try_recv().is_err(),
         "junk does not end the idle wait"
     );
+    assert_eq!(durable(&session), ["session_started"]);
 }
 
 #[test]
@@ -280,6 +296,7 @@ fn no_deadline_never_expires() {
         finished.try_recv().is_err(),
         "no deadline means the idle wait does not end"
     );
+    assert_eq!(durable(&session), ["session_started"]);
 }
 
 /// True once a thread is parked in `wait_until` with no deadline, within
