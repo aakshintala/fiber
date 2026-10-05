@@ -2539,3 +2539,201 @@ fn a_completed_call_in_the_window_is_not_in_the_batch() {
     assert_eq!(results[1].0, "a_1");
     assert!(results[1].1.contains("No person can answer"));
 }
+
+// Orphans: a job a crash left running is marked on open.
+
+fn job_started(id: &str) -> Event {
+    Event::JobStarted(contract::events::JobStarted {
+        job_id: contract::JobId(id.into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "npm test".into(),
+        output_path: format!("artifacts/{id}.log"),
+    })
+}
+
+fn job_completed(id: &str) -> Event {
+    Event::JobCompleted(contract::events::JobCompleted {
+        job_id: contract::JobId(id.into()),
+        status: contract::events::Outcome::Completed,
+        error: None,
+        process: None,
+        output_tail: None,
+    })
+}
+
+const ORPHANED: &str = "The process that ran this job died; it may still be running.";
+
+/// The `orphaned` completion a resume writes for `id`.
+fn assert_orphaned(line: &Envelope, id: &str) {
+    assert_eq!(line.kind, "job_completed");
+    assert_eq!(line.turn_id, None);
+    assert_eq!(line.action_id, None);
+    assert_eq!(
+        serde_json::Value::Object(line.payload.clone()),
+        json!({
+            "job_id": id,
+            "status": "failed",
+            "error": {"code": "orphaned", "message": ORPHANED},
+        })
+    );
+}
+
+#[test]
+fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(requested("shell"), Some("a_1"));
+    history.write(job_started("j_a"), Some("a_1"));
+    history.write(job_started("j_b"), Some("a_1"));
+    history.write(job_started("j_c"), Some("a_1"));
+    // As a `jobs wait` records it, under its call's action.
+    history.write(job_completed("j_b"), Some("a_1"));
+    history.write(completed("Started."), Some("a_1"));
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    // Written on open, before any turn, in start order.
+    let marked = history.new_lines();
+    assert_eq!(kinds_of(&marked), ["job_completed", "job_completed"]);
+    assert_orphaned(&marked[0], "j_a");
+    assert_orphaned(&marked[1], "j_c");
+    let last = history.lines()[history.history_len - 1].seq.unwrap().0;
+    assert_eq!(marked[0].seq.unwrap().0, last + 1);
+
+    assert_eq!(
+        history.run(looped, "two"),
+        contract::events::TurnOutcome::Completed
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let users: Vec<&str> = requests[0]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::User { text } => Some(text.as_str()),
+            Input::Assistant { .. }
+            | Input::Reasoning { .. }
+            | Input::ToolCall { .. }
+            | Input::ToolResult { .. } => None,
+        })
+        .collect();
+    let notice = |id: &str| format!("Fiber: background job {id} ended: failed.\n{ORPHANED}");
+    assert_eq!(users[1], notice("j_a"));
+    assert_eq!(users[2], notice("j_c"));
+    assert_eq!(*users.last().unwrap(), "two");
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "job_completed",
+            "job_completed",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_job_a_rewind_handed_on_is_not_marked() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(requested("shell"), Some("a_1"));
+    history.write(job_started("j_a"), Some("a_1"));
+    history.write(completed("Started."), Some("a_1"));
+    history
+        .log
+        .append(
+            &Event::Rewound(contract::events::Rewound {
+                new_session_id: SessionId("s_2".into()),
+                seq: contract::Seq(1),
+                jobs: vec![contract::JobId("j_a".into())],
+            }),
+            None,
+            None,
+        )
+        .unwrap();
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    assert!(history.new_lines().is_empty());
+    drop(looped);
+}
+
+#[test]
+fn a_job_with_a_completion_is_not_marked() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(job_started("j_a"), Some("a_1"));
+    history.write(job_completed("j_a"), None);
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    assert!(history.new_lines().is_empty());
+    drop(looped);
+}
+
+#[test]
+fn an_orphan_behind_a_suspended_batch_waits_for_its_results() {
+    // The suspended batch is still open on open: the orphan notice is
+    // written at the finishing turn's next step boundary, after the
+    // batch's results, so no message separates a call from its result.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_9"));
+    history.write(requested("shell"), Some("a_0"));
+    history.write(job_started("j_a"), Some("a_0"));
+    history.write(completed("Started j_a."), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless(Vec::new());
+    assert!(history.new_lines().is_empty());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    drop(looped);
+
+    let new = history.new_lines();
+    assert_eq!(
+        kinds_of(&new),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "job_completed",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(new[6].action_id, None);
+    assert_eq!(new[6].turn_id, Some(history.tid()));
+    assert_eq!(new[6].payload["error"]["code"], "orphaned");
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let conversation = &requests[0].conversation;
+    assert!(matches!(
+        conversation[conversation.len() - 2],
+        Input::ToolResult { ref action_id, .. } if action_id.0 == "a_1"
+    ));
+    assert_eq!(
+        conversation.last(),
+        Some(&Input::User {
+            text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}")
+        })
+    );
+}

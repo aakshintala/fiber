@@ -167,8 +167,9 @@ impl Loop {
     /// Resumes the session `lines` describe on `log`, which already holds
     /// the lock: the conversation is rebuilt with the fixed results for the
     /// calls a crash left without one, and the folds a new loop builds from
-    /// nothing are restored. Nothing is written: `session_started` is the
-    /// first line's, and `seq` carries on. Every other argument is
+    /// nothing are restored. The only lines written are one `job_completed`
+    /// per job a crash left running, marked `orphaned`; `session_started` is
+    /// the first line's, and `seq` carries on. Every other argument is
     /// [`Loop::start`]'s. `lines` is the whole log, read under the lock
     /// `Log::open` took.
     #[allow(
@@ -249,7 +250,7 @@ impl Loop {
         };
         // debt: copies `Loop::start`'s literal apart from five fields; a
         // shared constructor once a third constructor needs the same fields.
-        Ok(Self {
+        let mut resumed = Self {
             log,
             provider,
             model,
@@ -298,7 +299,9 @@ impl Loop {
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,
-        })
+        };
+        resumed.mark_orphans(lines)?;
+        Ok(resumed)
     }
 }
 

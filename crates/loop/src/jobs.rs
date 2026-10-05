@@ -4,12 +4,18 @@
 //! `job_completed` with no action. A resume marks each job a crash left
 //! running `orphaned` (`docs/events.md`, "Resume").
 
-use contract::TurnId;
+use std::collections::HashSet;
+
 use contract::events::{Event, InputItem, JobCompleted, Outcome};
 use contract::inbox::{JobNotice, Message};
+use contract::shapes::Failure;
+use contract::{Envelope, ErrorCode, JobId, TurnId};
 
 use crate::prompt::{body, fill};
 use crate::{Error, Loop};
+
+/// What an orphaned job's `job_completed` says.
+const ORPHANED: &str = "The process that ran this job died; it may still be running.";
 
 /// Something taken from the inbox and not yet written, in arrival order:
 /// a steering message, or a job's end whose claim held.
@@ -87,6 +93,66 @@ impl Loop {
         }
         Ok(steered)
     }
+
+    /// Writes one `job_completed` per job `lines` started and never ended,
+    /// in start order, unless a `rewound` handed the job on: the process
+    /// that ran it died with the one that wrote the log. Nothing touches a
+    /// process (`docs/events.md`, "Resume"). A suspended turn's batch is
+    /// still open, and a message there would separate its calls from their
+    /// results, so those notices wait for that turn's next step boundary.
+    pub(crate) fn mark_orphans(&mut self, lines: &[Envelope]) -> Result<(), Error> {
+        let orphans = orphans(lines)?;
+        if self.suspended.is_some() {
+            self.queued.extend(orphans.into_iter().map(Queued::Job));
+            return Ok(());
+        }
+        for completed in orphans {
+            crate::util::write(
+                &self.log,
+                &mut self.conversation,
+                &mut self.reviewed,
+                &self.model.reference,
+                &Event::JobCompleted(completed),
+                None,
+                None,
+                &mut self.changes.had,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// The jobs `lines` started with no `job_completed` and no `rewound` naming
+/// them, in start order, each as its `orphaned` completion.
+fn orphans(lines: &[Envelope]) -> Result<Vec<JobCompleted>, Error> {
+    let mut started: Vec<JobId> = Vec::new();
+    let mut settled: HashSet<JobId> = HashSet::new();
+    for line in lines.iter().filter(|line| line.is_durable()) {
+        let event = Event::from_envelope(line).map_err(Error::Unreadable)?;
+        if let Some(Event::JobStarted(job)) = event {
+            started.push(job.job_id);
+        } else if let Some(Event::JobCompleted(job)) = event {
+            settled.insert(job.job_id);
+        } else if let Some(Event::Rewound(rewound)) = event {
+            settled.extend(rewound.jobs);
+        }
+    }
+    Ok(started
+        .into_iter()
+        .filter(|id| settled.insert(id.clone()))
+        .map(|job_id| JobCompleted {
+            job_id,
+            status: Outcome::Failed,
+            error: Some(Failure {
+                code: ErrorCode::Orphaned,
+                message: ORPHANED.to_owned(),
+                retry_after: None,
+                provider: None,
+            }),
+            process: None,
+            output_tail: None,
+        })
+        .collect())
 }
 
 /// What a `job_completed` with no action tells the model: the job, how it
