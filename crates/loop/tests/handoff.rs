@@ -2045,6 +2045,21 @@ fn a_last_step_with_no_tool_call_asks_for_the_note_on_the_unchanged_conversation
 
     let (outcome, lines) = run(&mut session, "hi");
 
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            REPLY,
+            &["steering_queue"],
+            STEP,
+            &["steering_applied", "steering_queue"],
+            REJECTED,
+            HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
+    );
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
         of_kind(&lines, "handoff_started")[0].payload["trigger"],
@@ -2079,6 +2094,13 @@ fn a_result_whose_artifact_cannot_be_written_stays_in_the_note_request() {
     std::fs::write(&artifacts, "not a directory").unwrap();
 
     let (outcome, lines) = run(&mut session, "hi");
+
+    assert_kinds(
+        &lines,
+        &[
+            OPENING, STEP, CALL_BODY, STEP, REJECTED, HANDED_OFF, REPLY, ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(
@@ -2238,8 +2260,111 @@ fn an_estimate_over_the_window_after_a_handoff_in_the_step_fails_the_turn() {
 
     let (outcome, lines) = run(&mut session, "hi");
 
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, ENDED]);
     assert_eq!(outcome, Some(TurnOutcome::Failed));
     assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
     assert_eq!(error_of(lines.last().unwrap()), "context_overflow");
     assert_eq!(session.requests().len(), 2);
+}
+
+#[test]
+fn the_live_conversation_after_an_overflow_handoff_is_what_a_rebuild_renders() {
+    let mut session = Session::with_tools(
+        vec![
+            called_both(100),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        None,
+        both_tools(),
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING, STEP, TWO_CALLS, STEP, REJECTED, HANDED_OFF, REPLY, ENDED,
+        ],
+    );
+
+    let requests = session.requests();
+    let rebuilt = rebuild(&lines, MODEL).unwrap();
+    // The request after the handoff, then the reply it got.
+    assert_eq!(rebuilt.len(), 4);
+    assert_eq!(rebuilt[..3], requests[3].conversation[..]);
+    assert_eq!(text_of(&rebuilt[3]), "Done.");
+}
+
+#[test]
+fn a_failed_overflow_handoff_leaves_what_a_rebuild_renders_as_before() {
+    let mut session = Session::with_tools(
+        vec![called_both(100), overflowing(), overflowing()],
+        None,
+        both_tools(),
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, TWO_CALLS, STEP, REJECTED, FAILED_NOTE, ENDED],
+    );
+
+    // The conversation the overflowing request held, the results unmoved.
+    let requests = session.requests();
+    assert_eq!(rebuild(&lines, MODEL).unwrap(), requests[1].conversation);
+}
+
+#[test]
+fn a_result_carried_past_a_tool_handoff_keeps_its_artifact_for_an_overflow() {
+    let mut session = tool_session(
+        vec![
+            calling(&["wrapup", "long"], 500),
+            overflowing(),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        vec![wrapping("wrapup", "Tool note."), long()],
+    );
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            TWO_CALLS,
+            &["handoff_completed", "opening_message"],
+            STEP,
+            REJECTED,
+            HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
+    );
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let cut = of_kind(&lines, "tool_call_completed")[1].payload["artifact"]
+        .as_str()
+        .unwrap();
+    let session_dir = std::fs::canonicalize(&session.dir).unwrap();
+    let asked = &session.requests()[2].conversation;
+    // The sibling call and its result follow the note; the result is moved
+    // to the artifact the tool wrote, which is not rewritten.
+    assert!(matches!(&asked[asked.len() - 3], Input::ToolCall { .. }));
+    let Input::ToolResult { text, .. } = &asked[asked.len() - 2] else {
+        panic!("not a result");
+    };
+    assert_eq!(
+        *text,
+        format!("{MOVED}{}.", session_dir.join(cut).display())
+    );
+    assert_eq!(
+        std::fs::read_to_string(session_dir.join(cut)).unwrap(),
+        LONG
+    );
 }

@@ -168,8 +168,8 @@ pub(crate) struct Carry {
     pub(crate) texts: Vec<(ActionId, String)>,
     /// The calls of the last reply, in call order, with their results.
     pub(crate) step: Vec<StepCall>,
-    /// The artifact of each tool result that has one, by call, as a path
-    /// relative to the session directory.
+    /// The artifact of each tool result in this context that has one, by
+    /// call, as a path relative to the session directory.
     pub(crate) artifacts: Vec<(ActionId, String)>,
 }
 
@@ -243,6 +243,12 @@ impl Carry {
             conversation.extend(others.iter().map(|call| call.call.clone()));
             conversation.extend(others.iter().filter_map(|call| call.result.clone()));
         }
+        // Only a result still in this context can be moved out of it.
+        self.artifacts.retain(|(id, _)| {
+            conversation.iter().any(
+                |input| matches!(input, Input::ToolResult { action_id, .. } if action_id == id),
+            )
+        });
         self.nudged = false;
         conversation
     }
