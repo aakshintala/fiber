@@ -254,11 +254,15 @@ impl State {
                 }
             }
             Err(e) => {
-                // Left as it was, with an `io_failed` notice naming it:
-                // once per change of size and time. `None` (no notice
-                // yet) differs from `Some(None)` (noticed with unknown
-                // sizes), so the first failure is always named.
-                if self.files.get(path).and_then(|file| file.noticed) != Some(now) {
+                // Unreadable: an unknown baseline with the notice named
+                // separately, so the next check reads again even when the
+                // size and time match. `None` (no notice yet) differs from
+                // `Some(None)` (noticed with unknown sizes), so the first
+                // failure is always named.
+                let now = stat_of(path);
+                let noticed = self.files.get(path).and_then(|file| file.noticed);
+                self.track(path, None);
+                if noticed != Some(now) {
                     if let Some(file) = self.files.get_mut(path) {
                         file.noticed = Some(now);
                     }
@@ -286,16 +290,19 @@ impl State {
     /// path already tracked, or with no candidate, gives nothing. A
     /// readable candidate gives its `reason` line with the full text;
     /// one that is gone gives nothing, and one that cannot be read is
-    /// tracked with its failing sizes and gives an `io_failed` notice
-    /// naming it.
+    /// tracked with an unknown baseline and gives an `io_failed` notice
+    /// naming it, so a later read sends it as `created` even when its
+    /// size and time match the failure's.
     fn adopt(
         &mut self,
         dir: &Path,
         reason: InstructionReason,
     ) -> (Option<InstructionFile>, Option<Notice>) {
         let candidate = if dir == self.home.as_path() {
-            // The global file is `<home>/AGENTS.md` only.
-            home_candidate(dir)
+            // The global file is `<home>/AGENTS.md` only: absent reads
+            // as gone, unreadable reads as a notice, through the same
+            // arms below.
+            Some(dir.join("AGENTS.md"))
         } else {
             opening::candidate(dir)
         };
@@ -332,7 +339,7 @@ impl State {
                 self.files.insert(
                     path,
                     Tracked {
-                        stat: now,
+                        stat: None,
                         noticed: Some(now),
                     },
                 );
@@ -480,7 +487,9 @@ impl State {
                 }
                 Err(e) => {
                     let now = stat_of(&file.path);
-                    if self.files.get(&file.path).and_then(|file| file.noticed) != Some(now) {
+                    let noticed = self.files.get(&file.path).and_then(|file| file.noticed);
+                    self.track(&file.path, None);
+                    if noticed != Some(now) {
                         if let Some(tracked) = self.files.get_mut(&file.path) {
                             tracked.noticed = Some(now);
                         }
@@ -524,17 +533,6 @@ pub(crate) fn apply(had: &mut BTreeMap<String, String>, event: &Event) {
                 had.remove(&file.path);
             }
         }
-    }
-}
-
-/// The global file's candidate: `<home>/AGENTS.md` only, when present or
-/// unreadable.
-fn home_candidate(home: &Path) -> Option<PathBuf> {
-    let agents = home.join("AGENTS.md");
-    match std::fs::metadata(&agents) {
-        Ok(_) => Some(agents),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
-        Err(_) => Some(agents),
     }
 }
 

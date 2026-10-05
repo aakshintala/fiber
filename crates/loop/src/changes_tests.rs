@@ -272,6 +272,51 @@ fn changed_file_sends_full_text_when_the_diff_is_longer() {
 }
 
 #[test]
+fn changed_file_sends_a_diff_when_it_matches_the_new_length() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // The headers name the path, so the search runs against the path in
+    // force.
+    let path = canon(&workspace).join("AGENTS.md").display().to_string();
+    // The tail filler lines sit outside the hunk's context, so each one
+    // grows the new content without growing the diff; the old change
+    // line's padding tunes the parity. One pair lands byte-exact.
+    let mut pair = None;
+    for extra in 0..8usize {
+        for block in 8..500usize {
+            let old = format!("change{}\n{}", "o".repeat(extra), "f\n".repeat(block));
+            let new = format!("changed\n{}", "f\n".repeat(block));
+            if unified_diff(&old, &new, &path).len() == new.len() {
+                pair = Some((old, new));
+                break;
+            }
+        }
+        if pair.is_some() {
+            break;
+        }
+    }
+    let Some((old, new)) = pair else {
+        panic!("no equal-length diff found");
+    };
+    // Precondition: the diff is exactly the new content's byte length,
+    // so `>` and `>=` disagree here.
+    assert_eq!(unified_diff(&old, &new, &path).len(), new.len());
+    let file = workspace.join("AGENTS.md");
+    write(&file, &old);
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    write(&file, &new);
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    // Equal lengths send the diff: the full text goes out only when the
+    // diff is longer than the new file.
+    assert_eq!(out.files[0].sent, InstructionSent::Diff);
+    assert_eq!(out.files[0].content.as_deref(), Some(new.as_str()));
+}
+
+#[test]
 fn deleted_file_sends_deleted_then_stays_silent() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
@@ -325,7 +370,14 @@ fn new_workspace_file_is_created() {
     std::fs::create_dir_all(&workspace).unwrap();
     let fake = clock();
     let mut state = initial(&home, &workspace, &fake);
-    assert!(state.check(&*fake).files.is_empty());
+    // Absent candidates stay silent: nothing was ever sent, and no
+    // failure is named.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
     let file = workspace.join("AGENTS.md");
     write(&file, "Leaf.\n");
     let out = state.check(&*fake);
@@ -578,18 +630,28 @@ fn own_edit_ignores_undeclared_outside_and_unresolvable_paths() {
 }
 
 #[test]
-fn own_edit_leaves_an_unreadable_file_as_it_was() {
+fn own_call_on_a_file_under_a_file_records_nothing() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
-    let file = workspace.join("AGENTS.md");
-    write(&file, "Leaf.\n");
+    std::fs::create_dir_all(&workspace).unwrap();
     let fake = clock();
     let mut state = initial(&home, &workspace, &fake);
-    readonly(&file, true);
     let workspace = canon(&workspace);
-    let own = state.call_completed(&workspace, &declared(Some(&["AGENTS.md"])));
-    readonly(&file, false);
+    // Tracked through the subdirectory queue, then a file where its
+    // directory was: the read fails with more than absence (`ENOTDIR`),
+    // on any platform and user, so the call records no deletion.
+    write(&workspace.join("sub/AGENTS.md"), "Sub rules.\n");
+    assert!(
+        state
+            .call_completed(&workspace, &declared(Some(&["sub/notes.txt"])))
+            .is_empty()
+    );
+    assert_eq!(state.take_queued().len(), 1);
+    std::fs::remove_dir_all(workspace.join("sub")).unwrap();
+    std::fs::write(workspace.join("sub"), "not a directory").unwrap();
+    let own = state.call_completed(&workspace, &declared(Some(&["sub/AGENTS.md"])));
     assert!(own.is_empty());
+    assert!(state.take_queued().is_empty());
 }
 
 #[test]
@@ -981,6 +1043,86 @@ fn failing_stat_on_an_untracked_candidate_is_named() {
     );
 }
 
+/// A candidate that fails to read and then reads again with the same
+/// size and time is sent: the failure leaves an unknown baseline, not
+/// the failing sizes, so the next check reads again instead of taking
+/// the size-and-time shortcut.
+#[cfg(unix)]
+#[test]
+fn unreadable_candidate_readable_again_with_same_stat_is_created() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    deny(&file);
+    // Precondition: the read really fails with permission denied, so the
+    // check below exercises the failure and not the shortcut. Under a
+    // user that can still read the file (root) there is no failure to
+    // exercise, so the test fails instead of passing vacuously.
+    assert_eq!(
+        std::fs::read(&file).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    // Unreadable: named once...
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    // ...readable again with the same size and time (a permission change
+    // touches neither): `created`, not skipped as unchanged.
+    allow(&file);
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+    assert_eq!(out.files[0].content.as_deref(), Some("Leaf.\n"));
+}
+
+/// A tracked file that fails to read and then reads again at its old size
+/// and time is compared with what the model had: the failure leaves an
+/// unknown baseline, so the check reads instead of taking the shortcut.
+#[cfg(unix)]
+#[test]
+fn unreadable_tracked_file_readable_again_at_its_old_stat_is_compared() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    set_mtime(&file, 2_000);
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    // New sizes so the shortcut does not skip the read, then unreadable.
+    set_mtime(&file, 3_000);
+    deny(&file);
+    // Precondition: the read really fails with permission denied; see the
+    // candidate case above.
+    assert_eq!(
+        std::fs::read(&file).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    // Readable again with the original size and time but revised content
+    // (a permission change touches neither size nor time, and the
+    // revision restores both): `changed`, not skipped as unchanged.
+    allow(&file);
+    write(&file, "Leaf?\n");
+    set_mtime(&file, 2_000);
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    // A wholesale change to a tiny file: the headers alone outweigh it.
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+    assert_eq!(out.files[0].content.as_deref(), Some("Leaf?\n"));
+}
+
+#[cfg(unix)]
 #[test]
 fn permission_denied_tracked_file_is_named_once_per_stat_change() {
     let (home, _held) = root();
@@ -993,12 +1135,14 @@ fn permission_denied_tracked_file_is_named_once_per_stat_change() {
     // New sizes so the shortcut does not skip the read, then unreadable.
     set_mtime(&file, 3_000);
     deny(&file);
-    // A user that can still read the file (root) cannot make it fail:
-    // the notice case below needs the read to fail.
-    if std::fs::read(&file).is_ok() {
-        allow(&file);
-        return;
-    }
+    // Precondition: the read really fails with permission denied, so the
+    // check below exercises the failure and not the shortcut. Under a
+    // user that can still read the file (root) there is no failure to
+    // exercise, so the test fails instead of passing vacuously.
+    assert_eq!(
+        std::fs::read(&file).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
     let out = state.check(&*fake);
     allow(&file);
     assert!(out.files.is_empty());
@@ -1006,6 +1150,7 @@ fn permission_denied_tracked_file_is_named_once_per_stat_change() {
     assert!(out.notices[0].message.contains(&file.display().to_string()));
 }
 
+#[cfg(unix)]
 #[test]
 fn permission_denied_untracked_candidate_is_named() {
     let (home, _held) = root();
@@ -1014,10 +1159,12 @@ fn permission_denied_untracked_candidate_is_named() {
     let file = workspace.join("AGENTS.md");
     write(&file, "Leaf.\n");
     deny(&file);
-    if std::fs::read(&file).is_ok() {
-        allow(&file);
-        return;
-    }
+    // Precondition: the read really fails with permission denied; see the
+    // tracked case above.
+    assert_eq!(
+        std::fs::read(&file).unwrap_err().kind(),
+        std::io::ErrorKind::PermissionDenied
+    );
     let fake = clock();
     let mut state = initial(&home, &workspace, &fake);
     let out = state.check(&*fake);
@@ -1034,12 +1181,14 @@ fn permission_denied_untracked_candidate_is_named() {
 }
 
 /// Makes `path` unreadable while its sizes stay readable.
+#[cfg(unix)]
 fn deny(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o000)).unwrap();
 }
 
 /// Makes `path` readable again after [`deny`].
+#[cfg(unix)]
 fn allow(path: &Path) {
     use std::os::unix::fs::PermissionsExt as _;
     std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o644)).unwrap();
@@ -1302,4 +1451,26 @@ fn unreadable_home_file_is_named() {
     assert!(out.files.is_empty());
     assert!(out.notices.is_empty());
     std::fs::remove_dir(home.join("AGENTS.md")).unwrap();
+}
+
+#[test]
+fn home_through_a_file_names_its_global_file() {
+    let (home, _held) = root();
+    // `home` names a file, not a directory: `<home>/AGENTS.md` cannot
+    // even be listed (`ENOTDIR`), so the check names it instead of
+    // staying silent the way an absent global file does.
+    let home_file = home.join("home-file");
+    std::fs::write(&home_file, "not a directory").unwrap();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home_file, &workspace, &fake);
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert!(
+        out.notices[0]
+            .message
+            .contains(&home_file.join("AGENTS.md").display().to_string())
+    );
 }

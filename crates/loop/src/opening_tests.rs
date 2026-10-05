@@ -232,6 +232,19 @@ fn no_repository_reports_no_git() {
 }
 
 #[test]
+fn empty_directories_collect_nothing_silently() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // Neither directory holds any candidate: no file is sent, and no
+    // failure is named for the files that are not there.
+    let fake = clock();
+    let collected = collected(&home, &workspace, &fake);
+    assert!(collected.message.instruction_files.is_empty());
+    assert!(collected.notices.is_empty());
+}
+
+#[test]
 fn malformed_git_file_is_not_a_repository() {
     let (home, _held) = dir();
     let workspace = home.join("workspace");

@@ -237,10 +237,12 @@ fn gitdir_target(dotgit: &Path, dir: &Path) -> Option<PathBuf> {
 
 /// The instruction file `dir` contributes, if any: `AGENTS.md`, or
 /// `CLAUDE.md` when there is no `AGENTS.md`. A `CLAUDE.md` whose only
-/// content points at `AGENTS.md` counts as no file, and so does a
-/// directory holding neither. A path that is present but cannot be read
-/// still counts: reading it names the failure. The one precedence the
-/// opening message and the change check share.
+/// content points at `AGENTS.md` counts as no file. A path that is
+/// present but cannot be read still counts: reading it names the
+/// failure. An absent `CLAUDE.md` counts too, so the read below tells a
+/// file deleted after the check from an unreadable one: gone is silence,
+/// unreadable is a notice. The one precedence the opening message and
+/// the change check share.
 pub(crate) fn candidate(dir: &Path) -> Option<PathBuf> {
     let agents = dir.join("AGENTS.md");
     match std::fs::metadata(&agents) {
@@ -255,10 +257,10 @@ pub(crate) fn candidate(dir: &Path) -> Option<PathBuf> {
                 Ok(bytes) if String::from_utf8_lossy(&bytes).trim() != AGENTS_POINTER => {
                     Some(claude)
                 }
-                // Absent, or holding only the pointer: no file. Present
-                // but unreadable: the read names it.
+                // Holding only the pointer: no file. Absent, or present
+                // but unreadable: the read below names the failure or
+                // stays silent.
                 Ok(_) => None,
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
                 Err(_) => Some(claude),
             }
         }
@@ -266,9 +268,9 @@ pub(crate) fn candidate(dir: &Path) -> Option<PathBuf> {
     }
 }
 
-/// The instruction file `dir` holds: [`candidate`], read in full. A file
-/// that cannot be read is left out and a notice names it; an empty file
-/// is sent as it is.
+/// The instruction file `dir` holds: [`candidate`], read in full. Gone
+/// after the check is left out silently; present but unreadable is left
+/// out and a notice names it; an empty file is sent as it is.
 fn read_dir_file(dir: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut Vec<Notice>) {
     let Some(path) = candidate(dir) else {
         return;
