@@ -49,7 +49,7 @@ mod util;
 
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
-pub use process::{extensions_loaded, fiber_exited, fiber_started};
+pub use process::{extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;

@@ -1,0 +1,41 @@
+{
+ "protocol": "anthropic",
+ "max_accepted": 0,
+ "requests": [
+  {
+   "length": 64,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  },
+  {
+   "length": 32,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  },
+  {
+   "length": 16,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  },
+  {
+   "length": 8,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  },
+  {
+   "length": 4,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  },
+  {
+   "length": 2,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  },
+  {
+   "length": 1,
+   "status": 401,
+   "body": "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"API key is invalid.\"},\"request_id\":null}"
+  }
+ ]
+}

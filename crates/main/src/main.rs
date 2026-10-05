@@ -11,6 +11,7 @@
 mod builtin;
 mod cli;
 mod clock;
+mod mcp_servers;
 mod prompt_files;
 mod resume;
 mod session_extensions;
@@ -69,6 +70,7 @@ struct Parts {
     idle: Option<Duration>,
     /// The installed extensions, started, and their hooks.
     extensions: Arc<extensions::SessionExtensions>,
+    mcp: mcp_servers::Specs,
 }
 
 fn main() -> ExitCode {
@@ -365,13 +367,15 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         workspace,
         sessions,
         extensions,
+        mcp,
     } = parts;
     // Before the log exists: a failure here, such as not finding the running
-    // binary, leaves no session line.
-    let (tools, infos, driver) = match builtin::builtin(&workspace, &clock) {
-        Ok(built) => built,
-        Err(e) => return ask_failed(e),
-    };
+    // binary, leaves no session line; every server starts with the session too.
+    let (tools, infos, driver, session_servers) =
+        match mcp_servers::session_tools(&workspace, &clock, mcp.specs) {
+            Ok(built) => built,
+            Err(e) => return ask_failed(e),
+        };
     let permissions = ask_permissions(
         &home,
         &project,
@@ -380,7 +384,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     );
     let log = match Log::create(&sessions, id, Arc::clone(&clock)) {
         Ok(log) => Arc::new(log),
-        Err(e) => return ask_failed(failed(e.code(), e)),
+        Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
     };
     let session = match Session::open(
         &home,
@@ -391,7 +395,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Box::new(io::stdout()),
     ) {
         Ok(session) => session,
-        Err(e) => return ask_failed(e),
+        Err(e) => return stop_and_fail(session_servers, e),
     };
     session.shell(driver);
     let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
@@ -410,6 +414,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
             .and_then(|looped| {
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                 session_extensions::written(&log, &extensions)?;
+                r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
                 Ok(session_extensions::hooked(looped, &extensions))
             }),
             budget,
@@ -420,6 +425,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
             cancel,
         )
     });
+    session_servers.servers.stop();
     session.close(log);
     code
 }
@@ -489,6 +495,12 @@ fn run_turn(
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
     r#loop::fiber_exited(log, dir, ran).unwrap_or(1)
+}
+
+/// Stops the servers, then fails before any session line.
+fn stop_and_fail(servers: mcp_servers::SessionServers, e: Failure) -> i32 {
+    servers.servers.stop();
+    ask_failed(e)
 }
 
 /// Fiber home, configuration, the chosen model, its credential and its
@@ -575,6 +587,7 @@ fn parts_with(
         retry,
         idle,
         extensions: Arc::new(extensions),
+        mcp: mcp_servers::specs(&config),
     })
 }
 
@@ -761,32 +774,5 @@ fn ask_failed(e: Failure) -> i32 {
 mod idle_tests;
 
 #[cfg(test)]
-mod retry_policy_tests {
-    //! `retry.attempts` from configuration reaches the loop's retry policy.
-
-    use super::retry_policy;
-
-    fn config(overrides: Vec<String>) -> config::Config {
-        let root = fakes::TempDir::new("fiber-retry-policy");
-        let home = root.path().join("home");
-        let workspace = root.path().join("workspace");
-        std::fs::create_dir_all(&home).unwrap();
-        std::fs::create_dir_all(&workspace).unwrap();
-        let project = config::ProjectKey::new("test").unwrap();
-        let config = config::Config::load(config::Sources {
-            home,
-            workspace,
-            project,
-            overrides,
-        })
-        .unwrap();
-        // `root` is dropped here; the configuration was already read.
-        config
-    }
-
-    #[test]
-    fn retry_policy_clamps_huge_attempts() {
-        let retry = retry_policy(&config(vec!["retry.attempts=18446744073709551615".into()]));
-        assert_eq!(retry.attempts, u32::MAX);
-    }
-}
+#[path = "retry_policy_tests.rs"]
+mod retry_policy_tests;

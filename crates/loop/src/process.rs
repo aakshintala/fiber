@@ -7,7 +7,7 @@ use std::path::Path;
 
 use contract::events::{
     Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, LoadedExtension,
-    MessageOutcome, Notice, TurnOutcome,
+    McpServerFailed, MessageOutcome, Notice, TurnOutcome,
 };
 use contract::shapes::{Failure, Question};
 use contract::{Envelope, RequestId};
@@ -39,6 +39,24 @@ pub fn extensions_loaded(
 ) -> Result<(), Error> {
     let event = Event::ExtensionsLoaded(ExtensionsLoaded { extensions: loaded });
     log.append(&event, None, None)?;
+    for notice in notices {
+        log.append(&Event::Notice(notice), None, None)?;
+    }
+    Ok(())
+}
+
+/// Writes one `mcp_server_failed` line per server that failed to start,
+/// then each notice starting them raised (`docs/mcp.md`, "Starting
+/// servers"). Written after `fiber_started` and `extensions_loaded`,
+/// before the first model request.
+pub fn mcp_servers_started(
+    log: &Log,
+    failed: Vec<McpServerFailed>,
+    notices: Vec<Notice>,
+) -> Result<(), Error> {
+    for failure in failed {
+        log.append(&Event::McpServerFailed(failure), None, None)?;
+    }
     for notice in notices {
         log.append(&Event::Notice(notice), None, None)?;
     }

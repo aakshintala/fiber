@@ -1,0 +1,31 @@
+{
+ "protocol": "go-completions",
+ "max_accepted": 1024,
+ "requests": [
+  {
+   "length": 64,
+   "status": 200,
+   "body": "{\"id\":\"chatcmpl-GXxWkKIUPOwzSxMTn86KtOFOcN6SC\",\"object\":\"chat.completion\",\"created\":1791220006,\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"length\",\"logprobs\":null,\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning_content\":\"This user is asking me to simply say hi. This is a straightforward greeting request\",\"annotations\":[]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":16,\"total_tokens\":31,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0,\"ca"
+  },
+  {
+   "length": 128,
+   "status": 200,
+   "body": "{\"id\":\"chatcmpl-x9S8YBNfP2jo79BJUYb5WmhXccUQr\",\"object\":\"chat.completion\",\"created\":1791220008,\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"length\",\"logprobs\":null,\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning_content\":\"The user said \\\"Say hi.\\\" It's a simple greeting request. I should\",\"annotations\":[]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":16,\"total_tokens\":31,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0,\"cache_write_tokens\""
+  },
+  {
+   "length": 256,
+   "status": 200,
+   "body": "{\"id\":\"chatcmpl-gjL3ahFhLY31G43YL19rBkon7i3xq\",\"object\":\"chat.completion\",\"created\":1791220009,\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"length\",\"logprobs\":null,\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning_content\":\"The user says just \\\"Say hi.\\\" This is a simple greeting request. I\",\"annotations\":[]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":16,\"total_tokens\":31,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0,\"cache_write_tokens"
+  },
+  {
+   "length": 512,
+   "status": 200,
+   "body": "{\"id\":\"chatcmpl-w0SdPbaKhvanOu7GEj3qyfmIcGzH8\",\"object\":\"chat.completion\",\"created\":1791220011,\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"stop\",\"logprobs\":null,\"message\":{\"role\":\"assistant\",\"content\":\"Hi! \ud83d\udc4b How can I help you today?\",\"refusal\":null,\"annotations\":[]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":13,\"total_tokens\":28,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0,\"cache_write_tokens\":0},\"completion_tokens_details\":{\"accepted_prediction_tokens\":"
+  },
+  {
+   "length": 1024,
+   "status": 200,
+   "body": "{\"id\":\"chatcmpl-bpCXVHHvxlGAgvayospvBtuf3Xogx\",\"object\":\"chat.completion\",\"created\":1791220013,\"model\":\"glm-5.3-flash\",\"choices\":[{\"index\":0,\"finish_reason\":\"length\",\"logprobs\":null,\"message\":{\"role\":\"assistant\",\"content\":null,\"refusal\":null,\"reasoning_content\":\"Okay, the user just said \\\"Say hi.\\\" Let me start by understanding what\",\"annotations\":[]}}],\"usage\":{\"prompt_tokens\":15,\"completion_tokens\":16,\"total_tokens\":31,\"prompt_tokens_details\":{\"audio_tokens\":0,\"cached_tokens\":0,\"cache_write_to"
+  }
+ ]
+}

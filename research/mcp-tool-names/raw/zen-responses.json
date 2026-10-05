@@ -1,0 +1,56 @@
+{
+ "protocol": "zen-responses",
+ "max_accepted": 128,
+ "requests": [
+  {
+   "length": 64,
+   "status": 200,
+   "body": "{\"id\":\"resp_06d299ca83666abe006ac3d8de68dc87d28070a2c7f0b43d9a\",\"object\":\"response\",\"created_at\":1791219934,\"completed_at\":1791219935,\"status\":\"completed\",\"parallel_tool_calls\":true,\"temperature\":1,\"top_p\":0.98,\"max_output_tokens\":16,\"previous_response_id\":null,\"background\":false,\"truncation\":\"disabled\",\"top_logprobs\":0,\"max_tool_calls\":null,\"prompt_cache_retention\":\"24h\",\"model\":\"gpt-6-luna\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"id\":\"msg_06d299ca83666abe006ac3d8df01ec87d2850565a836"
+  },
+  {
+   "length": 128,
+   "status": 200,
+   "body": "{\"id\":\"resp_0a41c9c8d00ad0b9006ac3d8e0f16887d28739510d9d914054\",\"object\":\"response\",\"created_at\":1791219936,\"completed_at\":1791219937,\"status\":\"completed\",\"parallel_tool_calls\":true,\"temperature\":1,\"top_p\":0.98,\"max_output_tokens\":16,\"previous_response_id\":null,\"background\":false,\"truncation\":\"disabled\",\"top_logprobs\":0,\"max_tool_calls\":null,\"prompt_cache_retention\":\"24h\",\"model\":\"gpt-6-luna\",\"error\":null,\"incomplete_details\":null,\"output\":[{\"id\":\"msg_0a41c9c8d00ad0b9006ac3d8e1686087d287cd454286"
+  },
+  {
+   "length": 256,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 256 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 192,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 192 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 160,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 160 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 144,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 144 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 136,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 136 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 132,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 132 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 130,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 130 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  },
+  {
+   "length": 129,
+   "status": 400,
+   "body": "{\"model\":\"gpt-6-luna\",\"error\":{\"message\":\"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 129 instead.\",\"type\":\"invalid_request_error\",\"param\":\"tools[0].name\",\"code\":\"string_above_max_length\"}}"
+  }
+ ]
+}
