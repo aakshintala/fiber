@@ -13,6 +13,9 @@
 #[path = "support/probes.rs"]
 mod probes;
 
+#[path = "support/wire_tools.rs"]
+mod wire_tools;
+
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
@@ -1329,36 +1332,7 @@ fn a_model_data_marker_mixed_with_fibers_markers_sends_one_lifetime() {
 
 #[test]
 fn wire_tools_is_what_the_request_sends() {
-    let strict_tool = |name: &str| ToolDefinition {
-        name: name.into(),
-        ..weather_tool()
-    };
-    let loose = ToolDefinition {
-        name: "a_loose".into(),
-        description: "Loose.".into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
-            "required": ["a"]
-        }),
-        deferred: false,
-    };
-    let with_enum_object = ToolDefinition {
-        name: "z_enum".into(),
-        description: "Enum with an object value.".into(),
-        input_schema: json!({
-            "type": "object",
-            "properties": {"pick": {"type": "string", "enum": [{"x": 1}]}},
-            "required": ["pick"],
-            "additionalProperties": false
-        }),
-        deferred: false,
-    };
-    let mut tools: Vec<ToolDefinition> = (0..22)
-        .map(|i| strict_tool(&format!("tool_{i:02}")))
-        .collect();
-    tools.push(loose);
-    tools.push(with_enum_object);
+    let tools = wire_tools::wire_tools_fixture();
     let server = ProviderServer::start([completed_reply()]).unwrap();
     let endpoint = Endpoint {
         compat: provider::Compat {
@@ -1374,10 +1348,10 @@ fn wire_tools_is_what_the_request_sends() {
         .map(Value::Object)
         .collect();
     let mut request = request();
-    request.tools = tools.clone();
+    request.tools = tools;
     send(endpoint, &request);
     let sent = sent_body(&server, 0)["tools"].clone();
-    assert_eq!(Value::Array(wired.clone()), sent);
+    assert_eq!(Value::Array(wired), sent);
     let strict: Vec<bool> = sent
         .as_array()
         .unwrap()

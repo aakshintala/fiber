@@ -128,7 +128,8 @@ impl ModelCall for Call {
     }
 }
 
-/// Each tool in Responses' shape, in name order.
+/// Each tool in Responses' shape, in name order. This is the tools Fiber
+/// builds, before `extra_body` is merged (see #509).
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));

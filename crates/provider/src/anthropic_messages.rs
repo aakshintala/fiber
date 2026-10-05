@@ -127,7 +127,8 @@ impl ModelCall for Call {
 /// Schema limitations": "complex types in enums"). Anthropic refuses a request with
 /// more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:
 /// "The maximum number of strict tools supported is 20"), so past 20 the
-/// rest are sent `strict: false`, in name order.
+/// rest are sent `strict: false`, in name order. This is the tools Fiber
+/// builds, before `extra_body` is merged (see #509).
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));

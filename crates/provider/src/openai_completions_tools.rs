@@ -17,7 +17,8 @@ use crate::{Endpoint, strict};
 /// features").
 /// A model without deferral declares every tool in full (docs/tools.md,
 /// "Deferral is a property of the model"); Chat Completions has no
-/// defer_loading.
+/// defer_loading. This is the tools Fiber builds, before `extra_body` is
+/// merged (see #509).
 pub(crate) fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));

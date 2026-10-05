@@ -99,9 +99,4 @@ fn default_wire_tools_is_each_definition_as_an_object_in_name_order() {
         })
         .collect();
     assert_eq!(wired, want);
-    let names: Vec<&str> = wired
-        .iter()
-        .map(|map| map["name"].as_str().unwrap())
-        .collect();
-    assert_eq!(names, ["a", "b"]);
 }
