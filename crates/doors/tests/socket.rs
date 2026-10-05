@@ -1010,10 +1010,11 @@ impl Tool for Fixed {
     fn run(
         &self,
         _arguments: &Map<String, Value>,
-        _cancel: &dyn Cancel,
+        cancel: &dyn Cancel,
         _emit: &dyn Emit,
     ) -> Output {
-        self.ran.store(true, Ordering::Relaxed);
+        // True when the command started with no cancel on it.
+        self.ran.store(!cancel.is_cancelled(), Ordering::Relaxed);
         self.output.clone()
     }
 
@@ -1416,6 +1417,30 @@ fn close_cancels_a_shell_blocked_in_its_tool() {
         saw_cancel.load(Ordering::Relaxed),
         "the tool did not see its cancel"
     );
+}
+
+#[test]
+fn a_shell_nobody_cancelled_starts_uncancelled() {
+    let opened = Opened::open(vec![]);
+    let ran = Arc::new(AtomicBool::new(false));
+    opened.session.shell(fixed_ran(
+        ended(0, "hi\n"),
+        Bound::DEFAULT,
+        Arc::clone(&ran),
+    ));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_1", "echo hi"));
+            response(&client, "c_1");
+            assert!(ran.load(Ordering::Relaxed), "the tool saw a cancel");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
 }
 
 #[test]

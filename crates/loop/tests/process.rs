@@ -465,6 +465,50 @@ fn fiber_exited_keeps_the_request_that_was_not_resolved() {
     );
 }
 
+fn interaction(id: &str) -> Event {
+    Event::InteractionRequested(InteractionRequested {
+        request_id: RequestId(id.into()),
+        interaction: Interaction::Confirm {
+            prompt: "go?".into(),
+        },
+        action_ids: None,
+        extension: None,
+    })
+}
+
+fn answered(id: &str) -> Event {
+    Event::InteractionResolved(contract::events::InteractionResolved {
+        request_id: RequestId(id.into()),
+        by: contract::events::ResolvedBy::Fiber,
+        answer: contract::events::Answer::Declined {
+            declined: contract::shapes::True,
+        },
+    })
+}
+
+#[test]
+fn fiber_exited_keeps_the_question_that_was_not_resolved() {
+    for (resolve, left) in [("q_early", "q_late"), ("q_late", "q_early")] {
+        let session = Session::new();
+        fiber_started(&session.log, "1.2.3", false).unwrap();
+        session.append(&interaction("q_early"), None);
+        session.append(&interaction("q_late"), None);
+        session.append(&answered(resolve), None);
+        let (_, exited) = session.exit(Ok(()));
+        assert_eq!(exited["suspended_on"], left);
+        assert_eq!(
+            kinds(&session),
+            [
+                "fiber_started",
+                "interaction_requested",
+                "interaction_requested",
+                "interaction_resolved",
+                "fiber_exited",
+            ]
+        );
+    }
+}
+
 fn kinds(session: &Session) -> Vec<String> {
     log::read(&session.dir)
         .unwrap()
