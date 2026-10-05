@@ -107,12 +107,14 @@ In order:
 1. The system prompt and tools.
 2. A new opening message, written from the current instruction files and date
    (`docs/system-prompt.md`, "After a handoff").
-3. This turn's input from the person and any steering messages applied in this
+3. The context `session_start` hooks add, run with reason `handoff`, each
+   logged as `context_added` (`docs/extensions.md`, "The hook points").
+4. This turn's input from the person and any steering messages applied in this
    turn, verbatim. A handoff between turns has none.
-4. The handoff note.
-5. A line Fiber writes listing the jobs still running, with each job's id and
+5. The handoff note.
+6. A line Fiber writes listing the jobs still running, with each job's id and
    description, as the rewind note does (`docs/events.md`, "Rewind").
-6. The skills loaded in the previous context, each sent again as its current
+7. The skills loaded in the previous context, each sent again as its current
    text, in the order they were first loaded, once each
    (`docs/tools.md`, "Skills"). An agent working under a skill keeps it across
    a handoff without having to notice it was lost. A loaded skill whose file
@@ -202,7 +204,9 @@ a breaking change.
 
 - `failed` carries `error { code, message }`. A note request that fails follows
   the normal retry rules. If it still fails, `handoff_completed` records the
-  failure, the context stays as it was, and the turn continues. The automatic
+  failure, the context stays as it was, and the turn continues. A `blocking`
+  `session_start` hook that fails at the handoff ends it the same way, with
+  code `hook_failed` (`docs/extensions.md`, "When a hook fails"). The automatic
   trigger does not fire again in that turn, so the turn goes on until it ends
   or the overflow rule applies.
 - `cancelled` means a person cancelled the turn while the note request ran. The

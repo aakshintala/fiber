@@ -359,7 +359,8 @@ one line with the new date.
 
 A handoff writes a new `opening_message` from the current files and the current
 date. The model then sees the system prompt and tools, the opening message,
-the turn's input, the note and the jobs line (`docs/handoff.md`). The cache
+the context `session_start` hooks add, the turn's input, the note, the jobs
+line and the skills it had loaded (`docs/handoff.md`). The cache
 already misses after the tools at a handoff, so the fresh message costs nothing
 extra.
 
