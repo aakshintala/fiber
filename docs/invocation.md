@@ -745,7 +745,10 @@ Every client reaches sessions through the hub, the local terminal included.
   sockets, so it also finds sessions that were running before it restarted.
 - **It serves one feed.** The hub holds a `summary` connection to every
   running session and serves each client the latest `session_status` of every
-  running or waiting top-level session, across all projects. Exited sessions
+  running or waiting top-level session, across all projects. When a session's
+  socket closes, the hub sends `session_left` with `how`: `exited` when the
+  log ends in `fiber_exited`, otherwise `crashed`. A crashed session stays in
+  the feed until it is resumed or a client sends `dismiss`. Exited sessions
   come from a paged query over `recent.jsonl`, filterable by project, newest
   first (`docs/state.md`). Delegates are never in the feed; a client shows a
   delegate when the person opens its parent.
@@ -799,7 +802,8 @@ websocket for everything it does.
 |---|---|---|
 | `authenticate` | `token` (string) | On the port, the first command: presents a device token ("Remote clients"). |
 | `pair` | `code` (string) | On the port, instead of `authenticate`: exchanges a pairing code for a device token, returned in the acknowledgement. |
-| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it. |
+| `feed` | none | Subscribes the connection to the feed: the latest `session_status` of every running or waiting top-level session, and every change after it, then a `session_left` line (`session_id`, and `how`: `exited` or `crashed`) when one ends; crashed sessions not yet dismissed come first, as `session_left` lines. |
+| `dismiss` | `session` (string) | Drops a crashed session from the feed, for every client; its log stays, and it can still be resumed from `recent`. Rejected `stale_request` unless the session is crashed. |
 | `recent` | `before` (string, optional), `project` (string, optional) | Answers with a page of exited sessions from `recent.jsonl`, newest first (`docs/state.md`). |
 | `start` | `workspace` (string), `model` (string, optional), `content` (optional) | Starts a session in the workspace, any absolute path, and answers with its `session_id`. With `content`, its first prompt. |
 | `delete` | `session` (string), `cascade` (boolean, optional) | Deletes an exited session ("Deleting and pruning"). |
