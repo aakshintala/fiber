@@ -30,6 +30,9 @@ pub struct PromptInputs {
     pub session_log: String,
     /// The clock the opening message's date is read from.
     pub clock: Arc<dyn contract::clock::Clock>,
+    /// The credential label every request uses, which `preamble_built`
+    /// records; absent when the provider takes no credential.
+    pub credential: Option<String>,
 }
 
 impl PromptInputs {
@@ -52,6 +55,7 @@ impl PromptInputs {
             shell,
             session_log,
             clock,
+            credential: None,
         }
     }
 }
@@ -235,8 +239,8 @@ pub(crate) fn system_prompt(
 /// One preamble build: the system prompt text, the tool definitions in
 /// name order for requests, and the `preamble_built` payload
 /// (`docs/prompt-cache.md`, "The preamble" and `docs/events.md`,
-/// "`preamble_built`"). `effort`, `thinking` and `credential` are
-/// absent: no thinking levels or credential labels exist. `trigger_at` is
+/// "`preamble_built`"). `effort` and `thinking` are
+/// absent: no thinking levels exist; `credential` is the inputs' label. `trigger_at` is
 /// the automatic handoff's trigger, absent when it is off.
 #[allow(
     clippy::too_many_arguments,
@@ -289,7 +293,7 @@ pub(crate) fn build(
         thinking: None,
         tool_choice,
         cache_lifetime,
-        credential: None,
+        credential: inputs.credential.clone(),
         system_prompt: system.clone(),
         tools: sent,
         replaced,

@@ -1,7 +1,9 @@
 //! Finding a provider's key (`docs/model-routing.md`, "Credentials"): the
-//! stored credential first, then the source the person configured, then the
-//! one the provider's data declares.
+//! stored credential of the label first, then the source the person
+//! configured for that label, then, for the label `default`, the one the
+//! provider's data declares.
 
+use std::collections::BTreeSet;
 use std::fs;
 use std::io::ErrorKind;
 use std::process::{Command, Stdio};
@@ -9,38 +11,76 @@ use std::process::{Command, Stdio};
 use crate::Config;
 use crate::error::ConfigError;
 use crate::extension::ProviderData;
-use crate::secret::{CredentialSource, Secret, read_secret};
+use crate::secret::{CredentialSource, Secret, credential_labels, read_credential};
+
+/// The label of the source a provider's data declares, and of the key
+/// `fiber login` stores without a label.
+const DEFAULT_LABEL: &str = "default";
 
 impl Config {
-    /// The provider's key. The stored credential it names, or its own
-    /// name when it names none, comes first: when `credentials/<stored>`
-    /// exists but cannot be used, that is the error, and no other source
-    /// is tried. Otherwise `providers."<name>".credential` from the global
-    /// or per-project layer replaces the provider's own source. A command
-    /// runs each time this is called; the caller asks once per process.
-    pub fn credential(&self, provider: &ProviderData) -> Result<Secret, ConfigError> {
+    /// The label a session of this provider uses when nothing else names
+    /// one: `providers."<name>".credential` from the global or per-project
+    /// layer, else `default`.
+    pub fn credential_label(&self, provider: &ProviderData) -> String {
+        self.merged(None)
+            .get("providers")
+            .and_then(|p| p.get(&provider.name))
+            .and_then(|p| p.get("credential"))
+            .and_then(|v| v.as_str())
+            .unwrap_or(DEFAULT_LABEL)
+            .to_owned()
+    }
+
+    /// The provider's key under `label`. The stored credential
+    /// `credentials/<stored>/<label>`, where `<stored>` is the credential
+    /// the provider's data names or its own name, comes first: when it
+    /// exists but cannot be used, that is the error, and no other source is
+    /// tried under the label. Otherwise `providers."<name>".credentials."<label>"`
+    /// from the global or per-project layer, and for `default` only, the
+    /// provider's own source. A command runs each time this is called; the
+    /// caller asks once per process.
+    pub fn credential(&self, provider: &ProviderData, label: &str) -> Result<Secret, ConfigError> {
         let name = &provider.name;
         let stored = provider.credential_name.as_deref().unwrap_or(name);
         let missing = |why: String| ConfigError::CredentialMissing {
             provider: name.clone(),
             why,
         };
-        if let Some(secret) = read_secret(&self.home, stored)? {
+        if let Some(secret) = read_credential(&self.home, stored, label)? {
             return usable(secret.expose()).ok_or_else(|| ConfigError::CredentialFailed {
                 provider: name.clone(),
-                why: format!("credentials/{stored} is empty"),
+                why: format!("credentials/{stored}/{label} is empty"),
             });
         }
-        let configured = self
-            .merged(None)
+        let merged = self.merged(None);
+        let configured = merged
             .get("providers")
             .and_then(|p| p.get(name))
-            .and_then(|p| p.get("credential"))
+            .and_then(|p| p.get("credentials"))
+            .and_then(serde_json::Value::as_object);
+        let from_config = configured
+            .and_then(|labels| labels.get(label))
             .map(|v| serde_json::from_value::<CredentialSource>(v.clone()))
             .and_then(Result::ok);
-        let Some(source) = configured.or_else(|| provider.credential.clone()) else {
+        let own = (label == DEFAULT_LABEL)
+            .then(|| provider.credential.clone())
+            .flatten();
+        let Some(source) = from_config.or(own) else {
+            let mut labels: BTreeSet<String> = credential_labels(&self.home, stored)
+                .unwrap_or_default()
+                .into_iter()
+                .collect();
+            labels.extend(configured.into_iter().flat_map(|l| l.keys().cloned()));
+            if provider.credential.is_some() {
+                labels.insert(DEFAULT_LABEL.into());
+            }
+            let listed = if labels.is_empty() {
+                "none".to_owned()
+            } else {
+                labels.into_iter().collect::<Vec<_>>().join(", ")
+            };
             return Err(missing(format!(
-                "nothing is stored in credentials/{stored}, and the provider declares no other source"
+                "nothing is stored in credentials/{stored}/{label}, and no source is configured for it. The labels for `{name}` are: {listed}"
             )));
         };
         let found = match &source {
@@ -66,7 +106,7 @@ impl Config {
         };
         found.map_err(|from| {
             missing(format!(
-                "nothing is stored in credentials/{stored}, and {from}"
+                "nothing is stored in credentials/{stored}/{label}, and {from}"
             ))
         })
     }

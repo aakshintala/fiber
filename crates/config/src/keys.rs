@@ -172,7 +172,8 @@ pub(crate) const KEYS: &[Key] = &[
     key("extensions.*.tools.disabled", StrList, YES, None),
     key("extensions.*.hook_timeout_ms", Count, NO, None),
     key("hooks.order.*", StrList, NO, None),
-    key("providers.*.credential", Credential, NO, None),
+    key("providers.*.credential", Str, NO, None),
+    key("providers.*.credentials.*", Credential, NO, None),
     key(
         "tui.panel.cards",
         StrList,

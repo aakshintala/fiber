@@ -37,13 +37,19 @@ pub struct Resumed {
     /// `--model` (`docs/model-routing.md`, "Choosing the model"). `None`
     /// when the log holds none.
     pub model: Option<String>,
+    /// The last `preamble_built`'s credential label: the label a resumed
+    /// session keeps, beating the configured one (`docs/model-routing.md`,
+    /// "Which credential a session uses"). `None` when the log holds none.
+    pub credential: Option<String>,
 }
 
-/// Folds `lines` back to the session, the workspace and the model. A log
+/// Folds `lines` back to the session, the workspace, the model and the
+/// credential label. A log
 /// with no `session_started` is corrupt.
 pub fn resumed(lines: &[Envelope]) -> Result<Resumed, Error> {
     let mut folded: Option<Resumed> = None;
     let mut model = None;
+    let mut credential = None;
     for line in lines {
         let event = Event::from_envelope(line).map_err(Error::Unreadable)?;
         if let Some(Event::SessionStarted(started)) = &event
@@ -53,15 +59,20 @@ pub fn resumed(lines: &[Envelope]) -> Result<Resumed, Error> {
                 session: line.session_id.0.clone(),
                 workspace: started.workspace.clone(),
                 model: None,
+                credential: None,
             });
         }
         if let Some(Event::UsageRecorded(recorded)) = &event {
             model = Some(recorded.model.clone());
         }
+        if let Some(Event::PreambleBuilt(built)) = &event {
+            credential.clone_from(&built.credential);
+        }
     }
     match folded {
         Some(mut folded) => {
             folded.model = model;
+            folded.credential = credential;
             Ok(folded)
         }
         None => Err(Error::NoSessionStarted),

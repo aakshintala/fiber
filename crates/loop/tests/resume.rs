@@ -1423,6 +1423,41 @@ fn resumed_returns_no_model_for_a_log_with_none() {
     assert_eq!(resumed.model, None);
 }
 
+fn preamble(credential: Option<&str>) -> Event {
+    Event::PreambleBuilt(contract::events::PreambleBuilt {
+        reason: contract::events::PreambleReason::Start,
+        model: MODEL.into(),
+        context_window: 0,
+        trigger_at: None,
+        effort: None,
+        thinking: None,
+        tool_choice: "auto".into(),
+        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        credential: credential.map(str::to_owned),
+        system_prompt: String::new(),
+        tools: Vec::new(),
+        replaced: Vec::new(),
+    })
+}
+
+#[test]
+fn resumed_returns_the_credential_label_of_the_last_preamble() {
+    let history = History::new(vec![]);
+    history.write(preamble(Some("work")), None);
+    history.write(preamble(Some("personal")), None);
+    history.write(user_turn("one"), None);
+    let resumed = r#loop::resumed(&history.lines()).unwrap();
+    assert_eq!(resumed.credential.as_deref(), Some("personal"));
+}
+
+#[test]
+fn resumed_returns_no_credential_for_a_log_with_no_label() {
+    let history = History::new(vec![]);
+    assert_eq!(r#loop::resumed(&history.lines()).unwrap().credential, None);
+    history.write(preamble(None), None);
+    assert_eq!(r#loop::resumed(&history.lines()).unwrap().credential, None);
+}
+
 #[test]
 fn resumed_fails_log_corrupt_on_a_log_with_no_session_started() {
     let root = fakes::TempDir::new("fiber-resume");

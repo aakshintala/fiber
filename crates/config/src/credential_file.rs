@@ -31,19 +31,9 @@ impl CredentialFile {
     /// symbolic link, which a tool call or a repository could plant to
     /// redirect secrets, are refused.
     pub fn new(home: &Path, provider: &str, label: &str) -> Result<Self, ConfigError> {
-        for name in [provider, label] {
-            if !one_file_name(name) {
-                return Err(ConfigError::SecretName { name: name.into() });
-            }
-        }
-        if label.ends_with(".lock") || label.ends_with(".tmp") {
-            return Err(ConfigError::SecretName { name: label.into() });
-        }
-        let this = Self {
-            path: home.join("credentials").join(provider).join(label),
-        };
-        check_directories(&this.path)?;
-        Ok(this)
+        Ok(Self {
+            path: credential_path(home, provider, label)?,
+        })
     }
 
     /// Takes the lock without waiting. `None` when another holder has it.
@@ -63,6 +53,31 @@ impl CredentialFile {
             }),
         }
     }
+}
+
+/// `credentials/<provider>/<label>` in `home`, after the checks
+/// [`CredentialFile::new`] documents.
+pub(crate) fn credential_path(
+    home: &Path,
+    provider: &str,
+    label: &str,
+) -> Result<PathBuf, ConfigError> {
+    for name in [provider, label] {
+        if !one_file_name(name) {
+            return Err(ConfigError::SecretName { name: name.into() });
+        }
+    }
+    if is_lock_or_tmp(label) {
+        return Err(ConfigError::SecretName { name: label.into() });
+    }
+    let path = home.join("credentials").join(provider).join(label);
+    check_directories(&path)?;
+    Ok(path)
+}
+
+/// Whether a file name is one the lock or a temporary file uses.
+pub(crate) fn is_lock_or_tmp(name: &str) -> bool {
+    name.ends_with(".lock") || name.ends_with(".tmp")
 }
 
 /// The provider's directory, then `credentials/`, each a real directory or

@@ -12,6 +12,7 @@ mod approve;
 mod builtin;
 mod cli;
 mod clock;
+mod credential;
 mod handoff;
 mod mcp_servers;
 mod prompt_files;
@@ -352,7 +353,7 @@ fn ask(
 
 /// `fiber ask` on a new session.
 fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock::Clock>) -> i32 {
-    let mut parts = match parts_with(model, None, Arc::clone(&clock)) {
+    let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
     };
@@ -530,16 +531,16 @@ fn project_of(home: &Path, workspace: &Path) -> Result<(PathBuf, config::Project
 
 /// Fiber home, configuration, the chosen model, its credential and its
 /// provider: everything a failure of which leaves no session. `model` is
-/// `--model`, which sets configuration's `model` for this run. `recorded` is
-/// the resumed session's model: the model the
-/// log's last `usage_recorded` names, beats `--model`
+/// `--model`. `recorded` is the resumed session's model, from the log's last
+/// `usage_recorded`, and `recorded_credential` its credential label, from
+/// the last `preamble_built`; each beats configuration
 /// (`docs/model-routing.md`, "Choosing the model"). A log with no
-/// `usage_recorded` uses `--model`, then the configured default as a new
-/// session does. A recorded model that no longer resolves fails with the
-/// resolver's own failure, before any session line is written.
+/// `usage_recorded` uses `--model`, then the configured default. A recorded
+/// model or label that no longer resolves fails before any line is written.
 fn parts_with(
     model: Option<String>,
     recorded: Option<&str>,
+    recorded_credential: Option<&str>,
     clock: Arc<dyn contract::clock::Clock>,
 ) -> Result<Parts, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
@@ -565,11 +566,10 @@ fn parts_with(
     let model = providers
         .choose(recorded, &config)
         .map_err(|e| failed(e.code(), e))?;
-    let key = config
-        .credential(model.provider)
-        .map_err(|e| failed(e.code(), e))?;
+    let (label, key) =
+        credential::session_credential(&config, model.provider, recorded_credential)?;
     let provider = connect(model, key.expose().to_owned())?;
-    let reviewer = choose_reviewer(&providers, &config, &model);
+    let reviewer = choose_reviewer(&providers, &config, &model, &label);
     let limits = block_limits(&config);
     let retry = retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
@@ -588,6 +588,7 @@ fn parts_with(
     prompt.system = prompt_files::system(&home, &project);
     prompt.append = prompt_files::append(&home, &project);
     prompt.context_window = model.model.context_window;
+    prompt.credential = Some(label);
     Ok(Parts {
         sessions,
         home,
@@ -695,6 +696,7 @@ fn choose_reviewer(
     providers: &Providers,
     config: &Config,
     session: &extensions::Model<'_>,
+    label: &str,
 ) -> Result<r#loop::Reviewer, Failure> {
     let configured = config
         .get("reviewer.model", None)
@@ -709,9 +711,7 @@ fn choose_reviewer(
         },
     };
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
-    let key = config
-        .credential(model.provider)
-        .map_err(|e| failed(e.code(), e))?;
+    let key = credential::reviewer_credential(config, model.provider, session.provider, label)?;
     let provider = connect(model, key.expose().to_owned())?;
     Ok(r#loop::Reviewer {
         provider,
