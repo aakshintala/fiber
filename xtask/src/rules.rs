@@ -34,6 +34,35 @@ pub(crate) fn over_cap(files: &[RustFile]) -> Vec<String> {
         .collect()
 }
 
+/// The crates only the image child links (`docs/dependencies.md`, "Crates
+/// used only by the image child"), and the crates that may link them.
+pub(crate) const IMAGE_CRATES: [&str; 2] = ["image", "fast_image_resize"];
+pub(crate) const IMAGE_MEMBERS: [&str; 2] = ["picture", "main"];
+
+/// Each failure where a workspace member's normal dependency tree names an
+/// image crate. `trees` pairs a member with the output of `cargo tree -p
+/// MEMBER -e normal --prefix none`: one line per crate, the crate's name
+/// first. `picture` and `main` are exempt.
+pub(crate) fn image_leaks(trees: &[(String, String)]) -> Vec<String> {
+    let mut failures = BTreeSet::new();
+    for (member, tree) in trees {
+        if IMAGE_MEMBERS.contains(&member.as_str()) {
+            continue;
+        }
+        for name in tree
+            .lines()
+            .filter_map(|line| line.split_whitespace().next())
+        {
+            if IMAGE_CRATES.contains(&name) {
+                failures.insert(format!(
+                    "{member}: its normal dependency tree holds {name}; only the image child links image code"
+                ));
+            }
+        }
+    }
+    failures.into_iter().collect()
+}
+
 /// Whether Rust `source` uses the `unsafe` keyword. proc-macro2 tokenises
 /// it, so comments, literals and doc comments are never read as code.
 pub(crate) fn uses_unsafe(source: &str) -> Result<bool, proc_macro2::LexError> {

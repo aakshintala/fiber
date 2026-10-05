@@ -18,7 +18,7 @@
 //! - `ticket`: the issue the pull request body on stdin resolves
 //! - `bug-filter FILE...`: the nextest filter, packages and test files among
 //!   FILE, with how each is declared, as tab-separated lines
-//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `check-docs`: the checks
+//! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `check-docs`: the checks
 
 #![allow(
     clippy::print_stdout,
@@ -191,6 +191,30 @@ fn run(args: &[String]) -> Result<bool, String> {
         "dependency-list" => {
             let failures = rules::unlisted(&cargo_dependencies()?, &read("docs/dependencies.md")?)?;
             report("dependency-list", &failures, "ok")
+        }
+        "image-isolation" => {
+            let members = workspace_members()?;
+            let mut trees = Vec::new();
+            for name in members.keys() {
+                let tree = output(
+                    "cargo",
+                    &[
+                        "tree",
+                        "-p",
+                        &select::spec(name, &members),
+                        "-e",
+                        "normal",
+                        "--prefix",
+                        "none",
+                    ],
+                )?;
+                trees.push((name.clone(), tree));
+            }
+            report(
+                "image-isolation",
+                &rules::image_leaks(&trees),
+                "no crate but picture and main links image code",
+            )
         }
         "check-docs" => {
             let root = Path::new(".");

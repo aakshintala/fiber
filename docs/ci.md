@@ -96,6 +96,9 @@ On Linux x86_64 alone:
   anywhere or any file outside the crate, and every include argument is a
   string literal
 - every crate a `Cargo.toml` names is listed in `docs/dependencies.md`
+- no crate but `picture` and `main` has `image` or `fast_image_resize` in its
+  normal dependency tree (`cargo xtask image-isolation`), so the session
+  process links no image code
 - cargo-deny's licence, source and ban checks
 - the built-in tool definitions within their byte budget, with each
   definition's size printed
