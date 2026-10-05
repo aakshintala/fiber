@@ -94,14 +94,6 @@ fn run(session: &mut Session, prompt: &str) -> (Option<TurnOutcome>, Vec<Envelop
     (outcome, session.lines())
 }
 
-/// The durable kinds of `lines`, without the streamed fragments.
-fn durable(lines: &[Envelope]) -> Vec<&str> {
-    kinds(lines)
-        .into_iter()
-        .filter(|kind| !kind.ends_with("_delta"))
-        .collect()
-}
-
 const OPENING: &[&str] = &[
     "session_started",
     "preamble_built",
@@ -109,18 +101,23 @@ const OPENING: &[&str] = &[
     "turn_started",
 ];
 const STEP: &[&str] = &["step_started"];
-/// A reply that calls the weather tool, and the call's run.
+/// A reply that calls the weather tool, with its streamed fragments, and
+/// the call's run.
 const CALL_BODY: &[&str] = &[
     "assistant_message_started",
+    "assistant_message_delta",
+    "tool_call_arguments_delta",
     "tool_call_requested",
     "usage_recorded",
     "assistant_message_completed",
     "tool_call_started",
     "tool_call_completed",
 ];
-/// A reply of text.
+/// A reply of one text part, streamed as two fragments.
 const REPLY: &[&str] = &[
     "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
@@ -129,6 +126,8 @@ const REPLY: &[&str] = &[
 const HANDED_OFF: &[&str] = &[
     "handoff_started",
     "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
@@ -139,6 +138,8 @@ const HANDED_OFF: &[&str] = &[
 const FAILED_AFTER_TEXT: &[&str] = &[
     "handoff_started",
     "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
     "text_completed",
     "usage_recorded",
     "assistant_message_completed",
@@ -146,10 +147,11 @@ const FAILED_AFTER_TEXT: &[&str] = &[
 ];
 const ENDED: &[&str] = &["turn_completed"];
 
-/// Asserts the complete, ordered durable event kinds of `lines`: `parts`,
-/// concatenated (`docs/testing.md`, "Event streams").
+/// Asserts the complete, ordered event kinds of `lines`, streamed
+/// fragments included: `parts`, concatenated (`docs/testing.md`, "Event
+/// streams").
 fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
-    assert_eq!(durable(lines), parts.concat());
+    assert_eq!(kinds(lines), parts.concat());
 }
 
 fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
@@ -497,7 +499,7 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
-    let tail = durable(&lines);
+    let tail = kinds(&lines);
     assert_eq!(
         tail[tail.len() - 4..],
         [
@@ -641,6 +643,8 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
             &[
                 "handoff_started",
                 "assistant_message_started",
+                "assistant_message_delta",
+                "tool_call_arguments_delta",
                 "text_completed",
                 "tool_call_requested",
                 "usage_recorded",
@@ -954,6 +958,8 @@ fn a_notes_reasoning_is_not_part_of_the_note() {
                 "handoff_started",
                 "assistant_message_started",
                 "reasoning_started",
+                "reasoning_delta",
+                "assistant_message_delta",
                 "reasoning_completed",
                 "text_completed",
                 "usage_recorded",

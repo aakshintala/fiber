@@ -197,10 +197,7 @@ fn trigger_at_is_absent_when_automatic_handoff_is_off() {
     session.turn();
     let lines = session.lines();
     assert_eq!(
-        kinds(&lines)
-            .into_iter()
-            .filter(|kind| !kind.ends_with("_delta"))
-            .collect::<Vec<_>>(),
+        kinds(&lines),
         [
             "session_started",
             "preamble_built",
@@ -208,6 +205,8 @@ fn trigger_at_is_absent_when_automatic_handoff_is_off() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
@@ -229,10 +228,7 @@ fn trigger_at_follows_the_configured_tokens() {
     session.turn();
     let lines = session.lines();
     assert_eq!(
-        kinds(&lines)
-            .into_iter()
-            .filter(|kind| !kind.ends_with("_delta"))
-            .collect::<Vec<_>>(),
+        kinds(&lines),
         [
             "session_started",
             "preamble_built",
@@ -240,6 +236,8 @@ fn trigger_at_follows_the_configured_tokens() {
             "turn_started",
             "step_started",
             "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
             "text_completed",
             "usage_recorded",
             "assistant_message_completed",
