@@ -33,11 +33,12 @@ impl Tool for Read {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "read".to_owned(),
-            description: "Reads a text file, or a PNG, JPEG, GIF or WebP image, which comes back as an \
+            description:
+                "Reads a text file, or a PNG, JPEG, GIF or WebP image, which comes back as an \
                  image. The text is the file's own, with no line numbers and no byte order mark. \
                  `offset` is the first line, counted from 1. `limit` is how many lines. A \
                  directory is not listed; use the shell."
-                .to_owned(),
+                    .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {

@@ -56,6 +56,26 @@ fn watchers_attached_and_dropped_while_idle_leave_nothing_behind() {
 }
 
 #[test]
+fn dir_is_the_session_directory_whether_created_or_opened() {
+    let sessions = fakes::TempDir::new("log-unit-dir");
+    let created = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(created.dir(), sessions.path().join("s_1"));
+    drop(created);
+    let opened = Log::open(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(opened.dir(), sessions.path().join("s_1"));
+}
+
+#[test]
 fn an_artifact_lands_in_the_session_artifacts_and_a_path_is_refused() {
     let sessions = fakes::TempDir::new("log-unit-artifact");
     let log = Log::create(

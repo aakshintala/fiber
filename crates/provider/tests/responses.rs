@@ -103,6 +103,7 @@ fn request() -> ModelRequest {
         }],
         previous_end: None,
         max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
     }
 }
 
@@ -565,11 +566,13 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             action_id: ActionId("a_2".into()),
             text: "bad arguments".into(),
             is_error: false,
+            images: Vec::new(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
+            images: Vec::new(),
         },
     ]);
     let server = ProviderServer::start([Response::stream(stream(&[completed(
@@ -1078,6 +1081,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
+                images: Vec::new(),
             },
         ]
     };

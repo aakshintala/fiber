@@ -102,6 +102,7 @@ fn request() -> ModelRequest {
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
+        session_dir: std::path::PathBuf::new(),
     }
 }
 
@@ -593,6 +594,7 @@ fn after(reply: &Reply, model: &str) -> Vec<Input> {
                 action_id: ActionId(format!("a_{n}")),
                 text: "18 C, clear".into(),
                 is_error: false,
+                images: Vec::new(),
             });
         }
     }
@@ -1405,6 +1407,7 @@ fn a_failed_tool_result_sends_an_error_key_and_a_success_sends_output() {
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
+                images: Vec::new(),
             },
         ]
     };

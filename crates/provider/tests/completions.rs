@@ -106,6 +106,7 @@ fn request() -> ModelRequest {
         }],
         previous_end: None,
         max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
     }
 }
 
@@ -558,6 +559,7 @@ fn four_turn_conversation() -> Vec<Input> {
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
+            images: Vec::new(),
         },
         Input::User {
             text: "And Rome?".into(),
@@ -704,6 +706,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
+            images: Vec::new(),
         },
         Input::Assistant {
             model: "openrouter/z-ai/glm-5.3-flash".into(),
@@ -977,6 +980,7 @@ fn an_assistants_calls_fold_into_one_message_and_reasoning_alone_keeps_a_content
         action_id: ActionId(id.into()),
         text: "ok".into(),
         is_error: false,
+        images: Vec::new(),
     };
     let reasoning = Input::Reasoning {
         model: "openrouter/z-ai/glm-5.3-flash".into(),
@@ -1397,6 +1401,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
+                images: Vec::new(),
             },
         ]
     };

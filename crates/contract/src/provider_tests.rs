@@ -5,7 +5,7 @@ use serde_json::json;
 use super::*;
 use crate::events::{ReasoningCompleted, TextCompleted, ToolCallRequested};
 use crate::shapes::Tokens;
-use crate::{GenerationId, ProviderCallId};
+use crate::{ActionId, GenerationId, ProviderCallId};
 
 fn reply(actions: Vec<ReplyAction>) -> Reply {
     Reply {
@@ -99,4 +99,48 @@ fn default_wire_tools_is_each_definition_as_an_object_in_name_order() {
         })
         .collect();
     assert_eq!(wired, want);
+}
+
+#[test]
+fn a_tool_result_without_images_serialises_without_the_key_and_reads_back() {
+    let plain = Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "ok".into(),
+        is_error: false,
+        images: Vec::new(),
+    };
+    let value = serde_json::to_value(&plain).unwrap();
+    assert!(value.get("images").is_none(), "{value}");
+    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), plain);
+    // A line written before the field existed has none.
+    let old = json!({"type": "tool_result", "action_id": "a_1", "text": "ok"});
+    assert_eq!(serde_json::from_value::<Input>(old).unwrap(), plain);
+}
+
+#[test]
+fn a_tool_result_with_images_round_trips() {
+    let with = Input::ToolResult {
+        action_id: ActionId("a_1".into()),
+        text: "ok".into(),
+        is_error: true,
+        images: vec![ImageRef {
+            path: "artifacts/i_1.png".into(),
+            mime_type: "image/png".into(),
+            width: 3,
+            height: 2,
+        }],
+    };
+    let value = serde_json::to_value(&with).unwrap();
+    assert_eq!(value["images"][0]["path"], "artifacts/i_1.png");
+    assert_eq!(serde_json::from_value::<Input>(value).unwrap(), with);
+}
+
+#[test]
+fn a_request_without_a_session_dir_reads_an_empty_one() {
+    let request = json!({
+        "system_prompt": "s", "tools": [], "tool_choice": "auto",
+        "cache_lifetime": "5m", "cache_key": "k", "conversation": [],
+    });
+    let read: ModelRequest = serde_json::from_value(request).unwrap();
+    assert_eq!(read.session_dir, PathBuf::new());
 }

@@ -91,6 +91,7 @@ fn request() -> ModelRequest {
         conversation: vec![Input::User {
             text: "What is the weather in Paris? Use the tool.".into(),
         }],
+        session_dir: std::path::PathBuf::new(),
     }
 }
 
@@ -733,6 +734,7 @@ fn four_turn_conversation() -> Vec<Input> {
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
+            images: Vec::new(),
         },
         Input::User {
             text: "And Rome?".into(),
@@ -901,6 +903,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
             action_id: ActionId("a_1".into()),
             text: "18 C, clear".into(),
             is_error: false,
+            images: Vec::new(),
         },
     ]);
     let server = ProviderServer::start([completed_reply()]).unwrap();
@@ -1445,6 +1448,7 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
                 action_id: ActionId("a_1".into()),
                 text: "boom".into(),
                 is_error,
+                images: Vec::new(),
             },
         ]
     };
@@ -1471,4 +1475,144 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
                "cache_control": {"type": "ephemeral"}})
     );
     assert!(success.get("is_error").is_none());
+}
+
+/// A conversation whose one tool result carries `images`.
+fn image_conversation(is_error: bool, images: Vec<contract::provider::ImageRef>) -> Vec<Input> {
+    vec![
+        Input::ToolCall {
+            action_id: ActionId("a_1".into()),
+            call: ToolCallRequested {
+                name: "read".into(),
+                arguments: json!({"path": "a.png"}),
+                provider_id: Some(ProviderCallId("toolu_1".into())),
+                repair: None,
+                ran_by: None,
+            },
+        },
+        Input::ToolResult {
+            action_id: ActionId("a_1".into()),
+            text: "Image: 2x1 image/png.\n".into(),
+            is_error,
+            images,
+        },
+    ]
+}
+
+fn png_ref(path: &str) -> contract::provider::ImageRef {
+    contract::provider::ImageRef {
+        path: path.into(),
+        mime_type: "image/png".into(),
+        width: 2,
+        height: 1,
+    }
+}
+
+/// The request bodies the server saw for `request`, sent `times` times.
+fn bodies_of(request: &ModelRequest, times: usize) -> Vec<Vec<u8>> {
+    let server = ProviderServer::start((0..times).map(|_| completed_reply())).unwrap();
+    for _ in 0..times {
+        run(Box::new(Messages::new(endpoint(&server)).request(request)))
+            .0
+            .unwrap();
+    }
+    server.requests().into_iter().map(|r| r.body).collect()
+}
+
+#[test]
+fn a_stored_image_is_sent_inside_the_tool_result_after_its_text() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-image");
+    std::fs::create_dir(session.path().join("artifacts")).unwrap();
+    std::fs::write(session.path().join("artifacts/i_1.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref("artifacts/i_1.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"][1]["content"][0],
+        json!({
+            "type": "tool_result",
+            "tool_use_id": "toolu_1",
+            "content": [
+                {"type": "text", "text": "Image: 2x1 image/png.\n"},
+                {"type": "image", "source": {
+                    "type": "base64", "media_type": "image/png", "data": "YWJjZA=="}},
+            ],
+            "cache_control": {"type": "ephemeral"},
+        })
+    );
+}
+
+#[test]
+fn a_failed_result_with_an_image_still_sets_is_error() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-image");
+    std::fs::write(session.path().join("i.png"), b"abcd").unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(true, vec![png_ref("i.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let block = sent_body(&server, 0)["messages"][1]["content"][0].clone();
+    assert_eq!(block["is_error"], true);
+    assert_eq!(block["content"][1]["type"], "image");
+}
+
+#[test]
+fn an_image_that_cannot_be_read_is_named_in_the_text_and_not_sent() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-image");
+    let request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref("artifacts/gone.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"][1]["content"][0]["content"],
+        "Image: 2x1 image/png.\n[Image artifacts/gone.png could not be read.]"
+    );
+}
+
+#[test]
+fn a_resume_sends_the_same_bytes() {
+    let session = fakes::TempDir::new("fiber-anthropic-request-image");
+    std::fs::write(
+        session.path().join("i.png"),
+        b"\x89PNG bytes that are not a png",
+    )
+    .unwrap();
+    let request = ModelRequest {
+        conversation: image_conversation(false, vec![png_ref("i.png")]),
+        session_dir: session.path().to_path_buf(),
+        ..request()
+    };
+    let bodies = bodies_of(&request, 2);
+    assert_eq!(bodies[0], bodies[1]);
+}
+
+#[test]
+fn a_result_without_an_image_keeps_a_string_content() {
+    let request = ModelRequest {
+        conversation: image_conversation(false, Vec::new()),
+        ..request()
+    };
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    assert_eq!(
+        sent_body(&server, 0)["messages"][1]["content"][0]["content"],
+        "Image: 2x1 image/png.\n"
+    );
 }

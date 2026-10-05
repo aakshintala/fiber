@@ -537,6 +537,7 @@ impl Loop {
             conversation: self.conversation.clone(),
             previous_end: self.sent,
             max_output_tokens: None,
+            session_dir: self.log.dir().to_path_buf(),
         };
         if let Some(completed) = self.over_budget() {
             return Ok(Step::Ended(completed));

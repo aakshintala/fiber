@@ -105,6 +105,7 @@ fn a_reads_call_runs_and_its_result_goes_to_the_model() {
             action_id: done.action_id.clone().unwrap(),
             text: "Sunny.".into(),
             is_error: false,
+            images: Vec::new()
         })
     );
 }

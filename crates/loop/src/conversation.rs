@@ -10,7 +10,7 @@ use std::path::Path;
 use contract::events::{
     CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent,
 };
-use contract::provider::Input;
+use contract::provider::{ImageRef, Input};
 use contract::shapes::ContentPart;
 use contract::{ActionId, Envelope};
 
@@ -152,6 +152,7 @@ impl Rendered {
                         action_id: action.clone(),
                         text: text(&completed.content),
                         is_error: completed.status == CallStatus::Failed,
+                        images: images(&completed.content),
                     });
                     self.pending.retain(|p| &p.action_id != action);
                     self.outstanding.retain(|id| id != action);
@@ -263,6 +264,7 @@ impl Rendered {
                 }
                 .to_owned(),
                 is_error: true,
+                images: Vec::new(),
             });
         }
     }
@@ -362,6 +364,7 @@ pub(crate) fn render(
                     action_id: action.clone(),
                     text: text(&completed.content),
                     is_error: completed.status == CallStatus::Failed,
+                    images: images(&completed.content),
                 });
             }
         }
@@ -486,7 +489,7 @@ fn user(content: &[ContentPart]) -> Input {
     }
 }
 
-/// The text parts of `content`, joined. Only text reaches the model yet.
+/// The text parts of `content`, joined.
 pub(crate) fn text(content: &[ContentPart]) -> String {
     content
         .iter()
@@ -496,6 +499,28 @@ pub(crate) fn text(content: &[ContentPart]) -> String {
         })
         .collect::<Vec<_>>()
         .join("\n")
+}
+
+/// The image parts of `content`, in order, as the references a request reads
+/// the stored files by.
+pub(crate) fn images(content: &[ContentPart]) -> Vec<ImageRef> {
+    content
+        .iter()
+        .filter_map(|part| match part {
+            ContentPart::Image {
+                path,
+                mime_type,
+                width,
+                height,
+            } => Some(ImageRef {
+                path: path.clone(),
+                mime_type: mime_type.clone(),
+                width: *width,
+                height: *height,
+            }),
+            ContentPart::Text { .. } | ContentPart::Unknown => None,
+        })
+        .collect()
 }
 
 #[cfg(test)]

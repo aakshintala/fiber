@@ -8,6 +8,7 @@ publish.workspace = true
 # `provider` depends on `contract` and on no other Fiber crate
 # (docs/architecture.md, "The call rules").
 [dependencies]
+base64.workspace = true
 contract = { path = "../contract" }
 serde_json.workspace = true
 thiserror.workspace = true

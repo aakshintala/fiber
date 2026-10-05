@@ -15,6 +15,7 @@ fn request() -> ModelRequest {
         conversation: Vec::new(),
         previous_end: None,
         max_output_tokens: None,
+        session_dir: std::path::PathBuf::new(),
     }
 }
 
