@@ -97,11 +97,15 @@ pub(crate) fn ask_resume(
     // The recorded workspace, not the launch directory. A failure here,
     // such as not finding the running binary, returns before `fiber_started`,
     // so the log stays as it was. Every configured stdio server starts too.
-    let (tools, infos, driver, session_servers) =
-        match crate::mcp_servers::session_tools(Path::new(&folded.workspace), &clock, mcp.specs) {
-            Ok(built) => built,
-            Err(e) => return ask_failed(e),
-        };
+    let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
+        Path::new(&folded.workspace),
+        &dir.join("artifacts"),
+        &clock,
+        mcp.specs,
+    ) {
+        Ok(built) => built,
+        Err(e) => return ask_failed(e),
+    };
     let permissions = crate::ask_permissions(&home, &project, folded.workspace, &clock);
     let session = match Session::resume(&home, &dir, &log, clock, infos, Box::new(io::stdout())) {
         Ok(session) => session,

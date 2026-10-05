@@ -19,12 +19,19 @@ use crate::failed;
 type SessionTools = (Vec<(String, Arc<dyn Tool>)>, Vec<ToolInfo>, Arc<dyn Tool>);
 
 /// `edit`, `read`, `shell` and `write`, each registered by `builtin`.
-/// `read`, `write` and `edit` share one session's file state. A failure to
-/// find the running binary is `io_failed`, before any session line.
-pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<SessionTools, Failure> {
-    let files = tools::Files::new(workspace.to_path_buf());
+/// `read`, `write` and `edit` share one session's file state, and `read` runs
+/// the image child (`fiber image`) into `artifacts`, the session's
+/// `artifacts/` directory. A failure to find the running binary is
+/// `io_failed`, before any session line.
+pub(crate) fn builtin(
+    workspace: &Path,
+    artifacts: &Path,
+    clock: &Arc<dyn Clock>,
+) -> Result<SessionTools, Failure> {
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
+    let files = tools::Files::new(workspace.to_path_buf())
+        .with_images(fiber.clone(), artifacts.to_path_buf());
     let shell =
         tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber.clone());
     let driver =

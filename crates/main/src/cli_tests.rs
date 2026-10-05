@@ -430,6 +430,31 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
 }
 
 #[test]
+fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
+    assert_eq!(visible(), ["ask", "extension", "version", "help"]);
+    let Invocation::Run(Some(Commands::Image { args })) =
+        parse_from(["fiber", "image", "a", "b", "c"])
+    else {
+        panic!("image with three operands");
+    };
+    assert_eq!(
+        args,
+        [
+            OsString::from("a"),
+            OsString::from("b"),
+            OsString::from("c")
+        ]
+    );
+    let Invocation::Run(Some(Commands::Image { args })) =
+        parse_from(["fiber", "image", "--", "-a", "b", "c"])
+    else {
+        panic!("image keeps the argv delimiter");
+    };
+    assert_eq!(args.first(), Some(&OsString::from("--")));
+    assert_eq!(args.len(), 4);
+}
+
+#[test]
 fn find_keeps_the_argv_delimiter_like_grep() {
     // Clap consumes the argv delimiter `--`, so only the raw slice after
     // the subcommand restores it: without the find arm above, the parsed

@@ -18,6 +18,7 @@ extensions = { path = "../extensions" }
 log = { path = "../log" }
 loop = { path = "../loop" }
 mcp = { path = "../mcp" }
+picture = { path = "../picture" }
 provider = { path = "../provider" }
 serde_json.workspace = true
 tools = { path = "../tools" }

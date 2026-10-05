@@ -125,6 +125,9 @@ fn run() -> i32 {
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),
         cli::Invocation::Run(Some(cli::Commands::Find { args })) => tools::find_main(args),
+        // The image child holds no feature logic either: `picture` is the
+        // only crate that links image code.
+        cli::Invocation::Run(Some(cli::Commands::Image { args })) => picture::main(args),
     }
 }
 
@@ -372,7 +375,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     let (tools, infos, driver, session_servers) =
-        match mcp_servers::session_tools(&workspace, &clock, mcp.specs) {
+        match mcp_servers::session_tools(&workspace, &dir.join("artifacts"), &clock, mcp.specs) {
             Ok(built) => built,
             Err(e) => return ask_failed(e),
         };

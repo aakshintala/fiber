@@ -746,6 +746,7 @@ dependencies = [
  "log 0.0.0",
  "loop",
  "mcp",
+ "picture",
  "provider",
  "rustix",
  "serde_json",
