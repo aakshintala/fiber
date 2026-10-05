@@ -256,8 +256,8 @@ fn read_dir_file(dir: &Path, files: &mut Vec<InstructionFileSent>, notices: &mut
     }
 }
 
-/// The global file: `<home>/AGENTS.md` only. Absent is no file; unreadable
-/// is a notice. Returns whether `path` was present or unreadable: `false`
+/// One `AGENTS.md` candidate: the global `<home>/AGENTS.md` or a chain
+/// directory's. Absent is no file; unreadable is a notice. Returns whether `path` was present or unreadable: `false`
 /// only when absent, so only an absent file falls through to `CLAUDE.md`.
 fn read_candidate(
     path: &Path,
