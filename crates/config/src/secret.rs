@@ -112,10 +112,36 @@ pub fn store_credential(
     write_atomic(&path, secret.0.as_bytes(), 0o600)
 }
 
+/// Deletes `credentials/<name>/<label>` (`fiber logout`), and the label's lock
+/// file and the provider's directory when nothing else is in it. `true` when
+/// a credential was removed. The same name, label and symbolic link checks as
+/// [`store_credential`] apply.
+pub fn delete_credential(home: &Path, name: &str, label: &str) -> Result<bool, ConfigError> {
+    let path = credential_path(home, name, label)?;
+    if !plain(&path, false)? {
+        return Ok(false);
+    }
+    fs::remove_file(&path).map_err(|source| ConfigError::Io {
+        file: path.clone(),
+        source,
+    })?;
+    let mut lock = path.clone().into_os_string();
+    lock.push(".lock");
+    // The lock file is only a lock; a failure to remove it leaves the
+    // directory, which a later login reuses.
+    fs::remove_file(&lock).unwrap_or(());
+    // Still holds another label: `remove_dir` refuses a directory with
+    // anything in it.
+    if let Some(dir) = path.parent() {
+        fs::remove_dir(dir).unwrap_or(());
+    }
+    Ok(true)
+}
+
 /// The labels stored for `name`, sorted: the regular files in
 /// `credentials/<name>/`, without lock and temporary files. Empty when the
 /// directory is absent or `credentials/<name>` is a file or a link.
-pub(crate) fn credential_labels(home: &Path, name: &str) -> Result<Vec<String>, ConfigError> {
+pub fn credential_labels(home: &Path, name: &str) -> Result<Vec<String>, ConfigError> {
     if !one_file_name(name) {
         return Err(ConfigError::SecretName { name: name.into() });
     }

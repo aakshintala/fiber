@@ -9,7 +9,7 @@ use std::sync::Arc;
 use std::thread;
 
 use common::{PROJECT, Setup};
-use config::{Scope, remove_extension_settings, set_global};
+use config::{Scope, remove_extension_settings, set_global, set_global_if_unset};
 use contract::ErrorCode;
 use serde_json::json;
 
@@ -367,4 +367,75 @@ fn a_write_over_settings_this_session_read_as_invalid_fails_before_touching_disk
         reloaded.extension_settings(ACME, &[]).unwrap().0,
         json!({"a": 1, "b": 2})
     );
+}
+
+#[test]
+fn an_unset_key_is_written_once_and_a_set_key_is_left_alone() {
+    let setup = Setup::new();
+    let key = "providers.acme.credential";
+    assert!(set_global_if_unset(&setup.home(), key, json!("first")).unwrap());
+    assert!(!set_global_if_unset(&setup.home(), key, json!("second")).unwrap());
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config.get(key, None).unwrap().0, json!("first"));
+}
+
+#[test]
+fn a_write_if_unset_keeps_the_keys_around_it_and_names_a_dotted_provider() {
+    let setup = Setup::new();
+    setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+    let key = r#"providers."acme.api".credential"#;
+    assert!(set_global_if_unset(&setup.home(), key, json!("default")).unwrap());
+    let text = fs::read_to_string(setup.global()).unwrap();
+    let written: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        written,
+        json!({"model": "a/b", "providers": {"acme.api": {"credential": "default"}}})
+    );
+}
+
+#[test]
+fn a_project_layer_value_does_not_stop_the_global_write_if_unset() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {"acme": {"credential": "work"}}}"#,
+    );
+    assert!(
+        set_global_if_unset(&setup.home(), "providers.acme.credential", json!("default")).unwrap()
+    );
+    let global: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.global()).unwrap()).unwrap();
+    assert_eq!(global["providers"]["acme"]["credential"], "default");
+}
+
+#[test]
+fn a_write_if_unset_of_the_wrong_type_or_a_bad_key_changes_nothing() {
+    let setup = Setup::new();
+    let e = set_global_if_unset(&setup.home(), "model", json!(3)).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    let e = set_global_if_unset(&setup.home(), "a..b", json!(1)).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert!(!setup.global().exists());
+}
+
+#[test]
+fn concurrent_writes_if_unset_let_exactly_one_win() {
+    let setup = Arc::new(Setup::new());
+    let wins: usize = (0..8)
+        .map(|n| {
+            let setup = Arc::clone(&setup);
+            thread::spawn(move || {
+                set_global_if_unset(
+                    &setup.home(),
+                    "providers.acme.credential",
+                    json!(n.to_string()),
+                )
+                .unwrap()
+            })
+        })
+        .collect::<Vec<_>>()
+        .into_iter()
+        .map(|h| usize::from(h.join().unwrap()))
+        .sum();
+    assert_eq!(wins, 1);
 }
