@@ -137,7 +137,7 @@ Notes:
 - mlua carries Lua's C source.
 - ratatui's figure is its two 200 by 50 screen buffers. Any full-screen
   terminal UI holds a screen model of that size.
-- thiserror, signal-hook, getrandom, ring and rustix are already in the tree
+- thiserror, getrandom, ring and rustix are already in the tree
   through other crates (rustls, crossterm, mlua), so listing them directly
   adds no crate.
 - serde_json's `preserve_order` feature is never enabled
