@@ -237,6 +237,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call | the target session's `before_message` refused a session message |
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
+| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields") |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
@@ -287,6 +288,7 @@ Notices, for a failure outside any action:
 | `extension_incompatible` | an extension needs a newer `fiber` or a different extension API version, so loading skipped it |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
+| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, so the model is left out of the model list; the message names the model and the field (`docs/model-routing.md`, "Extra request body fields") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |

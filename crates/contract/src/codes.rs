@@ -113,6 +113,9 @@ codes! {
     MessageRefused,
     /// A bare model id matches models of two or more installed providers.
     ModelAmbiguous,
+    /// A model's `extra_body` names a field Fiber builds, so the model is
+    /// left out of the model list.
+    ModelInvalid,
     /// The provider does not know the model.
     ModelNotFound,
     /// `name_session` was called while the person's name pins the session.
