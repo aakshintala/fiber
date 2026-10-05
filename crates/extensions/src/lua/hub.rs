@@ -17,6 +17,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use mlua::Table;
 use serde_json::Value;
 
 use crate::Error;
@@ -141,6 +142,9 @@ pub(super) struct Shared {
     pub(super) calls: HashMap<u64, Progress>,
     /// Answers to what parked callbacks wait on, by call id.
     pub(super) replies: Vec<(u64, Reply)>,
+    /// Every hook's timeout once the entry script returns, when
+    /// configuration overrides them.
+    pub(super) hook_timeout: Option<Duration>,
     next_id: u64,
 }
 
@@ -178,11 +182,13 @@ pub(super) struct Job {
     pub(super) asked: Instant,
 }
 
-/// Commands and provider functions, in separate maps so a shared name cannot collide.
+/// What the entry script registered: commands, provider functions and hooks,
+/// in separate maps so a shared name cannot collide.
 #[derive(Default)]
 pub(super) struct CallbackTimeouts {
     pub(super) commands: BTreeMap<String, Duration>,
     pub(super) providers: BTreeMap<String, BTreeMap<String, Duration>>,
+    pub(super) hooks: DeclaredHooks,
 }
 
 impl CallbackTimeouts {
@@ -195,7 +201,78 @@ impl CallbackTimeouts {
                 .get(name)
                 .and_then(|fns| fns.get(*function))
                 .copied(),
+            Target::Hook { point, index } => self
+                .hooks
+                .by_point
+                .get(point)
+                .and_then(|hooks| hooks.get(*index))
+                .map(|hook| hook.timeout),
         }
+    }
+
+    /// Every hook runs under `timeout` instead of the one it declared.
+    pub(super) fn override_hooks(&mut self, timeout: Option<Duration>) {
+        let Some(timeout) = timeout else {
+            return;
+        };
+        for hook in self.hooks.by_point.values_mut().flatten() {
+            hook.timeout = timeout;
+        }
+    }
+}
+
+/// A hook's phase (`docs/extensions.md`, "When several hooks share a
+/// point"), in the order the phases run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(crate) enum HookPhase {
+    Sanitize,
+    Transform,
+    Check,
+}
+
+/// One hook the entry script registered.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct DeclaredHook {
+    pub(crate) phase: HookPhase,
+    /// `on_failure` is `blocking`.
+    pub(crate) blocking: bool,
+    /// Its timeout, or the configured override.
+    pub(crate) timeout: Duration,
+}
+
+/// The hooks the entry script registered, by point in registration order,
+/// and a message for each it tried to register and could not.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub(crate) struct DeclaredHooks {
+    pub(crate) by_point: BTreeMap<String, Vec<DeclaredHook>>,
+    pub(crate) problems: Vec<String>,
+}
+
+impl DeclaredHooks {
+    /// The hooks in `hooks`, the table `fiber.hook` fills, and the
+    /// refusals in `problems`. The prelude checked each field.
+    pub(super) fn read(hooks: &Table, problems: &Table) -> Self {
+        let mut declared = Self::default();
+        for (point, list) in hooks.pairs::<String, Table>().flatten() {
+            let list = list
+                .sequence_values::<Table>()
+                .flatten()
+                .map(|spec| DeclaredHook {
+                    phase: match spec.get::<String>("phase").as_deref() {
+                        Ok("sanitize") => HookPhase::Sanitize,
+                        Ok("check") => HookPhase::Check,
+                        _ => HookPhase::Transform,
+                    },
+                    blocking: spec
+                        .get::<String>("on_failure")
+                        .is_ok_and(|failure| failure == "blocking"),
+                    timeout: Duration::from_millis(spec.get::<u64>("timeout").unwrap_or(0)),
+                })
+                .collect();
+            declared.by_point.insert(point, list);
+        }
+        declared.problems = problems.sequence_values::<String>().flatten().collect();
+        declared
     }
 }
 
@@ -365,7 +442,7 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
             extension: name.to_owned(),
             command: command.clone(),
         },
-        Target::Provider { .. } => Error::UnknownCallback {
+        Target::Provider { .. } | Target::Hook { .. } => Error::UnknownCallback {
             extension: name.to_owned(),
             callback: target.to_string(),
         },

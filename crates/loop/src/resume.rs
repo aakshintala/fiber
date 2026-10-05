@@ -301,6 +301,7 @@ impl Loop {
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,
+            hooks: None,
         };
         resumed.mark_orphans(lines)?;
         Ok(resumed)

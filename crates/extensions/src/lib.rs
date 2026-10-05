@@ -9,6 +9,7 @@
 //! and "Credentials").
 
 mod git;
+mod hooks;
 mod host;
 mod install;
 mod installed;
@@ -27,6 +28,7 @@ use config::ConfigError;
 use contract::ErrorCode;
 
 pub use git::{Origin, SHORT_NAMES, full_name, is_path};
+pub use hooks::SessionExtensions;
 pub use install::Provenance;
 pub use installed::{Installed, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};

@@ -518,9 +518,10 @@ fn gemini_hello() -> Response {
 }
 
 /// The event kinds of a turn answered by [`hello`].
-const HELLO_KINDS: [&str; 14] = [
+const HELLO_KINDS: [&str; 15] = [
     "session_started",
     "fiber_started",
+    "extensions_loaded",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -626,6 +627,7 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -636,7 +638,7 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
             "fiber_exited",
         ]
     );
-    let turn = &run.lines[7]["payload"];
+    let turn = &run.lines[8]["payload"];
     assert_eq!(turn["outcome"], "failed");
     let exited = &run.last()["payload"];
     assert_eq!(exited["exit_code"], 1);
@@ -1503,6 +1505,7 @@ fn assert_weather(run: &Run) {
     let mut kinds = vec![
         "session_started",
         "fiber_started",
+        "extensions_loaded",
         "preamble_built",
         "opening_message",
         "turn_started",
@@ -1603,6 +1606,7 @@ fn a_zero_budget_fails_the_turn_before_the_provider_is_called() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1662,6 +1666,7 @@ fn muse_installed_by_path_completes_a_turn_on_metas_recorded_stream() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1739,6 +1744,7 @@ fn anthropic_installed_by_path_completes_a_turn_on_its_recorded_streams() {
     let mut kinds = vec![
         "session_started",
         "fiber_started",
+        "extensions_loaded",
         "preamble_built",
         "opening_message",
         "turn_started",
@@ -1807,6 +1813,7 @@ fn openai_installed_by_path_completes_a_turn_and_sends_store_false() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -1878,6 +1885,7 @@ fn gemini_installed_by_path_completes_a_turn_on_its_recorded_streams() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",

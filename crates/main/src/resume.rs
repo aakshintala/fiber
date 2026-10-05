@@ -90,6 +90,7 @@ pub(crate) fn ask_resume(
         idle,
         home,
         project,
+        extensions,
         ..
     } = parts;
     // The recorded workspace, not the launch directory. A failure here,
@@ -106,7 +107,9 @@ pub(crate) fn ask_resume(
         Err(e) => return ask_failed(e),
     };
     session.shell(driver);
-    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true) {
+    if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
+        .and_then(|()| crate::session_extensions::written(&log, &extensions))
+    {
         session.close(log);
         return ask_failed(failed(e.code(), e));
     }
@@ -121,7 +124,8 @@ pub(crate) fn ask_resume(
                 inbox,
                 tools,
                 permissions,
-            ),
+            )
+            .map(|looped| crate::session_extensions::hooked(looped, &extensions)),
             budget,
             idle,
             reviewer,

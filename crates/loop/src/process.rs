@@ -6,7 +6,8 @@
 use std::path::Path;
 
 use contract::events::{
-    Event, FiberExited, FiberStarted, FinalMessage, MessageOutcome, TurnOutcome,
+    Event, ExtensionsLoaded, FiberExited, FiberStarted, FinalMessage, LoadedExtension,
+    MessageOutcome, Notice, TurnOutcome,
 };
 use contract::shapes::{Failure, Question};
 use contract::{Envelope, RequestId};
@@ -24,6 +25,23 @@ pub fn fiber_started(log: &Log, version: &str, resumed: bool) -> Result<(), Erro
         resumed,
     });
     log.append(&started, None, None)?;
+    Ok(())
+}
+
+/// Writes `extensions_loaded`, the whole set of extensions the session
+/// loaded, then each notice loading them raised (`docs/events.md`,
+/// `extensions_loaded`). Written after `fiber_started`, before the first
+/// model request.
+pub fn extensions_loaded(
+    log: &Log,
+    loaded: Vec<LoadedExtension>,
+    notices: Vec<Notice>,
+) -> Result<(), Error> {
+    let event = Event::ExtensionsLoaded(ExtensionsLoaded { extensions: loaded });
+    log.append(&event, None, None)?;
+    for notice in notices {
+        log.append(&Event::Notice(notice), None, None)?;
+    }
     Ok(())
 }
 

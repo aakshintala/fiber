@@ -303,9 +303,10 @@ fn gemini_cut() -> Response {
 
 /// The event kinds of an ask that fails its first model call, then
 /// answers `Hello.` in two fragments after one retry.
-const RETRIED_HELLO_KINDS: [&str; 17] = [
+const RETRIED_HELLO_KINDS: [&str; 18] = [
     "session_started",
     "fiber_started",
+    "extensions_loaded",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -409,6 +410,7 @@ fn a_stream_cut_short_is_retried_on_every_protocol() {
         let mut expected = vec![
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",
@@ -449,9 +451,10 @@ fn x_should_retry_true_retries_a_400() {
 }
 
 /// The event kinds of an ask whose model call fails without a retry.
-const FAILED_AT_ONCE_KINDS: [&str; 10] = [
+const FAILED_AT_ONCE_KINDS: [&str; 11] = [
     "session_started",
     "fiber_started",
+    "extensions_loaded",
     "preamble_built",
     "opening_message",
     "turn_started",
@@ -498,6 +501,7 @@ fn two_503s_with_one_attempt_fail_the_ask() {
         [
             "session_started",
             "fiber_started",
+            "extensions_loaded",
             "preamble_built",
             "opening_message",
             "turn_started",

@@ -50,14 +50,15 @@ const GRACE: Duration = Duration::from_secs(1);
 pub(super) const CHECK_EVERY: u32 = 1000;
 
 /// The Lua half of the host's globals: `coroutine.wrap` over the armed
-/// `coroutine.create`, `require`, `fiber.command` and `fiber.provider`, which
-/// fill the two tables the prelude returns. Lua's own `wrap` is a
-/// separate C function that would make an unarmed coroutine.
+/// `coroutine.create`, `require`, `fiber.command`, `fiber.provider` and
+/// `fiber.hook`, which fill the tables the prelude returns. Lua's own `wrap`
+/// is a separate C function that would make an unarmed coroutine.
 // A callback's timeout is in milliseconds (docs/extensions.md, "How an
-// extension runs").
+// extension runs"). A hook's phase and `on_failure` are docs/extensions.md,
+// "When several hooks share a point" and "When a hook fails".
 pub(super) const PRELUDE: &str = r#"
 local create, load_module = ...
-local commands, providers = {}, {}
+local commands, providers, hooks, problems = {}, {}, {}, {}
 local resume, pack, unpack = coroutine.resume, table.pack, table.unpack
 
 coroutine.create = create
@@ -95,6 +96,49 @@ end
 
 local provider_functions = { models = true, quota = true, credential = true, sign = true }
 
+local hook_points = {
+  session_start = true, before_message = true, turn_start = true, before_tool = true,
+  before_model_call = true, after_tool = true, turn_end = true, before_handoff = true,
+}
+local refusing = { before_message = true, before_tool = true, before_model_call = true }
+local phases = { sanitize = true, transform = true, check = true }
+local failures = { blocking = true, ["non-blocking"] = true }
+
+-- A hook that does not register leaves a problem for Fiber's notice, and the
+-- entry script goes on.
+local function hook(point, spec)
+  local name = tostring(point)
+  local function refuse(why)
+    problems[#problems + 1] = "`" .. name .. "` hook not registered: " .. why
+  end
+  if type(point) ~= "string" or not hook_points[point] then
+    return refuse("`" .. name .. "` is not a hook point")
+  end
+  if type(spec) ~= "table" then
+    return refuse("it takes a table of `timeout`, `on_failure` and `run`")
+  end
+  if spec.timeout == nil then return refuse("missing `timeout`") end
+  if math.type(spec.timeout) ~= "integer" or spec.timeout <= 0 then
+    return refuse("`timeout` must be a whole number of milliseconds above 0")
+  end
+  if spec.on_failure == nil then return refuse("missing `on_failure`") end
+  if not failures[spec.on_failure] then
+    return refuse("`on_failure` must be `blocking` or `non-blocking`")
+  end
+  local phase = spec.phase
+  if phase == nil then phase = "transform" end
+  if not phases[phase] then
+    return refuse("`phase` must be `sanitize`, `transform` or `check`")
+  end
+  if phase == "check" and not refusing[point] then
+    return refuse("a `check` hook exists only at `before_message`, `before_tool` and `before_model_call`")
+  end
+  if type(spec.run) ~= "function" then return refuse("`run` must be a function") end
+  local list = hooks[point] or {}
+  hooks[point] = list
+  list[#list + 1] = { phase = phase, on_failure = spec.on_failure, timeout = spec.timeout, run = spec.run }
+end
+
 fiber = {
   command = function(name, spec)
     if type(name) ~= "string" then
@@ -115,9 +159,10 @@ fiber = {
     end
     providers[name] = registered
   end,
+  hook = hook,
 }
 
-return commands, providers
+return commands, providers, hooks, problems
 "#;
 
 /// A Lua extension in a session. Creating one runs no Lua: the VM and its
@@ -205,18 +250,49 @@ impl LuaExtension {
     /// The functions `fiber.provider` registered for `provider`, by name;
     /// empty when the extension registered no such provider.
     pub fn provider_functions(&self, provider: &str) -> Result<Vec<String>, Error> {
+        self.registered(|timeouts| {
+            timeouts
+                .providers
+                .get(provider)
+                .map(|fns| fns.keys().cloned().collect())
+                .unwrap_or_default()
+        })
+    }
+
+    /// Every hook the entry script registered, and why each one it tried
+    /// and could not register was refused. Starts the extension.
+    pub(crate) fn hooks(&self) -> Result<DeclaredHooks, Error> {
+        self.registered(|timeouts| timeouts.hooks.clone())
+    }
+
+    /// Runs the hook `index` registered at `point`, in registration order
+    /// from 0, passing `arg`, and returns what its `run` returned as JSON.
+    pub(crate) fn hook(&self, point: &str, index: usize, arg: Value) -> Result<Value, Error> {
+        self.call(
+            Target::Hook {
+                point: point.to_owned(),
+                index,
+            },
+            arg,
+        )
+    }
+
+    /// Every hook this extension registers runs under `timeout` instead of
+    /// the one it declared (`docs/configuration.md`,
+    /// `extensions."<name>".hook_timeout_ms`). Set before the first call.
+    pub(crate) fn override_hook_timeout(&self, timeout: Duration) {
+        self.hub.lock().hook_timeout = Some(timeout);
+    }
+
+    /// What `read` makes of the entry script's registrations, once it has
+    /// returned. Starts the extension.
+    fn registered<T>(&self, read: impl Fn(&CallbackTimeouts) -> T) -> Result<T, Error> {
         let mut shared = self.hub.lock();
         self.start(&mut shared)?;
         loop {
             let now = self.hub.clock().now();
             let until = match shared.gate(&self.name, now) {
-                Gate::Ready(timeouts) => {
-                    return Ok(timeouts
-                        .providers
-                        .get(provider)
-                        .map(|fns| fns.keys().cloned().collect())
-                        .unwrap_or_default());
-                }
+                Gate::Ready(timeouts) => return Ok(read(timeouts)),
                 Gate::Stopped(e) => {
                     // This may be the waiter that abandoned registration.
                     self.hub.notify();
@@ -322,15 +398,23 @@ enum Target {
         /// `models`, `quota`, `credential` or `sign`.
         function: &'static str,
     },
+    /// A hook `fiber.hook` registered.
+    Hook {
+        /// The hook point.
+        point: String,
+        /// Its place among the hooks registered there, from 0.
+        index: usize,
+    },
 }
 
-/// The callback's name as an error names it: a command's name, or
-/// `<provider>.<function>`.
+/// The callback's name as an error names it: a command's name,
+/// `<provider>.<function>`, or a hook's point.
 impl std::fmt::Display for Target {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Command(name) => f.write_str(name),
             Self::Provider { name, function } => write!(f, "{name}.{function}"),
+            Self::Hook { point, .. } => f.write_str(point),
         }
     }
 }
@@ -348,6 +432,7 @@ mod schedule;
 mod setup;
 
 use hub::{CallbackTimeouts, Gate, Hub, Next, Phase, Shared};
+pub(crate) use hub::{DeclaredHooks, HookPhase};
 
 pub(crate) use setup::Deadline;
 
@@ -363,6 +448,11 @@ struct Vm {
     /// What `fiber.provider` registered: each provider's functions, each
     /// with its `timeout` and `run`.
     providers: Table,
+    /// What `fiber.hook` registered: each point's hooks in order, each with
+    /// its `phase`, `on_failure`, `timeout` and `run`.
+    hooks: Table,
+    /// Why each hook `fiber.hook` refused was not registered.
+    problems: Table,
 }
 
 /// One step of a callback: it returned, or it suspended on a host call.
@@ -411,7 +501,7 @@ impl Vm {
         )
         .map_err(lua_error)?;
         lua.set_memory_limit(memory_cap).map_err(lua_error)?;
-        let (commands, providers) =
+        let (commands, providers, hooks, problems) =
             setup::install(&lua, &deadline, dir.clone(), memory_cap).map_err(lua_error)?;
         let entry = Rc::new(Cell::new(true));
         let http_tag =
@@ -424,6 +514,8 @@ impl Vm {
             http_tag,
             commands,
             providers,
+            hooks,
+            problems,
         };
 
         let entry_fn = match setup::load_file(&vm.lua, &dir, ENTRY, memory_cap) {
@@ -454,6 +546,14 @@ impl Vm {
                 .providers
                 .get::<Option<Table>>(name.as_str())
                 .and_then(|p| p.map_or(Ok(None), |p| p.get::<Option<Table>>(*function))),
+            Target::Hook { point, index } => self
+                .hooks
+                .get::<Option<Table>>(point.as_str())
+                .and_then(|list| {
+                    list.map_or(Ok(None), |list| {
+                        list.get::<Option<Table>>(index.saturating_add(1))
+                    })
+                }),
         }
         .map_err(fail)?;
         let Some(spec) = spec else {
@@ -467,7 +567,9 @@ impl Vm {
                 .transpose()
                 .map_err(fail)?
                 .map_or(mlua::Value::Nil, mlua::Value::String),
-            Target::Provider { .. } => host::to_lua(&self.lua, arg).map_err(fail)?,
+            Target::Provider { .. } | Target::Hook { .. } => {
+                host::to_lua(&self.lua, arg).map_err(fail)?
+            }
         };
         let thread = self.lua.create_thread(run).map_err(fail)?;
         self.deadline.arm(&thread).map_err(fail)?;
@@ -518,6 +620,7 @@ impl Vm {
             }
             timeouts.providers.insert(name, fns);
         }
+        timeouts.hooks = DeclaredHooks::read(&self.hooks, &self.problems);
         timeouts
     }
 
@@ -527,7 +630,7 @@ impl Vm {
             Target::Command(_) => Option::<String>::from_lua(value, &self.lua)
                 .map(|text| Value::String(text.unwrap_or_default()))
                 .map_err(fail),
-            Target::Provider { .. } => host::to_json(&value).map_err(fail),
+            Target::Provider { .. } | Target::Hook { .. } => host::to_json(&value).map_err(fail),
         }
     }
 
