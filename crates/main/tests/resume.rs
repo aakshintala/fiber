@@ -692,6 +692,109 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
     assert!(setup.sessions().join(&id).is_dir());
 }
 
+/// Sets `providers.fake.credential` to `label` and stores `labels` as
+/// `credentials/fake/<label>`, each holding `<label>-key`.
+fn labels(setup: &Setup, label: &str, stored: &[&str]) {
+    for name in stored {
+        config::store_credential(
+            &setup.home(),
+            "fake",
+            name,
+            &config::Secret::new(format!("{name}-key\n")),
+        )
+        .unwrap();
+    }
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "providers": {"fake": {"credential": label}}}),
+    );
+}
+
+fn preamble_label(run: &Run) -> Value {
+    let built = run.lines.iter().find(|l| l["kind"] == "preamble_built");
+    built.unwrap()["payload"]["credential"].clone()
+}
+
+#[test]
+fn a_new_session_uses_and_records_the_label_the_configuration_names() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "other"]);
+
+    let run = setup.fiber(&["ask", "one"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(preamble_label(&run), "work");
+    let requests = server.requests();
+    assert_eq!(
+        requests[0].header("authorization"),
+        Some(fakes::fingerprint("Bearer work-key").as_str())
+    );
+}
+
+#[test]
+fn a_session_with_no_label_set_uses_the_default_label() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "one"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(preamble_label(&run), "default");
+    assert_eq!(
+        server.requests()[0].header("authorization"),
+        Some(fakes::fingerprint("Bearer sk-test").as_str())
+    );
+}
+
+#[test]
+fn a_resumed_session_keeps_its_label_when_the_configuration_changes() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "other"]);
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+
+    labels(&setup, "other", &[]);
+    let second = setup.fiber(&["ask", "--resume", &id, "two"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(preamble_label(&second), "work");
+    let requests = server.requests();
+    assert_eq!(
+        requests[1].header("authorization"),
+        Some(fakes::fingerprint("Bearer work-key").as_str())
+    );
+}
+
+#[test]
+fn a_resume_whose_label_no_longer_exists_fails_before_the_session() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    labels(&setup, "work", &["work", "other"]);
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    let id = first.session_id().to_owned();
+    let events = setup.sessions().join(&id).join("events.jsonl");
+    let before = fs::read(&events).unwrap();
+
+    fs::remove_file(setup.home().join("credentials/fake/work")).unwrap();
+    labels(&setup, "other", &[]);
+    let run = setup.fiber(&["ask", "--resume", &id, "two"]);
+    assert_pre_session(&run, 1, "credential_missing");
+    assert!(
+        run.stderr.contains("credentials/fake/work")
+            && run
+                .stderr
+                .contains("The labels for `fake` are: default, other."),
+        "{}",
+        run.stderr
+    );
+    assert_eq!(fs::read(&events).unwrap(), before);
+}
+
 /// A `fiber ask` still running, with its stdout kept drained and its stderr
 /// kept for the failure, if any.
 struct Running {
