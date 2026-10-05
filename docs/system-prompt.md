@@ -209,7 +209,8 @@ way. Codex instead tells the model to look for them itself.
 ### Skills listing
 
 The listing sits last in the opening message. It has one entry per skill the
-model may load: the skill's name, its description and the path of its
+model may load, which leaves out a skill switched off in `skills.disabled`
+("Skills"): the skill's name, its description and the path of its
 `SKILL.md`. Every name and every description is sent in full. The model loads a
 skill with the `skill` tool (`docs/tools.md`, "Skills").
 
@@ -257,6 +258,15 @@ Claude Code need no copy.
 When two skills share a name, the more specific source wins: the repository,
 then personal, then an extension, then built-in. A `notice` with code
 `skill_shadowed` names both paths.
+
+A person can switch a skill off, for one project or everywhere, from the
+terminal's `/skills` view. The view writes the skill's name to
+`skills.disabled` in the project's or the global configuration
+(`docs/configuration.md`). A repository cannot set that key. A switched-off
+skill is left out of the listing, the `skill` tool refuses it, and `/name`
+does not expand it. It still shows in `/skills`, marked off. This is how a
+person turns off a repository's skill without editing the repository, or one
+skill of an extension whose other skills and tools they keep.
 
 A repository's skills load without asking, including in a fresh clone, like its
 instruction files. They are text the model reads, and a repository can already
@@ -319,6 +329,11 @@ At each turn start, Fiber also checks the skill directories for skills added
 or removed since the listing was last given. Each change is appended as one
 line: an added skill's name and description, or a removed skill's name. The
 opening message is never rebuilt for it.
+
+Switching a skill off counts as removing it, and switching it back on as
+adding it. The turn-start check reads `skills.disabled` with the skill
+directories, so a switch made in `/skills` reaches the model at the next turn
+start as one removed or added line, with no prompt-cache miss.
 
 The check finds skills by the same rules as the listing ("Skills"). A skill
 added with a missing `name` or `description`, or a header that does not parse,

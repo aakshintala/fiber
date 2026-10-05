@@ -124,6 +124,7 @@ set the key.
 | `retry.max_delay_ms` | 60000 | yes | The cap on one backoff, and on a wait a server asks for. |
 | `tools."<name>".max_result_bytes` | the tool's own, or 16384 | yes | The tool's result cap (`docs/tools.md`, "Bounded results"). |
 | `tools."<name>".deferred` | the tool's own | yes | Whether the tool is deferred (`docs/tools.md`, "What is deferred by default"). |
+| `skills.disabled` | `[]` | no | Names of skills switched off: left out of the listing, refused by the `skill` tool and not expanded by `/name`. The project's list and the global list both apply. The terminal's `/skills` view writes it (`docs/system-prompt.md`, "Skills"). |
 | `web_search.backend` | the one installed | no | The search backend `web_search` uses when more than one is installed (`docs/tools.md`, "Web fetch and web search"). |
 | `shell.read_only."<command>".flags` | none | no | Adds a command to the shell classifier's read-only list, with the flags it may take and stay read-only, such as `["--json", "-p"]` (`docs/tools.md`, "Search", "Other command-line tools"). |
 | `budget.usd` | none | no | The most a session may spend, in US dollars billed per token, its delegates included; unset means no limit (`docs/loop.md`, "Spending budget"). |
@@ -283,6 +284,8 @@ them:
   prompt-cache miss reload already costs (`docs/mcp.md`, "Reload")
 - when a session resumes, where changed configuration rebuilds the preamble as
   `docs/prompt-cache.md` describes
+- at each turn start, `skills.disabled` only, with the check for added and
+  removed skills (`docs/system-prompt.md`, "Added and removed skills")
 
 Nothing watches the files, so an idle Fiber does no work. A value written with
 `host.config.set` is visible to that extension at once, and to other sessions
