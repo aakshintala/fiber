@@ -59,6 +59,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         model: "claude-sonnet-5-5".into(),
         base_url: format!("{}/v1", server.url()),
         key: Some("sk-secret".into()),
+        direct: true,
         ..Endpoint::default()
     }
 }
@@ -1167,6 +1168,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let (url, _hold) = stalling_server();
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let call: Arc<dyn ModelCall> = Arc::from(Messages::new(endpoint).call(&request()));
@@ -1205,6 +1207,7 @@ fn a_connection_closed_before_any_response_fails_the_call() {
     });
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let (result, _) = run(Messages::new(endpoint).call(&request()));
@@ -1419,4 +1422,52 @@ fn wire_tools_is_what_the_request_sends() {
     };
     assert_eq!(by_name("a_loose"), json!(false));
     assert_eq!(by_name("z_enum"), json!(false));
+}
+
+#[test]
+fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
+    // `is_error` is Anthropic's `tool_result` flag
+    // (platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
+    let conversation = |is_error: bool| {
+        vec![
+            Input::ToolCall {
+                action_id: ActionId("a_1".into()),
+                call: ToolCallRequested {
+                    name: "get_weather".into(),
+                    arguments: json!({"city": "Paris"}),
+                    provider_id: Some(ProviderCallId("toolu_1".into())),
+                    repair: None,
+                    ran_by: None,
+                },
+            },
+            Input::ToolResult {
+                action_id: ActionId("a_1".into()),
+                text: "boom".into(),
+                is_error,
+            },
+        ]
+    };
+    let block = |is_error: bool| {
+        let server = ProviderServer::start([completed_reply()]).unwrap();
+        let request = ModelRequest {
+            conversation: conversation(is_error),
+            ..request()
+        };
+        run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+            .0
+            .unwrap();
+        sent_body(&server, 0)["messages"][1]["content"][0].clone()
+    };
+    assert_eq!(
+        block(true),
+        json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": "boom",
+               "is_error": true, "cache_control": {"type": "ephemeral"}})
+    );
+    let success = block(false);
+    assert_eq!(
+        success,
+        json!({"type": "tool_result", "tool_use_id": "toolu_1", "content": "boom",
+               "cache_control": {"type": "ephemeral"}})
+    );
+    assert!(success.get("is_error").is_none());
 }

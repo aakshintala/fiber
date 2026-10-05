@@ -60,6 +60,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         model: "z-ai/glm-5.3-flash".into(),
         base_url: format!("{}/v1", server.url()),
         key: Some("sk-secret".into()),
+        direct: true,
         ..Endpoint::default()
     }
 }
@@ -570,6 +571,7 @@ fn markers() -> Endpoint {
             anthropic: true,
             ..Compat::default()
         },
+        direct: true,
         ..Endpoint::default()
     }
 }
@@ -912,6 +914,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let (url, _hold) = stalling_server();
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let call: Arc<dyn ModelCall> = Arc::from(Completions::new(endpoint).call(&request()));
@@ -947,6 +950,7 @@ fn a_connection_closed_before_any_response_fails_the_call() {
     });
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let (result, _) = run(Completions::new(endpoint).call(&request()));
@@ -1369,4 +1373,51 @@ fn wire_tools_is_what_the_request_sends() {
     };
     assert_eq!(by_name("a_loose"), json!(false));
     assert_eq!(by_name("z_enum"), json!(false));
+}
+
+#[test]
+fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
+    // Chat Completions defines no error field on a tool message
+    // (`ChatCompletionRequestToolMessage`: `role, content, tool_call_id`),
+    // so the flag is ignored.
+    let conversation = |is_error: bool| {
+        vec![
+            Input::ToolCall {
+                action_id: ActionId("a_1".into()),
+                call: ToolCallRequested {
+                    name: "get_weather".into(),
+                    arguments: json!({"city": "Paris"}),
+                    provider_id: Some(ProviderCallId("call_1".into())),
+                    repair: None,
+                    ran_by: None,
+                },
+            },
+            Input::ToolResult {
+                action_id: ActionId("a_1".into()),
+                text: "boom".into(),
+                is_error,
+            },
+        ]
+    };
+    let messages = |is_error: bool| {
+        let server = ProviderServer::start([completed_reply()]).unwrap();
+        send(
+            endpoint(&server),
+            &ModelRequest {
+                conversation: conversation(is_error),
+                ..request()
+            },
+        );
+        sent_body(&server, 0)["messages"].clone()
+    };
+    assert_eq!(
+        messages(true),
+        json!([
+            {"role": "system", "content": "You are terse."},
+            {"role": "assistant", "tool_calls": [{"id": "call_1", "type": "function",
+                "function": {"name": "get_weather", "arguments": "{\"city\":\"Paris\"}"}}]},
+            {"role": "tool", "tool_call_id": "call_1", "content": "boom"},
+        ])
+    );
+    assert_eq!(messages(true), messages(false));
 }

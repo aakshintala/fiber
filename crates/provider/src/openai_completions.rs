@@ -63,6 +63,7 @@ impl Completions {
             body,
             provider: endpoint.provider.clone(),
             lifetime,
+            direct: endpoint.direct,
             cancel: Arc::default(),
         }
     }
@@ -88,22 +89,28 @@ pub struct Call {
     /// The lifetime a reported cache write is counted under (see
     /// [`write_lifetime`]).
     lifetime: CacheLifetime,
+    direct: bool,
     cancel: Arc<Cancel>,
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (reply, should_retry) =
-            match http::post(&self.url, &self.headers, &self.body, &self.cancel) {
-                Ok((stream, should_retry)) => (
-                    decode(BufReader::new(stream), &self.lifetime, sink),
-                    should_retry,
-                ),
-                Err(e) => {
-                    let should_retry = e.should_retry();
-                    (Err(e), should_retry)
-                }
-            };
+        let (reply, should_retry) = match http::post(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.direct,
+            &self.cancel,
+        ) {
+            Ok((stream, should_retry)) => (
+                decode(BufReader::new(stream), &self.lifetime, sink),
+                should_retry,
+            ),
+            Err(e) => {
+                let should_retry = e.should_retry();
+                (Err(e), should_retry)
+            }
+        };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
@@ -320,6 +327,10 @@ fn messages(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
             Input::User { text } => {
                 out.push(message(json!({"role": "user", "content": text})));
             }
+            // The flag is ignored: Chat Completions defines no error field
+            // on a tool message (`ChatCompletionRequestToolMessage`: `role,
+            // content, tool_call_id`), so a failed result sends the same
+            // bytes as a success.
             Input::ToolResult {
                 action_id, text, ..
             } => {

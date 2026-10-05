@@ -61,6 +61,7 @@ impl Messages {
             headers,
             body: body(endpoint, request),
             provider: endpoint.provider.clone(),
+            direct: endpoint.direct,
             cancel: Arc::default(),
         }
     }
@@ -83,26 +84,39 @@ pub struct Call {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     provider: String,
+    direct: bool,
     cancel: Arc<Cancel>,
 }
 
 impl Call {
     /// Sends the request and returns the reply's bytes, unread.
     pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        http::post(&self.url, &self.headers, &self.body, &self.cancel).map(|(body, _)| body)
+        http::post(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.direct,
+            &self.cancel,
+        )
+        .map(|(body, _)| body)
     }
 }
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (reply, should_retry) =
-            match http::post(&self.url, &self.headers, &self.body, &self.cancel) {
-                Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
-                Err(e) => {
-                    let should_retry = e.should_retry();
-                    (Err(e), should_retry)
-                }
-            };
+        let (reply, should_retry) = match http::post(
+            &self.url,
+            &self.headers,
+            &self.body,
+            self.direct,
+            &self.cancel,
+        ) {
+            Ok((stream, should_retry)) => (decode(BufReader::new(stream), sink), should_retry),
+            Err(e) => {
+                let should_retry = e.should_retry();
+                (Err(e), should_retry)
+            }
+        };
         // Whatever a cancelled call returns, the cancel ended it.
         if self.cancel.is_cancelled() {
             return Err(CallError::Cancelled);
@@ -401,12 +415,25 @@ fn block_of(input: &Input, reference: &str, call_ids: &BTreeMap<&ActionId, &str>
             "input": call.arguments,
         })),
         Input::ToolResult {
-            action_id, text, ..
-        } => Some(json!({
-            "type": "tool_result",
-            "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
-            "content": text,
-        })),
+            action_id,
+            text,
+            is_error,
+        } => {
+            // A failed tool result sends Anthropic's `is_error` flag; a
+            // success sends no such key
+            // (platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls:
+            // "`is_error` (optional): Set to `true` if the tool execution
+            // resulted in an error.").
+            let mut result = json!({
+                "type": "tool_result",
+                "tool_use_id": call_ids.get(action_id).copied().unwrap_or(action_id.0.as_str()),
+                "content": text,
+            });
+            if *is_error && let Some(map) = result.as_object_mut() {
+                map.insert("is_error".into(), json!(true));
+            }
+            Some(result)
+        }
     }
 }
 

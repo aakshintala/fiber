@@ -101,12 +101,15 @@ fn a_signer_is_asked_on_every_send_and_its_headers_are_sent() {
     let signer = Recorder(std::sync::Mutex::default());
     let headers = [("x-client".to_owned(), "fiber".to_owned())];
     for _ in 0..2 {
-        let sent = super::post_signed(
+        // An explicit direct connection, so the test holds without a
+        // proxy whatever the developer's shell names.
+        let sent = super::post_with(
             &url,
             &headers,
             b"{\"a\":1}",
             Some(&signer),
             &std::sync::Arc::default(),
+            None,
         );
         assert!(sent.is_ok());
     }
@@ -123,12 +126,13 @@ fn a_signer_is_asked_on_every_send_and_its_headers_are_sent() {
 #[test]
 fn a_request_that_cannot_be_signed_is_never_sent() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-    let sent = super::post_signed(
+    let sent = super::post_with(
         &format!("{}/v1", server.url()),
         &[],
         b"",
         Some(&Refuses),
         &std::sync::Arc::default(),
+        None,
     );
     let Err(err) = sent.map(|_| ()) else {
         panic!("signed anyway");
@@ -153,12 +157,13 @@ fn unusable_signed_headers_are_never_sent() {
         &BadHeaderName,
     ] {
         let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
-        let sent = super::post_signed(
+        let sent = super::post_with(
             &format!("{}/v1", server.url()),
             &[],
             b"",
             Some(signer),
             &std::sync::Arc::default(),
+            None,
         );
         let Err(err) = sent.map(|_| ()) else {
             panic!("sent unusable signed headers");
@@ -205,11 +210,13 @@ fn retry_after_is_kept_only_when_finite_and_non_negative() {
             fakes::Response::status(429, "{}").header("retry-after", header)
         ])
         .unwrap();
-        let Err(crate::Error::Status { retry_after, .. }) = super::post(
+        let Err(crate::Error::Status { retry_after, .. }) = super::post_with(
             &format!("{}/v1", server.url()),
             &[],
             b"{}",
+            None,
             &std::sync::Arc::default(),
+            None,
         ) else {
             panic!("a 429 with retry-after: {header} was not a status failure");
         };
@@ -499,24 +506,35 @@ fn a_proxy_that_refuses_connect_fails_the_call() {
 /// Present in the re-executed child, absent in the parent.
 const PROXY_CHILD: &str = "FIBER_TEST_PROXY_CHILD";
 
+/// Present in the re-executed child when it should connect directly.
+const PROXY_DIRECT_CHILD: &str = "FIBER_TEST_PROXY_DIRECT_CHILD";
+
 /// The server URL, passed to the child on its environment.
 const PROXY_CHILD_SERVER: &str = "FIBER_TEST_PROXY_SERVER";
+
+/// The child's side of the proxy-environment tests: calls the server once,
+/// directly or through the environment's proxy.
+fn proxy_child_main() {
+    let url = std::env::var(PROXY_CHILD_SERVER).unwrap();
+    let direct = std::env::var_os(PROXY_DIRECT_CHILD).is_some();
+    let (mut body, _) = super::post_signed(
+        &format!("{url}/v1"),
+        &[],
+        b"{}",
+        None,
+        direct,
+        &std::sync::Arc::default(),
+    )
+    .unwrap();
+    let mut text = String::new();
+    std::io::Read::read_to_string(&mut body, &mut text).unwrap();
+    assert_eq!(text, "{}");
+}
 
 #[test]
 fn the_proxy_environment_reaches_model_calls() {
     if std::env::var_os(PROXY_CHILD).is_some() {
-        let url = std::env::var(PROXY_CHILD_SERVER).unwrap();
-        let (mut body, _) = super::post_signed(
-            &format!("{url}/v1"),
-            &[],
-            b"{}",
-            None,
-            &std::sync::Arc::default(),
-        )
-        .unwrap();
-        let mut text = String::new();
-        std::io::Read::read_to_string(&mut body, &mut text).unwrap();
-        assert_eq!(text, "{}");
+        proxy_child_main();
         return;
     }
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
@@ -543,4 +561,36 @@ fn the_proxy_environment_reaches_model_calls() {
         "the proxy recorded CONNECT {target}"
     );
     assert_eq!(proxy.connects(), [target]);
+}
+
+#[test]
+fn a_direct_call_ignores_the_proxy_environment() {
+    if std::env::var_os(PROXY_CHILD).is_some() {
+        proxy_child_main();
+        return;
+    }
+    let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+    let proxy = fakes::ConnectProxy::start().unwrap();
+    let proxy_url = proxy.url();
+    let server_url = server.url();
+    let output = fakes::rerun(
+        "http::tests::a_direct_call_ignores_the_proxy_environment",
+        &[
+            (PROXY_CHILD, "1"),
+            (PROXY_DIRECT_CHILD, "1"),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            (PROXY_CHILD_SERVER, server_url.as_str()),
+        ],
+    );
+    assert!(
+        output.status.success(),
+        "the direct child called past the proxy:\nstdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        proxy.connects().is_empty(),
+        "nothing went through the proxy"
+    );
+    assert_eq!(server.requests().len(), 1);
 }

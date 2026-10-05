@@ -57,6 +57,7 @@ fn endpoint(server: &ProviderServer) -> Endpoint {
         model: "muse-spark-1.3-contributor".into(),
         base_url: format!("{}/zen/go/v1", server.url()),
         key: Some("sk-secret".into()),
+        direct: true,
         ..Endpoint::default()
     }
 }
@@ -840,6 +841,7 @@ fn cancelling_from_another_thread_ends_a_blocked_read() {
     let (url, _hold) = stalling_server();
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let call: Arc<dyn ModelCall> = Arc::from(Responses::new(endpoint).call(&request()));
@@ -921,6 +923,7 @@ fn a_connection_closed_before_any_response_fails_the_call() {
     });
     let endpoint = Endpoint {
         base_url: url,
+        direct: true,
         ..Endpoint::default()
     };
     let (result, _) = run(Responses::new(endpoint).call(&request()));
@@ -1049,4 +1052,58 @@ fn wire_tools_is_what_the_request_sends() {
     assert_eq!(by_name("a_loose"), json!(false));
     assert_eq!(by_name("z_enum"), json!(true));
     assert_eq!(sent.as_array().unwrap().len(), 24);
+}
+
+#[test]
+fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
+    // OpenAI's Responses API defines no error field on a function-call
+    // output (openai-openapi `FunctionCallOutputItemParam` /
+    // `FunctionToolCallOutput`: `type, call_id, output, id, name,
+    // namespace, caller, status`, where `status` is item progress, not tool
+    // failure), so the flag is ignored.
+    let conversation = |is_error: bool| {
+        vec![
+            Input::ToolCall {
+                action_id: ActionId("a_1".into()),
+                call: ToolCallRequested {
+                    name: "get_weather".into(),
+                    arguments: json!({"city": "Paris"}),
+                    provider_id: Some(ProviderCallId("call_1".into())),
+                    repair: None,
+                    ran_by: None,
+                },
+            },
+            Input::ToolResult {
+                action_id: ActionId("a_1".into()),
+                text: "boom".into(),
+                is_error,
+            },
+        ]
+    };
+    let input = |is_error: bool| {
+        let server = ProviderServer::start([Response::stream(stream(&[completed(
+            "completed",
+            json!({}),
+        )]))])
+        .unwrap();
+        let request = ModelRequest {
+            conversation: conversation(is_error),
+            ..request()
+        };
+        run(Box::new(
+            Responses::new(endpoint(&server)).request(&request),
+        ))
+        .0
+        .unwrap();
+        sent_body(&server, 0)["input"].clone()
+    };
+    assert_eq!(
+        input(true),
+        json!([
+            {"type": "function_call", "call_id": "call_1",
+             "name": "get_weather", "arguments": "{\"city\":\"Paris\"}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": "boom"}
+        ])
+    );
+    assert_eq!(input(true), input(false));
 }
