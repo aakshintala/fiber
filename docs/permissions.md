@@ -106,11 +106,16 @@ no block budget.
 
 ### Fast paths
 
-Three classes of call never reach a reviewer or a person:
+Four classes of call never reach a reviewer or a person:
 
 - every call whose only effect is `reads`, or that declares no effect,
 - a `writes` call whose paths all sit inside the **workspace**, none of them
-  under `.git/` or `.fiber/`, and
+  under `.git/` or `.fiber/`,
+- a `writes` call whose paths are all Markdown files (`.md`) inside extension
+  data directories, `data/<name>/` or `projects/<key>/data/<name>/` in Fiber
+  home (`docs/state.md`, "What each part holds"), whichever tool makes it. Paths are
+  resolved first, so a path that leads out of a data directory through a link
+  does not qualify, and
 - a call whose only effect is `network` and whose declared hosts are all
   known in the session (`docs/tools.md`, "What a tool declares"). A web
   search declares an empty host list and a web fetch declares its URL's host,
@@ -118,8 +123,13 @@ Three classes of call never reach a reviewer or a person:
   "Web fetch and web search"). A call that declares no host list, or names a
   host that is not known, is reviewed.
 
-Everything else — shell execution, other network calls, and any write outside the
-workspace — is reviewed. A write under `.git/` or `.fiber/` is reviewed too: a hook or
+Memory layers keep their notes and pages as Markdown in extension data
+directories, so saving one costs no model call. The limit to Markdown keeps
+this path off files an extension may load as code or trust as settings, such
+as a Lua file or a JSON index; a write to one is reviewed.
+
+Everything else — shell execution, other network calls, and any other write
+outside the workspace — is reviewed. A write under `.git/` or `.fiber/` is reviewed too: a hook or
 `.git/config` runs code on the next `git` command, which the reviewer judges
 as `git commit` without seeing the hook, and `.fiber/` holds the repository's
 configuration, including the extensions, hooks and MCP servers it declares.

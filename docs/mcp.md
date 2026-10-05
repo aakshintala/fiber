@@ -108,8 +108,8 @@ so Fiber cannot do better. Every call to one MCP tool declares the same effects,
 whatever its arguments.
 
 An MCP tool declares no paths. A `reads` call takes the permission fast path. A
-`writes` call never does, because the workspace fast path needs paths inside
-the workspace. The credential deny (`docs/permissions.md`, "Credentials") cannot
+`writes` call never does, because both write fast paths need the paths a
+call writes. The credential deny (`docs/permissions.md`, "Credentials") cannot
 see what an MCP tool touches, as it cannot for a shell command it does not
 recognize.
 
