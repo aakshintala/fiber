@@ -421,6 +421,17 @@ fn samples() -> Vec<(&'static str, Value)> {
             "answers": [{"skipped": true}, {"labels": ["a"], "text": "t"}, {"labels": []}]}),
         ),
         (
+            "repository_code_offered",
+            json!({"request_id": "r", "items": [
+                {"kind": "extension", "name": "n", "hash": "h", "required": true,
+                 "summary": "s", "version": "1.0.0", "diff": "d"},
+                {"kind": "mcp_server", "name": "m", "hash": "h", "required": false, "summary": "s"}]}),
+        ),
+        (
+            "repository_code_resolved",
+            json!({"request_id": "r", "decisions": ["approve", "skip", "never"]}),
+        ),
+        (
             "usage_recorded",
             json!({"generation_id": "g", "model": "p/m", "tokens": tokens,
             "web_searches": 1, "cost": 0.25, "subscription": true, "extension": "e",

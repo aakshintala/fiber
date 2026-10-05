@@ -240,15 +240,17 @@ Most of a provider is data. For the provider:
 For each model:
 
 - its id, as the vendor spells it
-- its protocol and base URL, which can differ between models of one provider
+- its protocol and base URL, which can differ between models of one provider,
+  and may name a per-account host ("A per-account host")
 - compatibility flags the native protocol reads, such as whether the vendor
   accepts `store`, which field carries the token limit, and which thinking
   dialect it speaks
 - the thinking levels it supports ("Thinking")
 - whether deferred tools work for it, declared only after a probe
   (`docs/tools.md`, "Which tools the model sees")
-- whether its provider hosts a web search for it, and which variant
-  (`docs/tools.md`, "Web fetch and web search")
+- `web_search`: the vendor's own hosted-search tool type, exactly as it is
+  sent, such as `web_search_20250305` or `google_search`; absent when the
+  model's provider hosts no search for it ("Hosted web search")
 - extra request body fields, which may not name a field Fiber builds
   itself ("Extra request body fields")
 - a prompt addendum, text appended to the system prompt for this model only
@@ -282,6 +284,38 @@ with the notice `model_invalid` naming the model and the field. The same
 applies to a model a provider's `models()` function returns. So the tools
 and system prompt in the session log are always the ones sent, and the tool
 set is fixed for a given Fiber build.
+
+### Hosted web search
+
+A model's `web_search` names the vendor's hosted-search tool type as the
+vendor spells it. Each protocol accepts only the types its code reads back
+(`docs/tools.md`, "Hosted by the provider"). A model whose `web_search` names
+any other type is left out of the model list, with the notice
+`model_invalid` naming the model and the type, as for a forbidden
+`extra_body` field.
+
+### A per-account host
+
+Some providers serve each account from its own host, such as a Databricks
+workspace, an Azure resource or a Vertex region. A model's `base_url` names
+that part with a placeholder, `{name}`:
+
+```json
+"base_url": "https://{workspace}/ai-gateway/anthropic"
+```
+
+The extension's manifest lists the same pattern under `providers`
+(`docs/extensions.md`, "What a package holds"), so an install or an offer
+shows where the host comes from. The value is one of the extension's own
+settings, which only the person sets (`docs/configuration.md`, "Extension
+settings"), globally or per project, with `fiber config set` or in
+`config/<extension>.json`. The package may name an environment variable to
+read when the setting is unset, such as `DATABRICKS_HOST`. A placeholder's
+setting is never a `repo_settings` key, so a repository never sets it, as it
+never changes a base URL ("Choosing the model").
+
+A model whose placeholder has no value is left out of the model list, with
+the notice `model_unconfigured` naming the model and the setting.
 
 ### openai-completions facts
 

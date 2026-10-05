@@ -425,12 +425,13 @@ provider extension declares") lists:
 {
   "name": "databricks",
   "credential": { "env": "DATABRICKS_TOKEN" },
+  "placeholders": { "workspace": { "env": "DATABRICKS_HOST" } },
   "headers": { "x-databricks-client": "fiber" },
   "models": [
     {
       "id": "databricks-claude-opus-5",
       "protocol": "anthropic-messages",
-      "base_url": "https://example.cloud.databricks.com/ai-gateway/anthropic",
+      "base_url": "https://{workspace}/ai-gateway/anthropic",
       "compat": { "store": false },
       "deferred_tools": true,
       "extra_body": {},
@@ -469,6 +470,15 @@ provider extension declares") lists:
   field Fiber builds, such as `tools` or `messages`; a model that does is
   left out with the notice `model_invalid` (`docs/model-routing.md`, "Extra
   request body fields").
+- A `{name}` in a `base_url` is a per-account host. Its value is the
+  extension's setting of that name, which only the person sets; `placeholders`
+  may name an environment variable read when the setting is unset. A model
+  whose placeholder has no value is left out with the notice
+  `model_unconfigured` (`docs/model-routing.md`, "A per-account host").
+- `web_search` is the vendor's hosted-search tool type as it is sent; absent,
+  the model hosts no search. A type its protocol does not read back leaves
+  the model out with `model_invalid` (`docs/model-routing.md`, "Hosted web
+  search").
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
 - `cost` is in US dollars per million tokens. A model priced by request size

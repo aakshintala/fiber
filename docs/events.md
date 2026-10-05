@@ -714,7 +714,38 @@ fixes their payloads. `ask_user` raises one `form` per call
 (`docs/tools.md`, "Asking the person"). MCP elicitation raises one interaction
 per field (`docs/mcp.md`, "Elicitation, sampling and roots"). They are durable
 for the reasons approvals are, and a reply naming a request that is no longer
-pending is rejected in the same way.
+pending is rejected in the same way. An offer of a repository's code has its
+own pair too ("Repository code").
+
+### Repository code
+
+#### `repository_code_offered`
+
+Durable. The offer of everything a repository declares that has no approval
+for this project and this content, raised before the session's first model
+request (`docs/extensions.md`, "Code a repository ships").
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the id a `reply` names |
+| `items` | array | yes | one per item offered, each: `kind` (string: `extension`, `hook` or `mcp_server`), `name` (string), `hash` (string, the content hash an approval records), `required` (boolean), `summary` (string, what an install shows), `version` (string, for an extension), and `diff` (string, against the copy approved before, when the content changed since an approval) |
+
+#### `repository_code_resolved`
+
+Durable. One decision per item, in the offer's order.
+
+| Key | Type | Required | Meaning |
+|---|---|---|---|
+| `request_id` | string | yes | the offer it answers |
+| `decisions` | array of strings | yes | per item: `approve`, `skip` (for this session) or `never`; a closed set |
+
+Only a person answers an offer, through a client's `reply`. A model never
+does, and an extension never does: `host.drive` sends no answer to an offer,
+as it sends none to an approval. A session with no client that can answer
+raises no offer and skips or fails each item instead
+(`docs/extensions.md`, "Code a repository ships"). The pair is durable so that
+a session that exited on a pending offer raises it again, with the same
+`request_id`, on resume.
 
 ### Usage and notices
 

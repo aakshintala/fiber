@@ -6,6 +6,7 @@
 mod action;
 mod context;
 mod host;
+mod offer;
 mod session;
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +33,9 @@ pub use host::{
     ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted,
     JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady, OnFork, ReloadFailure,
     Reloaded, ReloadedServers, ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
+};
+pub use offer::{
+    OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
 };
 pub use session::{
     Clients, ContextAdded, FiberExited, FiberStarted, FinalMessage, InputItem, NamedBy, Parent,
@@ -141,6 +145,8 @@ kinds! {
     PermissionResolved(PermissionResolved) = "permission_resolved", Durable;
     InteractionRequested(InteractionRequested) = "interaction_requested", Durable;
     InteractionResolved(InteractionResolved) = "interaction_resolved", Durable;
+    RepositoryCodeOffered(RepositoryCodeOffered) = "repository_code_offered", Durable;
+    RepositoryCodeResolved(RepositoryCodeResolved) = "repository_code_resolved", Durable;
     UsageRecorded(UsageRecorded) = "usage_recorded", Durable;
     QuotaNoticed(QuotaNoticed) = "quota_noticed", Durable;
     RetryScheduled(RetryScheduled) = "retry_scheduled", Ephemeral;
