@@ -84,6 +84,11 @@ repository's `docs/` tree at the release tag, without the documents about
 developing Fiber itself (`docs/agents/` and `docs/workflow.md`). It is the
 same for every target. Nothing in the binary embeds documentation.
 
+The release also carries `fiber-extensions.tar.gz` and its checksum file:
+every first-party extension at the release tag, the eleven directories under
+`providers/` and `extensions/hooks`. It is the same for every target. Nothing
+in the binary embeds an extension (`docs/extensions.md`, "A fresh install").
+
 Archive names carry no version, so
 `https://github.com/aakshintala/fiber/releases/latest/download/<archive>`
 always fetches the newest.
@@ -137,13 +142,17 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    warns without failing when that directory is not on `PATH`
 6. downloads the same release's docs archive, checks its SHA-256, and puts it
    in place as `docs/` in Fiber home, by extracting beside it and renaming
+7. downloads the same release's extensions archive, checks its SHA-256, and
+   installs each first-party extension under `extensions/` in Fiber home the
+   same way, recorded at the release's tag
 
 `FIBER_VERSION=0.3.0` installs that version instead of the newest, with that
-version's docs. Rolling back is installing an older version this way.
+version's docs and first-party extensions. Rolling back is installing an older
+version this way.
 
-`install.sh` installs no provider. The model picker installs one when a person
-chooses it, and `fiber extension install <name>` installs one on a headless machine
-(`docs/extensions.md`, "A fresh install").
+Running `install.sh` again reinstalls the first-party extensions, including
+one a person removed. `fiber update` never does: it updates only what is
+installed.
 
 There is no Homebrew formula and no `cargo install`.
 
@@ -164,10 +173,11 @@ It:
 2. if that version is newer than the running one, downloads the archive for
    the running binary's own target and its checksum file into the directory
    that holds the binary, checks the SHA-256 and extracts the binary there,
-   and downloads and checks the same release's docs archive
-3. stages each installed extension at its newest version whose manifest
-   accepts the Fiber version being installed, in a fresh directory
-   (`docs/state.md`, "What each part holds")
+   and downloads and checks the same release's docs and extensions archives
+3. stages each installed extension in a fresh directory (`docs/state.md`,
+   "What each part holds"): a first-party one from the extensions archive,
+   and any other at its newest version whose manifest accepts the Fiber
+   version being installed
 4. renames the staged extensions into place, then the docs, then the binary
 
 Every download and check finishes before the first rename, so a failure up to

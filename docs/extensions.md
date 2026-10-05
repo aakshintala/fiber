@@ -663,8 +663,15 @@ A person can declare a hook or a watcher as a command in configuration,
 without writing an extension. The first-party `hooks` extension,
 `github.com/aakshintala/fiber/extensions/hooks`, reads the declarations and
 registers each one as a real hook or watcher, so a declared hook follows every
-rule on this page. Whether a fresh install ships with it is not yet decided
-([#429](https://github.com/aakshintala/fiber/issues/429)).
+rule on this page. Installing Fiber installs it ("A fresh install"), and it
+loads only in a session whose configuration has a `hooks` key.
+
+If a person removed `hooks` and configuration still declares hooks, they are
+not silently dropped. When any entry is `blocking`, a headless run fails with
+`extension_missing`, and the terminal offers to install `hooks` before the
+session starts, so a guard never fails open. When every entry is
+`non-blocking`, the session starts and a `notice` names the missing
+extension.
 
 The declarations are the extension's settings (`docs/configuration.md`,
 "Extension settings"), under `hooks`, one entry per name, so each layer adds
@@ -1040,18 +1047,31 @@ tool set is fixed before the first request (`docs/prompt-cache.md`, "Tools").
 
 ### A fresh install
 
-A fresh install has no extensions, providers included. In the terminal, the
-model picker offers the first-party providers, and choosing one installs it.
-On a headless machine, `fiber extension install <name>` installs one. A headless run
-whose provider is not installed fails with `extension_missing`. An extension a
-repository declares and nobody has approved is skipped, or fails the run when
-the repository marks it `required` ("Code a repository ships").
+A fresh install has every first-party extension: the eleven providers and
+`hooks`. They arrive in the release's extensions archive, which `install.sh`
+installs beside the binary (`docs/releasing.md`), so a first run needs no
+`git` and no network beyond the download. They are ordinary extensions,
+recorded under their full names: nothing is compiled in, and
+`fiber extension remove <name>` removes any of them.
+
+A first-party extension costs nothing in a session that does not use it. A
+provider that is pure data is only read, a Lua provider first runs when a
+session uses one of its models, and `hooks` loads only when configuration has
+a `hooks` key.
+
+A person who removed a provider can install it again with
+`fiber extension install <name>`, or by choosing it in the terminal's model
+picker. A headless run whose provider is not installed fails with
+`extension_missing`. An extension a repository declares and nobody has
+approved is skipped, or fails the run when the repository marks it `required`
+("Code a repository ships").
 
 ### Staying current
 
 `fiber update` updates the Fiber binary and every installed extension
 together, so a new Fiber and the extensions written for it arrive at the same
-time. A repository's extensions are not among them: one changes only through a
+time. The first-party extensions come from the same release's extensions
+archive, so they always match the binary. A repository's extensions are not among them: one changes only through a
 new offer ("Code a repository ships"). `fiber extension update <name>` updates one extension, and
 `fiber extension update` with no name updates every extension.
 
