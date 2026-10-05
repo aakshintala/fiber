@@ -131,6 +131,7 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -146,19 +147,19 @@ fn a_rate_limit_then_a_reply_retries_after_2s() {
         ]
     );
     assert_eq!(attempts(&lines), [1]);
-    let failed_message = &lines[4];
-    let completed = &lines[5].payload;
+    let failed_message = &lines[5];
+    let completed = &lines[6].payload;
     assert_eq!(completed["outcome"], "failed");
     assert_eq!(completed["attempt"], 1);
     assert_eq!(completed["error"]["code"], "rate_limited");
     // The retry is a new action: its `retry_scheduled` names the failed
     // message, the next attempt and the wait.
-    let wait = &lines[6];
+    let wait = &lines[7];
     assert_eq!(wait.action_id, failed_message.action_id);
     assert_eq!(wait.payload["code"], "rate_limited");
     assert_eq!(wait.payload["attempt"], 2);
     assert_eq!(wait.payload["delay_ms"], 2000);
-    assert_ne!(lines[7].action_id, failed_message.action_id);
+    assert_ne!(lines[8].action_id, failed_message.action_id);
     // The failed attempt writes no `usage_recorded`; the retry's reply does,
     // before its completion.
     assert_eq!(completed_count(&lines, "usage_recorded"), 1);
@@ -199,6 +200,7 @@ fn three_failures_then_success_waits_2_4_8s() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -261,6 +263,7 @@ fn four_failures_exhaust_the_retries_with_the_last_error() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -307,6 +310,7 @@ fn a_never_retried_code_fails_at_once() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -333,6 +337,7 @@ fn x_should_retry_false_stops_a_5xx_at_once() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -363,6 +368,7 @@ fn x_should_retry_true_retries_an_invalid_request() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -409,6 +415,7 @@ fn an_asked_wait_within_the_cap_waits_the_larger() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -437,6 +444,7 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -445,7 +453,7 @@ fn an_asked_wait_over_the_cap_fails_at_once_as_rate_limited() {
         ]
     );
     assert_eq!(attempts(&lines), [1]);
-    let completed = &lines[5].payload;
+    let completed = &lines[6].payload;
     assert_eq!(completed["error"]["code"], "rate_limited");
     assert_eq!(completed["error"]["retry_after"], 90.0);
     assert!(lines.iter().all(|l| l.kind != "retry_scheduled"));
@@ -492,6 +500,7 @@ fn a_failed_stream_drops_its_partial_text_and_tool_calls() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -530,6 +539,7 @@ fn zero_attempts_never_retries() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -566,6 +576,7 @@ fn a_cancel_during_the_wait_ends_the_turn_interrupted() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -593,6 +604,7 @@ fn a_cancel_during_the_failing_call_is_interrupted_with_no_wait() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -639,6 +651,7 @@ fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",

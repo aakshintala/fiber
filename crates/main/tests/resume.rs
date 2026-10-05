@@ -358,6 +358,7 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
             "session_started",
             "fiber_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -377,7 +378,8 @@ fn a_second_ask_with_a_unique_prefix_continues_the_session() {
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
     assert_eq!(second.session_id(), id);
     assert_eq!(second.lines[0]["payload"]["resumed"], true);
-    // No `session_started`: the session keeps its first line.
+    // No `session_started`: the session keeps its first line. No
+    // `opening_message` either: the log already holds one.
     assert_eq!(
         second.kinds(),
         [
@@ -445,6 +447,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
         [
             "fiber_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -489,6 +492,7 @@ fn a_resumed_run_sends_the_fixed_results_and_writes_no_call_started() {
             "tool_call_requested",
             "fiber_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -545,6 +549,7 @@ fn the_logs_last_model_beats_the_flag_and_the_default() {
         [
             "fiber_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -607,6 +612,7 @@ fn a_held_session_fails_session_held() {
             "session_started",
             "fiber_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -649,6 +655,7 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
             "session_started",
             "fiber_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",

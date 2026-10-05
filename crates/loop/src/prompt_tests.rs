@@ -7,19 +7,33 @@
     reason = "test code; a failure is the test's"
 )]
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use super::{PromptInputs, fill, section, system_prompt};
 
+/// Every optional input absent, for system prompt tests: the opening
+/// message fields never reach `system_prompt`.
+fn empty_inputs() -> PromptInputs {
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    PromptInputs::new(
+        PathBuf::from("/test-home"),
+        "/bin/sh".into(),
+        "/test-home/s_test/events.jsonl".into(),
+        clock,
+    )
+}
+
 fn full_inputs() -> PromptInputs {
-    PromptInputs {
-        system: Some("Custom system.".into()),
-        append: Some("Appendix.".into()),
-        addendum: Some("Addendum.".into()),
-        extensions: vec![
-            ("zeta".into(), "Z text.".into()),
-            ("alpha".into(), "A text.".into()),
-        ],
-        context_window: None,
-    }
+    let mut inputs = empty_inputs();
+    inputs.system = Some("Custom system.".into());
+    inputs.append = Some("Appendix.".into());
+    inputs.addendum = Some("Addendum.".into());
+    inputs.extensions = vec![
+        ("zeta".into(), "Z text.".into()),
+        ("alpha".into(), "A text.".into()),
+    ];
+    inputs
 }
 
 fn tools() -> Vec<(String, Option<String>, bool)> {
@@ -55,7 +69,7 @@ fn system_md_replaces_fibers_text_and_keeps_the_rest() {
 
 #[test]
 fn default_inputs_use_fibers_text() {
-    let prompt = system_prompt(&PromptInputs::default(), "m", false, &[]);
+    let prompt = system_prompt(&empty_inputs(), "m", false, &[]);
     assert!(prompt.contains("operating inside Fiber"));
 }
 
@@ -65,33 +79,31 @@ fn deferred_tools_leave_their_guidelines_out() {
         ("read".into(), Some("Read guide.".into()), true),
         ("write".into(), Some("Write guide.".into()), false),
     ];
-    let prompt = system_prompt(&PromptInputs::default(), "m", false, &tools);
+    let prompt = system_prompt(&empty_inputs(), "m", false, &tools);
     assert!(!prompt.contains("Read guide."));
     assert!(prompt.contains("Write guide."));
 }
 
 #[test]
 fn unattended_line_only_when_unattended() {
-    let plain = system_prompt(&PromptInputs::default(), "m", false, &[]);
+    let plain = system_prompt(&empty_inputs(), "m", false, &[]);
     assert!(!plain.contains("Nobody is present"));
-    let away = system_prompt(&PromptInputs::default(), "m", true, &[]);
+    let away = system_prompt(&empty_inputs(), "m", true, &[]);
     assert!(away.contains("Nobody is present"));
 }
 
 #[test]
 fn empty_parts_leave_no_blank_line() {
-    let prompt = system_prompt(&PromptInputs::default(), "m", false, &[]);
+    let prompt = system_prompt(&empty_inputs(), "m", false, &[]);
     assert!(!prompt.contains("\n\n\n"));
     assert!(!prompt.contains("# Tools"));
     assert!(!prompt.contains("Appendix"));
     // Whitespace-only files count as absent.
-    let inputs = PromptInputs {
-        system: Some("   \n".into()),
-        append: Some("\n".into()),
-        addendum: Some("  ".into()),
-        extensions: vec![("e".into(), "  ".into())],
-        context_window: None,
-    };
+    let mut inputs = empty_inputs();
+    inputs.system = Some("   \n".into());
+    inputs.append = Some("\n".into());
+    inputs.addendum = Some("  ".into());
+    inputs.extensions = vec![("e".into(), "  ".into())];
     let prompt = system_prompt(&inputs, "m", false, &[]);
     assert!(prompt.contains("operating inside Fiber"));
     assert!(!prompt.contains("# Tools"));

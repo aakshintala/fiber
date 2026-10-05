@@ -201,16 +201,12 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
     let credentials = home.path().join("credentials");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&credentials).unwrap();
-    let log = Arc::new(
-        Log::create(
-            home.path(),
-            SessionId("s_test".into()),
-            fakes::clock::FakeClock::new(),
-        )
-        .unwrap(),
-    );
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log =
+        Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
     let (_inbox, rx) = mpsc::channel::<Delivery>();
     let rules: Arc<dyn Rules> = rules;
+    let prompt_clock: Arc<dyn contract::clock::Clock> = clock;
     let looped = Loop::start(
         log,
         Arc::new(fakes::ScriptedProvider::new(Vec::new())),
@@ -219,7 +215,15 @@ fn start(rules: Arc<FakeRules>) -> (Loop, fakes::TempDir, PathBuf, PathBuf) {
             cost: None,
             subscription: false,
         },
-        crate::prompt::PromptInputs::default(),
+        crate::prompt::PromptInputs::new(
+            home.path().to_path_buf(),
+            "/bin/sh".into(),
+            home.path()
+                .join("s_test/events.jsonl")
+                .display()
+                .to_string(),
+            prompt_clock,
+        ),
         rx,
         Vec::new(),
         crate::Permissions {

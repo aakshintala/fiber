@@ -131,6 +131,7 @@ impl Rendered {
             // not compile until it is placed.
             Event::TurnStarted(_)
             | Event::SteeringApplied(_)
+            | Event::OpeningMessage(_)
             | Event::AssistantMessageStarted(_) => {
                 self.flush();
                 render(&mut self.conversation, event, action, model);
@@ -168,7 +169,6 @@ impl Rendered {
             | Event::Notice(_)
             | Event::PreambleBuilt(_)
             | Event::ModelChanged(_)
-            | Event::OpeningMessage(_)
             | Event::InstructionFile(_)
             | Event::DateChanged(_)
             | Event::SkillsChanged(_)
@@ -246,6 +246,15 @@ pub(crate) fn render(
             }
         }
         Event::SteeringApplied(steering) => conversation.push(user(&steering.content)),
+        // The opening message is rendered from its logged fields only, so
+        // a resume renders the identical bytes; it is the conversation's
+        // first message (`docs/system-prompt.md`, "Recording").
+        // debt: the skills listing is always empty; fixed by #511.
+        Event::OpeningMessage(message) => {
+            conversation.push(Input::User {
+                text: crate::opening::render(message),
+            });
+        }
         Event::ReasoningCompleted(reasoning) => conversation.push(Input::Reasoning {
             model: model.to_owned(),
             text: reasoning.text.clone(),
@@ -307,7 +316,6 @@ pub(crate) fn render(
         | Event::Notice(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
-        | Event::OpeningMessage(_)
         | Event::InstructionFile(_)
         | Event::DateChanged(_)
         | Event::SkillsChanged(_)

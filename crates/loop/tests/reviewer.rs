@@ -97,7 +97,11 @@ fn usages(lines: &[Envelope]) -> Vec<&Envelope> {
 /// the decision lines and `reviews` reviewer `usage_recorded` lines after
 /// the reply's own.
 fn kinds_with(middle: &[&str], reviews: usize) -> Vec<String> {
-    let mut kinds = vec!["session_started".to_owned(), "preamble_built".to_owned()];
+    let mut kinds = vec![
+        "session_started".to_owned(),
+        "preamble_built".to_owned(),
+        "opening_message".to_owned(),
+    ];
     kinds.extend(kinds_next(middle, reviews));
     kinds
 }
@@ -363,6 +367,7 @@ fn a_second_call_is_reviewed_with_the_first_as_history() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -511,6 +516,7 @@ fn a_failed_reviewer_call_escalates_with_its_failure() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -575,6 +581,7 @@ fn with_no_reviewer_every_reviewed_call_goes_to_a_person_with_one_notice() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -802,6 +809,7 @@ fn the_session_limit_escalates_with_a_raised_consecutive_limit() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -989,6 +997,7 @@ fn a_headless_session_ends_the_turn_once_the_block_budget_runs_out() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1122,6 +1131,7 @@ fn headless_failures_count_toward_the_block_budget() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1187,6 +1197,7 @@ fn a_review_at_the_spending_budget_denies_without_sending() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1271,6 +1282,7 @@ fn failures_without_an_answer_count_toward_the_consecutive_limit() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1385,6 +1397,7 @@ fn close_taken_during_an_escalation_leaves_later_calls_unanswerable() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1500,6 +1513,7 @@ fn close_taken_during_an_escalation_leaves_a_later_standing_ask_unanswerable() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1582,6 +1596,7 @@ fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
         [
             "session_started",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",

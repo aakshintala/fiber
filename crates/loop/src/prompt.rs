@@ -2,10 +2,13 @@
 //! `section` splitter every prompt file goes through, `fill` for its
 //! placeholders, and the system prompt assembly.
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
-/// system prompt" and `docs/prompt-cache.md`, "The preamble"). Every
-/// optional input absent is [`PromptInputs::default`].
-#[derive(Debug, Clone, Default)]
+/// system prompt" and `docs/prompt-cache.md`, "The preamble").
+/// [`PromptInputs::new`] returns every optional input absent.
+#[derive(Clone)]
 pub struct PromptInputs {
     /// `SYSTEM.md` text.
     pub system: Option<String>,
@@ -19,6 +22,38 @@ pub struct PromptInputs {
     pub extensions: Vec<(String, String)>,
     /// The model's context window, in tokens.
     pub context_window: Option<u64>,
+    /// Fiber home, for the global `AGENTS.md`.
+    pub home: PathBuf,
+    /// The shell, or `unknown` when `SHELL` is unset.
+    pub shell: String,
+    /// The session log's path.
+    pub session_log: String,
+    /// The clock the opening message's date is read from.
+    pub clock: Arc<dyn contract::clock::Clock>,
+}
+
+impl PromptInputs {
+    /// Every optional input absent: `home` is Fiber home, `shell` the
+    /// shell or `unknown`, `session_log` the session log's path and
+    /// `clock` the clock the date is read from.
+    pub fn new(
+        home: PathBuf,
+        shell: String,
+        session_log: String,
+        clock: Arc<dyn contract::clock::Clock>,
+    ) -> Self {
+        Self {
+            system: None,
+            append: None,
+            addendum: None,
+            extensions: Vec::new(),
+            context_window: None,
+            home,
+            shell,
+            session_log,
+            clock,
+        }
+    }
 }
 
 const SYSTEM_MD: &str = include_str!("../prompt/system.md");
@@ -88,7 +123,7 @@ pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
 
 /// The body of a `messages.md` section: its `## name` line dropped and
 /// blank lines at either end removed, ready to `fill`.
-fn body(md: &str, name: &str) -> String {
+pub(crate) fn body(md: &str, name: &str) -> String {
     section(md, name)
         .lines()
         .skip(1)

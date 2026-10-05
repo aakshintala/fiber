@@ -12,8 +12,9 @@
 mod support;
 
 use contract::events::{
-    CallStatus, Empty, Event, InputItem, ReasoningCompleted, SteeringApplied, TextCompleted,
-    ToolCallCompleted, ToolCallRequested, ToolCallStarted, TurnStarted,
+    CallStatus, Empty, Environment, Event, InputItem, OpeningMessage, ReasoningCompleted,
+    SteeringApplied, TextCompleted, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
+    TurnStarted,
 };
 use contract::provider::Input;
 use contract::shapes::{ContentPart, DeclaredEffects, Origin, Sender};
@@ -527,6 +528,18 @@ use contract::{ErrorCode, GenerationId};
 use fakes::{Scripted, ScriptedProvider};
 use r#loop::{Loop, Model};
 
+/// `PromptInputs` over temp `home` with a fixed shell: the opening message
+/// reads no real files.
+fn resume_prompt(home: &std::path::Path) -> r#loop::PromptInputs {
+    let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    r#loop::PromptInputs::new(
+        home.to_path_buf(),
+        "/bin/sh".into(),
+        home.join("events.jsonl").display().to_string(),
+        clock,
+    )
+}
+
 /// A history log with helpers, then a resumed loop on it.
 struct History {
     _root: fakes::TempDir,
@@ -627,6 +640,12 @@ impl History {
         }
     }
 
+    /// `PromptInputs` over a temp home with a fixed shell: the opening
+    /// message reads no real files.
+    fn prompt(&self) -> r#loop::PromptInputs {
+        resume_prompt(self._root.path())
+    }
+
     fn resume(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
         let lines = self.lines();
         Loop::resume(
@@ -634,7 +653,7 @@ impl History {
             &lines,
             Arc::clone(&self.provider) as Arc<dyn contract::provider::Provider>,
             Self::model(),
-            r#loop::PromptInputs::default(),
+            self.prompt(),
             self.inbox_rx.take().unwrap(),
             tools,
             r#loop::Permissions {
@@ -727,7 +746,7 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
-    assert_eq!(conversation.len(), 4);
+    assert_eq!(conversation.len(), 5);
     assert!(matches!(&conversation[0], Input::User { text } if text == "one"));
     let Input::ToolCall { action_id, .. } = &conversation[1] else {
         panic!("{conversation:?}");
@@ -737,7 +756,12 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
     assert!(is_error);
-    assert!(matches!(&conversation[3], Input::User { text } if text == "two"));
+    // The log holds no opening message, so the resume writes one at its
+    // first turn, after the rebuilt history.
+    assert!(
+        matches!(&conversation[3], Input::User { text } if text.starts_with("This message is from Fiber"))
+    );
+    assert!(matches!(&conversation[4], Input::User { text } if text == "two"));
     // `sent` is the conversation's length at the dead process's last
     // `assistant_message_started`: the previous request ended after "one".
     assert_eq!(requests[0].previous_end, Some(1));
@@ -748,6 +772,7 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -781,6 +806,7 @@ fn resume_writes_no_session_started_and_seq_continues() {
             "turn_started",
             "tool_call_requested",
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -867,6 +893,7 @@ fn a_session_grant_from_before_the_resume_is_honoured() {
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -908,6 +935,7 @@ fn budget_counts_spend_from_before_the_resume() {
         kinds,
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "turn_completed"
@@ -969,7 +997,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         &lines,
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
-        r#loop::PromptInputs::default(),
+        history.prompt(),
         rx,
         vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
         r#loop::Permissions {
@@ -1001,6 +1029,7 @@ fn reviewer_denies_from_before_the_resume_count_toward_the_session_limit() {
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1070,7 +1099,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         &lines,
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
-        r#loop::PromptInputs::default(),
+        history.prompt(),
         rx,
         vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
         r#loop::Permissions {
@@ -1101,6 +1130,7 @@ fn non_reviewer_denies_from_before_the_resume_do_not_count() {
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1159,7 +1189,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
         &lines,
         Arc::clone(&history.provider) as Arc<dyn Provider>,
         History::model(),
-        r#loop::PromptInputs::default(),
+        history.prompt(),
         rx,
         vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)],
         r#loop::Permissions {
@@ -1188,6 +1218,7 @@ fn the_reviewers_first_request_contains_the_earlier_tool_calls() {
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1245,7 +1276,7 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
-    assert_eq!(conversation.len(), 4);
+    assert_eq!(conversation.len(), 5);
     let (id, text, _) = result_of(&conversation[2]);
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
@@ -1254,6 +1285,7 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1285,6 +1317,50 @@ fn a_resume_builds_the_preamble_with_reason_resume() {
 }
 
 #[test]
+fn a_resume_over_a_log_with_an_opening_message_writes_none() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    // The log already holds an opening message, written before the turn
+    // and rendered from its logged fields only: `test-os` never ran, so
+    // the conversation proves it.
+    history.write(
+        Event::OpeningMessage(OpeningMessage {
+            environment: Environment {
+                date: "2023-11-14".into(),
+                os: "test-os".into(),
+                arch: "test-arch".into(),
+                shell: "/bin/sh".into(),
+                workspace: history.workspace.clone(),
+                git: None,
+                session_log: "test-log".into(),
+            },
+            instruction_files: Vec::new(),
+            skills: Vec::new(),
+        }),
+        None,
+    );
+    history.write(user_turn("one"), None);
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    history.run(looped, "two");
+
+    assert!(
+        history
+            .new_lines()
+            .iter()
+            .all(|line| line.kind != "opening_message"),
+        "{:?}",
+        history.new_kinds()
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let conversation = &requests[0].conversation;
+    assert!(matches!(&conversation[0], Input::User { text } if text.contains("test-os")));
+    assert!(matches!(&conversation[1], Input::User { text } if text == "one"));
+    assert!(matches!(&conversation[2], Input::User { text } if text == "two"));
+}
+
+#[test]
 fn no_request_before_the_resume_leaves_previous_end_absent() {
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
@@ -1301,6 +1377,7 @@ fn no_request_before_the_resume_leaves_previous_end_absent() {
         history.new_kinds(),
         [
             "preamble_built",
+            "opening_message",
             "turn_started",
             "step_started",
             "assistant_message_started",
@@ -1404,7 +1481,7 @@ fn resume_fails_log_corrupt_on_a_log_with_no_session_started() {
         &lines,
         Arc::new(ScriptedProvider::new(vec![])) as Arc<dyn Provider>,
         History::model(),
-        r#loop::PromptInputs::default(),
+        resume_prompt(root.path()),
         rx,
         Vec::new(),
         r#loop::Permissions {
