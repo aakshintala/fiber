@@ -624,3 +624,45 @@ fn a_call_on_an_extension_with_no_thread_is_stopped() {
     let err = returned(shared.judge("ext", id, &command("x"), at, at)).unwrap_err();
     assert!(matches!(err, Error::Stopped { .. }), "{err:?}");
 }
+
+/// A credential lock on a fresh file, and a second handle on it.
+fn held_lock(tag: &str) -> (fakes::TempDir, config::CredentialFile, host::Reply) {
+    let home = fakes::TempDir::new(&format!("fiber-lua-{tag}"));
+    let file = config::CredentialFile::new(home.path(), "acme", "default").unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    (home, file, host::Reply::Lock(Ok(lock)))
+}
+
+#[test]
+fn a_lock_reply_for_a_stopped_extension_is_dropped_and_releases_the_lock() {
+    let (_home, file, reply) = held_lock("deliver-stopped");
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().phase = Phase::Stopped(hub::stopped("ext"));
+    assert!(file.try_lock().unwrap().is_none());
+    hub.deliver(7, reply);
+    assert!(hub.lock().replies.is_empty());
+    assert!(file.try_lock().unwrap().is_some());
+}
+
+#[test]
+fn a_lock_reply_queued_when_the_extension_stops_is_dropped_and_releases_the_lock() {
+    let (_home, file, reply) = held_lock("stop-queued");
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().phase = Phase::Ready(CallbackTimeouts::default());
+    hub.deliver(7, reply);
+    assert_eq!(hub.lock().replies.len(), 1);
+    assert!(file.try_lock().unwrap().is_none());
+    hub.lock().stop(hub::stopped("ext"));
+    assert!(hub.lock().replies.is_empty());
+    assert!(file.try_lock().unwrap().is_some());
+}
+
+#[test]
+fn a_lock_reply_for_a_ready_extension_is_kept_with_its_lock() {
+    let (_home, file, reply) = held_lock("deliver-ready");
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().phase = Phase::Ready(CallbackTimeouts::default());
+    hub.deliver(7, reply);
+    assert_eq!(hub.lock().replies.len(), 1);
+    assert!(file.try_lock().unwrap().is_none());
+}
