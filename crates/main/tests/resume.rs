@@ -960,3 +960,129 @@ fn a_changed_append_system_changes_the_resumed_request() {
         second_body["instructions"]
     );
 }
+
+/// A standing-ask approval carrying `request_id`.
+fn ask_request(request_id: &str) -> Event {
+    Event::PermissionRequested(contract::events::PermissionRequested {
+        request_id: contract::RequestId(request_id.into()),
+        declared: DeclaredEffects {
+            effects: vec![contract::shapes::Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        step: contract::events::AskStep::StandingAsk {
+            standing_rule: contract::events::StandingRule {
+                scope: contract::events::RuleScope::Project,
+                prefix: "run tests".into(),
+            },
+        },
+    })
+}
+
+fn msg_started() -> Event {
+    Event::AssistantMessageStarted(contract::events::Empty {})
+}
+
+fn fiber_start() -> Event {
+    Event::FiberStarted(contract::events::FiberStarted {
+        version: "0.0.0".into(),
+        resumed: false,
+    })
+}
+
+fn fiber_exit(suspended_on: Option<&str>) -> Event {
+    Event::FiberExited(contract::events::FiberExited {
+        exit_code: 0,
+        usage: contract::shapes::Usage {
+            tokens: contract::shapes::Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: Default::default(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        final_message: None,
+        error: None,
+        suspended_on: suspended_on.map(|id| contract::RequestId(id.into())),
+        questions: None,
+    })
+}
+
+#[test]
+fn a_suspended_approval_is_refused_then_the_prompt_runs_next() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    hand_built(
+        &setup,
+        "s_susp1",
+        vec![
+            (turn_started("one"), Some(t()), None),
+            (msg_started(), Some(t()), Some(a("a_0"))),
+            (requested("search"), Some(t()), Some(a("a_1"))),
+            (ask_request("r_9"), Some(t()), Some(a("a_1"))),
+            (fiber_start(), None, None),
+            (fiber_exit(Some("r_9")), None, None),
+        ],
+    );
+    let events = setup.sessions().join("s_susp1").join("events.jsonl");
+    let before = fs::read(&events).unwrap().len();
+
+    let run = setup.fiber(&["ask", "--resume", "s_susp1", "next"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.session_id(), "s_susp1");
+    assert_eq!(run.lines[0]["payload"]["resumed"], true);
+    // No `turn_started` for the finishing turn: it completes the
+    // suspended one, then the prompt starts its own.
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+
+    // The re-raised `request_id` matches the original, on both lines.
+    let raised = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "permission_requested")
+        .unwrap();
+    assert_eq!(raised["payload"]["request_id"], "r_9");
+    let resolved = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["request_id"], "r_9");
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "standing_rule");
+
+    // Stdout's durable lines are the log's tail, byte for byte.
+    let log = fs::read_to_string(&events).unwrap();
+    assert_eq!(&log[before..], &run.durable());
+}

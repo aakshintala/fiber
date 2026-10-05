@@ -1495,3 +1495,1047 @@ fn resume_fails_log_corrupt_on_a_log_with_no_session_started() {
     };
     assert_eq!(error.code(), ErrorCode::LogCorrupt);
 }
+
+// #302 part 3: re-raising a pending approval on resume.
+
+use std::sync::Mutex;
+
+use contract::events::{
+    AskStep, Escalation, FiberExited, FiberStarted, Interaction, InteractionRequested,
+    PermissionRequested, RuleOffer, RuleScope, StandingRule, TurnCompleted,
+    TurnOutcome as CompletedOutcome,
+};
+use contract::inbox::{Ack, Answer};
+use contract::shapes::{Effect, Usage};
+
+/// A standing-ask approval for `action`, carrying `request_id`.
+fn standing_request(request_id: &str) -> Event {
+    Event::PermissionRequested(PermissionRequested {
+        request_id: contract::RequestId(request_id.into()),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        step: AskStep::StandingAsk {
+            standing_rule: StandingRule {
+                scope: RuleScope::Project,
+                prefix: "run tests".into(),
+            },
+        },
+    })
+}
+
+/// A review approval for `action`, carrying `request_id`, an escalation and
+/// a rule offer.
+fn review_request(request_id: &str) -> Event {
+    Event::PermissionRequested(PermissionRequested {
+        request_id: contract::RequestId(request_id.into()),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: true,
+            paths: None,
+        },
+        step: AskStep::Review {
+            escalation: Some(Escalation::ConsecutiveBlocks {
+                reason: "it writes".into(),
+            }),
+            rule: Some(RuleOffer {
+                subject: "run tests".into(),
+                prefix: "run tests".into(),
+            }),
+        },
+    })
+}
+
+fn fiber_started() -> Event {
+    Event::FiberStarted(FiberStarted {
+        version: "0.0.0".into(),
+        resumed: false,
+    })
+}
+
+fn fiber_exited(suspended_on: Option<&str>) -> Event {
+    Event::FiberExited(FiberExited {
+        exit_code: 0,
+        usage: Usage {
+            tokens: Tokens {
+                input: 0,
+                cache_read: 0,
+                cache_write: BTreeMap::new(),
+                output: 0,
+            },
+            cost: Some(0.0),
+            subscription_cost: 0.0,
+        },
+        final_message: None,
+        error: None,
+        suspended_on: suspended_on.map(|id| contract::RequestId(id.into())),
+        questions: None,
+    })
+}
+
+fn turn_completed() -> Event {
+    Event::TurnCompleted(TurnCompleted {
+        outcome: CompletedOutcome::Completed,
+        error: None,
+        questions: None,
+    })
+}
+
+fn denied_resolved(request_id: Option<&str>) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        request_id: request_id.map(|id| contract::RequestId(id.into())),
+        decision: Decision::Deny,
+        decided_by: DecidedBy::StandingRule,
+        reason: Some("No person can answer an approval in this session.".into()),
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
+fn allowed_resolved() -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        request_id: None,
+        decision: Decision::Allow,
+        decided_by: DecidedBy::Person,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
+fn confirm_requested(request_id: &str) -> Event {
+    Event::InteractionRequested(InteractionRequested {
+        request_id: contract::RequestId(request_id.into()),
+        interaction: Interaction::Confirm {
+            prompt: "Proceed?".into(),
+        },
+        action_ids: None,
+        extension: None,
+    })
+}
+
+/// An acknowledgement that records its answer.
+fn recording() -> (Ack, Arc<Mutex<Option<Answer>>>) {
+    let seen: Arc<Mutex<Option<Answer>>> = Arc::new(Mutex::new(None));
+    let back = Arc::clone(&seen);
+    let ack = Ack(Box::new(move |answer| {
+        *back.lock().unwrap() = Some(answer);
+    }));
+    (ack, seen)
+}
+
+fn is_accepted(seen: &Arc<Mutex<Option<Answer>>>) -> bool {
+    matches!(&*seen.lock().unwrap(), Some(Ok(_)))
+}
+
+impl History {
+    /// Resumes with `tools` as an unattended session answers: no person
+    /// can answer an approval.
+    fn resume_headless(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
+        let lines = self.lines();
+        Loop::resume(
+            Arc::clone(&self.log),
+            &lines,
+            Arc::clone(&self.provider) as Arc<dyn Provider>,
+            Self::model(),
+            self.prompt(),
+            self.inbox_rx.take().unwrap(),
+            tools,
+            r#loop::Permissions {
+                workspace: self.workspace.clone(),
+                credentials: self.credentials.clone(),
+                rules: self.rules.clone(),
+            },
+        )
+        .unwrap()
+        .answerable(false)
+    }
+
+    /// Runs one turn on its own thread, returning the loop for the next
+    /// turn, and failing the test past [`support::DEADLINE`].
+    fn step(&mut self, mut looped: Loop) -> (Loop, Option<contract::events::TurnOutcome>) {
+        let (done, finished) = mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = looped.turn().unwrap();
+            done.send((looped, outcome)).unwrap();
+        });
+        finished
+            .recv_timeout(support::DEADLINE)
+            .expect("the turn ended in time")
+    }
+}
+
+/// A suspended history: one turn whose batch is `[a_1]` with a standing
+/// ask `r_9` pending on it, then the process exited on that request.
+fn suspended_history(script: Vec<Scripted>) -> History {
+    let mut history = History::new(script);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    history
+}
+
+#[test]
+fn an_open_batch_gets_no_fixed_result() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("search"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    // The finishing turn's request holds both calls and no prompt, and
+    // neither call has a fixed result: the finishing turn completes them.
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let conversation = &requests[0].conversation;
+    let calls: Vec<&str> = conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolCall { action_id, .. } => Some(action_id.0.as_str()),
+            Input::ToolResult { .. }
+            | Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(calls, ["a_1", "a_2"]);
+    for input in conversation {
+        if let Input::ToolResult { text, .. } = input {
+            assert!(
+                !text.contains("never ran") && !text.contains("unknown"),
+                "{text}"
+            );
+        }
+    }
+}
+
+#[test]
+fn without_a_suspend_the_same_batch_gets_fixed_results() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("search"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let fixed: Vec<(&str, &str)> = requests[0]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolResult {
+                action_id, text, ..
+            } if text.contains("never ran") => Some((action_id.0.as_str(), text.as_str())),
+            Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(fixed.len(), 2);
+    assert_eq!(fixed[0].0, "a_1");
+    assert_eq!(fixed[1].0, "a_2");
+}
+
+#[test]
+fn a_call_outside_the_open_batch_still_gets_its_fixed_result() {
+    // `a_0`'s call sits before the last `assistant_message_started`, so it
+    // is outside the suspended batch; only it gets a fixed result.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(requested("read"), Some("a_0"));
+    history.write(message_started(), Some("a_9"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("search"), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let fixed: Vec<&str> = requests[0]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolResult {
+                action_id, text, ..
+            } if text.contains("never ran") => Some(action_id.0.as_str()),
+            Input::ToolCall { .. }
+            | Input::ToolResult { .. }
+            | Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. } => None,
+        })
+        .collect();
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(fixed, ["a_0"]);
+}
+
+#[test]
+fn no_suspended_on_resumes_as_a_cut_short_turn() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(None), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    // Part 1's behaviour: no re-raise, the call keeps its fixed result.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|k| k == "permission_requested")
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        requests[0].conversation.iter().any(|input| matches!(
+            input,
+            Input::ToolResult { text, .. } if text.contains("never ran")
+        )),
+        "{:?}",
+        requests[0].conversation
+    );
+}
+
+#[test]
+fn a_suspended_on_naming_an_unknown_request_resumes_as_cut_short() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_unknown")), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|k| k == "permission_requested")
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_suspended_on_naming_an_interaction_resumes_as_cut_short() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(confirm_requested("r_7"), None);
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_7")), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    // Only approvals re-raise.
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|k| k == "permission_requested")
+    );
+}
+
+#[test]
+fn an_already_resolved_request_resumes_as_cut_short() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(denied_resolved(Some("r_9")), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert_eq!(
+        history
+            .new_kinds()
+            .iter()
+            .filter(|k| *k == "permission_requested")
+            .count(),
+        0
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_line_after_fiber_exited_resumes_as_cut_short() {
+    // A resumed process started a new turn and died: the last line is not
+    // `fiber_exited`, so nothing re-raises.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.write(user_turn("two"), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(
+            support::message("three"),
+            support::ignore(),
+        ))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|k| k == "permission_requested")
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_completed_turn_resumes_as_cut_short() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(turn_completed(), None);
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|k| k == "permission_requested")
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_request_outside_the_batch_resumes_as_cut_short() {
+    // The request's action `a_9` was never requested after the last
+    // `assistant_message_started`: the log is treated as cut short.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_9"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    assert!(
+        !history
+            .new_kinds()
+            .iter()
+            .any(|k| k == "permission_requested")
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
+    let mut history = suspended_history(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
+    let (prompt_ack, prompt_seen) = recording();
+    let (close_ack, close_seen) = recording();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), prompt_ack))
+        .unwrap();
+    history.inbox_tx.send(Delivery::Close(close_ack)).unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let (looped, prompted) = history.step(looped);
+    assert_eq!(prompted, Some(contract::events::TurnOutcome::Completed));
+    let (_looped, closed) = history.step(looped);
+    assert_eq!(closed, None);
+
+    // Both deliveries were accepted: the prompt waited behind the
+    // finishing turn instead of being rejected `busy`.
+    assert!(is_accepted(&prompt_seen), "the prompt was accepted");
+    assert!(is_accepted(&close_seen), "close was accepted");
+
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let new = history.new_lines();
+    // The re-raised request keeps its `request_id` on both lines.
+    assert_eq!(new[2].payload["request_id"], "r_9");
+    assert_eq!(new[3].payload["request_id"], "r_9");
+    assert_eq!(new[3].payload["decision"], "deny");
+    assert_eq!(new[3].payload["decided_by"], "standing_rule");
+    assert_eq!(new[4].payload["status"], "denied");
+    // The finished turn's `turn_completed` carries the original turn id,
+    // and every line of it does.
+    assert_eq!(new[2].turn_id.as_ref().unwrap().0, "t_1");
+    assert_eq!(new[10].turn_id.as_ref().unwrap().0, "t_1");
+    assert_eq!(new[10].payload["outcome"], "completed");
+    for line in &new[2..=10] {
+        assert_eq!(
+            line.turn_id.as_ref().unwrap().0,
+            "t_1",
+            "every finished-turn line carries the original turn id: {}",
+            line.kind
+        );
+    }
+    // No resumed code path starts a call from before the resume.
+    assert!(
+        !new.iter().any(|l| l.kind == "tool_call_started"),
+        "no tool_call_started"
+    );
+
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 2);
+    // The first request holds the call and the denial, and no prompt.
+    let first = &requests[0].conversation;
+    assert!(matches!(&first[1], Input::ToolCall { .. }), "{first:?}");
+    assert!(
+        matches!(&first[3], Input::ToolResult { text, .. } if text.contains("No person can answer")),
+        "{first:?}"
+    );
+    assert!(
+        !first
+            .iter()
+            .any(|input| matches!(input, Input::User { text } if text == "two")),
+        "{first:?}"
+    );
+    // The second request holds the denial and then the prompt.
+    let second = &requests[1].conversation;
+    assert!(
+        second.iter().any(
+            |input| matches!(input, Input::ToolResult { text, .. } if text.contains("No person can answer"))
+        ),
+        "{second:?}"
+    );
+    assert!(
+        matches!(second.last().unwrap(), Input::User { text } if text == "two"),
+        "{second:?}"
+    );
+}
+
+#[test]
+fn a_three_call_batch_completes_in_request_order() {
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(requested("exec"), Some("a_2"));
+    history.write(requested("search"), Some("a_3"));
+    // The first call was allowed in the log; the second is pending.
+    history.write(allowed_resolved(), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_2"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let (prompt_ack, prompt_seen) = recording();
+    let (close_ack, _) = recording();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), prompt_ack))
+        .unwrap();
+    history.inbox_tx.send(Delivery::Close(close_ack)).unwrap();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let (_looped, prompted) = history.step(looped);
+    assert_eq!(prompted, Some(contract::events::TurnOutcome::Completed));
+    assert!(is_accepted(&prompt_seen));
+
+    let new = history.new_lines();
+    assert_eq!(new[2].kind, "permission_requested");
+    assert_eq!(new[3].kind, "permission_resolved");
+    let completions: Vec<(&str, &str)> = new[4..7]
+        .iter()
+        .map(|line| {
+            assert_eq!(line.kind, "tool_call_completed");
+            (
+                line.action_id.as_ref().unwrap().0.as_str(),
+                line.payload["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    // In request order: the allowed call is cancelled all the same, the
+    // pending one denied, the third cancelled. None started.
+    assert_eq!(
+        completions,
+        [
+            ("a_1", "cancelled"),
+            ("a_2", "denied"),
+            ("a_3", "cancelled")
+        ]
+    );
+    assert!(!new.iter().any(|l| l.kind == "tool_call_started"));
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "tool_call_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_review_request_re_raises_with_its_escalation_and_offer() {
+    let mut history = History::new(vec![Scripted::text("Hello."), Scripted::text("Second.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(review_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+    let before = history
+        .lines()
+        .iter()
+        .find(|l| l.kind == "permission_requested")
+        .unwrap()
+        .payload
+        .clone();
+
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+    let looped = history.resume_headless(Vec::new());
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    let new = history.new_lines();
+    assert_eq!(new[2].kind, "permission_requested");
+    assert_eq!(new[2].payload["request_id"], "r_9");
+    assert_eq!(new[2].payload, before);
+    assert_eq!(new[2].payload["step"], "review");
+    assert!(new[2].payload.get("escalation").is_some());
+    assert!(new[2].payload.get("rule").is_some());
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_tool_called_in_the_finishing_turn_runs() {
+    let tool = Arc::new(support::TestTool::reads("read", "Paris."));
+    let mut history = History::new(vec![
+        support::tool_call_reply("Go.", &["read"]),
+        Scripted::text("Done."),
+        Scripted::text("Second."),
+    ]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), support::ignore()))
+        .unwrap();
+    let looped = history.resume_headless(vec![("builtin".into(), tool.clone() as Arc<dyn Tool>)]);
+    let (looped, finishing) = history.step(looped);
+    assert_eq!(finishing, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    // The new call ran to completion inside the finishing turn.
+    assert_eq!(tool.ran().len(), 1);
+    let new = history.new_lines();
+    let ran: Vec<&str> = new
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.payload["status"].as_str().unwrap())
+        .collect();
+    // The suspended call denied, the new one completed.
+    assert_eq!(ran, ["denied", "completed"]);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+}
+
+#[test]
+fn a_completed_call_in_the_window_is_not_in_the_batch() {
+    // `a_0` was requested and completed after the last
+    // `assistant_message_started`; only the pending `a_1` is finished.
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_9"));
+    history.write(requested("read"), Some("a_0"));
+    history.write(completed("Paris."), Some("a_0"));
+    history.write(requested("exec"), Some("a_1"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless(Vec::new());
+    let (looped, outcome) = history.step(looped);
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let _ = looped;
+
+    // Exactly one new completion, for the pending call: the completed
+    // call keeps its single result.
+    let new = history.new_lines();
+    let completions: Vec<&str> = new
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.action_id.as_ref().unwrap().0.as_str())
+        .collect();
+    assert_eq!(completions, ["a_1"]);
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let results: Vec<(&str, &str)> = requests[0]
+        .conversation
+        .iter()
+        .filter_map(|input| match input {
+            Input::ToolResult {
+                action_id, text, ..
+            } => Some((action_id.0.as_str(), text.as_str())),
+            Input::ToolCall { .. }
+            | Input::User { .. }
+            | Input::Assistant { .. }
+            | Input::Reasoning { .. } => None,
+        })
+        .collect();
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].0, "a_0");
+    assert_eq!(results[0].1, "Paris.");
+    assert_eq!(results[1].0, "a_1");
+    assert!(results[1].1.contains("No person can answer"));
+}

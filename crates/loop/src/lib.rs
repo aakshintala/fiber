@@ -131,6 +131,12 @@ pub struct Loop {
     /// `close` has been taken. No further turn starts
     /// (`docs/invocation.md`, "Lifecycle").
     closing: bool,
+    /// A turn cut short on a pending approval, folded at resume: the next
+    /// `turn` finishes it before starting any new one.
+    pub(crate) suspended: Option<resume::Suspended>,
+    /// Deliveries held aside across the finishing turn, in arrival order:
+    /// `wait_for_turn` takes them first, ahead of the channel.
+    pub(crate) deferred: VecDeque<Delivery>,
     /// The conversation, built from the durable events as they are written
     /// and never by re-reading the log (`docs/loop.md`, "What the model is
     /// sent").
@@ -264,6 +270,8 @@ impl Loop {
             reviewer_key: format!("{}:reviewer", started.session_id.0),
             queued: VecDeque::new(),
             closing: false,
+            suspended: None,
+            deferred: VecDeque::new(),
             conversation: Vec::new(),
             sent: None,
             tools,
@@ -349,6 +357,9 @@ impl Loop {
     /// Returns how the turn ended, or `None` once `close` was taken while
     /// idle or every sender of the inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
+        if let Some(pending) = self.suspended.take() {
+            return self.finish_suspended(pending);
+        }
         let Some(started) = self.wait_for_turn()? else {
             return Ok(None);
         };
@@ -386,29 +397,7 @@ impl Loop {
         if let Some(ack) = started.prompt {
             inbox::accept(ack);
         }
-        let mut completed = loop {
-            match self.step(&turn)? {
-                Step::Next => {}
-                // Anything waiting continues the turn (`docs/loop.md`,
-                // "Ending a turn"). A steer taken here waits for the next
-                // step; a prompt is rejected.
-                Step::Replied => {
-                    self.drain(&turn)?;
-                    if self.queued.is_empty() {
-                        break ended(TurnOutcome::Completed, None);
-                    }
-                }
-                Step::Ended(completed) => break completed,
-            }
-        };
-        if self.idle_left {
-            self.cancel.disarm();
-            return Ok(None);
-        }
-        self.disarm_cancel(&mut completed);
-        let outcome = completed.outcome;
-        self.append(&Event::TurnCompleted(completed), &turn, None)?;
-        Ok(Some(outcome))
+        self.run_steps(&turn)
     }
 
     /// Builds the one preamble and writes `preamble_built`, once per loop.
@@ -788,7 +777,7 @@ impl Loop {
 }
 
 /// How a step ended.
-enum Step {
+pub(crate) enum Step {
     /// The reply called tools: take the next step.
     Next,
     /// The reply called no tool: the turn completes unless something is

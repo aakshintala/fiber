@@ -32,7 +32,7 @@ const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped.
 pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
-    Ok(rebuild_and_sent(lines, model)?.0)
+    Ok(rebuild_and_sent(lines, model, &HashSet::new())?.0)
 }
 
 /// The actions with a `tool_call_completed` in `lines`.
@@ -57,13 +57,14 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
 pub(crate) fn rebuild_and_sent(
     lines: &[Envelope],
     model: &str,
+    open: &HashSet<ActionId>,
 ) -> Result<(Vec<Input>, Option<usize>), Error> {
     let completed = completed_actions(lines)?;
     let mut rendered = Rendered::default();
     let mut sent = None;
     for line in lines.iter().filter(|l| l.is_durable()) {
         if let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? {
-            rendered.push(&event, line.action_id.as_ref(), model, &completed);
+            rendered.push(&event, line.action_id.as_ref(), model, &completed, open);
             if matches!(event, Event::AssistantMessageStarted(_)) {
                 sent = Some(rendered.conversation.len());
             }
@@ -100,6 +101,7 @@ impl Rendered {
         action: Option<&ActionId>,
         model: &str,
         completed: &HashSet<ActionId>,
+        open: &HashSet<ActionId>,
     ) {
         match event {
             Event::ToolCallRequested(call) => {
@@ -108,8 +110,9 @@ impl Rendered {
                         action_id: action.clone(),
                         call: call.clone(),
                     });
-                    // A call the log completes needs no fixed result.
-                    if !completed.contains(action) {
+                    // A call the log completes needs no fixed result, nor
+                    // does one the finishing turn completes on resume.
+                    if !completed.contains(action) && !open.contains(action) {
                         self.pending.push(Pending {
                             action_id: action.clone(),
                             started: false,

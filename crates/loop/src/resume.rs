@@ -1,26 +1,26 @@
 //! Resuming a session (`docs/events.md`, "Resume"): rebuilding the loop's
 //! state from the log and its configuration, nothing else. A suspended turn
-//! (`fiber_exited` with `suspended_on`) resumes as any cut-short turn until
-//! #302's third criterion lands: its calls with no result get the fixed
-//! result and the prompt starts a new turn.
+//! (`fiber_exited` with `suspended_on`) re-raises its pending approval under
+//! the same `request_id`, refuses it as headless, finishes the turn, and
+//! then runs the prompt as the next turn.
 
-use std::collections::VecDeque;
+use std::collections::{HashSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
-use contract::events::{DecidedBy, Decision, Event};
+use contract::events::{DecidedBy, Decision, Event, TurnOutcome};
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
 use contract::tool::Tool;
-use contract::{Envelope, ErrorCode};
+use contract::{ActionId, Envelope, ErrorCode, TurnId};
 use log::Log;
 
 use crate::calls;
 use crate::retry::Retry;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, render_reviewed};
-use crate::{Error, Loop, Model, Permissions};
+use crate::{Error, Loop, Model, Permissions, Step};
 
 /// What a resume folds back: the session, the workspace the first
 /// `session_started` recorded, and the model the last `usage_recorded`
@@ -68,6 +68,101 @@ pub fn resumed(lines: &[Envelope]) -> Result<Resumed, Error> {
     }
 }
 
+/// A turn cut short on a pending approval: what the finishing turn writes
+/// back under the same turn id (`docs/invocation.md`, "Lifecycle").
+pub(crate) struct Suspended {
+    /// The cut-short turn, which the finishing turn completes.
+    pub(crate) turn: TurnId,
+    /// The pending request, re-raised with the same `request_id`.
+    pub(crate) request: contract::events::PermissionRequested,
+    /// The call the request was raised for.
+    pub(crate) action: ActionId,
+    /// The calls with `tool_call_requested` after the log's last
+    /// `assistant_message_started` and no `tool_call_completed`, in
+    /// request order: the batch the finishing turn completes.
+    pub(crate) batch: Vec<ActionId>,
+}
+
+/// The suspended turn `lines` describe, if any: the last line is a
+/// `fiber_exited` with `suspended_on` naming a `permission_requested` that
+/// has no `permission_resolved`, whose turn has no `turn_completed`, and
+/// whose action is in the suspended batch. Anything else resumes as a
+/// cut-short turn. Only approvals re-raise: no tool raises an
+/// `interaction_requested` yet, so a `suspended_on` naming one resumes as
+/// cut short.
+// debt: re-raises approvals only; an interaction_requested joins when a tool raises one (ask_user, docs/tools.md "Asking the person").
+pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> {
+    let Some(last) = lines.last() else {
+        return Ok(None);
+    };
+    let Some(event) = Event::from_envelope(last).map_err(Error::Unreadable)? else {
+        return Ok(None);
+    };
+    let Event::FiberExited(exited) = event else {
+        return Ok(None);
+    };
+    let Some(pending) = exited.suspended_on else {
+        return Ok(None);
+    };
+    let mut found = None;
+    for line in lines.iter().filter(|l| l.is_durable()) {
+        let Some(event) = Event::from_envelope(line).map_err(Error::Unreadable)? else {
+            continue;
+        };
+        if let Event::PermissionRequested(request) = &event
+            && request.request_id == pending
+        {
+            let (Some(turn), Some(action)) = (line.turn_id.clone(), line.action_id.clone()) else {
+                continue;
+            };
+            found = Some((request.clone(), turn, action));
+        }
+        if let Event::PermissionResolved(resolved) = &event
+            && resolved.request_id.as_ref() == Some(&pending)
+        {
+            return Ok(None);
+        }
+    }
+    let Some((request, turn, action)) = found else {
+        return Ok(None);
+    };
+    if lines
+        .iter()
+        .any(|l| l.is_durable() && l.kind == "turn_completed" && l.turn_id.as_ref() == Some(&turn))
+    {
+        return Ok(None);
+    }
+    let completed = crate::conversation::completed_actions(lines)?;
+    // Starting at the message line itself is safe: it is an
+    // `assistant_message_started`, never a `tool_call_requested`, so the
+    // scan below skips it either way.
+    let start = lines
+        .iter()
+        .rposition(|l| l.kind == "assistant_message_started")
+        .unwrap_or(0);
+    let mut batch = Vec::new();
+    for line in lines.iter().skip(start) {
+        if line.kind != "tool_call_requested" {
+            continue;
+        }
+        if let Some(id) = &line.action_id
+            && !completed.contains(id)
+            && !batch.contains(id)
+        {
+            batch.push(id.clone());
+        }
+    }
+    if !batch.contains(&action) {
+        return Ok(None);
+    }
+    Ok(Some(Suspended {
+        turn,
+        request,
+        action,
+        batch,
+    }))
+}
+
 impl Loop {
     /// Resumes the session `lines` describe on `log`, which already holds
     /// the lock: the conversation is rebuilt with the fixed results for the
@@ -92,10 +187,18 @@ impl Loop {
     ) -> Result<Self, Error> {
         // Fails `log_corrupt` on a log with no `session_started`.
         let folded = resumed(lines)?;
+        // The suspended turn, if any: its batch stays open, so the rebuild
+        // writes no fixed result for it; the finishing turn completes it.
+        let halted = suspended(lines)?;
+        let open: HashSet<ActionId> = halted
+            .as_ref()
+            .map(|halted| halted.batch.iter().cloned().collect())
+            .unwrap_or_default();
         // The conversation, with the fixed results, and its length at the
         // last `assistant_message_started`: the previous request's end, for
         // the cache markers.
-        let (conversation, sent) = crate::conversation::rebuild_and_sent(lines, &model.reference)?;
+        let (conversation, sent) =
+            crate::conversation::rebuild_and_sent(lines, &model.reference, &open)?;
         let mut reviewed = Vec::new();
         let mut grants = Vec::new();
         let mut session_blocks = 0;
@@ -162,6 +265,8 @@ impl Loop {
             reviewer_key: format!("{}:reviewer", folded.session),
             queued: VecDeque::new(),
             closing: false,
+            suspended: halted,
+            deferred: VecDeque::new(),
             conversation,
             sent,
             tools,
@@ -194,5 +299,79 @@ impl Loop {
             idle_exit: None,
             idle_left: false,
         })
+    }
+}
+
+impl Loop {
+    /// Finishes a turn cut short on a pending approval, then runs the
+    /// prompt as the next turn (`docs/invocation.md`, "Lifecycle"): the
+    /// request is raised again under the same `request_id`, refused as
+    /// headless, every call of the batch is completed in request order,
+    /// and the turn takes its next step as after any completed batch. The
+    /// preamble runs first, as before any turn; the finishing turn is not
+    /// a turn start, so it runs no instruction-file/date check (the next
+    /// turn, the prompt's, does it at its own start). `turn_started` is
+    /// not written again. Deliveries already
+    /// waiting are held aside in `deferred`, so the finishing turn's
+    /// drains do not reject the prompt `busy`.
+    pub(crate) fn finish_suspended(
+        &mut self,
+        suspended: Suspended,
+    ) -> Result<Option<TurnOutcome>, Error> {
+        self.deferred.extend(self.inbox.try_iter());
+        self.ensure_preamble()?;
+        self.cut_off = false;
+        self.cancel.arm();
+        let turn = suspended.turn.clone();
+        self.append(
+            &Event::PermissionRequested(suspended.request.clone()),
+            &turn,
+            Some(&suspended.action),
+        )?;
+        // debt: refuses a suspended request whatever answerable says; the
+        // hub's resume raises it and waits for a reply (docs/invocation.md
+        // "Lifecycle").
+        let denied = self.unanswerable(
+            &suspended.action,
+            &turn,
+            Some(suspended.request.request_id.clone()),
+        )?;
+        for id in &suspended.batch {
+            let completed = if *id == suspended.action {
+                denied.clone()
+            } else {
+                crate::cancel::never_ran()
+            };
+            self.append(&Event::ToolCallCompleted(*completed), &turn, Some(id))?;
+        }
+        self.run_steps(&turn)
+    }
+
+    /// The step loop and the `turn_completed` tail every turn ends with:
+    /// shared by a new turn and the finishing one, so the two cannot drift.
+    pub(crate) fn run_steps(&mut self, turn: &TurnId) -> Result<Option<TurnOutcome>, Error> {
+        let mut completed = loop {
+            match self.step(turn)? {
+                Step::Next => {}
+                // Anything waiting continues the turn (`docs/loop.md`,
+                // "Ending a turn"). A steer taken here waits for the next
+                // step; a prompt is rejected.
+                Step::Replied => {
+                    self.drain(turn)?;
+                    if self.queued.is_empty() {
+                        break crate::ended(TurnOutcome::Completed, None);
+                    }
+                }
+                Step::Ended(completed) => break completed,
+            }
+        };
+        if self.idle_left {
+            self.cancel.disarm();
+            return Ok(None);
+        }
+        self.disarm_cancel(&mut completed);
+        let outcome = completed.outcome;
+        self.append(&Event::TurnCompleted(completed), turn, None)?;
+        Ok(Some(outcome))
     }
 }
