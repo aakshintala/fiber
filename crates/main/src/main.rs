@@ -645,6 +645,7 @@ fn connect(model: extensions::Model<'_>, key: String) -> Result<Arc<dyn Provider
         compat: Compat::from_data(&model.model.compat),
         max_output_tokens: model.model.max_output_tokens,
         extra_body: model.model.extra_body.clone(),
+        text_only: !model.model.input.iter().any(|kind| kind == "image"),
         direct: false,
     };
     Ok(match model.model.protocol {

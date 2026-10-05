@@ -60,17 +60,28 @@ impl Setup {
 
     /// [`Setup::provider`] on `protocol`.
     fn provider_on(&self, server: &ProviderServer, protocol: &str) {
+        self.provider_on_input(server, protocol, Some(vec!["text", "image"]));
+    }
+
+    /// [`Setup::provider_on`], with `input` as the model's declared input
+    /// kinds, or none when it declares none.
+    fn provider_on_input(&self, server: &ProviderServer, protocol: &str, input: Option<Vec<&str>>) {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
             &json!({"name": "fake", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
         );
+        let mut model = json!({"id": "m", "protocol": protocol,
+            "base_url": format!("{}/v1", server.url())});
+        if let Some(input) = input {
+            model["input"] = json!(input);
+        }
         write(
             &source.join("providers/fake.json"),
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": protocol, "base_url": format!("{}/v1", server.url())}]
+                "models": [model]
             }),
         );
         extensions::plan(
@@ -835,6 +846,39 @@ fn an_image_is_stored_logged_by_path_and_sent_inside_the_tool_result_on_every_re
         tool_result(&requests[2].body),
         tool_result(&requests[1].body),
         "a resume sends the same bytes"
+    );
+}
+
+#[test]
+fn a_model_without_an_image_input_gets_no_image_part_and_the_result_says_so() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("pic.png"), PIXEL).unwrap();
+    let server = ProviderServer::start([
+        anthropic_read("pic.png"),
+        anthropic_hello(),
+        anthropic_hello(),
+    ])
+    .unwrap();
+    setup.provider_on_input(&server, "anthropic-messages", None);
+
+    let run = setup.run(&["ask", "look at the picture"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    let content = tool_result(&requests[1].body)["content"].clone();
+    let text = content.as_str().expect("the content stays a plain string");
+    assert!(
+        text.starts_with("Image: 1x1 image/png.\n[Image artifacts/i_"),
+        "{text}"
+    );
+    assert!(
+        text.ends_with(".png left out: this model does not take images.]"),
+        "{text}"
+    );
+    assert!(
+        !String::from_utf8_lossy(&requests[1].body).contains(PIXEL_BASE64),
+        "no image part reaches the request"
     );
 }
 
