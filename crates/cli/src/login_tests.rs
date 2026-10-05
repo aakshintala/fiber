@@ -12,6 +12,10 @@ use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use config::{
     Config, CredentialFile, ProjectKey, Secret, Sources, read_credential, store_credential,
@@ -665,8 +669,42 @@ fn logout_without_a_provider_is_a_usage_failure() {
     assert_eq!(run_logout(None), 2);
 }
 
+/// The child's marker: set, the test runs `run_login` and exits with its code.
+const CHILD: &str = "FIBER_CLI_TEST_CHILD";
+
+/// How long the child may run before the test kills it and fails.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
 #[test]
 fn login_of_an_unknown_provider_is_a_usage_failure() {
-    // Fails in `installed`, before any lock, prompt or read of stdin.
-    assert_eq!(run_login(Some("no-such-provider-for-the-test")), 2);
+    // Fails in `installed`, before any lock, prompt or read of stdin. It runs
+    // in a child with an empty Fiber home and no stdin, so neither the
+    // owner's home nor a terminal can change the outcome.
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(run_login(Some("no-such-provider-for-the-test")));
+    }
+    let home = fakes::TempDir::new("fiber-login-child");
+    let name = module_path!().split_once("::").unwrap().1;
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::login_of_an_unknown_provider_is_a_usage_failure"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", home.path())
+        .env(CHILD, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for `fiber login` of an unknown provider to exit");
+    };
+    assert_eq!(status.code(), Some(2), "{status}");
 }
