@@ -176,6 +176,8 @@ pub enum Origin {
         /// The sending session.
         from_session_id: SessionId,
     },
+    /// Fiber's own message, such as the ending notice.
+    Fiber,
 }
 
 /// The keys of "Where a message came from".
@@ -184,8 +186,10 @@ pub struct Sender {
     /// Who sent it.
     #[serde(flatten)]
     pub origin: Origin,
-    /// The `prompt`, `steer` or `message` command that sent it.
-    pub command_id: CommandId,
+    /// The `prompt`, `steer` or `message` command that sent it; `None`
+    /// only for Fiber's own message.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub command_id: Option<CommandId>,
 }
 
 /// A point in a session's log that a fork or a rewind continues from.

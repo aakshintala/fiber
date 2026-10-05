@@ -217,6 +217,8 @@ pub struct Loop {
     /// Handoff: the settings, the context's measure and what its render
     /// carries (`docs/handoff.md`).
     handoff: handoff::State,
+    /// The session's jobs, and how far the loop is in ending with them.
+    ending: jobs::Ending,
 }
 
 /// The one built preamble: what every request sends and what
@@ -318,6 +320,7 @@ impl Loop {
             idle_left: false,
             hooks: None,
             handoff: handoff::State::new(handoff::Carry::default()),
+            ending: jobs::Ending::default(),
         })
     }
 
@@ -360,7 +363,8 @@ impl Loop {
     }
 
     /// Runs turns until `close` is taken or every sender of the inbox is
-    /// gone (`docs/invocation.md`, "Lifecycle").
+    /// gone, then, while jobs still run, the ending notice and their ends
+    /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
     pub fn run(mut self) -> Result<(), Error> {
         while self.turn()?.is_some() {}
         Ok(())
@@ -506,6 +510,8 @@ impl Loop {
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         }
         self.append(&Event::StepStarted(Empty {}), turn, None)?;
+        // A jobs notice comes first, before the drain's `steering_queue`.
+        self.write_pending(turn)?;
         // Queued first: a steer held during an approval, or taken by the
         // end-of-turn check, arrived before this drain.
         self.drain(turn)?;

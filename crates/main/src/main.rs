@@ -14,6 +14,7 @@ mod cli;
 mod clock;
 mod credential;
 mod handoff;
+mod late_emit;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
@@ -376,10 +377,11 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         extensions,
         mcp,
     } = parts;
+    let (job_emit, jobs) = late_emit::registry(&dir, &clock);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     let (tools, infos, driver, session_servers) =
-        match mcp_servers::session_tools(&workspace, &clock, mcp.specs) {
+        match mcp_servers::session_tools(&workspace, &clock, &jobs, mcp.specs) {
             Ok(built) => built,
             Err(e) => return ask_failed(e),
         };
@@ -394,6 +396,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Ok(log) => Arc::new(log),
         Err(e) => return stop_and_fail(session_servers, failed(e.code(), e)),
     };
+    job_emit.set(Arc::clone(&log) as _);
     let session = match Session::open(
         &home,
         &dir,
@@ -406,6 +409,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Err(e) => return stop_and_fail(session_servers, e),
     };
     session.shell(driver);
+    session.jobs(jobs.clone());
     let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
         finish(
             // `Loop::start` writes `session_started`, which `fiber_started`
@@ -423,7 +427,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                 session_extensions::written(&log, &extensions)?;
                 r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
-                let looped = session_extensions::hooked(looped, &extensions);
+                let looped = session_extensions::hooked(looped.jobs(jobs), &extensions);
                 Ok(looped.handoff(handoff).on_handoff(forget))
             }),
             budget,

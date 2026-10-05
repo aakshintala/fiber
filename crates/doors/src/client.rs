@@ -423,7 +423,7 @@ fn deliver_message(conn: &mut Conn, id: CommandId, content: Vec<ContentPart>, pr
         content,
         sender: Sender {
             origin: Origin::Driver,
-            command_id: id.clone(),
+            command_id: Some(id.clone()),
         },
     };
     let ack = inbox_ack(conn, id);

@@ -756,3 +756,39 @@ fn since_text_from_the_start_keeps_every_byte_and_from_inside_drops_continuation
     std::fs::write(&path, b"ab").unwrap();
     assert_eq!(super::since_text(&path, 1), "b\n");
 }
+
+#[test]
+fn running_lists_running_jobs_in_start_order_and_drops_ended_ones() {
+    let (_dir, registry) = world();
+    let seam: &dyn Jobs = registry.as_ref();
+    assert!(seam.running().is_empty());
+    let first = seam.open(opening("one")).unwrap();
+    let second = seam.open(opening("two")).unwrap();
+    let third = seam.open(opening("three")).unwrap();
+    let ids = [
+        first.started.job_id.clone(),
+        second.started.job_id.clone(),
+        third.started.job_id.clone(),
+    ];
+    assert_eq!(seam.running(), ids.to_vec());
+    second.end.end(ended_ok(&ids[1].0));
+    assert_eq!(seam.running(), vec![ids[0].clone(), ids[2].clone()]);
+    drop(first.end);
+    third.end.end(ended_ok(&ids[2].0));
+    assert!(seam.running().is_empty());
+}
+
+#[test]
+fn deliver_to_through_the_seam_sends_the_end_before_running_drops_it() {
+    let (_dir, registry) = world();
+    let seam: &dyn Jobs = registry.as_ref();
+    let (tx, rx) = mpsc::channel();
+    seam.deliver_to(tx);
+    let opened = seam.open(opening("npm test")).unwrap();
+    let id = opened.started.job_id.clone();
+    assert_eq!(seam.running(), vec![id.clone()]);
+    opened.end.end(ended_ok(&id.0));
+    assert!(seam.running().is_empty());
+    let sent = notice(&rx);
+    assert_eq!(sent.completed, ended_ok(&id.0));
+}

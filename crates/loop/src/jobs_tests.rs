@@ -15,12 +15,14 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
+use contract::clock::Clock as _;
 use contract::commands::{Reply, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
     Decision, JobCompleted, Outcome, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
 };
 use contract::inbox::{Ack, Claim, Delivery, JobNotice, Message};
+use contract::jobs::{Jobs, OpenError};
 use contract::provider::{
     Delta, Input, ModelCall, ModelRequest, Provider, ReplyAction, ToolDefinition,
 };
@@ -30,6 +32,7 @@ use contract::shapes::{
 };
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
+use fakes::jobs::FakeJobs;
 use fakes::{Scripted, ScriptedProvider};
 use log::Log;
 use serde_json::{Map, Value, json};
@@ -92,7 +95,7 @@ fn message(text: &str, command: &str) -> Message {
         content: vec![ContentPart::Text { text: text.into() }],
         sender: From {
             origin: Origin::Driver,
-            command_id: CommandId(command.into()),
+            command_id: Some(CommandId(command.into())),
         },
     }
 }
@@ -268,6 +271,7 @@ struct World {
     looped: Option<Loop>,
     /// Every line written, ephemeral ones too, from the loop's start.
     watched: mpsc::Receiver<Envelope>,
+    clock: Arc<fakes::clock::FakeClock>,
 }
 
 impl World {
@@ -281,7 +285,8 @@ impl World {
         let credentials = home.path().join("credentials");
         std::fs::create_dir_all(&workspace).unwrap();
         std::fs::create_dir_all(&credentials).unwrap();
-        let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let fake = fakes::clock::FakeClock::new();
+        let clock: Arc<dyn contract::clock::Clock> = fake.clone();
         let log = Arc::new(
             Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
         );
@@ -340,6 +345,7 @@ impl World {
             provider,
             looped: Some(looped),
             watched,
+            clock: fake,
         }
     }
 
@@ -979,4 +985,992 @@ fn a_notice_kept_by_a_cancelled_turn_starts_the_next_one() {
     let watched = world.watched();
     assert!(watched.iter().any(|line| line.kind == "job_completed"));
     assert!(!kinds(&watched).contains(&"steering_queue"));
+}
+
+// Ending with jobs running (`docs/tools.md`, "Background jobs").
+
+/// What the ending notice reads for `ids`.
+fn ending_text(ids: &[&str]) -> String {
+    format!(
+        "Fiber: this session is about to end, and these background jobs are still running: {}. Stop any you do not need with `jobs stop`; the rest will be waited for.",
+        ids.join(", ")
+    )
+}
+
+/// Opens a running job on `jobs`; it runs until its `end` is reported.
+fn open_job(jobs: &FakeJobs) -> contract::jobs::Opened {
+    jobs.open(contract::jobs::Opening {
+        tool: "shell".into(),
+        description: "npm test".into(),
+        stop: contract::jobs::Stop(Box::new(|| {})),
+        input: None,
+    })
+    .unwrap()
+}
+
+/// Jobs a test lists by hand. When `racing` holds deliveries, the next
+/// `running` read sends them and empties the list before it reads: a job
+/// that ends just as the loop checks. When `arriving` holds deliveries, the
+/// next read sends them and leaves the list: a message that arrives just as
+/// the loop checks. Each read's length goes to `reads` when set.
+#[derive(Default)]
+struct Listed {
+    ids: Mutex<Vec<JobId>>,
+    racing: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
+    arriving: Mutex<Option<(Sender<Delivery>, Vec<Delivery>)>>,
+    reads: Mutex<Option<Sender<usize>>>,
+}
+
+impl Listed {
+    fn set(&self, ids: &[&str]) {
+        *self.ids.lock().unwrap() = ids.iter().map(|id| JobId((*id).into())).collect();
+    }
+}
+
+impl Jobs for Listed {
+    fn open(&self, _: contract::jobs::Opening) -> Result<contract::jobs::Opened, OpenError> {
+        Err(OpenError::Io {
+            path: "unused".into(),
+            source: std::io::Error::other("a listed job is not opened"),
+        })
+    }
+
+    fn stop(&self, _: &JobId) -> bool {
+        false
+    }
+
+    fn background(&self) -> usize {
+        0
+    }
+
+    fn foreground(&self, _: contract::jobs::Foreground) {}
+
+    fn running(&self) -> Vec<JobId> {
+        if let Some((inbox, deliveries)) = self.racing.lock().unwrap().take() {
+            for delivery in deliveries {
+                inbox.send(delivery).unwrap();
+            }
+            self.ids.lock().unwrap().clear();
+        }
+        if let Some((inbox, deliveries)) = self.arriving.lock().unwrap().take() {
+            for delivery in deliveries {
+                inbox.send(delivery).unwrap();
+            }
+        }
+        let ids = self.ids.lock().unwrap().clone();
+        if let Some(reads) = self.reads.lock().unwrap().as_ref() {
+            let _sent = reads.send(ids.len());
+        }
+        ids
+    }
+
+    fn deliver_to(&self, _: Sender<Delivery>) {}
+}
+
+impl World {
+    /// Gives the loop `jobs`, whose ends reach its inbox as the door wires
+    /// them.
+    fn with_jobs(mut self, jobs: Arc<dyn Jobs>) -> Self {
+        jobs.deliver_to(self.inbox.clone());
+        let looped = self.looped.take().unwrap().jobs(jobs);
+        self.looped = Some(looped);
+        self
+    }
+
+    fn idle(mut self, after: Duration) -> Self {
+        let looped = self.looped.take().unwrap().idle_exit(Some(after));
+        self.looped = Some(looped);
+        self
+    }
+
+    /// Runs the loop to its end on its own thread.
+    fn spawn_run(&mut self) -> mpsc::Receiver<Result<(), crate::Error>> {
+        let looped = self.looped.take().unwrap();
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            let _sent = done.send(looped.run());
+        });
+        finished
+    }
+
+    /// The durable lines of the next turn, `turn_started` through
+    /// `turn_completed`.
+    fn next_turn(&mut self) -> Vec<Envelope> {
+        let lines: Vec<Envelope> = self
+            .watched()
+            .into_iter()
+            .filter(Envelope::is_durable)
+            .collect();
+        let from = lines
+            .iter()
+            .position(|line| line.kind == "turn_started")
+            .expect("a turn started");
+        lines[from..].to_vec()
+    }
+
+    fn home(&self) -> &std::path::Path {
+        self._home.path()
+    }
+}
+
+fn ran(finished: &mpsc::Receiver<Result<(), crate::Error>>) {
+    let result = finished.recv_timeout(DEADLINE).expect("run returned");
+    assert!(result.is_ok(), "{result:?}");
+}
+
+/// A whole session's durable kinds: its opening lines, then `turns`.
+fn session_of(turns: &[Vec<&str>]) -> Vec<String> {
+    ["session_started", "preamble_built", "opening_message"]
+        .into_iter()
+        .chain(turns.iter().flatten().copied())
+        .map(str::to_owned)
+        .collect()
+}
+
+fn durable_kinds(world: &World) -> Vec<String> {
+    log::read(&world.dir)
+        .unwrap()
+        .into_iter()
+        .filter(Envelope::is_durable)
+        .map(|line| line.kind)
+        .collect()
+}
+
+#[test]
+fn close_with_a_job_running_gives_the_ending_notice_then_waits_for_the_job() {
+    let world = World::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+
+    let first = world.next_turn();
+    assert_eq!(kinds(&first), one_step_with(&[]));
+
+    let ending = world.next_turn();
+    assert_eq!(kinds(&ending), one_step_with(&["jobs_pending_notified"]));
+    // The notice is a message from Fiber, with no `command_id`.
+    assert_eq!(
+        ending[0].payload["input"],
+        json!([{
+            "type": "message",
+            "source": "fiber",
+            "content": [{"type": "text", "text": ending_text(&[&id])}],
+        }])
+    );
+    assert_eq!(
+        Value::Object(ending[2].payload.clone()),
+        json!({"job_ids": [id], "reason": "ending"})
+    );
+    assert_eq!(ending[2].turn_id, ending[0].turn_id);
+    assert_eq!(ending[2].action_id, None);
+    let requests = world.requests();
+    assert_eq!(requests.len(), 2);
+    // The request carries the logged message once: `jobs_pending_notified`
+    // renders nothing.
+    let notice = Input::User {
+        text: ending_text(&[&id]),
+    };
+    assert_eq!(requests[1].conversation.last(), Some(&notice));
+    assert_eq!(
+        requests[1]
+            .conversation
+            .iter()
+            .filter(|input| **input == notice)
+            .count(),
+        1
+    );
+
+    // The loop is still there: the job's end starts a turn.
+    job.end.end(failed(&id));
+    let last = world.next_turn();
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    assert_eq!(
+        last[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [id]}])
+    );
+    assert_notice(&last[2], &id);
+    ran(&finished);
+    let requests = world.requests();
+    assert_eq!(requests.len(), 3);
+    // A resume renders the notice from the log as the loop sent it.
+    let rebuilt = crate::rebuild(&log::read(&world.dir).unwrap(), "fake/model").unwrap();
+    let sent = &requests[2].conversation;
+    assert_eq!(rebuilt[..sent.len()], sent[..]);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&[]),
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn close_with_no_job_running_exits_with_no_notice() {
+    let world = World::new(vec![Scripted::text("Done.")], Vec::new(), |_| Vec::new());
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    job.end.end(failed(&job.started.job_id.0));
+    // The end before the loop's inbox was wired sends nothing.
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    ran(&finished);
+    assert_eq!(durable_kinds(&world), session_of(&[one_step_with(&[])]));
+    assert_eq!(world.requests().len(), 1);
+}
+
+#[test]
+fn the_ending_notice_is_given_once_even_when_another_job_starts() {
+    let world = World::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("Waiting."),
+            Scripted::text("One."),
+            Scripted::text("Two."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let first_job = open_job(&jobs);
+    let first_id = first_job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    let _first = world.next_turn();
+    let ending = world.next_turn();
+    assert_eq!(ending[2].payload["job_ids"], json!([first_id]));
+
+    let second_job = open_job(&jobs);
+    let second_id = second_job.started.job_id.0.clone();
+    first_job.end.end(failed(&first_id));
+    let one = world.next_turn();
+    assert_eq!(kinds(&one), one_step_with(&["job_completed"]));
+    assert_notice(&one[2], &first_id);
+
+    second_job.end.end(failed(&second_id));
+    let two = world.next_turn();
+    assert_eq!(kinds(&two), one_step_with(&["job_completed"]));
+    assert_notice(&two[2], &second_id);
+    ran(&finished);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&[]),
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn after_close_a_prompt_is_rejected_and_a_steer_does_not_join_a_job_turn() {
+    let world = World::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[JOB]);
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    let _first = world.next_turn();
+    let _ending = world.next_turn();
+    let (prompted, prompt_answer) = mpsc::channel();
+    let (steered, steer_answer) = mpsc::channel();
+    // The end and both commands are waiting together at the next read.
+    *jobs.racing.lock().unwrap() = Some((
+        world.inbox.clone(),
+        vec![
+            held(JOB),
+            Delivery::Prompt(message("Again.", "c_again"), reported(prompted)),
+            Delivery::Steer(message("And.", "c_and"), reported(steered)),
+        ],
+    ));
+    world.send(Delivery::Cancelled);
+    let last = world.next_turn();
+    assert_eq!(prompt_answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(steer_answer.recv_timeout(DEADLINE), Ok(false));
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    assert_eq!(
+        last[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [JOB]}])
+    );
+    ran(&finished);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&[]),
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+// Idle with jobs running (`docs/invocation.md`, "Lifecycle").
+
+const IDLE: Duration = Duration::from_secs(60);
+
+/// The jobs check's text, naming `ids`.
+fn check_text(ids: &[&str]) -> String {
+    format!(
+        "Fiber: no one has prompted this session for a while, and these background jobs are still running: {}. Read each job's output file, and stop with `jobs stop` any that look hung or that you no longer need.",
+        ids.join(", ")
+    )
+}
+
+/// The input of a turn the jobs check or the ending notice starts: one
+/// message from Fiber.
+fn fiber_input(text: &str) -> Value {
+    json!([{
+        "type": "message",
+        "source": "fiber",
+        "content": [{"type": "text", "text": text}],
+    }])
+}
+
+/// The check turn in `lines` names `id`: a Fiber message as its input,
+/// then `jobs_pending_notified` with `reason` `unattended` after its first
+/// `step_started`.
+fn assert_check(lines: &[Envelope], id: &str) {
+    assert_eq!(lines[0].payload["input"], fiber_input(&check_text(&[id])));
+    assert_eq!(lines[2].kind, "jobs_pending_notified");
+    assert_eq!(
+        Value::Object(lines[2].payload.clone()),
+        json!({"job_ids": [id], "reason": "unattended"})
+    );
+    assert_eq!(lines[2].turn_id, lines[0].turn_id);
+    assert_eq!(lines[2].action_id, None);
+}
+
+#[test]
+fn the_idle_delay_with_a_job_running_gives_the_jobs_check_once_and_never_exits() {
+    let world = World::new(
+        vec![Scripted::text("Checked."), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    // Unattended since the wait began, with a job running: the check is
+    // due one delay later.
+    assert!(
+        clock.await_parked(origin + IDLE, DEADLINE),
+        "{:?}",
+        clock.parked()
+    );
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    let check = world.next_turn();
+    assert_eq!(kinds(&check), one_step_with(&["jobs_pending_notified"]));
+    assert_check(&check, &id);
+    // The request carries the logged message once; the line renders
+    // nothing.
+    let requests = world.requests();
+    assert_eq!(requests.len(), 1);
+    let text = check_text(&[&id]);
+    assert_eq!(users(&requests[0]).last(), Some(&text));
+    assert_eq!(
+        users(&requests[0])
+            .iter()
+            .filter(|user| **user == text)
+            .count(),
+        1
+    );
+    // Another two delays with no prompt: no second check, and the session
+    // does not end while the job runs. A wake makes the wait look again.
+    clock.advance(IDLE + IDLE);
+    world.send(Delivery::Cancelled);
+    assert!(matches!(
+        finished.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    job.end.end(failed(&id));
+    let turn = world.next_turn();
+    assert_eq!(kinds(&turn), one_step_with(&["job_completed"]));
+    // The idle delay starts once the job's turn is over and no job runs.
+    let restarted = origin + IDLE + IDLE + IDLE + IDLE;
+    assert!(
+        clock.await_parked(restarted, DEADLINE),
+        "{:?}",
+        clock.parked()
+    );
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 2);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn a_prompt_arms_the_jobs_check_again_from_when_it_was_taken() {
+    let world = World::new(
+        vec![
+            Scripted::text("Checked."),
+            Scripted::text("Hi."),
+            Scripted::text("Checked again."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    assert_check(&world.next_turn(), &id);
+    // Half a delay later a prompt arrives: the clock restarts from it.
+    clock.advance(IDLE / 2);
+    world.send(Delivery::Cancelled);
+    world.send(prompt("Hello."));
+    let prompted = world.next_turn();
+    assert_eq!(kinds(&prompted), one_step_with(&[]));
+    let rearmed = origin + IDLE + IDLE / 2 + IDLE;
+    assert!(
+        clock.await_parked(rearmed, DEADLINE),
+        "{:?}",
+        clock.parked()
+    );
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    assert_check(&world.next_turn(), &id);
+    job.end.end(failed(&id));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    assert!(clock.await_parked(rearmed + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&[]),
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn a_steer_in_the_check_turn_arms_the_check_again() {
+    let world = World::new(
+        vec![
+            Scripted::text("Checked."),
+            Scripted::text("Noted."),
+            Scripted::text("Checked again."),
+            Scripted::text("Seen."),
+        ],
+        vec![vec![steer("Still here.")]],
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    let check = world.next_turn();
+    let mut steered = one_step_with(&["jobs_pending_notified"]);
+    steered.pop();
+    steered.extend(["step_started", "steering_applied"]);
+    steered.extend(REPLY);
+    assert_eq!(kinds(&check), steered);
+    assert_check(&check, &id);
+    // The steer was taken as the check came due: the next is one delay on.
+    assert!(
+        clock.await_parked(origin + IDLE + IDLE, DEADLINE),
+        "{:?}",
+        clock.parked()
+    );
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    assert_check(&world.next_turn(), &id);
+    job.end.end(failed(&id));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 4);
+}
+
+#[test]
+fn a_steer_while_idle_arms_the_check_again() {
+    let world = World::new(
+        vec![
+            Scripted::text("Checked."),
+            Scripted::text("Noted."),
+            Scripted::text("Checked again."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    assert_check(&world.next_turn(), &id);
+    world.send(steer("Still here."));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&[]));
+    assert!(clock.await_parked(origin + IDLE + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    assert_check(&world.next_turn(), &id);
+    job.end.end(failed(&id));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    assert!(clock.await_parked(origin + IDLE * 3, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 4);
+}
+
+#[test]
+fn a_jobs_end_does_not_arm_the_check_again() {
+    let world = World::new(
+        vec![
+            Scripted::text("Checked."),
+            Scripted::text("One."),
+            Scripted::text("Two."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let first = open_job(&jobs);
+    let second = open_job(&jobs);
+    let one = first.started.job_id.0.clone();
+    let two = second.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    let check = world.next_turn();
+    assert_eq!(
+        check[0].payload["input"],
+        fiber_input(&check_text(&[&one, &two]))
+    );
+    assert_eq!(
+        Value::Object(check[2].payload.clone()),
+        json!({"job_ids": [one, two], "reason": "unattended"})
+    );
+    // One job ends; its turn does not arm the check, so the other running
+    // past another delay gives none.
+    first.end.end(failed(&one));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    clock.advance(IDLE + IDLE);
+    world.send(Delivery::Cancelled);
+    second.end.end(failed(&two));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    assert!(clock.await_parked(origin + IDLE * 4, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn with_jobs_given_and_none_running_the_idle_delay_exits() {
+    let world = World::new(Vec::new(), Vec::new(), |_| Vec::new());
+    let jobs = FakeJobs::new(world.home());
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert!(world.requests().is_empty());
+    assert_eq!(durable_kinds(&world), ["session_started"]);
+}
+
+#[test]
+fn with_no_idle_delay_a_job_running_gets_no_check() {
+    let world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    let clock = Arc::clone(&world.clock);
+    let finished = world.spawn_run();
+    clock.advance(IDLE * 10);
+    world.send(Delivery::Cancelled);
+    job.end.end(failed(&id));
+    assert_eq!(kinds(&world.next_turn()), one_step_with(&["job_completed"]));
+    world.send(Delivery::Close(ignore()));
+    ran(&finished);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[one_step_with(&["job_completed"])])
+    );
+}
+
+#[test]
+fn a_steer_arriving_as_the_check_turn_starts_follows_jobs_pending_notified() {
+    let world = World::new(vec![Scripted::text("Checked.")], Vec::new(), |_| Vec::new());
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[JOB]);
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    // The steer lands in the inbox as the wait reads the jobs past the
+    // delay, after its last look at the inbox: the check turn's first step
+    // drains it.
+    *jobs.arriving.lock().unwrap() = Some((world.inbox.clone(), vec![steer("Still here.")]));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    let lines = world.watched();
+    let from = lines
+        .iter()
+        .position(|line| line.kind == "turn_started")
+        .expect("a turn started");
+    assert_eq!(
+        kinds(&lines[from..]),
+        [
+            "turn_started",
+            "step_started",
+            "jobs_pending_notified",
+            "steering_queue",
+            "steering_applied",
+            "steering_queue",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(
+        lines[from + 2].payload,
+        json!({"job_ids": [JOB], "reason": "unattended"})
+            .as_object()
+            .unwrap()
+            .clone()
+    );
+    jobs.set(&[]);
+    world.send(Delivery::Close(ignore()));
+    ran(&finished);
+}
+
+#[test]
+fn a_job_listed_while_idle_holds_the_deadline_gets_the_check_and_its_end_restarts_it() {
+    let world = World::new(vec![Scripted::text("Checked.")], Vec::new(), |_| Vec::new());
+    let jobs = Arc::new(Listed::default());
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let finished = world.spawn_run();
+    assert!(clock.await_parked(origin + IDLE, DEADLINE));
+    let (reads, read) = mpsc::channel();
+    *jobs.reads.lock().unwrap() = Some(reads);
+    jobs.set(&[JOB]);
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    // The wait read the job running past the deadline, and did not end:
+    // the session was unattended that long, so the check is given.
+    while read.recv_timeout(DEADLINE).expect("the wait read the jobs") == 0 {}
+    assert_check(&world.next_turn(), JOB);
+    // The job ends with its final state already claimed: no turn starts,
+    // and the delay counts from when the wait saw no job running.
+    jobs.set(&[]);
+    world.send(notice(JOB, false, &Asked::default()));
+    assert!(
+        clock.await_parked(origin + IDLE + IDLE, DEADLINE),
+        "{:?}",
+        clock.parked()
+    );
+    assert!(matches!(
+        finished.try_recv(),
+        Err(mpsc::TryRecvError::Empty)
+    ));
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 1);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[one_step_with(&["jobs_pending_notified"])])
+    );
+}
+
+#[test]
+fn an_approval_wait_with_a_job_running_outlasts_the_idle_deadline() {
+    let world = World::new(
+        vec![calls("gated"), Scripted::text("Seen.")],
+        Vec::new(),
+        |_| vec![Arc::new(Gated)],
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone()).idle(IDLE);
+    let clock = Arc::clone(&world.clock);
+    let origin = clock.now();
+    let (asked, request) = mpsc::channel();
+    let watcher = on_request(&world.log, move |request_id| {
+        asked.send(request_id).unwrap();
+    });
+    world.send(prompt("go"));
+    let finished = world.spawn_run();
+    let _request_id = request.recv_timeout(DEADLINE).expect("the call asked");
+    watcher.join().unwrap();
+    clock.advance(IDLE + Duration::from_secs(1));
+    world.send(Delivery::Cancelled);
+    let (rejected, answer) = mpsc::channel();
+    world.send(Delivery::Reply(
+        Reply {
+            request_id: RequestId("r_absent".into()),
+            answer: ReplyAnswer::Approval {
+                decision: Decision::Deny,
+                feedback: None,
+                remember: None,
+            },
+        },
+        reported(rejected),
+    ));
+    assert_eq!(answer.recv_timeout(DEADLINE), Ok(false));
+    // The job's end waits for the next step; the delay restarts from it.
+    job.end.end(failed(&id));
+    let restarted = origin + IDLE + Duration::from_secs(1) + IDLE;
+    assert!(
+        clock.await_parked(restarted, DEADLINE),
+        "{:?}",
+        clock.parked()
+    );
+    clock.advance(IDLE);
+    world.send(Delivery::Cancelled);
+    ran(&finished);
+    // The idle exit writes nothing for the pending call.
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[vec![
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+        ]])
+    );
+}
+
+#[test]
+fn a_job_that_ends_as_the_loop_checks_still_starts_its_turn() {
+    let world = World::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+        ],
+        Vec::new(),
+        |_| Vec::new(),
+    );
+    let jobs = Arc::new(Listed::default());
+    jobs.set(&[JOB]);
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    let _first = world.next_turn();
+    let ending = world.next_turn();
+    assert_eq!(ending[2].payload["job_ids"], json!([JOB]));
+    // The end is in the inbox by the time the list no longer names it.
+    *jobs.racing.lock().unwrap() = Some((world.inbox.clone(), vec![held(JOB)]));
+    world.send(Delivery::Cancelled);
+    let last = world.next_turn();
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    assert_notice(&last[2], JOB);
+    ran(&finished);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&[]),
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn after_close_a_kept_notice_starts_a_turn_and_a_kept_steer_does_not() {
+    let mut world = World::new(vec![Scripted::text("Seen.")], Vec::new(), |_| Vec::new());
+    let jobs = Arc::new(Listed::default());
+    world = world.with_jobs(jobs);
+    {
+        // What a turn cut short before `close` left queued.
+        let looped = world.looped.as_mut().unwrap();
+        looped.closing = true;
+        looped
+            .queued
+            .push_back(crate::jobs::Queued::Steer(message("Kept.", "c_kept")));
+        looped
+            .queued
+            .push_back(crate::jobs::Queued::Job(failed(JOB)));
+    }
+    assert_eq!(world.turn(), Some(TurnOutcome::Completed));
+    let lines = world.turn_lines();
+    assert_eq!(kinds(&lines), one_step_with(&["job_completed"]));
+    assert_eq!(
+        lines[0].payload["input"],
+        json!([{"type": "jobs", "job_ids": [JOB]}])
+    );
+    assert_notice(&lines[2], JOB);
+    assert!(!users(&world.requests()[0]).contains(&"Kept.".to_owned()));
+    assert_eq!(world.turn(), None);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[one_step_with(&["job_completed"])])
+    );
+}
+
+#[test]
+fn a_steer_in_a_turn_started_after_close_is_rejected_closing() {
+    let (during_ending, ending_answer) = mpsc::channel();
+    let (during_job, job_answer) = mpsc::channel();
+    let world = World::new(
+        vec![
+            Scripted::text("Done."),
+            Scripted::text("Waiting."),
+            Scripted::text("Seen."),
+        ],
+        vec![
+            Vec::new(),
+            vec![Delivery::Steer(
+                message("During the notice.", "c_one"),
+                reported(during_ending),
+            )],
+            vec![Delivery::Steer(
+                message("During the job's turn.", "c_two"),
+                reported(during_job),
+            )],
+        ],
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let job = open_job(&jobs);
+    let id = job.started.job_id.0.clone();
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    world.send(Delivery::Close(ignore()));
+    let finished = world.spawn_run();
+    let first = world.next_turn();
+    assert_eq!(kinds(&first), one_step_with(&[]));
+    let ending = world.next_turn();
+    assert_eq!(kinds(&ending), one_step_with(&["jobs_pending_notified"]));
+    assert_eq!(ending_answer.recv_timeout(DEADLINE), Ok(false));
+    job.end.end(failed(&id));
+    let last = world.next_turn();
+    assert_eq!(kinds(&last), one_step_with(&["job_completed"]));
+    assert_eq!(job_answer.recv_timeout(DEADLINE), Ok(false));
+    ran(&finished);
+    assert_eq!(world.requests().len(), 3);
+    assert_eq!(
+        durable_kinds(&world),
+        session_of(&[
+            one_step_with(&[]),
+            one_step_with(&["jobs_pending_notified"]),
+            one_step_with(&["job_completed"]),
+        ])
+    );
+}
+
+#[test]
+fn the_turn_in_flight_when_close_arrives_still_takes_a_steer() {
+    let (steered, answer) = mpsc::channel();
+    let world = World::new(
+        vec![Scripted::text("Hi."), Scripted::text("Steered.")],
+        vec![vec![
+            Delivery::Close(ignore()),
+            Delivery::Steer(message("And this.", "c_and"), reported(steered)),
+        ]],
+        |_| Vec::new(),
+    );
+    let jobs = FakeJobs::new(world.home());
+    let mut world = world.with_jobs(jobs.clone());
+    world.send(prompt("Hello."));
+    let finished = world.spawn_run();
+    let turn = world.next_turn();
+    assert_eq!(answer.recv_timeout(DEADLINE), Ok(true));
+    let mut expected = vec![
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "step_started",
+        "steering_applied",
+    ];
+    expected.extend_from_slice(&REPLY);
+    assert_eq!(kinds(&turn), expected);
+    ran(&finished);
+    assert_eq!(world.requests().len(), 2);
+    assert_eq!(durable_kinds(&world), session_of(&[expected]));
 }

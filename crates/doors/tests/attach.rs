@@ -190,7 +190,7 @@ fn turn_input(text: &str, command: &CommandId) -> Vec<InputItem> {
         content: vec![ContentPart::Text { text: text.into() }],
         sender: Sender {
             origin: Origin::Driver,
-            command_id: command.clone(),
+            command_id: Some(command.clone()),
         },
         changed_by: None,
     }]
@@ -201,7 +201,14 @@ fn turn_input(text: &str, command: &CommandId) -> Vec<InputItem> {
 /// first, then the accept (`loop`, `turn`).
 fn prompt_of(inbox: &Receiver<Delivery>) -> (Vec<ContentPart>, CommandId, Ack) {
     match inbox.recv_timeout(DEADLINE).expect("the prompt arrives") {
-        Delivery::Prompt(message, ack) => (message.content, message.sender.command_id, ack),
+        Delivery::Prompt(message, ack) => (
+            message.content,
+            message
+                .sender
+                .command_id
+                .expect("a driver prompt has a command_id"),
+            ack,
+        ),
         Delivery::Close(_)
         | Delivery::Steer(..)
         | Delivery::SteerDrop(..)

@@ -281,7 +281,7 @@ fn turn() -> Event {
             content: vec![ContentPart::Text { text: "hi".into() }],
             sender: Sender {
                 origin: Origin::Driver,
-                command_id: CommandId("c_1".into()),
+                command_id: Some(CommandId("c_1".into())),
             },
             changed_by: None,
         }],
@@ -954,7 +954,7 @@ fn a_full_subscriber_after_a_queued_steer_gets_the_latest_steering_queue() {
                     }],
                     sender: Sender {
                         origin: Origin::Driver,
-                        command_id: CommandId("c_later".into()),
+                        command_id: Some(CommandId("c_later".into())),
                     },
                 }],
             }),
