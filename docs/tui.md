@@ -176,12 +176,17 @@ The default cards, in order:
   fills toward the automatic handoff point, with a marker there; tokens, cache
   hit rate, cost billed and cost on subscription, delegates included, against
   `budget.usd` when one is set; output speed and turns; and one "tools" line naming any
-  MCP server that is down.
+  MCP server that is down. Every number has a plain label that says what it
+  measures, such as "tokens in / out", "cache hits" or "output speed, last
+  reply", never a bare abbreviation. The handoff marker carries one line saying
+  what a handoff is: when the context fills, Fiber writes a summary and the
+  work continues in a fresh context (`docs/handoff.md`).
 - **Changed files:** the five files with the most lines changed, and totals.
 - **Delegates:** one card for all of them, two rows each, at most 6 rows
   shown, drawn from each delegate's `session_status` over a `summary`
   connection. It scrolls on its own under the mouse wheel.
-- **Jobs:** one line saying how many run. A click lists them, one row each.
+- **Jobs:** one line saying how many run, shown only while a job runs. A
+  click lists them, one row each.
 - **Quota,** from its extension. Quota is not built in.
 
 The context bar is drawn against `preamble_built`'s `context_window` and
@@ -189,7 +194,7 @@ The context bar is drawn against `preamble_built`'s `context_window` and
 never from `details`, which has no fixed shape a client may rely on
 (`docs/events.md`).
 
-Every panel item is clickable and opens its view: the model picker, the
+⌥P shows and hides the panel. Every panel item is clickable and opens its view: the model picker, the
 context breakdown, usage, the tools, a delegate's or job's transcript, or a
 file's diff. The same views back `/model`, `/context`, `/usage` and `/tools`.
 
@@ -233,6 +238,7 @@ the conversation. The views are:
 - **The context breakdown:** one bar of context by category against the
   handoff point, with the largest tool results.
 - **Changed files:** a file list with the chosen file's hunks.
+- **Search results:** every match with its surrounding lines ("Search").
 - **The tools view,** `/tools` (`docs/tools.md`, "Seeing the tools"): every
   tool by source, full or deferred, and its approximate size. An MCP server or
   an extension has an on/off switch that writes its `tools.enabled` and
@@ -351,6 +357,9 @@ draft stay.
   by step, with each step's number in the gutter and its thinking line first.
   A step is opened by `step_started` (`docs/events.md`, "Session and turn").
 - **Clicking a row opens that call:** its diff, output or error.
+- **A call that changed a file is highlighted** in the ledger, with the file's
+  name and its lines added and removed, so edits stand out from reads and
+  commands.
 - **Failed calls get no special treatment.** They are ordinary rows with their
   status. Nothing is hoisted above the fold.
 
@@ -486,6 +495,11 @@ An approval request is a panel at the bottom that replaces the input box
   matches"). A request that offers no rule shows neither.
 - The panel says why it asked: the standing rule that asked, the reviewer's
   reason when the reviewer escalated, or that the reviewer failed.
+- The panel's tint follows why it asked. A reviewer's escalation gets the
+  alert tint; a standing ask gets the normal approval tint. A call that
+  declares itself irreversible says "irreversible" in the panel's header, as
+  text, whatever asked. Nothing judges danger by reading the command
+  (`docs/permissions.md`).
 - The asking call's tool group expands so the full call can be read.
 - Esc puts the request aside. It stays pending behind a badge, and clicking the
   badge reopens it. Denying is always explicit.
@@ -504,8 +518,10 @@ box, as an approval does (`docs/tools.md`, "Asking the person").
   note on the whole form.
 - Each question shows its options with their descriptions, and a row to
   answer in words. Enter on a single-choice option chooses it and moves on.
-  Space toggles a multi-choice option, and the question ends with a `Next →`
-  row, `Review →` on the last question, that moves on.
+  In a multi-choice question, Space toggles the option under the cursor and
+  Enter moves on to the next question, or to Submit after the last one. The
+  question ends with a `Next →` row, `Review →` on the last question, that
+  does the same for the mouse.
 - "Chat about this", and Esc, decline the form and end the turn, so the person
   can answer in their own words. The terminal sends `reply` with `declined`,
   then `cancel`: the call completes `declined`, and the cancel ends the turn.
@@ -541,6 +557,13 @@ editor's find box does, and the input box keeps its draft. Every match is
 marked, the current one brighter, with "3 of 41". A match inside a collapsed
 section expands it.
 
+Matching is plain text. No model ranks the matches or interprets the query.
+
+Ctrl+F a second time, or a click on the "3 of 41" count, opens the search
+results as a swapped view ("Swapped views"): every match, one row each, with
+the lines around it. Enter, or a click on a row, jumps to that match in the
+conversation and closes the view.
+
 Search is Ctrl+F, and Cmd+F where the terminal forwards it. Ghostty binds
 `super+f=start_search` by default; the line that frees it is:
 
@@ -565,10 +588,14 @@ marked with OSC 8 or handled on click.
   reply arrives. crossterm parses both replies but hands them only to a call
   that blocks for up to 2 seconds, so Fiber reads terminal input itself
   ([fiber-zig#16](https://github.com/aakshintala/fiber-zig/issues/16)).
-- **Every action has a legacy path:** a legacy key, a mouse target or a slash
-  command.
-- **Esc closes whatever is on top,** and interrupts the turn only when nothing
-  is open. In a question form, Esc means "Chat about this".
+- **Every action has a key.** Every action also has a mouse target or a slash
+  command. A mouse target is drawn only where one fits naturally, never as a
+  button added only so the mouse has a way in. A key that needs the kitty
+  keyboard protocol also has one that does not, so every action keeps a key
+  on any terminal.
+- **Esc closes whatever is on top,** returns focus to the input box from the
+  conversation, and interrupts the turn only when nothing is open and the
+  input box has focus. In a question form, Esc means "Chat about this".
 - **Slash commands.** Typing `/` opens one completion panel above the input
   box. Commands, skills, prompt templates and MCP prompts share one list,
   filtered as the person types. Each row is a name, a one-line description, a
@@ -582,10 +609,31 @@ marked with OSC 8 or handled on click.
   the files git tracks, so a huge repository costs one listing, never a walk of
   the tree.
 
+### Moving through the conversation
+
+The input box holds the keyboard until the person moves focus out of it.
+Shift+Tab moves focus to the newest item in the conversation.
+
+- ↑ and ↓, or k and j, move focus through turns, tool groups and their
+  ledger rows, scrolling the conversation as needed.
+- Enter opens the focused item, as a click does: a group's ledger, a call's
+  diff or output, a delegate's view.
+- y copies the focused item's text. Ctrl+G opens it in `$VISUAL` or
+  `$EDITOR`.
+- Tab moves focus to the panel, then the rail, then back to the
+  conversation.
+- Esc returns focus to the input box, keeping the draft.
+
+The focus order is not defined screen by screen. It is every click target on
+screen, the same targets hover highlights, from top to bottom and left to
+right. Every mouse target, an extension widget's included, is therefore a
+focus stop with no extra work, and nothing the mouse can reach is out of the
+keyboard's reach.
+
 ### The input box
 
-- Enter sends. Shift+Enter inserts a line break, with Ctrl+J as the legacy
-  path. Pasted text keeps its line breaks. The box grows to about a third of
+- Enter sends. Shift+Enter inserts a line break, with Ctrl+J for terminals
+  without the kitty keyboard protocol. Pasted text keeps its line breaks. The box grows to about a third of
   the screen, then scrolls.
 - ↑ in an empty box recalls earlier prompts: from this session, then the
   project's earlier sessions, newest first. Ctrl+R searches them. They come
@@ -622,18 +670,24 @@ marked with OSC 8 or handled on click.
 | Open the draft, or a pasted token, in `$VISUAL` or `$EDITOR` | `open_in_editor` | Ctrl+G | click the token |
 | Paste an image | `paste_image` | Ctrl+V | |
 | Open or close the ledgers | `toggle_ledgers` | Ctrl+O | click a group's line |
+| Move focus from the input box into the conversation | `navigate` | Shift+Tab | click an item |
+| Move focus to the next or previous item | `focus_next_prev` | ↓ ↑, j k | click an item |
+| Open the focused item | `open_focused` | Enter | click it |
+| Copy the focused item | `copy_focused` | y | select it |
+| Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
+| Show or hide the panel | `toggle_panel` | ⌥P | |
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
+| Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
 | Amend it | `amend_steering` | Enter | |
 | Drop it | `drop_steering` | ⌥X | its mouse target |
-| Reopen a request put aside, or move to the next | `next_request` | | `/approvals`; click the badge |
+| Reopen a request put aside, or move to the next | `next_request` | ⌥A | `/approvals`; click the badge |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
-| Open the key map | `key_map` | | `/?` or `/help` |
+| Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
-binding by area with its legacy path, as codex's shortcut overlay does,
-including actions with no key. Esc closes it. Ctrl+L opens the model picker,
+binding by area with its other paths, as codex's shortcut overlay does. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
 Every action has a stable id, and `keys."<id>"` in the global configuration
@@ -1009,7 +1063,10 @@ top. An extension's view or overlay takes focus when it opens.
 
 A key that needs the kitty keyboard protocol, such as `shift+enter`, works
 once keyboard detection finishes ("Keys", "Rules"). An extension that binds
-one gives a legacy path too, as the built-ins do.
+one also binds a key that works without the protocol, as the built-ins do.
+Every click target an extension draws is a focus stop in navigate mode
+("Moving through the conversation"), so its widgets need no focus order of
+their own.
 
 ### Animation
 
