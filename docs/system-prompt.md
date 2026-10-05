@@ -136,8 +136,9 @@ system prompt under a heading naming the extension. This is how an extension
 gives standing guidance across its tools, such as which to call first, that
 must survive a handoff. A tool's own description stays in its tool definition.
 
-An extension with a prompt file is first used at session start, as one that
-registers a tool is (`docs/extensions.md`). A hook never changes the system
+An extension with a prompt file is read at session start, when every enabled
+Lua extension starts (`docs/extensions.md`, "Loading, and cost when nothing is
+loaded"). A hook never changes the system
 prompt.
 
 ## The opening message

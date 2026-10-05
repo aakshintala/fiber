@@ -231,9 +231,11 @@ fiber.command(name, { description, timeout, run })
 
 What a harness declares is `docs/delegates.md`, "Harness extensions".
 
-A tool, provider, harness, search backend or hook registers before the session's tool
-set is fixed (`docs/prompt-cache.md`, "Tools"), so an extension that registers
-one is first used at session start.
+A tool, harness, search backend, hook or watcher registers before the
+session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), which is why
+every enabled Lua extension runs its `init.lua` at session start ("Loading,
+and cost when nothing is loaded"). A provider is the exception: its manifest
+declares it, so its Lua waits for the first use of one of its models.
 
 ### Host calls
 
@@ -835,11 +837,23 @@ client.
 
 ## Loading, and cost when nothing is loaded
 
-Each Lua extension gets its own Lua VM and thread, created the first time the
-extension is invoked, not at startup. A session that loads no Lua extension —
-or loads one it never calls — creates no VM and pays no idle CPU and no
-runtime memory for it. Lazy creation, not a cheap runtime, is what makes this
-true. A process extension costs its process from session start, because it
+Each Lua extension gets its own Lua VM and thread. At session start, every
+installed Lua extension that is enabled for the project runs its `init.lua`,
+because a tool, hook, watcher, harness or search backend must register before
+the session's tool set is fixed (`docs/prompt-cache.md`, "Tools"), and Fiber
+cannot know what an extension registers without running it. Each started
+extension costs about 120 KiB and a thread for the whole session. These cost
+nothing at start:
+
+- an extension disabled for the project, which never starts;
+- an extension with no Lua, only data, skills, themes, prompt templates or
+  binaries, which starts no VM;
+- a provider, which its manifest's `providers` and its data file declare, so
+  its Lua, if it has any, first runs when the session uses one of its models;
+- the first-party `hooks` extension in a session whose configuration has no
+  `hooks` key ("Hooks declared in configuration").
+
+A process extension costs its process from session start, because it
 must register before the session's first request. A TUI extension's VM is
 created before the terminal's first frame, since a replaced layout or input
 box changes that frame (`docs/tui.md`, "How a TUI extension runs").
@@ -1055,10 +1069,8 @@ manifest declares, such as `npm ci`. Fiber runs that step in the extension's
 directory at install and at every update, as pi runs `npm install` for its
 packages. Like pi, Fiber does not pass `--ignore-scripts`, so a dependency's
 own install scripts run too, and the install summary says so. A pure-data
-provider is only ever read, and a Lua script first runs when the extension is
-first used. An
-extension that registers a tool is first used at session start, because the
-tool set is fixed before the first request (`docs/prompt-cache.md`, "Tools").
+provider is only ever read. Any other enabled Lua extension's script first
+runs at session start ("Loading, and cost when nothing is loaded").
 
 ### A fresh install
 
