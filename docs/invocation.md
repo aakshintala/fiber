@@ -155,8 +155,10 @@ other variables and whether the login-shell capture succeeded ("A session's
 environment"). A line that stops a
 session from starting carries its fix, such as
 `` no key for openrouter: run `fiber login openrouter` ``. It exits non-zero
-when a session cannot start. It never touches the network, so it does not
-check that a key is valid.
+when a session cannot start. It also prints where the diagnostic logs are, the
+newest line at `error` level among them, and the newest crash file, with its
+age (`docs/state.md`, "What each part holds"). It never touches the network, so
+it does not check that a key is valid.
 
 **Extensions.** `fiber extension` manages extensions (`docs/extensions.md`,
 "Installing").
@@ -196,7 +198,9 @@ exact declaration for the person who ran it (`docs/mcp.md`, "A repository's
 servers").
 
 **The hub.** The first seven run on the machine whose hub they manage; `add`
-and `remove` run on a client ("The hub"):
+and `remove` run on a client ("The hub"). A paired client can also mint a
+pairing code, list devices and revoke one, through the hub commands
+`pairing_code`, `devices` and `revoke` ("Remote clients"):
 
 | Command | What it does |
 |---|---|
@@ -787,9 +791,9 @@ websocket for everything it does.
 | `read_file` | `session` (string), `path` (string) | Answers with one file from the session's `artifacts/` ("A session's files"). |
 | `status` | none | Answers with what `fiber hub status` prints. |
 | `refresh` | none | Rebuilds the hub's environment, as `fiber hub refresh` does. |
-| `pairing_code` | `device` (string) | Local socket only: answers with a new pairing code for that device, as `fiber hub pair` prints. |
-| `devices` | none | Local socket only: answers with the paired devices. |
-| `revoke` | `device` (string) | Local socket only: revokes the device's token and closes its live connections. |
+| `pairing_code` | `device` (string) | Answers with a new pairing code for that device, as `fiber hub pair` prints. |
+| `devices` | none | Answers with the paired devices. |
+| `revoke` | `device` (string) | Revokes the device's token, which may be the asking client's own, and closes its live connections. |
 
 Each is answered with one `command_accepted` or `command_rejected`, as a
 session's commands are. A client offers the workspaces of recent sessions
@@ -800,7 +804,8 @@ clients.
 
 - **Pairing gives each client its own device token.** `fiber hub pair
   <device>`, run on the hub's machine, prints a short code, and in a terminal
-  a QR code with the hub's address. A client sends the code with `pair`
+  a QR code with the hub's address; a paired client asks for one with
+  `pairing_code`. A client sends the code with `pair`
   within 10 minutes and receives a device token named after the device. The
   code then stops working. A wrong, used or old code is rejected
   `pairing_failed`.
@@ -823,9 +828,20 @@ clients.
   (`ssh -L /tmp/fiber-hub.sock:/home/me/.fiber/run/hub host`) and add it as a
   `unix:` address. Only their account can open either end, so being that
   account stays the authentication.
-- **Pairing codes are minted and tokens revoked only on the hub's machine.**
-  `pairing_code`, `devices` and `revoke` are answered only on the local
-  socket, so a stolen device token cannot mint another or keep itself alive.
+- **Any paired client manages devices, and every change is announced.**
+  `pairing_code`, `devices` and `revoke` are answered on the port as on the
+  local socket. Limiting them to the hub's machine would stop no one holding a
+  token, since a device token is already a shell on the hub's account and a
+  session's shell reaches the local socket; it would only stop a person whose
+  one device is a phone from adding a second. Detection is the control
+  instead. Each pairing and each revocation is written to the hub's
+  diagnostic log (`docs/state.md`, "What each part holds") and sent to every
+  connected client as a `device_changed` line (`docs/events.md`, "The
+  envelope"), so a device paired by someone else is seen.
+- **The first device is paired on the hub's machine.** Where the hub is
+  deployed, `fiber hub pair` mints the first code: by hand, or from a deploy
+  script or a cloud console. The same local door is the way back in after a
+  stolen token revokes a person's devices.
 
 ### Several hubs
 
@@ -981,6 +997,8 @@ that hold nothing to lose:
   worktree is skipped, and its line names what removing it would lose:
   uncommitted files, commits found nowhere else, or both. `--force` removes
   it anyway. A worktree a running session works in is never removed.
+- **Diagnostic logs and crash files.** It deletes the old ones, as the hub
+  does when it starts (`docs/state.md`, "What each part holds").
 - **What it frees.** `--dry-run` prints what prune would delete and the space
   it would free, and deletes nothing. Otherwise prune prints the same list,
   asks as delete does (`--yes` confirms), deletes, and prints the space freed.

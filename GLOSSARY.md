@@ -138,10 +138,18 @@ after the device. The hub keeps only its hash; revoking it closes the device's
 live connections.
 _Avoid_: API key, bearer token, session token
 
+### Diagnostic log
+
+The file in Fiber home's `logs/` where a process records what happens outside
+any session: failures with no session to hold them, and the hub's operations.
+A session's own events stay in its session log.
+_Avoid_: debug log, telemetry
+
 ### Pairing code
 
-A short code `fiber hub pair` prints on the hub's machine, which a client
-exchanges once, within 10 minutes, for a device token.
+A short code that `fiber hub pair` prints on the hub's machine, or a paired
+client asks the hub for, which a new client exchanges once, within 10 minutes,
+for a device token.
 _Avoid_: invite, one-time password
 
 ### Fork
