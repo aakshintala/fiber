@@ -238,8 +238,9 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call | the target session's `before_message` refused a session message |
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
-| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields") |
+| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, or its `web_search` names a type its protocol does not read, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
 | `model_not_found` | model call, turn | the provider does not know the model |
+| `model_unconfigured` | notice | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
 | `no_match` | tool call | an edit block's text was not found in the file |
 | `no_model` | exit, notice | nothing chose a model, or an installed provider lacks the named model |
@@ -290,13 +291,15 @@ Notices, for a failure outside any action:
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
-| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, so the model is left out of the model list; the message names the model and the field (`docs/model-routing.md`, "Extra request body fields") |
+| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, or its `web_search` names a type its protocol does not read, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
+| `model_unconfigured` | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
 | `skill_invalid` | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
 | `skills_large` | the skills listing passes 10% of the context window; the message names the sources that add the most (`docs/system-prompt.md`, "Size") |
 | `tool_definitions_large` | full tool definitions take more than 10% of the context window |
+| `web_search_unavailable` | `web_search` is not declared: several search backends are installed and `web_search.backend` is unset, or it names a backend that is not installed; the message names which (`docs/tools.md`, "Web fetch and web search") |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,

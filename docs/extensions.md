@@ -55,8 +55,10 @@ An extension is one directory. Its manifest, `extension.json`, states
   extension that registers a replacement or a provider its manifest does not
   declare is not loaded for the session, with the notice `extension_failed`,
   and a model whose base URL its provider's entry does not list is left out of
-  the model list. So what an install or an offer shows is everything the
-  extension can take over
+  the model list. A base URL with a per-account host lists its pattern, such
+  as `https://{workspace}/ai-gateway/anthropic`, and the setting that fills it
+  (`docs/model-routing.md`, "A per-account host"). So what an install or an
+  offer shows is everything the extension can take over
 
 Beside the manifest it may hold:
 
@@ -289,7 +291,8 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   returns the value merged across layers; `set` writes the machine or the
   project file, as `scope` says. The files and layers are
   `docs/configuration.md` ("Extension settings").
-- **`host.drive`** sends any driver command except an answer to an approval.
+- **`host.drive`** sends any driver command except an answer to an approval
+  or to an offer of a repository's code.
   An extension never approves a tool call, here or in a hook. An inbox
   extension uses `steer` or `prompt`; a `/goal` extension may use `cancel`.
   This is the extension contract, not a wall: a process extension could open
@@ -1113,8 +1116,10 @@ content, and raises one offer listing all of it, so approving costs no
 prompt-cache rebuild. Each item shows what an install shows ("What an install
 shows"), and an item whose content changed shows the diff against the copy
 approved before. For each item the person chooses: approve, skip for this
-session, or never. Any client may answer, local or remote, and the first
-answer wins, as for every interaction (`docs/invocation.md`, "Replying").
+session, or never. The offer is its own event pair, `repository_code_offered`
+and `repository_code_resolved`, never an interaction a model or an extension
+raises (`docs/events.md`, "Repository code"). Any client may answer, local or
+remote, and the first answer wins (`docs/invocation.md`, "Replying").
 
 Whether the session waits depends on whether a client that can answer is
 connected, not on how the session started:

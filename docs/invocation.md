@@ -463,10 +463,15 @@ An approval (`permission_requested`) is answered with these keys, which
 {"id":"c_91be","command":"reply","args":{"request_id":"r_2c01","decision":"allow","remember":{"scope":"project","prefix":"npm test"}}}
 ```
 
+An offer of a repository's code (`repository_code_offered`) is answered with
+`decisions`: an array of strings, one per offered item in the offer's order,
+each `approve`, `skip` or `never`, which `repository_code_resolved` records.
+
 A reply is rejected `stale_request` when its request is no longer pending, and
 `invalid_arguments` when its keys do not fit the request: another kind's
-answer keys, `feedback` with `allow`, or `remember` on a request with no `rule`
-or with a prefix the request did not offer. A global standing rule is added by
+answer keys, `feedback` with `allow`, `remember` on a request with no `rule`
+or with a prefix the request did not offer, or `decisions` whose length is
+not the number of items offered. A global standing rule is added by
 editing the global rules file, never from an approval.
 
 ## Lifecycle

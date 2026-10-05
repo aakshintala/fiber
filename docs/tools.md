@@ -25,6 +25,16 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   standing allows, and still meets the credential deny and the standing deny
   and ask rules (`docs/permissions.md`, "The order a call is judged in"). Any
   tool may set it, an extension's included; it only makes the call stricter.
+- The effects function may also return the network hosts the call contacts
+  (`hosts`). A list, even an empty one, says the call contacts those hosts and
+  no others; an empty list says it contacts no host the model chose, as a
+  search through its fixed backend does. A call that returns no list has
+  unknown hosts. A `network` call whose hosts are all known in the session
+  takes the fast path (`docs/permissions.md`, "Fast paths").
+- A call's result may list the hosts it surfaced (`hosts_surfaced`), such as
+  the hosts of a search's result URLs. Those hosts become known in the
+  session. Any tool may return either list, an MCP or extension tool included;
+  the loop reads them and never names a tool.
 - Optionally: guideline lines for the system prompt, for guidance that spans
   calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
   "Tool guidelines").
@@ -212,9 +222,14 @@ path's directory, ending in `/`.
   be read, or is over 50 megapixels, fails with `unsupported_file` and the
   decoder's message (or the pixel count). A CMYK JPEG decodes and is
   accepted. For a model that cannot take images, the image is left out and
-  the result says so.
+  the result says so. On a protocol that cannot carry an image inside a tool
+  result, the image goes in a user message right after the tool message, as
+  rendered PDF pages do on `openai-completions`.
 - A PDF comes back as a PDF part. One of more than 10 pages needs `pages`,
-  and a request takes at most 20 pages; these are Claude Code's numbers. The
+  and a request takes at most 20 pages; these are Claude Code's numbers. A
+  PDF of more than 10 pages without `pages`, a range of more than 20 pages,
+  and `pages` on a file that is not a PDF each fail with `invalid_arguments`,
+  the message saying which. The
   provider module sends the PDF natively where its protocol accepts a PDF in a
   tool result, and otherwise sends the pages rendered as images, which go
   through the same limits (`docs/model-routing.md`, "Image limits").
@@ -817,8 +832,10 @@ backend.
 
 - When the model's provider hosts a search, that search is used, even when a
   backend is also installed.
-- Which models host a search, and which variant each takes, is data in the
-  provider's extension (`docs/model-routing.md`). Reading and sending back the
+- Which models host a search, and which type each takes, is the model's
+  `web_search` in the provider's extension: the vendor's own tool type, such
+  as `web_search_20250305` or `google_search` (`docs/model-routing.md`,
+  "Hosted web search"). Reading and sending back the
   hosted search's blocks is protocol code in `anthropic-messages`,
   `openai-responses` and `google-generative-ai`.
 - Measured September 27, 2026: ChatGPT/codex, muse (only on its
@@ -849,23 +866,29 @@ backend.
   results, each a title, a URL and a snippet. Fiber writes the result.
 - A backend's key is an extension secret, stored at `credentials/<backend>`
   and read with `host.secret`.
-- With more than one backend installed, `web_search.backend`
-  (`docs/configuration.md`) names the one used.
-- When the provider hosts no search and no backend is installed, `web_search`
-  is not declared.
+- With one backend installed, it is used. With more than one,
+  `web_search.backend` (`docs/configuration.md`) names the one used.
+- `web_search` is not declared when the provider hosts no search and no
+  backend is installed, when several are installed and `web_search.backend`
+  is unset, or when it names a backend that is not installed. In the last two
+  cases a `notice` with code `web_search_unavailable` names the setting or the
+  missing backend.
 - The cap is the 16 KiB default.
 
 ### Effects
 
 - Both tools declare `network`.
-- A search never reaches a reviewer or a person. A query reaches only the
-  search service.
-- A fetch to a known host takes the same fast path. Any other fetch is
-  reviewed (`docs/permissions.md`, "Fast paths").
+- `web_fetch` declares the host of the URL as written in `hosts`. A search
+  declares an empty `hosts` list, because a query reaches only the search
+  service, and its result lists the hosts of its result URLs in
+  `hosts_surfaced` ("What a tool declares").
+- So a search never reaches a reviewer or a person, and a fetch to a known
+  host takes the same fast path. Any other fetch is reviewed
+  (`docs/permissions.md`, "Fast paths").
 - A host is known in a session when it was named in one of the person's
-  messages or an instruction file, appeared in a search result in the
-  session, or was the host of a fetch a reviewer or a person allowed in the
-  session. A host named only inside a fetched page is not known: otherwise an
+  messages or an instruction file, was listed in a result's `hosts_surfaced`
+  in the session, or was the host of a fetch a reviewer or a person allowed in
+  the session. A host named only inside a fetched page is not known: otherwise an
   injected page could name its own host.
 - A query string does not make a fetch suspicious. A search on a known host,
   such as a Jira query URL, needs no review.

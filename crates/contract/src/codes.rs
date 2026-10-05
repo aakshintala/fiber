@@ -116,11 +116,15 @@ codes! {
     MessageRefused,
     /// A bare model id matches models of two or more installed providers.
     ModelAmbiguous,
-    /// A model's `extra_body` names a field Fiber builds, so the model is
+    /// A model's `extra_body` names a field Fiber builds, or its
+    /// `web_search` names a type its protocol does not read, so the model is
     /// left out of the model list.
     ModelInvalid,
     /// The provider does not know the model.
     ModelNotFound,
+    /// A model's base URL names a per-account host whose setting has no
+    /// value, so the model is left out of the model list.
+    ModelUnconfigured,
     /// `name_session` was called while the person's name pins the session.
     NamePinned,
     /// An edit block's text was not found in the file.
@@ -208,6 +212,9 @@ codes! {
     /// An install needs two majors of one dependency, or no tag meets a
     /// minimum.
     VersionConflict,
+    /// `web_search` is not declared: several search backends are installed and
+    /// none is chosen, or the chosen one is not installed.
+    WebSearchUnavailable,
 }
 
 #[cfg(test)]

@@ -113,9 +113,12 @@ Three classes of call never reach a reviewer or a person:
 - every call whose only effect is `reads`, or that declares no effect,
 - a `writes` call whose paths all sit inside the **workspace**, none of them
   under `.git/` or `.fiber/`, and
-- a web search, and a web fetch to a host known in the session
-  (`docs/tools.md`, "Web fetch and web search"). A fetch to any other host
-  is reviewed.
+- a call whose only effect is `network` and whose declared hosts are all
+  known in the session (`docs/tools.md`, "What a tool declares"). A web
+  search declares an empty host list and a web fetch declares its URL's host,
+  so a search and a fetch to a known host take this path (`docs/tools.md`,
+  "Web fetch and web search"). A call that declares no host list, or names a
+  host that is not known, is reviewed.
 
 Everything else — shell execution, other network calls, and any write outside the
 workspace — is reviewed. A write under `.git/` or `.fiber/` is reviewed too: a hook or

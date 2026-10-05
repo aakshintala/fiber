@@ -410,6 +410,8 @@ fn fsyncs(event: &Event, in_action: bool) -> bool {
         | Event::PermissionResolved(_)
         | Event::InteractionRequested(_)
         | Event::InteractionResolved(_)
+        | Event::RepositoryCodeOffered(_)
+        | Event::RepositoryCodeResolved(_)
         | Event::QuotaNoticed(_)
         | Event::PreambleBuilt(_)
         | Event::ModelChanged(_)
