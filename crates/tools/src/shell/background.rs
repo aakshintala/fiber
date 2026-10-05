@@ -275,9 +275,10 @@ fn terminal_receipt(
     members: Option<&str>,
     first: &str,
 ) -> Output {
-    let why = match reason {
-        MoveReason::StartedInBackground => IN_TERMINAL.to_owned(),
-        other => sentence(other, members),
+    let why = if matches!(reason, MoveReason::StartedInBackground) {
+        IN_TERMINAL.to_owned()
+    } else {
+        sentence(reason, members)
     };
     let mut text = format!(
         "{why}\nJob {id}. Output: {path}. Type into it with `jobs write`; `jobs wait` waits for it.\n",

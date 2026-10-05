@@ -12,15 +12,14 @@ use contract::emit::Emit;
 use contract::events::{Class, Event, JobCompleted, JobStarted};
 use contract::jobs::{End, Foreground, Jobs, OpenError, Opened, Opening};
 
+type Typer = Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>;
+
 struct Inner {
     next: u64,
     started: Vec<JobStarted>,
     stops: Vec<(JobId, Arc<dyn Fn() + Send + Sync>)>,
     /// The terminal input of each job started with `tty`.
-    inputs: Vec<(
-        JobId,
-        Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>,
-    )>,
+    inputs: Vec<(JobId, Typer)>,
     /// Jobs whose end was reported.
     ended: Vec<JobId>,
     /// Jobs whose stop was sent.
