@@ -181,10 +181,13 @@ fn recv(client: &Client) -> Value {
     client.recv(DEADLINE).expect("a line arrived")
 }
 
-fn until(client: &Client, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
+/// Collects lines until `done`, waiting `DEADLINE` for each.
+fn until(client: &Client, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
-        let line = recv(client);
+        let line = client
+            .recv(DEADLINE)
+            .unwrap_or_else(|| panic!("waited {DEADLINE:?} for {what}; got {lines:?}"));
         let stop = done(&line);
         lines.push(line);
         if stop {
@@ -333,10 +336,22 @@ fn two_clients_see_the_log_while_ask_is_held() {
         &first,
         r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"text","text":"more"}]}}"#,
     );
+    // The reader hands a line to the inbox before it reads the next, so the
+    // answer to `tools` proves the prompt and the steer are queued. Released
+    // earlier, the turn can end and drop them: "The session ended before
+    // answering." instead of the loop's answer, or none.
+    send(&first, r#"{"id":"c_queued","command":"tools"}"#);
+    let mut own = until(&first, "the answer to c_queued", |line| {
+        line["payload"]["command_id"] == "c_queued"
+    });
     server.release();
 
-    let own = until(&first, |line| line["kind"] == "fiber_exited");
-    let other = until(&second, |line| line["kind"] == "fiber_exited");
+    own.extend(until(&first, "fiber_exited on the first client", |line| {
+        line["kind"] == "fiber_exited"
+    }));
+    let other = until(&second, "fiber_exited on the second client", |line| {
+        line["kind"] == "fiber_exited"
+    });
     let prompt = answered(&own, "c_prompt");
     assert_eq!(prompt["kind"], "command_rejected");
     assert_eq!(prompt["payload"]["code"], "closing");
