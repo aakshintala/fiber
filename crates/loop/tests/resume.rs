@@ -2680,10 +2680,10 @@ fn a_job_with_a_completion_is_not_marked() {
 }
 
 #[test]
-fn an_orphan_behind_a_suspended_batch_waits_for_its_results() {
-    // The suspended batch is still open on open: the orphan notice is
-    // written at the finishing turn's next step boundary, after the
-    // batch's results, so no message separates a call from its result.
+fn an_orphan_behind_a_suspended_batch_renders_after_its_results() {
+    // The orphan line is written on open, as on every resume; the notice
+    // joins the conversation after the open batch's results, live and on
+    // rebuild alike, so no message separates a call from its result.
     let mut history = History::new(vec![Scripted::text("Hello.")]);
     history.write(user_turn("one"), None);
     history.write(message_started(), Some("a_9"));
@@ -2697,22 +2697,23 @@ fn an_orphan_behind_a_suspended_batch_waits_for_its_results() {
     history.freeze();
 
     let looped = history.resume_headless(Vec::new());
-    assert!(history.new_lines().is_empty());
+    let marked = history.new_lines();
+    assert_eq!(kinds_of(&marked), ["job_completed"]);
+    assert_orphaned(&marked[0], "j_a");
     let (looped, outcome) = history.step(looped);
     assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
     drop(looped);
 
-    let new = history.new_lines();
     assert_eq!(
-        kinds_of(&new),
+        history.new_kinds(),
         [
+            "job_completed",
             "preamble_built",
             "opening_message",
             "permission_requested",
             "permission_resolved",
             "tool_call_completed",
             "step_started",
-            "job_completed",
             "assistant_message_started",
             "text_completed",
             "usage_recorded",
@@ -2720,9 +2721,6 @@ fn an_orphan_behind_a_suspended_batch_waits_for_its_results() {
             "turn_completed",
         ]
     );
-    assert_eq!(new[6].action_id, None);
-    assert_eq!(new[6].turn_id, Some(history.tid()));
-    assert_eq!(new[6].payload["error"]["code"], "orphaned");
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
@@ -2736,4 +2734,7 @@ fn an_orphan_behind_a_suspended_batch_waits_for_its_results() {
             text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}")
         })
     );
+    // A later resume renders the same conversation from the log.
+    let rebuilt = r#loop::rebuild(&history.lines(), MODEL).unwrap();
+    assert_eq!(&rebuilt[..conversation.len()], conversation.as_slice());
 }

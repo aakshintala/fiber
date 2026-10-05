@@ -509,3 +509,74 @@ fn a_job_record_under_an_action_does_not_flush_its_call() {
         Input::ToolResult { text, is_error: false, .. } if text == "Job j_1 failed.\n"
     ));
 }
+
+fn call(name: &str) -> Event {
+    Event::ToolCallRequested(ToolCallRequested {
+        name: name.into(),
+        arguments: json!({}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+    })
+}
+
+fn result(text: &str) -> Event {
+    Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![contract::shapes::ContentPart::Text { text: text.into() }],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+    })
+}
+
+/// The kinds of input `conversation` holds, with each result's action.
+fn shape(conversation: &[Input]) -> Vec<String> {
+    conversation
+        .iter()
+        .map(|input| match input {
+            Input::User { .. } => "user".to_owned(),
+            Input::ToolCall { action_id, .. } => format!("call {}", action_id.0),
+            Input::ToolResult { action_id, .. } => format!("result {}", action_id.0),
+            Input::Assistant { .. } => "assistant".to_owned(),
+            Input::Reasoning { .. } => "reasoning".to_owned(),
+        })
+        .collect()
+}
+
+#[test]
+fn a_notice_logged_inside_a_batch_renders_after_its_last_result() {
+    // A resume finishing a suspended turn logs its orphan notice before
+    // the open batch's results: the notice renders after them.
+    let lines = vec![
+        line("tool_call_requested", &call("a"), Some("a_1")),
+        line("tool_call_requested", &call("b"), Some("a_2")),
+        line("job_completed", &orphaned("j_1"), None),
+        line("tool_call_completed", &result("one"), Some("a_1")),
+        line("tool_call_completed", &result("two"), Some("a_2")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(
+        shape(&rebuilt),
+        ["call a_1", "call a_2", "result a_1", "result a_2", "user"]
+    );
+    assert!(user_text(&rebuilt[4]).contains("j_1"));
+}
+
+#[test]
+fn a_notice_behind_an_open_batch_renders_at_the_end() {
+    // Rebuilt on resume with the batch still open: no fixed result, and the
+    // notice waits behind the call.
+    let lines = vec![
+        line("tool_call_requested", &call("a"), Some("a_1")),
+        line("job_completed", &orphaned("j_1"), None),
+    ];
+    let open = std::collections::HashSet::from([ActionId("a_1".into())]);
+    let (rebuilt, _) = super::rebuild_and_sent(&lines, "fake/model-1", &open).unwrap();
+    assert_eq!(shape(&rebuilt), ["call a_1", "user"]);
+}

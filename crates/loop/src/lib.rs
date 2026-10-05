@@ -138,6 +138,9 @@ pub struct Loop {
     /// Deliveries held aside across the finishing turn, in arrival order:
     /// `wait_for_turn` takes them first, ahead of the channel.
     pub(crate) deferred: VecDeque<Delivery>,
+    /// Job notices a resume logged behind a suspended turn's open batch:
+    /// they join the conversation after that batch's results.
+    pub(crate) held: Vec<Input>,
     /// The conversation, built from the durable events as they are written
     /// and never by re-reading the log (`docs/loop.md`, "What the model is
     /// sent").
@@ -273,6 +276,7 @@ impl Loop {
             closing: false,
             suspended: None,
             deferred: VecDeque::new(),
+            held: Vec::new(),
             conversation: Vec::new(),
             sent: None,
             tools,

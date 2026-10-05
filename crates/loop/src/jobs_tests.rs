@@ -267,7 +267,7 @@ struct World {
     provider: Arc<ScriptedProvider>,
     looped: Option<Loop>,
     /// Every line written, ephemeral ones too, from the loop's start.
-    watcher: log::Watcher,
+    watched: mpsc::Receiver<Envelope>,
 }
 
 impl World {
@@ -285,7 +285,17 @@ impl World {
         let log = Arc::new(
             Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
         );
-        let watcher = log.watch();
+        // The watcher blocks without a deadline, so its lines cross a
+        // channel and [`World::watched`] carries the deadline.
+        let mut watcher = log.watch();
+        let (forward, watched) = mpsc::channel();
+        thread::spawn(move || {
+            while let Ok(Some(line)) = watcher.recv() {
+                if forward.send(line).is_err() {
+                    return;
+                }
+            }
+        });
         let provider = Arc::new(ScriptedProvider::new(script));
         let (inbox, rx) = mpsc::channel();
         let during = During {
@@ -329,7 +339,7 @@ impl World {
             inbox,
             provider,
             looped: Some(looped),
-            watcher,
+            watched,
         }
     }
 
@@ -337,14 +347,17 @@ impl World {
     /// the next `turn_completed`: call it after a turn ends.
     fn watched(&mut self) -> Vec<Envelope> {
         let mut lines = Vec::new();
-        while let Some(line) = self.watcher.recv().unwrap() {
+        loop {
+            let line = self
+                .watched
+                .recv_timeout(DEADLINE)
+                .expect("a turn_completed line");
             let done = line.kind == "turn_completed";
             lines.push(line);
             if done {
-                break;
+                return lines;
             }
         }
-        lines
     }
 
     /// Starts one turn on its own thread.

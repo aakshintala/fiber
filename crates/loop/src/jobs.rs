@@ -8,6 +8,7 @@ use std::collections::HashSet;
 
 use contract::events::{Event, InputItem, JobCompleted, Outcome};
 use contract::inbox::{JobNotice, Message};
+use contract::provider::Input;
 use contract::shapes::Failure;
 use contract::{Envelope, ErrorCode, JobId, TurnId};
 
@@ -99,14 +100,19 @@ impl Loop {
     /// that ran it died with the one that wrote the log. Nothing touches a
     /// process (`docs/events.md`, "Resume"). A suspended turn's batch is
     /// still open, and a message there would separate its calls from their
-    /// results, so those notices wait for that turn's next step boundary.
+    /// results, so those notices join the conversation once
+    /// [`Loop::finish_suspended`] has written the batch's results, where
+    /// `rebuild` renders them too.
     pub(crate) fn mark_orphans(&mut self, lines: &[Envelope]) -> Result<(), Error> {
-        let orphans = orphans(lines)?;
-        if self.suspended.is_some() {
-            self.queued.extend(orphans.into_iter().map(Queued::Job));
-            return Ok(());
-        }
-        for completed in orphans {
+        for completed in orphans(lines)? {
+            if self.suspended.is_some() {
+                self.log
+                    .append(&Event::JobCompleted(completed.clone()), None, None)?;
+                self.held.push(Input::User {
+                    text: notice_text(&completed),
+                });
+                continue;
+            }
             crate::util::write(
                 &self.log,
                 &mut self.conversation,

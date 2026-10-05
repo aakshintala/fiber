@@ -85,6 +85,13 @@ pub(crate) fn rebuild_and_sent(
 struct Rendered {
     conversation: Vec<Input>,
     pending: Vec<Pending>,
+    /// Calls requested whose result is still to come: later in the log,
+    /// or from the turn a resume finishes.
+    outstanding: Vec<ActionId>,
+    /// Job notices logged while calls were outstanding: they render after
+    /// the last of those calls' results, so no message separates a call
+    /// from its result.
+    held: Vec<Input>,
     /// The content the model last had per instruction file path: a diff
     /// renders from this and the line's content, both in the log.
     had: BTreeMap<String, String>,
@@ -118,6 +125,8 @@ impl Rendered {
                             action_id: action.clone(),
                             started: false,
                         });
+                    } else {
+                        self.outstanding.push(action.clone());
                     }
                 }
             }
@@ -136,6 +145,10 @@ impl Rendered {
                         is_error: completed.status == CallStatus::Failed,
                     });
                     self.pending.retain(|p| &p.action_id != action);
+                    self.outstanding.retain(|id| id != action);
+                    if self.outstanding.is_empty() {
+                        self.conversation.append(&mut self.held);
+                    }
                 }
             }
             // The next round starts a new batch: every call of the last
@@ -213,11 +226,19 @@ impl Rendered {
             // A job notice joins at a step boundary, as a steer does: it
             // starts a new batch. A `wait` or `stop` record, under its
             // call's action, continues the batch.
-            Event::JobCompleted(_) => {
+            // A notice a resume logged while a suspended batch was open
+            // waits for that batch's results.
+            Event::JobCompleted(job) => {
                 if action.is_none() {
                     self.flush();
                 }
-                render(&mut self.conversation, event, action, model, &mut self.had);
+                if action.is_none() && !self.outstanding.is_empty() {
+                    self.held.push(Input::User {
+                        text: crate::jobs::notice_text(job),
+                    });
+                } else {
+                    render(&mut self.conversation, event, action, model, &mut self.had);
+                }
             }
         }
     }
@@ -239,6 +260,7 @@ impl Rendered {
 
     fn finish(mut self) -> Vec<Input> {
         self.flush();
+        self.conversation.append(&mut self.held);
         self.conversation
     }
 }

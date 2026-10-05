@@ -268,6 +268,7 @@ impl Loop {
             closing: false,
             suspended: halted,
             deferred: VecDeque::new(),
+            held: Vec::new(),
             conversation,
             sent,
             tools,
@@ -347,6 +348,8 @@ impl Loop {
             };
             self.append(&Event::ToolCallCompleted(*completed), &turn, Some(id))?;
         }
+        // Orphan notices the resume logged behind the open batch.
+        self.conversation.append(&mut self.held);
         self.run_steps(&turn)
     }
 
