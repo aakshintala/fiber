@@ -443,16 +443,32 @@ fn a_cancel_during_the_failing_call_is_interrupted_with_no_wait() {
 }
 
 #[test]
-fn a_clock_advance_during_the_failing_call_retries_at_once() {
-    // The 10s advance lands during the failing call, past the 2s backoff
-    // anchored at the attempt's start, so the retry waits on nothing. The
-    // test advances nothing itself: a parked wait would hang the turn.
+fn a_clock_advance_during_the_failing_call_does_not_shorten_the_wait() {
+    // The 10s advance lands during the failing call, before the wait
+    // starts. The wait is the full 2s delay from its start: it parks 12s
+    // out and ends only once 2s more are advanced.
     let mut session = Session::advancing(
         vec![failed(ErrorCode::RateLimited), Scripted::text("Recovered.")],
         Duration::from_secs(10),
     );
     session.inbox.send(delivery("hi")).unwrap();
-    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let clock = Arc::clone(&session.clock);
+    let provider = Arc::clone(&session.provider);
+    std::thread::scope(|scope| {
+        let turn = scope.spawn(|| session.turn());
+        let until = clock.origin() + Duration::from_secs(12);
+        assert!(
+            clock.await_parked(until, DEADLINE),
+            "the wait parks the full delay from its start"
+        );
+        assert_eq!(
+            provider.requests().len(),
+            1,
+            "the earlier advance buys no retry"
+        );
+        clock.advance(Duration::from_secs(2));
+        assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Completed));
+    });
     let lines = session.lines();
     assert_eq!(attempts(&lines), [1]);
     assert_eq!(scheduled(&lines), [(2, 2000)]);
