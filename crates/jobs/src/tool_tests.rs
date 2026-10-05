@@ -458,6 +458,29 @@ fn a_zero_timeout_on_a_running_job_returns_at_once() {
 }
 
 #[test]
+fn a_timeout_names_the_waited_jobs_output_path_when_another_job_exists() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let other = open(&registry, "one", idle_stop());
+    let waited = open(&registry, "two", idle_stop());
+    let other_path = other.path.display().to_string();
+    let id = waited.started.job_id.0.clone();
+    let path = waited.path.display().to_string();
+    let output = run(
+        &tool,
+        json!({"action": "wait", "job_id": id, "timeout_ms": 0}),
+        &CancelToken::new(),
+    );
+    assert_eq!(
+        text_of(&output),
+        format!("Job {id} is still running.\nOutput: {path}\n")
+    );
+    assert_ne!(path, other_path);
+    drop(other.end);
+    drop(waited.end);
+}
+
+#[test]
 fn a_wait_returns_when_the_job_ends_and_when_the_deadline_passes() {
     let clock = FakeClock::new();
     let as_clock: Arc<dyn Clock> = clock.clone();

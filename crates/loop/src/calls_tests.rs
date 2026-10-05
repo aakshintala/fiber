@@ -729,6 +729,10 @@ fn durable(lines: &[Envelope]) -> Vec<&Envelope> {
     lines.iter().filter(|line| line.seq.is_some()).collect()
 }
 
+fn kinds(lines: &[Envelope]) -> Vec<&str> {
+    lines.iter().map(|line| line.kind.as_str()).collect()
+}
+
 /// `job_started`, `job_completed`, `tool_call_completed` for `id`, consecutive
 /// and under one action.
 fn assert_job_triplet(lines: &[Envelope], id: &str, status: &str) -> ActionId {
@@ -792,12 +796,55 @@ fn a_calls_job_lines_are_written_before_its_completion_and_render_nothing() {
     );
     assert_eq!(with.outcome, Some(TurnOutcome::Completed));
     assert_eq!(without.outcome, Some(TurnOutcome::Completed));
-    assert_job_triplet(&with.lines, id, "completed");
-    assert!(
-        durable(&without.lines)
-            .iter()
-            .all(|line| line.kind != "job_started")
+    assert_eq!(
+        kinds(&with.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_started",
+            "job_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
+    assert_eq!(
+        kinds(&without.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    assert_job_triplet(&with.lines, id, "completed");
     assert_eq!(with.requests.len(), 2);
     assert_eq!(
         scrubbed(&with.requests[1], &with.homes),
@@ -827,6 +874,36 @@ fn two_calls_write_their_job_lines_in_request_order() {
         Arc::new(crate::TurnCancel::default()),
     );
     assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "tool_call_started",
+            "job_started",
+            "job_completed",
+            "tool_call_completed",
+            "job_started",
+            "job_completed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let lines = durable(&ran.lines);
     let first_at = lines
         .iter()
@@ -836,21 +913,6 @@ fn two_calls_write_their_job_lines_in_request_order() {
         .iter()
         .rposition(|line| line.kind == "job_started")
         .unwrap();
-    assert!(second_at > first_at + 2);
-    assert_eq!(
-        lines[first_at..first_at + 3]
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["job_started", "job_completed", "tool_call_completed"]
-    );
-    assert_eq!(
-        lines[second_at..second_at + 3]
-            .iter()
-            .map(|line| line.kind.as_str())
-            .collect::<Vec<_>>(),
-        ["job_started", "job_completed", "tool_call_completed"]
-    );
     assert_eq!(lines[first_at].payload["job_id"], first);
     assert_eq!(lines[second_at].payload["job_id"], second);
     let first_action = lines[first_at].action_id.clone().unwrap();
@@ -899,5 +961,25 @@ fn a_cancelled_call_still_writes_its_job_lines() {
     );
     watcher.join().unwrap();
     assert_eq!(ran.outcome, Some(TurnOutcome::Interrupted));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "job_started",
+            "job_completed",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     assert_job_triplet(&ran.lines, id, "cancelled");
 }

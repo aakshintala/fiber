@@ -140,7 +140,7 @@ impl JobsTool {
             Err(StopError::Unknown) => failed(unknown_message(&id)),
             Err(StopError::Ended(status)) => failed(format!(
                 "Job `{id}` has ended: {}.",
-                registry::status_word_of(status)
+                registry::status_word(status)
             )),
         }
     }

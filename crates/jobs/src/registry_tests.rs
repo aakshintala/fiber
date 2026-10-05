@@ -4,7 +4,6 @@
 
 use std::io::Write as _;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
 
 use contract::events::{JobCompleted, Outcome};
 use contract::jobs::{JobRecord, OpenError, Opening, Stop};
@@ -13,7 +12,7 @@ use contract::{ErrorCode, JobId};
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 
-use super::{Registry, mint_id};
+use super::Registry;
 
 fn world() -> (TempDir, Arc<Registry>) {
     let dir = TempDir::new("fiber-jobs");
@@ -172,15 +171,4 @@ fn the_completion_is_claimed_once() {
     assert!(matches!(first.record, Some(JobRecord::Completed(_))));
     assert!(second.record.is_none());
     assert!(second.text.contains("cancelled"), "{}", second.text);
-}
-
-#[test]
-fn mint_id_skips_an_id_that_is_taken() {
-    let calls = AtomicUsize::new(0);
-    let id = mint_id(|_| {
-        let n = calls.fetch_add(1, Ordering::SeqCst);
-        n == 0
-    });
-    assert_eq!(calls.load(Ordering::SeqCst), 2);
-    assert!(is_job_id(&id), "{id}");
 }

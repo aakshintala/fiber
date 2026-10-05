@@ -85,7 +85,7 @@ impl Registry {
     /// created, returns [`OpenError::Io`] and records nothing.
     pub fn open(self: &Arc<Self>, opening: Opening) -> Result<Opened, OpenError> {
         let mut inner = lock(&self.inner);
-        let id = mint_id(|id| inner.jobs.iter().any(|job| job.started.job_id.0 == id));
+        let id = mint_id();
         let path = self.artifacts.join(format!("{id}.log"));
         let file = match File::create(&path) {
             Ok(file) => file,
@@ -191,9 +191,8 @@ impl Registry {
         id: &str,
         cancel: &dyn Cancel,
     ) -> Result<Answer, StopError> {
-        match self.send_stop(id)? {
-            None => {}
-            Some(stop) => stop(),
+        if let Some(stop) = self.send_stop(id)? {
+            stop();
         }
         if let Some(answer) = self.answer_if_ended(id) {
             return Ok(answer);
@@ -209,19 +208,11 @@ impl Registry {
     /// ended.
     fn send_stop(&self, id: &str) -> Result<Option<Arc<dyn Fn() + Send + Sync>>, StopError> {
         let mut inner = lock(&self.inner);
-        let Some(index) = position(&inner.jobs, id) else {
+        let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
             return Err(StopError::Unknown);
         };
-        let Some(job) = inner.jobs.get_mut(index) else {
-            return Err(StopError::Unknown);
-        };
-        // Copy the status out before mutating: the match borrows `phase`.
-        let ended = match &job.phase {
-            Phase::Ended(completed) => Some(completed.status),
-            Phase::Running => None,
-        };
-        if let Some(status) = ended {
-            return Err(StopError::Ended(status));
+        if let Phase::Ended(completed) = &job.phase {
+            return Err(StopError::Ended(completed.status));
         }
         if job.stop_sent {
             return Ok(None);
@@ -248,8 +239,10 @@ impl Registry {
     /// time. `None` when the job is still running.
     fn answer_if_ended(&self, id: &str) -> Option<Answer> {
         let mut inner = lock(&self.inner);
-        let index = position(&inner.jobs, id)?;
-        let job = inner.jobs.get_mut(index)?;
+        let job = inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id.0 == id)?;
         let completed = match &job.phase {
             Phase::Ended(completed) => (**completed).clone(),
             Phase::Running => return None,
@@ -266,8 +259,10 @@ impl Registry {
 
     fn finish(&self, completed: JobCompleted) {
         let mut inner = lock(&self.inner);
-        if let Some(index) = position(&inner.jobs, &completed.job_id.0)
-            && let Some(job) = inner.jobs.get_mut(index)
+        if let Some(job) = inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id.0 == completed.job_id.0)
         {
             // The borrow from `matches!` ends at this statement, so the
             // assignment below can replace `phase`.
@@ -311,24 +306,24 @@ impl Registry {
                 }
                 inner.seq
             };
-            self.park_once(id, until, seen, cancel);
+            self.park_once(until, seen);
         }
     }
 
     /// One wait on the clock. The mutex is taken before `wait_until` and
     /// held until the condvar wait, so a wake blocks on it instead of
     /// notifying nobody.
-    fn park_once(&self, id: &str, until: Option<Instant>, seen: u64, cancel: &dyn Cancel) {
+    fn park_once(&self, until: Option<Instant>, seen: u64) {
         let mut slot = Some(lock(&self.inner));
         self.clock.wait_until(until, &mut |bound| {
             let Some(guard) = slot.take() else {
                 return;
             };
-            if ended(&guard, id)
-                || cancel.is_cancelled()
-                || guard.seq != seen
-                || timed_out(self.clock.as_ref(), until)
-            {
+            // An end, a cancel and a clock wake all bump `seq` under this
+            // lock before they notify. A change after `seen` was read is
+            // still visible, so the wait does not sleep through it. The
+            // loop reads why it woke.
+            if guard.seq != seen {
                 slot = Some(guard);
                 return;
             }
@@ -364,31 +359,20 @@ fn bump(inner: &mut Inner, cv: &Condvar) {
 }
 
 fn ended(inner: &Inner, id: &str) -> bool {
-    position(&inner.jobs, id).is_some_and(|index| {
-        inner
-            .jobs
-            .get(index)
-            .is_some_and(|job| matches!(job.phase, Phase::Ended(_)))
-    })
+    inner
+        .jobs
+        .iter()
+        .any(|job| job.started.job_id.0 == id && matches!(job.phase, Phase::Ended(_)))
 }
 
 fn timed_out(clock: &dyn Clock, until: Option<Instant>) -> bool {
     until.is_some_and(|until| clock.now() >= until)
 }
 
-fn position(jobs: &[Job], id: &str) -> Option<usize> {
-    jobs.iter().position(|job| job.started.job_id.0 == id)
-}
-
-/// `j_` and 16 lowercase hex digits, not one `taken` rejects. A collision
-/// remints; 64 bits make that rare, and a registry never reuses an id.
-fn mint_id(taken: impl Fn(&str) -> bool) -> String {
-    loop {
-        let id = format!("j_{:016x}", RandomState::new().hash_one(()));
-        if !taken(&id) {
-            return id;
-        }
-    }
+/// `j_` and 16 lowercase hex digits, drawn once. 64 bits, the same scheme
+/// as the loop's ids.
+fn mint_id() -> String {
+    format!("j_{:016x}", RandomState::new().hash_one(()))
 }
 
 fn phase_word(phase: &Phase) -> &'static str {
@@ -398,17 +382,13 @@ fn phase_word(phase: &Phase) -> &'static str {
     }
 }
 
-fn status_word(status: Outcome) -> &'static str {
+/// The word for a job that has ended: `completed`, `failed` or `cancelled`.
+pub(crate) fn status_word(status: Outcome) -> &'static str {
     match status {
         Outcome::Completed => "completed",
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
     }
-}
-
-/// `running` is not a status: this is the word for a job that has ended.
-pub(crate) fn status_word_of(status: Outcome) -> &'static str {
-    status_word(status)
 }
 
 fn running_text(id: &str, path: &Path) -> String {
