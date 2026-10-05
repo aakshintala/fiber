@@ -7,7 +7,10 @@ mod common;
 use std::fs;
 
 use common::{Setup, mode};
-use config::{Secret, read_credential, read_secret, store_credential, store_secret};
+use config::{
+    CredentialFile, Secret, credential_labels, delete_credential, delete_credential_held,
+    read_credential, read_secret, store_credential, store_secret,
+};
 use contract::ErrorCode;
 
 const VALUE: &str = "sk-live-7f3a9c0d1e2b";
@@ -248,4 +251,89 @@ fn a_bare_secret_and_a_provider_directory_of_one_name_collide() {
         fs::read_to_string(setup.home().join("credentials/acme")).unwrap(),
         VALUE
     );
+}
+
+#[test]
+fn a_stored_credential_is_deleted_and_the_provider_directory_stays() {
+    let setup = Setup::new();
+    store_credential(&setup.home(), "acme", "work", &Secret::new(VALUE.into())).unwrap();
+    store_credential(&setup.home(), "acme", "home", &Secret::new(VALUE.into())).unwrap();
+    assert!(delete_credential(&setup.home(), "acme", "work").unwrap());
+    assert!(!setup.home().join("credentials/acme/work").exists());
+    // A label is still stored: the directory stays.
+    assert!(setup.home().join("credentials/acme/home").exists());
+    assert_eq!(credential_labels(&setup.home(), "acme").unwrap(), ["home"]);
+    assert!(delete_credential(&setup.home(), "acme", "home").unwrap());
+    assert!(setup.home().join("credentials/acme").is_dir());
+    assert!(credential_labels(&setup.home(), "acme").unwrap().is_empty());
+}
+
+#[test]
+fn deleting_a_credential_that_is_not_stored_is_false() {
+    let setup = Setup::new();
+    assert!(!delete_credential(&setup.home(), "acme", "work").unwrap());
+    store_credential(&setup.home(), "acme", "home", &Secret::new(VALUE.into())).unwrap();
+    assert!(!delete_credential(&setup.home(), "acme", "work").unwrap());
+    assert!(setup.home().join("credentials/acme/home").exists());
+}
+
+#[test]
+fn deleting_a_credential_keeps_its_lock_file_and_directory() {
+    let setup = Setup::new();
+    let file = CredentialFile::new(&setup.home(), "acme", "default").unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    store_credential(&setup.home(), "acme", "default", &Secret::new(VALUE.into())).unwrap();
+    drop(lock);
+    assert!(delete_credential(&setup.home(), "acme", "default").unwrap());
+    assert!(!setup.home().join("credentials/acme/default").exists());
+    assert!(setup.home().join("credentials/acme/default.lock").exists());
+}
+
+#[test]
+fn deleting_while_a_login_holds_the_lock_is_refused_and_removes_nothing() {
+    let setup = Setup::new();
+    let file = CredentialFile::new(&setup.home(), "acme", "default").unwrap();
+    let lock = file.try_lock().unwrap().unwrap();
+    store_credential(&setup.home(), "acme", "default", &Secret::new(VALUE.into())).unwrap();
+    let e = delete_credential(&setup.home(), "acme", "default").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::IoFailed);
+    assert!(setup.home().join("credentials/acme/default").exists());
+    assert!(setup.home().join("credentials/acme/default.lock").exists());
+    // The holder itself may remove it, and the lock file is still there.
+    assert!(delete_credential_held(&setup.home(), "acme", "default", &lock).unwrap());
+    assert!(!setup.home().join("credentials/acme/default").exists());
+    assert!(setup.home().join("credentials/acme/default.lock").exists());
+    assert!(!delete_credential_held(&setup.home(), "acme", "default", &lock).unwrap());
+    drop(lock);
+    // The next login takes the same lock file.
+    assert!(file.try_lock().unwrap().is_some());
+}
+
+#[test]
+fn deleting_refuses_a_name_that_is_not_one_file_name_and_a_symbolic_link() {
+    let setup = Setup::new();
+    let outside = setup.root().join("planted");
+    fs::write(&outside, VALUE).unwrap();
+    for (name, label) in [
+        ("..", "x"),
+        ("a/b", "x"),
+        ("acme", "../x"),
+        ("acme", "a.lock"),
+    ] {
+        let e = delete_credential(&setup.home(), name, label).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::InvalidArguments, "{name} {label}");
+    }
+    fs::create_dir_all(setup.home().join("credentials/acme")).unwrap();
+    std::os::unix::fs::symlink(&outside, setup.home().join("credentials/acme/work")).unwrap();
+    let e = delete_credential(&setup.home(), "acme", "work").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(outside.exists());
+    // A provider directory that is a link is refused, and nothing behind it goes.
+    let behind = setup.root().join("behind");
+    fs::create_dir_all(&behind).unwrap();
+    fs::write(behind.join("work"), VALUE).unwrap();
+    std::os::unix::fs::symlink(&behind, setup.home().join("credentials/other")).unwrap();
+    let e = delete_credential(&setup.home(), "other", "work").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(behind.join("work").exists());
 }

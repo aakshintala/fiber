@@ -87,6 +87,16 @@ impl Providers {
         Ok((providers, notices))
     }
 
+    /// The installed providers' names, sorted.
+    pub fn names(&self) -> impl Iterator<Item = &str> {
+        self.by_name.keys().map(String::as_str)
+    }
+
+    /// The provider installed under `name`.
+    pub fn get(&self, name: &str) -> Option<&ProviderData> {
+        self.by_name.get(name)
+    }
+
     /// The session's model, in the order "Choosing the model" gives: the
     /// model a resumed session was using, then configuration's `model`, which
     /// `--model` and `-c model=` set for one run.

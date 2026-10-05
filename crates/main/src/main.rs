@@ -16,6 +16,7 @@ mod cost;
 mod credential;
 mod handoff;
 mod late_emit;
+mod login;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
@@ -81,8 +82,7 @@ struct Parts {
 }
 
 fn main() -> ExitCode {
-    let code = run();
-    ExitCode::from(u8::try_from(code).unwrap_or(1))
+    ExitCode::from(u8::try_from(run()).unwrap_or(1))
 }
 
 fn run() -> i32 {
@@ -96,8 +96,7 @@ fn run() -> i32 {
             0
         }
         cli::Invocation::Run(Some(cli::Commands::Version)) => {
-            let mut out = io::stdout().lock();
-            write!(out, "{}", cli::version_line()).unwrap_or(());
+            write!(io::stdout().lock(), "{}", cli::version_line()).unwrap_or(());
             0
         }
         cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
@@ -129,6 +128,8 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => approve::approve(args.yes),
+        cli::Invocation::Run(Some(cli::Commands::Login(args))) => login::run_login(args),
+        cli::Invocation::Run(Some(cli::Commands::Logout(args))) => login::run_logout(args),
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),

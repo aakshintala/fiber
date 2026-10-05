@@ -35,7 +35,23 @@ pub fn set_global(home: &Path, key: &str, value: Value) -> Result<(), ConfigErro
     if let Value::Object(map) = candidate {
         keys::check(map, &Source::Global(file.clone()), &mut Vec::new())?;
     }
-    update(&file, &segments, value)
+    update(&file, &segments, value, false).map(|_| ())
+}
+
+/// [`set_global`] when the global `config.json` holds no value at `key`,
+/// checked and written under one lock (`fiber login` writing
+/// `providers."<name>".credential` with a provider's first label). `true`
+/// when it wrote. A project layer's value does not count: only the global
+/// file is looked at.
+pub fn set_global_if_unset(home: &Path, key: &str, value: Value) -> Result<bool, ConfigError> {
+    let file = home.join("config.json");
+    let segments = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+    let mut candidate = Value::Object(Map::new());
+    path::set(&mut candidate, &segments, value.clone());
+    if let Value::Object(map) = candidate {
+        keys::check(map, &Source::Global(file.clone()), &mut Vec::new())?;
+    }
+    update(&file, &segments, value, true)
 }
 
 /// Deletes an extension's settings in the global and every per-project layer
@@ -102,18 +118,28 @@ pub(crate) fn append_line(file: &Path, line: &str) -> Result<(), ConfigError> {
 }
 
 /// Reads `file` under its lock, sets one key and writes the whole file back,
-/// keys sorted with a 2-space indent.
-pub(crate) fn update(file: &Path, key: &[String], value: Value) -> Result<(), ConfigError> {
+/// keys sorted with a 2-space indent. With `only_if_unset`, a file that
+/// already holds a value at `key` is left alone. `true` when it wrote.
+pub(crate) fn update(
+    file: &Path,
+    key: &[String],
+    value: Value,
+    only_if_unset: bool,
+) -> Result<bool, ConfigError> {
     let io = |source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
     };
     let _lock = locked(file)?;
     let mut root = read(file)?.unwrap_or_else(|| Value::Object(Map::new()));
+    if only_if_unset && path::get(&root, key).is_some() {
+        return Ok(false);
+    }
     path::set(&mut root, key, value);
     let mut text = serde_json::to_string_pretty(&root).map_err(|e| io(e.into()))?;
     text.push('\n');
-    write_atomic(file, text.as_bytes(), 0o666)
+    write_atomic(file, text.as_bytes(), 0o666)?;
+    Ok(true)
 }
 
 /// Takes the lock for a whole-file write to `file`: creates the parent

@@ -175,6 +175,55 @@ fn the_menu_and_approve_help_say_what_approve_does() {
 }
 
 #[test]
+fn login_and_logout_take_an_optional_provider() {
+    for (args, provider) in [
+        (&["fiber", "login"][..], None),
+        (&["fiber", "login", "openrouter"], Some("openrouter")),
+    ] {
+        let Invocation::Run(Some(Commands::Login(login))) = parse_from(args.iter().copied()) else {
+            panic!("{args:?}");
+        };
+        assert_eq!(login.provider.as_deref(), provider, "{args:?}");
+    }
+    for (args, provider) in [
+        (&["fiber", "logout"][..], None),
+        (&["fiber", "logout", "opencode-zen"], Some("opencode-zen")),
+    ] {
+        let Invocation::Run(Some(Commands::Logout(logout))) = parse_from(args.iter().copied())
+        else {
+            panic!("{args:?}");
+        };
+        assert_eq!(logout.provider.as_deref(), provider, "{args:?}");
+    }
+    for args in [
+        &["fiber", "login", "a", "b"][..],
+        &["fiber", "logout", "a", "b"],
+    ] {
+        assert!(
+            sentence(args).starts_with("Unexpected argument 'b'"),
+            "{}",
+            sentence(args)
+        );
+    }
+}
+
+#[test]
+fn the_menu_lists_login_and_logout_under_fiber_itself() {
+    let menu = menu();
+    let itself = menu
+        .split("\n\n")
+        .find(|group| group.starts_with("Fiber itself:"))
+        .unwrap();
+    for line in [
+        "  login [<provider>]  Store a provider's key",
+        "  logout <provider>   Delete a provider's stored key",
+    ] {
+        assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
+    }
+    assert!(super::LOGOUT_SHAPE.ends_with(" Run `fiber --help` for usage."));
+}
+
+#[test]
 fn extension_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "extension"]),
@@ -416,7 +465,15 @@ fn the_menu_and_ask_help_show_resume() {
 fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
     assert_eq!(
         visible(),
-        ["ask", "extension", "approve", "version", "help"]
+        [
+            "ask",
+            "extension",
+            "approve",
+            "login",
+            "logout",
+            "version",
+            "help"
+        ]
     );
     let Invocation::Run(Some(Commands::Grep { args })) =
         parse_from(["fiber", "grep", "needle", "a.txt"])
@@ -468,7 +525,15 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
 fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
     assert_eq!(
         visible(),
-        ["ask", "extension", "approve", "version", "help"]
+        [
+            "ask",
+            "extension",
+            "approve",
+            "login",
+            "logout",
+            "version",
+            "help"
+        ]
     );
     let Invocation::Run(Some(Commands::Image { args })) =
         parse_from(["fiber", "image", "a", "b", "c"])

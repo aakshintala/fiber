@@ -17,8 +17,10 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
 Fiber itself:
-  help [<command>]  Print this menu, or a command's help
-  version           Print the version
+  login [<provider>]  Store a provider's key
+  logout <provider>   Delete a provider's stored key
+  help [<command>]    Print this menu, or a command's help
+  version             Print the version
 
 Extensions:
   extension install <name or path>  Install an extension and its dependencies
@@ -36,11 +38,16 @@ Examples:
   fiber ask < brief.md
   git diff | fiber ask "review this diff" -
   fiber extension install openrouter
+  fiber login openrouter
   fiber help ask"#;
 
 const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
 
 const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
+
+/// What `fiber logout` says when it is given no provider.
+pub(crate) const LOGOUT_SHAPE: &str =
+    "`fiber logout` takes the provider to log out of. Run `fiber --help` for usage.";
 
 /// What `fiber` was asked to do, or the parse error.
 #[derive(Debug)]
@@ -79,6 +86,10 @@ pub(crate) enum Commands {
     Extension(ExtensionCommands),
     /// Show what this repository ships and approve it
     Approve(ApproveArgs),
+    /// Store a provider's key
+    Login(LoginArgs),
+    /// Delete a provider's stored key
+    Logout(LogoutArgs),
     /// Print the version
     Version,
     /// Print this menu, or a command's help
@@ -152,6 +163,22 @@ pub(crate) struct ApproveArgs {
     /// Approve without asking, for a script or a machine image.
     #[arg(long)]
     pub(crate) yes: bool,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct LoginArgs {
+    /// The installed provider to store a key for. With none, a terminal
+    /// offers the installed providers.
+    #[arg(value_name = "provider")]
+    pub(crate) provider: Option<String>,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct LogoutArgs {
+    /// The provider whose stored key to delete. A missing provider is a
+    /// usage error `fiber` words itself, so it matches the other sentences.
+    #[arg(value_name = "provider")]
+    pub(crate) provider: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
