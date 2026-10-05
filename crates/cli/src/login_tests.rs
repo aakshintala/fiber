@@ -21,7 +21,12 @@ use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::{Value, json};
 
-use super::{KeyReader, LoginIo, Plain, credential_key, login, logout, write_prompt};
+use doors::failure;
+
+use super::{
+    KeyReader, LoginIo, Plain, credential_key, finish, login, logout, run_login, run_logout,
+    write_prompt,
+};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -640,4 +645,28 @@ fn a_prompt_is_written_before_the_key_is_read_and_an_empty_one_writes_nothing() 
     let mut quiet = Vec::new();
     write_prompt("", &mut quiet).unwrap();
     assert!(quiet.is_empty());
+}
+
+#[test]
+fn fail_gives_the_failures_exit_code() {
+    assert_eq!(crate::fail(failure(ErrorCode::Usage, "bad usage")), 2);
+    assert_eq!(crate::fail(failure(ErrorCode::IoFailed, "disk")), 1);
+}
+
+#[test]
+fn finish_is_zero_on_success_and_the_exit_code_on_failure() {
+    assert_eq!(finish(Ok(())), 0);
+    assert_eq!(finish(Err(failure(ErrorCode::Usage, "bad usage"))), 2);
+    assert_eq!(finish(Err(failure(ErrorCode::IoFailed, "disk"))), 1);
+}
+
+#[test]
+fn logout_without_a_provider_is_a_usage_failure() {
+    assert_eq!(run_logout(None), 2);
+}
+
+#[test]
+fn login_of_an_unknown_provider_is_a_usage_failure() {
+    // Fails in `installed`, before any lock, prompt or read of stdin.
+    assert_eq!(run_login(Some("no-such-provider-for-the-test")), 2);
 }
