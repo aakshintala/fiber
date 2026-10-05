@@ -132,7 +132,7 @@ impl Plan {
             prepare(&item.paths.fresh, &item.manifest)?;
         }
         let paths: Vec<Paths> = self.items.values().map(|i| i.paths.clone()).collect();
-        commit_all(&paths, |from, to| fs::rename(from, to))?;
+        commit_all(&paths, |from, to| fs::rename(from, to), |_, _| Ok(()))?;
         let mut names: Vec<String> = self.items.keys().cloned().collect();
         names.sort_by_key(|n| *n != self.root);
         Ok(names)
