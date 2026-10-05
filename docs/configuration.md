@@ -343,6 +343,20 @@ Standing rules are not configuration keys. They are two files in Fiber home:
 project (`docs/permissions.md`, "Remembering a decision"). A repository has no rules
 file.
 
+Each line is one JSON object:
+
+```json
+{"decision":"allow","tool":"shell","prefix":"npm test"}
+```
+
+`decision` is `allow`, `ask` or `deny`; `tool` is the tool's name and
+`prefix` what it matches (`docs/permissions.md`, "What a rule matches"). A
+line saved from an approval also carries `added`, milliseconds since the Unix
+epoch, and `session_id`, the session that added it, which `/rules` shows.
+Unknown keys are ignored and blank lines are skipped. A missing file holds no
+rules. A file or line that cannot be read denies calls until it is fixed
+(`docs/permissions.md`, "Scope").
+
 ## The repository's `.fiber/` directory
 
 ```

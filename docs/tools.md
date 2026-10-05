@@ -20,7 +20,11 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   (`docs/permissions.md`). It also returns the call's subject and the prefix
   a rule would offer (`docs/permissions.md`, "What a rule matches"). A tool
   whose section says nothing of a subject returns an empty one, and its rules
-  match it by name.
+  match it by name. It may also return that the call is always reviewed
+  (`always_reviewed`): such a call skips the fast path, session grants and
+  standing allows, and still meets the credential deny and the standing deny
+  and ask rules (`docs/permissions.md`, "The order a call is judged in"). Any
+  tool may set it, an extension's included; it only makes the call stricter.
 - Optionally: guideline lines for the system prompt, for guidance that spans
   calls, such as which tool to prefer for a job (`docs/system-prompt.md`,
   "Tool guidelines").

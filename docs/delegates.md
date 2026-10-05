@@ -175,8 +175,9 @@ final message, any questions, usage totals and worktree state. Their keys are
 
 - Every delegate runs in `auto`, as every session does (`docs/permissions.md`).
 - `delegate_spawn`, `delegate_fork` and `delegate_message` declare `executes`
-  and are always judged by the parent's reviewer: no fast path, session grant
-  or standing allow skips them. The parent's reviewer judges what the parent's
+  and `always_reviewed` (`docs/tools.md`, "What a tool declares"), so they are
+  always judged by the parent's reviewer: no fast path, session grant or
+  standing allow skips them. The parent's reviewer judges what the parent's
   model tells a delegate against the parent's own person's messages, because
   the delegate's reviewer reads that prompt and those messages as the human's.
 - A Fiber delegate has its own reviewer. An escalation from it is a block, as
