@@ -425,7 +425,7 @@ sent the latest.
 | `workspace` | string | yes | the workspace path |
 | `parent` | string | no | on a delegate, the parent's `session_id` |
 | `model` | string | yes | the model reference in use |
-| `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting` or `idle`; a closed set |
+| `state` | string | yes | `streaming`, `tool`, `retrying`, `waiting`, `jobs` (no turn running, jobs running) or `idle` (nothing in flight); a closed set |
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval` or `question`) and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
@@ -1198,9 +1198,10 @@ Durable.
 
 | Key | Type | Required | Meaning |
 |---|---|---|---|
-| `job_ids` | array of strings | yes | the jobs named in the ending notice (`docs/tools.md`, "Background jobs") |
+| `job_ids` | array of strings | yes | the jobs named in the notice |
+| `reason` | string | yes | `ending`, the ending notice (`docs/tools.md`, "Background jobs"), or `unattended`, the jobs check (`docs/invocation.md`, "Lifecycle"); a closed set |
 
-The ending notice starts a turn whose input is one `message` item with
+Either notice starts a turn whose input is one `message` item with
 `source` `fiber`, carrying the notice's text. The request is built from that
 text. `jobs_pending_notified` is the first line after that turn's first
 `step_started`, and it adds nothing to the request.

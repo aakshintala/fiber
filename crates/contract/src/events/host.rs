@@ -294,8 +294,20 @@ pub struct JobCompleted {
 /// `jobs_pending_notified`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobsPendingNotified {
-    /// The jobs named in the ending notice.
+    /// The jobs named in the notice.
     pub job_ids: Vec<JobId>,
+    /// Which notice named them.
+    pub reason: PendingReason,
+}
+
+/// Why Fiber woke the model about running jobs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PendingReason {
+    /// The session is about to end.
+    Ending,
+    /// The session was left unattended: the jobs check.
+    Unattended,
 }
 
 /// `command_accepted`.

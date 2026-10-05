@@ -583,7 +583,10 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"job_id": "j", "status": "cancelled", "error": error,
             "process": process, "output_tail": "tail"}),
         ),
-        ("jobs_pending_notified", json!({"job_ids": ["j"]})),
+        (
+            "jobs_pending_notified",
+            json!({"job_ids": ["j"], "reason": "ending"}),
+        ),
         (
             "command_accepted",
             json!({"command_id": "c", "result": {"new_session_id": "s2"}}),

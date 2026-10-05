@@ -31,8 +31,8 @@ pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,
     ExtensionExec, ExtensionMessage, ExtensionStateSet, ExtensionStateUnset, ExtensionUi,
     ExtensionsLoaded, FinishedWorktree, JobCompleted, JobDelta, JobLine, JobStarted,
-    JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady, OnFork, ReloadFailure,
-    Reloaded, ReloadedServers, ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
+    JobsPendingNotified, LoadedExtension, McpServerFailed, McpServerReady, OnFork, PendingReason,
+    ReloadFailure, Reloaded, ReloadedServers, ServerFailure, ToolInfo, ToolSource, ToolState, Ui,
 };
 pub use offer::{
     OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
