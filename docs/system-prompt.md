@@ -38,8 +38,9 @@ Built from these parts, in this order, joined by a blank line:
 1. Fiber's text, `crates/loop/prompt/system.md`, or the person's `SYSTEM.md`
    in its place.
 2. The guidelines of every tool declared in full, in tool-name order.
-3. The session section: the model line, the unattended line when nobody can
-   answer, and the model's addendum from provider data, if it has one.
+3. The session section: the model line, the docs line, the unattended line
+   when nobody can answer, and the model's addendum from provider data, if it
+   has one.
 4. Each extension's prompt text, in extension-name order.
 5. The person's `APPEND_SYSTEM.md`.
 
@@ -76,6 +77,22 @@ from pi's (MIT license).
 Preferences about how to work, such as testing, commit habits and reply style,
 are left to instruction files. Fiber's text states only what holds in every
 project.
+
+### The docs line
+
+One line tells the model where Fiber's own documentation is, so a question
+about Fiber is answered from the installed docs and not from memory. It names
+`docs/` in Fiber home: `user/` for using Fiber, and the rest for how Fiber
+works, including the extension API. The model reads them with its ordinary
+file tools when a question is about Fiber itself.
+
+The path is fixed for the session, so the line never changes the preamble.
+When `docs/` is missing from Fiber home, as for a binary copied without the
+installer, the line names the website instead, and `fiber doctor` says the
+docs are not installed (`docs/invocation.md`, "Commands and flags"). The installed docs
+match the installed version (`docs/releasing.md`). They can describe
+behaviour the binary does not have yet, because the docs are written before
+the code that follows them.
 
 ### Tool guidelines
 
@@ -340,7 +357,7 @@ compiled into the binary:
 | `crates/loop/prompt/system.md` | Fiber's system prompt text |
 | `crates/tools/prompt/guidelines.md` | the built-in tools' guidelines, one `##` section per tool |
 | `crates/loop/prompt/opening.md` | the opening message |
-| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section and unattended line, instruction file headers, the diff, deleted and date lines, the extension heading, the nudge, and the handoff note request |
+| `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the diff, deleted and date lines, the extension heading, the nudge, and the handoff note request |
 | `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass` (`docs/permissions.md`, "The reviewer") |
 
 In `messages.md`, a section's text runs from its `## name` line to the next

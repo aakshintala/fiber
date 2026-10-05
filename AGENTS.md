@@ -6,6 +6,8 @@ matches the work before starting it.
 - How a ticket becomes a merged pull request: `docs/workflow.md`. Every code
   change passes `scripts/check` before a pull request opens.
 - Vocabulary: `GLOSSARY.md`. Use its terms in code, docs and issues.
+- Pages for a person using Fiber: `docs/user/`. Each links into the area docs
+  rather than restating them, and is written only once its area is built.
 - What each area does: `docs/<area>.md`. The crates and their boundaries:
   `docs/architecture.md`. Decisions: `docs/adr/`.
 - Tests: `docs/testing.md`. Code rules: `docs/code-quality.md`. Crates and

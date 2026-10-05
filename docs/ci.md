@@ -186,6 +186,15 @@ Before the release workflow publishes anything, it:
 What the artifacts are, how a release is triggered and how it is signed is
 `docs/releasing.md`.
 
+## The user docs site
+
+A workflow publishes `docs/user/` to GitHub Pages on every merge to `main`.
+The site carries the rest of `docs/` too, for readers who follow a link into
+an area doc. Nothing else hosts Fiber's documentation. The command reference
+in `docs/user/` is generated from the same command definitions as `fiber help`
+and shell completion, and the docs check fails when the committed copy differs
+from what the generator writes.
+
 ## Waiting on CI
 
 Every workflow's third-party actions are pinned to a commit hash. The hash is

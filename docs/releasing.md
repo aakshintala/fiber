@@ -79,6 +79,11 @@ file `docs/dependencies.md` requires. Each checksum file is named after its
 archive with `.sha256` added, and holds that archive's SHA-256. The release
 also carries `install.sh`.
 
+The release also carries `fiber-docs.tar.gz` and its checksum file: the
+repository's `docs/` tree at the release tag, without the documents about
+developing Fiber itself (`docs/agents/` and `docs/workflow.md`). It is the
+same for every target. Nothing in the binary embeds documentation.
+
 Archive names carry no version, so
 `https://github.com/aakshintala/fiber/releases/latest/download/<archive>`
 always fetches the newest.
@@ -130,9 +135,11 @@ curl -fsSL https://github.com/aakshintala/fiber/releases/latest/download/install
    failed install never leaves half a binary
 5. installs to `$FIBER_INSTALL_DIR`, or `~/.local/bin` if that is unset, and
    warns without failing when that directory is not on `PATH`
+6. downloads the same release's docs archive, checks its SHA-256, and puts it
+   in place as `docs/` in Fiber home, by extracting beside it and renaming
 
-`FIBER_VERSION=0.3.0` installs that version instead of the newest. Rolling
-back is installing an older version this way.
+`FIBER_VERSION=0.3.0` installs that version instead of the newest, with that
+version's docs. Rolling back is installing an older version this way.
 
 `install.sh` installs no provider. The model picker installs one when a person
 chooses it, and `fiber extension install <name>` installs one on a headless machine
@@ -144,8 +151,9 @@ There is no Homebrew formula and no `cargo install`.
 
 `fiber update` updates the binary and every installed extension together
 (`docs/extensions.md`, "Staying current"). It changes only the binary and
-`extensions/` in Fiber home, and never touches configuration, credentials,
-sessions, rules, approvals, pinned copies or extension data (`docs/state.md`).
+`extensions/` and `docs/` in Fiber home, and never touches configuration,
+credentials, sessions, rules, approvals, pinned copies or extension data
+(`docs/state.md`).
 
 It:
 
@@ -155,11 +163,12 @@ It:
    API's limit of 60 requests an hour for each address
 2. if that version is newer than the running one, downloads the archive for
    the running binary's own target and its checksum file into the directory
-   that holds the binary, checks the SHA-256 and extracts the binary there
+   that holds the binary, checks the SHA-256 and extracts the binary there,
+   and downloads and checks the same release's docs archive
 3. stages each installed extension at its newest version whose manifest
    accepts the Fiber version being installed, in a fresh directory
    (`docs/state.md`, "What each part holds")
-4. renames the staged extensions into place, then the binary
+4. renames the staged extensions into place, then the docs, then the binary
 
 Every download and check finishes before the first rename, so a failure up to
 that point changes nothing. In a terminal, `fiber update` shows the version
@@ -167,7 +176,7 @@ change and the extension summary `docs/extensions.md` describes, and asks once
 before step 4. Without a terminal it goes ahead.
 
 If the running version is already the newest, only the extensions are
-updated. `fiber update` never installs an older version.
+updated, and the docs are installed if `docs/` is missing from Fiber home. `fiber update` never installs an older version.
 
 The binary it replaces is the one that is running. If Fiber cannot write to
 that binary's directory, such as `/usr/local/bin` owned by root, it stops with

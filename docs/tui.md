@@ -79,6 +79,11 @@ arrives (`docs/performance.md`).
 A failed attach says why on home: the session is held, or its schema is too
 new.
 
+**When a session cannot start,** as on a fresh install with no provider or no
+key, home shows the same lines `fiber doctor` prints for each blocker, each
+with its fix, above the input box (`docs/invocation.md`, "Commands and flags"). A person
+who runs `fiber` before reading anything is told what to do next.
+
 ### The logo
 
 The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
