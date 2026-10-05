@@ -302,7 +302,10 @@ fn a_write_of_an_object_key_checks_the_object_and_what_it_holds() {
         ("handoff", json!(5)),
         ("handoff", json!({"tokens": "many"})),
         ("mcp", json!({"servers": {"gh": {"required": "yes"}}})),
-        ("providers.x", json!({"credential": {"command": []}})),
+        (
+            "providers.x",
+            json!({"credentials": {"work": {"command": []}}}),
+        ),
     ] {
         let e = set_global(&setup.home(), key, value).unwrap_err();
         assert_eq!(e.code(), ErrorCode::ConfigInvalid, "{key}");

@@ -459,43 +459,75 @@ fn a_session_exits_after_thirty_idle_minutes_unless_configured() {
 }
 
 #[test]
-fn a_credential_replaces_the_one_below_it_as_a_whole() {
+fn a_credential_label_replaces_the_one_below_it_as_a_whole() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"providers": {"openrouter": {"credential": {"env": "OPENROUTER_API_KEY"}}}}"#,
+        r#"{"providers": {"openrouter": {"credentials": {"work": {"env": "OPENROUTER_API_KEY"}, "other": {"env": "O"}}}}}"#,
     );
     setup.write(
         &setup.project(),
-        r#"{"providers": {"openrouter": {"credential": {"file": "/k"}}}}"#,
+        r#"{"providers": {"openrouter": {"credentials": {"work": {"file": "/k"}}}}}"#,
     );
     let config = setup.load(&[]).unwrap();
-    let (value, source) = config.get("providers.openrouter.credential", None).unwrap();
+    let (value, source) = config
+        .get("providers.openrouter.credentials.work", None)
+        .unwrap();
     assert_eq!(source, Source::Project(setup.project()));
     assert_eq!(
         serde_json::from_value::<CredentialSource>(value).unwrap(),
         CredentialSource::File("/k".into())
     );
+    let merged = config.merged(None);
+    assert_eq!(
+        merged["providers"]["openrouter"]["credentials"]["other"],
+        json!({"env": "O"})
+    );
 }
 
 #[test]
-fn a_provider_without_a_credential_keeps_the_one_below_it() {
+fn a_label_is_replaced_whole_across_three_layers() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"providers": {"openrouter": {"credential": {"env": "KEY"}}}}"#,
+        r#"{"providers": {"p": {"credentials": {"work": {"env": "A"}}}}}"#,
     );
     setup.write(
         &setup.project(),
-        r#"{"providers": {"other": {"credential": {"env": "B"}}}}"#,
+        r#"{"providers": {"p": {"credentials": {"work": {"file": "/k"}}}}}"#,
+    );
+    let merged = setup
+        .load(&["providers.p.credentials.work={\"command\": [\"c\"]}"])
+        .unwrap()
+        .merged(None);
+    assert_eq!(
+        merged["providers"]["p"]["credentials"],
+        json!({"work": {"command": ["c"]}})
+    );
+}
+
+#[test]
+fn a_provider_without_credentials_keeps_the_ones_below_it() {
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        r#"{"providers": {"openrouter": {"credentials": {"work": {"env": "KEY"}}}}}"#,
+    );
+    setup.write(
+        &setup.project(),
+        r#"{"providers": {"other": {"credentials": {"work": {"env": "B"}}}, "openrouter": {"credential": "work"}}}"#,
     );
     let merged = setup.load(&[]).unwrap().merged(None);
     assert_eq!(
-        merged["providers"]["openrouter"]["credential"],
+        merged["providers"]["openrouter"]["credentials"]["work"],
         json!({"env": "KEY"})
     );
     assert_eq!(
-        merged["providers"]["other"]["credential"],
+        merged["providers"]["openrouter"]["credential"],
+        json!("work")
+    );
+    assert_eq!(
+        merged["providers"]["other"]["credentials"]["work"],
         json!({"env": "B"})
     );
 }

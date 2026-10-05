@@ -299,20 +299,27 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
         ),
         (
             &["providers", "openrouter", "credential"],
+            json!("work"),
+            json!({"env": "OPENROUTER_API_KEY"}),
+            STR,
+            false,
+        ),
+        (
+            &["providers", "openrouter", "credentials", "work"],
             json!({"env": "OPENROUTER_API_KEY"}),
             json!({"env": 1}),
             "one of {\"env\": name}",
             false,
         ),
         (
-            &["providers", "openrouter", "credential"],
+            &["providers", "openrouter", "credentials", "work"],
             json!({"file": "/k"}),
             json!({"env": "A", "file": "/k"}),
             "one of {\"env\": name}",
             false,
         ),
         (
-            &["providers", "openrouter", "credential"],
+            &["providers", "openrouter", "credentials", "work"],
             json!({"command": ["op", "read"]}),
             json!({"command": []}),
             "one of {\"env\": name}",
@@ -483,16 +490,16 @@ fn an_object_key_holding_another_type_is_config_invalid() {
 }
 
 #[test]
-fn a_provider_credential_reads_as_its_source() {
+fn a_provider_credential_label_reads_as_its_source() {
     let setup = Setup::new();
     setup.write(
         &setup.global(),
-        r#"{"providers": {"openrouter": {"credential": {"command": ["op", "read", "op://k"]}}}}"#,
+        r#"{"providers": {"openrouter": {"credentials": {"work": {"command": ["op", "read", "op://k"]}}}}}"#,
     );
     let (value, _) = setup
         .load(&[])
         .unwrap()
-        .get("providers.openrouter.credential", None)
+        .get("providers.openrouter.credentials.work", None)
         .unwrap();
     assert_eq!(
         serde_json::from_value::<CredentialSource>(value).unwrap(),

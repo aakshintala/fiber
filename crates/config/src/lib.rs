@@ -36,7 +36,9 @@ pub use extension::{
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use rules::RulesFiles;
-pub use secret::{CredentialSource, Secret, read_secret, store_secret};
+pub use secret::{
+    CredentialSource, Secret, read_credential, read_secret, store_credential, store_secret,
+};
 pub use write::{Scope, remove_extension_settings, set_global};
 
 use home::{parse, plain, read, read_bytes};
@@ -203,21 +205,28 @@ impl Config {
         let mut merged = Value::Object(Map::new());
         for (_, layer) in &self.layers {
             let upper = view(layer, model);
-            // A provider's credential replaces the one below it as a whole
-            // (docs/configuration.md, "Layers").
+            // Each entry under a provider's `credentials` replaces the one
+            // below it as a whole (docs/configuration.md, "Layers").
             for (name, provider) in upper
                 .get("providers")
                 .and_then(Value::as_object)
                 .into_iter()
                 .flatten()
             {
-                if provider.get("credential").is_some()
-                    && let Some(below) = merged
+                for label in provider
+                    .get("credentials")
+                    .and_then(Value::as_object)
+                    .into_iter()
+                    .flat_map(Map::keys)
+                {
+                    if let Some(below) = merged
                         .get_mut("providers")
                         .and_then(|p| p.get_mut(name))
+                        .and_then(|p| p.get_mut("credentials"))
                         .and_then(Value::as_object_mut)
-                {
-                    below.remove("credential");
+                    {
+                        below.remove(label);
+                    }
                 }
             }
             path::merge(&mut merged, &upper);

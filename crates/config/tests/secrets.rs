@@ -7,7 +7,7 @@ mod common;
 use std::fs;
 
 use common::{Setup, mode};
-use config::{Secret, read_secret, store_secret};
+use config::{Secret, read_credential, read_secret, store_credential, store_secret};
 use contract::ErrorCode;
 
 const VALUE: &str = "sk-live-7f3a9c0d1e2b";
@@ -118,14 +118,14 @@ fn a_stored_secret_is_not_part_of_the_configuration() {
     store_secret(&setup.home(), "openrouter", &Secret::new(VALUE.into())).unwrap();
     setup.write(
         &setup.global(),
-        r#"{"providers": {"openrouter": {"credential": {"env": "OPENROUTER_API_KEY"}}}}"#,
+        r#"{"providers": {"openrouter": {"credentials": {"work": {"env": "OPENROUTER_API_KEY"}}}}}"#,
     );
     let config = setup.load(&[]).unwrap();
     assert!(!config.merged(None).to_string().contains(VALUE));
     assert!(!format!("{config:?}").contains(VALUE));
     assert_eq!(
         config
-            .get("providers.openrouter.credential", None)
+            .get("providers.openrouter.credentials.work", None)
             .unwrap()
             .0,
         serde_json::json!({"env": "OPENROUTER_API_KEY"})
@@ -166,4 +166,86 @@ fn a_credentials_directory_that_is_a_symbolic_link_is_refused() {
     let e = store_secret(&setup.home(), "acme", &Secret::new(VALUE.into())).unwrap_err();
     assert_eq!(e.code(), ErrorCode::ConfigInvalid);
     assert!(!outside.join("acme").exists());
+}
+
+#[test]
+fn a_stored_credential_is_a_0600_file_in_a_0700_provider_directory() {
+    let setup = Setup::new();
+    store_credential(&setup.home(), "acme", "work", &Secret::new(VALUE.into())).unwrap();
+    let file = setup.home().join("credentials/acme/work");
+    assert_eq!(fs::read_to_string(&file).unwrap(), VALUE);
+    assert_eq!(mode(&file), 0o600);
+    assert_eq!(mode(&setup.home().join("credentials/acme")), 0o700);
+    assert_eq!(mode(&setup.home().join("credentials")), 0o700);
+    let read = read_credential(&setup.home(), "acme", "work")
+        .unwrap()
+        .unwrap();
+    assert_eq!(read.expose(), VALUE);
+    assert_eq!(
+        read_credential(&setup.home(), "acme", "other").unwrap(),
+        None
+    );
+    store_credential(&setup.home(), "acme", "work", &Secret::new("new".into())).unwrap();
+    assert_eq!(
+        read_credential(&setup.home(), "acme", "work")
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "new"
+    );
+}
+
+#[test]
+fn a_label_that_is_not_one_plain_file_name_is_refused() {
+    let setup = Setup::new();
+    for label in [
+        "",
+        ".",
+        "..",
+        "a/b",
+        "../x",
+        "default.lock",
+        "default.tmp",
+        "a.tmp",
+    ] {
+        let e =
+            store_credential(&setup.home(), "acme", label, &Secret::new(VALUE.into())).unwrap_err();
+        assert_eq!(e.code(), ErrorCode::InvalidArguments, "{label:?}");
+        assert!(
+            read_credential(&setup.home(), "acme", label).is_err(),
+            "{label:?}"
+        );
+    }
+    // Only the suffix is refused.
+    store_credential(&setup.home(), "acme", "lock.x", &Secret::new(VALUE.into())).unwrap();
+    store_credential(&setup.home(), "acme", "tmp", &Secret::new(VALUE.into())).unwrap();
+    assert!(!setup.home().join("credentials/acme/default.lock").exists());
+}
+
+#[test]
+fn a_stored_credential_that_is_a_symbolic_link_is_refused() {
+    let setup = Setup::new();
+    let outside = setup.root().join("planted");
+    fs::write(&outside, VALUE).unwrap();
+    fs::create_dir_all(setup.home().join("credentials/acme")).unwrap();
+    let link = setup.home().join("credentials/acme/work");
+    std::os::unix::fs::symlink(&outside, &link).unwrap();
+    let e = read_credential(&setup.home(), "acme", "work").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert!(!e.to_string().contains(VALUE));
+}
+
+#[test]
+fn a_bare_secret_and_a_provider_directory_of_one_name_collide() {
+    let setup = Setup::new();
+    store_secret(&setup.home(), "acme", &Secret::new(VALUE.into())).unwrap();
+    let e = read_credential(&setup.home(), "acme", "work").unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    let e =
+        store_credential(&setup.home(), "acme", "work", &Secret::new(VALUE.into())).unwrap_err();
+    assert_eq!(e.code(), ErrorCode::ConfigInvalid);
+    assert_eq!(
+        fs::read_to_string(setup.home().join("credentials/acme")).unwrap(),
+        VALUE
+    );
 }
