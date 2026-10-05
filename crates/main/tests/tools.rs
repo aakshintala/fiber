@@ -1322,4 +1322,25 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         .unwrap()];
     assert_eq!(completed["payload"]["job_id"], job_id);
     assert_eq!(completed["payload"]["status"], "completed");
+    // The deltas left out above: all of this job's, inside its life, and
+    // together exactly what it printed, so a missing or duplicated one fails.
+    let all: Vec<&str> = run
+        .lines
+        .iter()
+        .map(|line| line["kind"].as_str().unwrap())
+        .collect();
+    let started = all.iter().position(|kind| *kind == "job_started").unwrap();
+    let ended = all
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .unwrap();
+    let mut printed = String::new();
+    for (index, line) in run.lines.iter().enumerate() {
+        if line["kind"] == "job_delta" {
+            assert!(started < index && index < ended, "{all:?}");
+            assert_eq!(line["payload"]["job_id"], job_id);
+            printed.push_str(line["payload"]["text"].as_str().unwrap());
+        }
+    }
+    assert_eq!(printed, "one\ntwo\n");
 }
