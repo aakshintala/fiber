@@ -159,6 +159,6 @@ fn a_bad_context_length_is_a_usage_error() {
 }
 
 #[test]
-fn only_matching_rides_along_for_the_follow_up() {
+fn only_matching_sets_the_flag() {
     assert!(run(&["-o", "needle"]).only_matching);
 }

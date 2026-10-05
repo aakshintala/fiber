@@ -39,8 +39,9 @@ pub(crate) struct Options {
     pub count: bool,
     /// Whether `-w` was given.
     pub word: bool,
-    /// Whether `-o` was given: provisional ruling 20 on #298 hands every
-    /// such call to the system grep, so this only rides along until then.
+    /// Whether `-o` was given: each non-empty match prints on its own
+    /// line. With `-v`, context or an alternation the call instead runs
+    /// the system grep (ruling 17 on #298).
     pub only_matching: bool,
     /// The `-B` context lines.
     pub before: usize,

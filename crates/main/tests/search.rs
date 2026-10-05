@@ -187,13 +187,28 @@ fn grep_keeps_the_argv_delimiter() {
 }
 
 #[test]
-fn grep_falls_back_for_unhandled_calls() {
+fn grep_prints_only_the_match() {
     let setup = Setup::new();
-    setup.write("a.txt", "needle\n");
-    // Provisional ruling 20 on #298: `-o` runs the system grep.
+    setup.write("a.txt", "xneedle yneedle\nnone\n");
+    // Built-in `-o`: each non-empty match on its own line.
     let run = setup.fiber(&["grep", "-o", "needle", "a.txt"], None);
     assert_eq!(run.code, Some(0));
-    assert_eq!(run.stdout, "needle\n");
+    assert_eq!(run.stdout, "needle\nneedle\n");
+    assert_eq!(run.stderr, "");
+}
+
+#[test]
+fn grep_only_matching_skips_ignored_directories() {
+    let setup = Setup::new();
+    setup.write(".gitignore", "ignored/\n");
+    setup.write("ignored/needle.txt", "needle\n");
+    setup.write("kept.txt", "needle\n");
+    // Built-in `-o` walks like the search, not the system grep: the
+    // ignored directory stays skipped.
+    let run = setup.fiber(&["grep", "-ro", "needle", "."], None);
+    assert_eq!(run.code, Some(0));
+    assert_eq!(run.stdout, "./kept.txt:needle\n");
+    assert_eq!(run.stderr, "");
 }
 
 #[test]

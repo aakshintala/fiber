@@ -5,6 +5,7 @@ use std::fs::File;
 use std::io::{BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 
+use grep_matcher::Matcher as _;
 use grep_regex::RegexMatcherBuilder;
 use grep_searcher::{BinaryDetection, Searcher, SearcherBuilder, Sink, SinkContext, SinkMatch};
 
@@ -54,14 +55,15 @@ pub(crate) fn run(
             return Outcome::Done(2);
         }
     };
-    // Provisional ruling 20 on #298: `-o` is not built in until the owner
-    // rules. A call with `-o` runs the system grep, as any other unhandled
-    // flag does. Removing this branch and printing each match is the
-    // follow-up.
-    if options.only_matching {
+    if options.files_with_matches && options.count {
         return Outcome::Fallback;
     }
-    if options.files_with_matches && options.count {
+    // Ruling 17 on #298: `-o` with `-v` or context runs the system grep,
+    // whose output for these combinations is not reproduced here.
+    if options.only_matching && options.invert {
+        return Outcome::Fallback;
+    }
+    if options.only_matching && (options.before > 0 || options.after > 0) {
         return Outcome::Fallback;
     }
     let mut search = match compile(&options) {
@@ -240,6 +242,12 @@ fn compile(options: &Options) -> Result<Search, ()> {
             Mode::Fixed => pattern.push_str(&escape_fixed(part)),
         }
     }
+    // Ruling 17 on #298: `-o` with an alternation runs the system grep:
+    // GNU prints the longest match at each position while the regex
+    // crate prints the first alternative, so the spans below would differ.
+    if options.only_matching && has_alternation(&pattern) {
+        return Err(());
+    }
     let mut matcher = RegexMatcherBuilder::new();
     // Bytes, as GNU in the C locale: `.` matches any byte but a newline,
     // and `-i` folds ASCII only. The differential tests run the system
@@ -263,6 +271,37 @@ fn compile(options: &Options) -> Result<Search, ()> {
         matcher,
         searcher: searcher.build(),
     })
+}
+
+/// Whether the translated pattern holds an alternation: a bare `|`
+/// outside a bracket expression, where the pipe reads as syntax. Escaped
+/// pipes and pipes inside `[...]` read as literals, so only a bare one
+/// outside brackets counts.
+fn has_alternation(pattern: &str) -> bool {
+    let mut escaped = false;
+    let mut bracket = false;
+    let mut fresh = false;
+    for current in pattern.bytes() {
+        if escaped {
+            escaped = false;
+            fresh = false;
+        } else if current == b'\\' {
+            escaped = true;
+            fresh = false;
+        } else if bracket {
+            // A leading `]` is a member, not the closer.
+            if current == b']' && !fresh {
+                bracket = false;
+            }
+            fresh = false;
+        } else if current == b'[' {
+            bracket = true;
+            fresh = true;
+        } else if current == b'|' {
+            return true;
+        }
+    }
+    false
 }
 
 /// Escapes a fixed string as a regular expression: every character that
@@ -458,6 +497,7 @@ fn search_stream(
 ) -> Found {
     let mut emit = Emit {
         options,
+        matcher: &search.matcher,
         label: target.label,
         out,
         matched: false,
@@ -511,6 +551,8 @@ fn search_stream(
 struct Emit<'a, 'w> {
     /// What was asked for.
     options: &'a Options,
+    /// The pattern, for `-o` match spans.
+    matcher: &'a grep_regex::RegexMatcher,
     /// The label lines print under, or nothing unlabelled.
     label: Option<&'a [u8]>,
     /// Where lines go.
@@ -544,6 +586,29 @@ impl Sink for Emit<'_, '_> {
         }
         if self.options.count {
             self.count += 1;
+            return Ok(!self.out.broken());
+        }
+        if self.options.only_matching {
+            // Each non-empty match prints on its own line, under the
+            // same prefix a match line prints: the label when the path
+            // shows, the number with `-n`. An empty match prints nothing.
+            let text = stripped(mat.bytes());
+            let no = mat.line_number().unwrap_or_default();
+            // The matcher is detached first: the spans borrow it while
+            // each line borrows the output.
+            let matcher = self.matcher;
+            // `RegexMatcher` never fails a search (`NoError`):
+            // `unwrap_or` only satisfies the `Result`.
+            matcher
+                .find_iter_at(&text, 0, |span| {
+                    if let Some(piece) = text.get(span.start()..span.end())
+                        && !piece.is_empty()
+                    {
+                        self.line(no, piece, b':');
+                    }
+                    !self.out.broken()
+                })
+                .unwrap_or(());
             return Ok(!self.out.broken());
         }
         let text = stripped(mat.bytes());

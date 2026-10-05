@@ -10,6 +10,7 @@ publish.workspace = true
 [dependencies]
 contract = { path = "../contract" }
 grep-regex.workspace = true
+grep-matcher.workspace = true
 grep-searcher.workspace = true
 ignore.workspace = true
 rustix.workspace = true

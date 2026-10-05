@@ -469,12 +469,6 @@ fn a_match_or_an_error_prints_no_notice() {
 #[test]
 fn declined_calls_fall_back_before_anything_is_written() {
     let dir = text_tree(&BTreeMap::from([("a.txt", "aa\nab\n")]));
-    // Provisional ruling 20 on #298: `-o` hands over until the owner rules.
-    let with_only = vec![
-        OsString::from("-o"),
-        OsString::from("a"),
-        OsString::from("a.txt"),
-    ];
     // `-l` with `-c` has no output the built-in reproduces.
     let with_both = vec![
         OsString::from("-l"),
@@ -498,7 +492,6 @@ fn declined_calls_fall_back_before_anything_is_written() {
         OsString::from("a.txt"),
     ];
     for args in [
-        with_only,
         with_both,
         with_backref,
         with_invalid,
@@ -515,6 +508,451 @@ fn declined_calls_fall_back_before_anything_is_written() {
         assert!(stdout.is_empty(), "{args:?}");
         assert!(stderr.is_empty(), "{args:?}");
     }
+}
+
+#[test]
+fn only_matching_prints_each_match_on_its_own_line() {
+    let dir = text_tree(&BTreeMap::from([(
+        "a.txt",
+        "xneedle yneedle\nnone\nneedle\n",
+    )]));
+    let (code, stdout, stderr) = text(&dir, &["-o", "needle", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "needle\nneedle\nneedle\n");
+    assert_eq!(stderr, "");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"xneedle yneedle\nnone\nneedle\n".as_slice())]),
+        &["-o", "needle", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_numbers_each_match() {
+    let dir = text_tree(&BTreeMap::from([(
+        "a.txt",
+        "xneedle yneedle\nnone\nneedle\n",
+    )]));
+    let (code, stdout, stderr) = text(&dir, &["-n", "-o", "needle", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "1:needle\n1:needle\n3:needle\n");
+    assert_eq!(stderr, "");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"xneedle yneedle\nnone\nneedle\n".as_slice())]),
+        &["-n", "-o", "needle", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_shows_the_path_for_many_files() {
+    let dir = text_tree(&BTreeMap::from([
+        ("a.txt", "xneedle\n"),
+        ("b.txt", "needle y\n"),
+    ]));
+    let (_, pair, _) = text(&dir, &["-o", "needle", "a.txt", "b.txt"], "");
+    assert_eq!(pair, "a.txt:needle\nb.txt:needle\n");
+    let (_, single, _) = text(&dir, &["-o", "needle", "a.txt"], "");
+    assert_eq!(single, "needle\n");
+    let (_, numbered, _) = text(&dir, &["-n", "-o", "needle", "a.txt", "b.txt"], "");
+    assert_eq!(numbered, "a.txt:1:needle\nb.txt:1:needle\n");
+    matches_like_grep(
+        &BTreeMap::from([
+            ("a.txt", b"xneedle\n".as_slice()),
+            ("b.txt", b"needle y\n".as_slice()),
+        ]),
+        &["-n", "-o", "needle", "a.txt", "b.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_reads_standard_input() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let (code, stdout, stderr) = text(&dir, &["-o", "needle"], "xneedle yneedle\n");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "needle\nneedle\n");
+    assert_eq!(stderr, "");
+    let (_, both, _) = text(&dir, &["-o", "needle", "-", "a.txt"], "xneedle\n");
+    assert_eq!(both, "(standard input):needle\na.txt:needle\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"needle\n".as_slice())]),
+        &["-o", "needle", "-", "a.txt"],
+        Some(b"xneedle\n"),
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_searches_recursively_but_skips_ignored() {
+    // The review on #497: every `-o` call fell back, so `grep -ro`
+    // searched ignored directories. Built in, the walk skips them.
+    let dir = text_tree(&BTreeMap::from([
+        (".gitignore", "skipped_dir/\n"),
+        ("skipped_dir/needle.txt", "needle\n"),
+        ("kept/needle.txt", "xneedle yneedle\n"),
+    ]));
+    let (code, stdout, stderr) = text(&dir, &["-r", "-o", "needle", "."], "");
+    assert_eq!(code, 0);
+    assert_eq!(
+        stdout,
+        "./kept/needle.txt:needle\n./kept/needle.txt:needle\n"
+    );
+    assert_eq!(stderr, "");
+    let (_, implicit, _) = text(&dir, &["-r", "-o", "needle"], "");
+    assert_eq!(implicit, "kept/needle.txt:needle\nkept/needle.txt:needle\n");
+}
+
+#[test]
+fn only_matching_skips_empty_matches() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "abc\n"), ("b.txt", "b\n")]));
+    // `b*` matches empty at every position: only the `b` prints.
+    let (code, stdout, stderr) = text(&dir, &["-o", "b*", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "b\n");
+    assert_eq!(stderr, "");
+    // No non-empty match anywhere: nothing prints, but the line matched.
+    let (empty_code, empty_stdout, _) = text(&dir, &["-o", "x*", "b.txt"], "");
+    assert_eq!(empty_code, 0);
+    assert_eq!(empty_stdout, "");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"abc\n".as_slice())]),
+        &["-o", "b*", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+    matches_like_grep(
+        &BTreeMap::from([("b.txt", b"b\n".as_slice())]),
+        &["-o", "x*", "b.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_counts_matching_lines() {
+    // As without `-o`: `-c` counts lines, not matches.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "a a\nb\n"), ("b.txt", "zzz\n")]));
+    let (code, single, _) = text(&dir, &["-o", "-c", "a", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(single, "1\n");
+    let (_, pair, _) = text(&dir, &["-o", "-c", "a", "a.txt", "b.txt"], "");
+    assert_eq!(pair, "a.txt:1\nb.txt:0\n");
+    let (missing_code, missing, _) = text(&dir, &["-o", "-c", "absent", "a.txt"], "");
+    assert_eq!(missing_code, 1);
+    assert_eq!(missing, "0\n");
+    matches_like_grep(
+        &BTreeMap::from([
+            ("a.txt", b"a a\nb\n".as_slice()),
+            ("b.txt", b"zzz\n".as_slice()),
+        ]),
+        &["-o", "-c", "a", "a.txt", "b.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_lists_matching_files() {
+    let dir = text_tree(&BTreeMap::from([
+        ("a.txt", "xneedle\n"),
+        ("b.txt", "plain\n"),
+    ]));
+    let (code, stdout, stderr) = text(&dir, &["-o", "-l", "needle", "a.txt", "b.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "a.txt\n");
+    assert_eq!(stderr, "");
+    matches_like_grep(
+        &BTreeMap::from([
+            ("a.txt", b"xneedle\n".as_slice()),
+            ("b.txt", b"plain\n".as_slice()),
+        ]),
+        &["-o", "-l", "needle", "a.txt", "b.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_ignores_case() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "Needle xNEEDLEy needless\n")]));
+    let (code, stdout, _) = text(&dir, &["-o", "-i", "needle", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "Needle\nNEEDLE\nneedle\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"Needle xNEEDLEy needless\n".as_slice())]),
+        &["-o", "-i", "needle", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_matches_words() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle needles xneedle\n")]));
+    let (code, stdout, _) = text(&dir, &["-o", "-w", "needle", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "needle\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"needle needles xneedle\n".as_slice())]),
+        &["-o", "-w", "needle", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_reads_fixed_strings() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "a+b xa+by aab\n")]));
+    let (code, stdout, _) = text(&dir, &["-o", "-F", "a+b", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "a+b\na+b\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"a+b xa+by aab\n".as_slice())]),
+        &["-o", "-F", "a+b", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_reads_extended_patterns() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "a+b xaaby\n")]));
+    let (code, stdout, _) = text(&dir, &["-o", "-E", "a+b", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "aab\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"a+b xaaby\n".as_slice())]),
+        &["-o", "-E", "a+b", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_reads_basic_patterns() {
+    // Without `-E` or `-F` the pattern is a basic regular expression:
+    // `\+` repeats, while a bare `+` reads as a literal.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "a+b xaaby\n")]));
+    let (code, stdout, _) = text(&dir, &["-o", "a\\+b", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "aab\n");
+    let (_, literal, _) = text(&dir, &["-o", "a+b", "a.txt"], "");
+    assert_eq!(literal, "a+b\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"a+b xaaby\n".as_slice())]),
+        &["-o", "a\\+b", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_prints_invalid_utf8_raw() {
+    // As GNU in the C locale: `.` matches any byte but a newline, and
+    // the match prints as raw bytes.
+    let dir = bytes_tree(&BTreeMap::from([("a.txt", &b"a\xffb\nplain\n"[..])]));
+    let (code, stdout, _) = search(&dir, &["-o", "a.b", "a.txt"], &[]);
+    assert_eq!(code, 0);
+    assert_eq!(stdout, b"a\xffb\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"a\xffb\nplain\n".as_slice())]),
+        &["-o", "a.b", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_keeps_literal_pipes_builtin() {
+    // A pipe that reads as a literal is no alternation: `-F` escapes
+    // it, and a bracket member never alternates.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "xa|by\n")]));
+    let (code, stdout, stderr) = text(&dir, &["-o", "-F", "a|b", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(stdout, "a|b\n");
+    assert_eq!(stderr, "");
+    let (_, classed, _) = text(&dir, &["-o", "-E", "[a|b]+", "a.txt"], "");
+    assert_eq!(classed, "a|b\n");
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"xa|by\n".as_slice())]),
+        &["-o", "-F", "a|b", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+    matches_like_grep(
+        &BTreeMap::from([("a.txt", b"xa|by\n".as_slice())]),
+        &["-o", "-E", "[a|b]+", "a.txt"],
+        None,
+        &[],
+        Some(b""),
+        false,
+    );
+}
+
+#[test]
+fn only_matching_with_invert_falls_back() {
+    // Ruling 17 on #298: `-o` with `-v` runs the system grep.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\nplain\n")]));
+    let args = vec![
+        OsString::from("-o"),
+        OsString::from("-v"),
+        OsString::from("needle"),
+        OsString::from("a.txt"),
+    ];
+    let mut input = Cursor::new(Vec::new());
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    match run(dir.path(), &args, &mut input, &mut stdout, &mut stderr) {
+        Outcome::Fallback => {}
+        Outcome::Done(code) => panic!("-o -v ran builtin with {code}"),
+    }
+    assert!(stdout.is_empty());
+    assert!(stderr.is_empty());
+}
+
+#[test]
+fn only_matching_with_context_falls_back() {
+    // Ruling 17 on #298: `-o` with `-A`, `-B` or `-C` runs the system grep.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "1\nneedle\n3\n")]));
+    for flag in ["-A1", "-B1", "-C1"] {
+        let args = vec![
+            OsString::from("-o"),
+            OsString::from(flag),
+            OsString::from("needle"),
+            OsString::from("a.txt"),
+        ];
+        let mut input = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        match run(dir.path(), &args, &mut input, &mut stdout, &mut stderr) {
+            Outcome::Fallback => {}
+            Outcome::Done(code) => panic!("-o {flag} ran builtin with {code}"),
+        }
+        assert!(stdout.is_empty(), "{flag}");
+        assert!(stderr.is_empty(), "{flag}");
+    }
+}
+
+#[test]
+fn only_matching_with_an_alternation_falls_back() {
+    // Ruling 17 on #298: GNU prints the longest match at each position
+    // while the regex crate prints the first alternative, so `-o` with
+    // an alternation runs the system grep.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "ab\n")]));
+    let basic = vec![
+        OsString::from("-o"),
+        OsString::from("a\\|ab"),
+        OsString::from("a.txt"),
+    ];
+    let extended = vec![
+        OsString::from("-o"),
+        OsString::from("-E"),
+        OsString::from("a|ab"),
+        OsString::from("a.txt"),
+    ];
+    let lines = vec![
+        OsString::from("-o"),
+        OsString::from("a\nb"),
+        OsString::from("a.txt"),
+    ];
+    for args in [basic, extended, lines] {
+        let mut input = Cursor::new(Vec::new());
+        let mut stdout = Vec::new();
+        let mut stderr = Vec::new();
+        match run(dir.path(), &args, &mut input, &mut stdout, &mut stderr) {
+            Outcome::Fallback => {}
+            Outcome::Done(code) => panic!("{args:?} ran builtin with {code}"),
+        }
+        assert!(stdout.is_empty(), "{args:?}");
+        assert!(stderr.is_empty(), "{args:?}");
+    }
+}
+
+#[test]
+fn only_matching_on_a_closed_pipe_stops_before_the_input_ends() {
+    // Ruling 13 on #298, as `a_closed_pipe_stops_before_the_input_ends`
+    // does for whole lines: `-o` output through a closed pipe stays
+    // quiet and stops reading.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "x\n")]));
+    let owned: Vec<OsString> = [OsString::from("-o"), OsString::from("needle")].to_vec();
+    let path = dir.path().to_path_buf();
+    let (done, finished) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut generator = Generator {
+            read: 0,
+            limit: 1 << 20,
+        };
+        let mut closed = Closed { writes: 0 };
+        let mut stderr = Vec::new();
+        let code = match run(&path, &owned, &mut generator, &mut closed, &mut stderr) {
+            Outcome::Done(code) => code,
+            Outcome::Fallback => panic!("fell back"),
+        };
+        done.send((code, generator.read, closed.writes, stderr))
+            .unwrap_or(());
+    });
+    let deadline = std::time::Duration::from_secs(10);
+    let (code, read, writes, stderr) = finished
+        .recv_timeout(deadline)
+        .expect("waited 10s for the bounded generator search to finish");
+    assert_eq!(code, 0);
+    assert!(stderr.is_empty());
+    assert!(read < (1 << 20), "read {read}");
+    assert!(writes < 16, "writes {writes}");
+}
+
+#[test]
+fn an_only_matching_write_failure_is_an_error() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "xneedle yneedle\n")]));
+    let owned: Vec<OsString> = [
+        OsString::from("-o"),
+        OsString::from("needle"),
+        OsString::from("a.txt"),
+    ]
+    .to_vec();
+    let mut input = Cursor::new(Vec::new());
+    let mut refused = Refused;
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut input, &mut refused, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    assert_eq!(code, 2);
+    assert_eq!(stderr, b"grep: writing output: no space\n");
 }
 
 #[test]
