@@ -131,17 +131,13 @@ impl Loop {
     ) -> Result<Shaped, Error> {
         let name = format!("{}.txt", id.0);
         let cap = bound.start.saturating_add(bound.end);
-        let was_cut = full.len() > cap;
-        let (content, cut) = if was_cut {
+        let (content, cut) = if full.len() > cap {
             let (kept, artifact) = self.log.cut_output(&full, bound, &name);
             (vec![ContentPart::Text { text: kept }], artifact)
         } else {
             (text, None)
         };
         let artifact = match artifact {
-            // The cut's notice already says the output could not be saved:
-            // no artifact is written for it to contradict.
-            Some(_) if was_cut && cut.is_none() => None,
             // The hook's text replaces what the cut wrote under the same
             // name, so the cut's notice points at it.
             Some(artifact) => Some(self.log.write_artifact(&name, artifact.as_bytes())?.0),

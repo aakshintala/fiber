@@ -787,7 +787,7 @@ fn a_hooks_artifact_that_cannot_be_written_fails_the_turn() {
 }
 
 #[test]
-fn a_cut_whose_output_could_not_be_saved_points_at_no_artifact() {
+fn a_hooks_artifact_that_cannot_be_written_fails_the_turn_after_a_cut() {
     let hooks = FakeHooks::new(
         changed(Some("summary-past-the-cap"), None, Some("the whole log")),
         &["acme"],
@@ -803,11 +803,14 @@ fn a_cut_whose_output_could_not_be_saved_points_at_no_artifact() {
         Arc::new(TurnCancel::default()),
         true,
     );
-    assert!(ran.turn.is_ok(), "{:?}", ran.turn);
-    let completed = ran.completed();
-    assert!(completed.payload.get("artifact").is_none());
-    let content = completed.payload["content"][0]["text"].as_str().unwrap();
-    assert!(content.contains("could not be saved"), "{content}");
+    let Err(crate::Error::Log(_)) = &ran.turn else {
+        panic!("the turn went on: {:?}", ran.turn)
+    };
+    assert!(
+        !ran.lines
+            .iter()
+            .any(|line| line.kind == "tool_call_completed")
+    );
 }
 
 #[test]
