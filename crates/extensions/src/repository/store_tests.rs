@@ -2,7 +2,7 @@
 //! failure leaves behind.
 
 use std::fs::{self, File};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -556,4 +556,56 @@ fn scratch_and_temporary_names_never_repeat() {
     let c = super::store::next();
     assert_ne!(b, c);
     assert_ne!(a, c);
+}
+
+#[test]
+fn a_ready_marker_that_cannot_be_removed_fails_before_the_install_step_runs() {
+    let repo = Repo::new();
+    let item = extension(&repo, &json!({"install": ["sh", "-c", "touch ../ran"]}));
+    let hash = hashed(&item);
+    let marker = ready(&repo, &hash);
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::create_dir(&marker).unwrap();
+    let e = store(&repo).approve(&item, &hash).unwrap_err();
+    assert!(
+        matches!(&e, Error::Io { path, .. } if path == &marker),
+        "{e}"
+    );
+    assert!(e.to_string().contains(&marker.display().to_string()), "{e}");
+    // The step never ran: its side effect outside the copy is absent. A
+    // build that ignored the removal failure would run the step before
+    // failing at the marker, leaving this behind.
+    assert!(!repo.home().join("pinned").join("ran").exists());
+}
+
+#[test]
+fn a_stray_file_where_the_copy_goes_is_replaced_by_the_copy() {
+    let repo = Repo::new();
+    let item = extension(&repo, &json!({}));
+    let hash = hashed(&item);
+    let copy = repo.home().join("pinned").join(&hash);
+    fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    fs::write(&copy, "stray").unwrap();
+    assert!(!ready(&repo, &hash).exists());
+    store(&repo).approve(&item, &hash).unwrap();
+    assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_dir());
+    assert!(copy.join("init.lua").is_file());
+    assert!(copy.join("extension.json").is_file());
+    assert!(ready(&repo, &hash).is_file());
+}
+
+#[test]
+fn a_stray_symlink_where_the_copy_goes_is_replaced_by_the_copy() {
+    let repo = Repo::new();
+    let item = extension(&repo, &json!({}));
+    let hash = hashed(&item);
+    let copy = repo.home().join("pinned").join(&hash);
+    fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    symlink("nowhere-fiber-test", &copy).unwrap();
+    assert!(!ready(&repo, &hash).exists());
+    store(&repo).approve(&item, &hash).unwrap();
+    assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_dir());
+    assert!(copy.join("init.lua").is_file());
+    assert!(copy.join("extension.json").is_file());
+    assert!(ready(&repo, &hash).is_file());
 }
