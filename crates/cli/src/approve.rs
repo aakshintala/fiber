@@ -16,7 +16,7 @@ const PROMPT: &str = "approve all? [y/N]";
 
 /// `fiber approve [--yes]` in the current directory. Without `--yes` it asks
 /// once, and refuses when nobody can answer.
-pub(crate) fn approve(yes: bool) -> i32 {
+pub fn approve(yes: bool) -> i32 {
     let prepared = config::fiber_home_from_env()
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| {

@@ -220,7 +220,7 @@ fn the_menu_lists_login_and_logout_under_fiber_itself() {
     ] {
         assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
     }
-    assert!(super::LOGOUT_SHAPE.ends_with(" Run `fiber --help` for usage."));
+    assert!(::cli::LOGOUT_SHAPE.ends_with(" Run `fiber --help` for usage."));
 }
 
 #[test]

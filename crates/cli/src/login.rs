@@ -23,7 +23,7 @@ use rustix::termios::{self, LocalModes, OptionalActions, Termios};
 use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
 use signal_hook::iterator::{Handle, Signals};
 
-use crate::cli::{LOGOUT_SHAPE, LoginArgs, LogoutArgs};
+use crate::{LOGOUT_SHAPE, fail, project_of};
 
 /// The label `fiber login` stores a key under until labels arrive.
 const LABEL: &str = "default";
@@ -381,11 +381,7 @@ pub(crate) fn logout(
 fn finish(result: Result<(), Failure>) -> i32 {
     match result {
         Ok(()) => 0,
-        Err(e) => {
-            // A closed stderr leaves nobody to tell.
-            writeln!(io::stderr(), "fiber: {}", e.message).unwrap_or(());
-            doors::exit_code(&e)
-        }
+        Err(e) => fail(e),
     }
 }
 
@@ -399,7 +395,7 @@ fn home_and_providers() -> Result<(std::path::PathBuf, Providers), Failure> {
 }
 
 /// `fiber login [<provider>]`.
-pub(crate) fn run_login(args: LoginArgs) -> i32 {
+pub fn run_login(provider: Option<&str>) -> i32 {
     let ran = home_and_providers().and_then(|(home, providers)| {
         let stdin = io::stdin();
         let on_terminal = stdin.is_terminal();
@@ -411,7 +407,7 @@ pub(crate) fn run_login(args: LoginArgs) -> i32 {
             Box::new(Plain)
         };
         login(
-            args.provider.as_deref(),
+            provider,
             &mut LoginIo {
                 home: &home,
                 providers: &providers,
@@ -426,14 +422,14 @@ pub(crate) fn run_login(args: LoginArgs) -> i32 {
 }
 
 /// `fiber logout <provider>`.
-pub(crate) fn run_logout(args: LogoutArgs) -> i32 {
-    if args.provider.is_none() {
+pub fn run_logout(provider: Option<&str>) -> i32 {
+    if provider.is_none() {
         return finish(Err(failure(ErrorCode::Usage, LOGOUT_SHAPE)));
     }
     let ran = home_and_providers().and_then(|(home, providers)| {
         let workspace = std::env::current_dir()
             .map_err(|e| failure(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-        let (_, project) = crate::project_of(&home, &workspace)?;
+        let (_, project) = project_of(&home, &workspace)?;
         let config = Config::load(Sources {
             home: home.clone(),
             workspace,
@@ -441,13 +437,7 @@ pub(crate) fn run_logout(args: LogoutArgs) -> i32 {
             overrides: Vec::new(),
         })
         .map_err(config_failure)?;
-        logout(
-            args.provider.as_deref(),
-            &home,
-            &providers,
-            &config,
-            &mut io::stderr(),
-        )
+        logout(provider, &home, &providers, &config, &mut io::stderr())
     });
     finish(ran)
 }

@@ -12,6 +12,10 @@ use std::fs;
 use std::io::{self, BufRead, Cursor, Write};
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
 
 use config::{
     Config, CredentialFile, ProjectKey, Secret, Sources, read_credential, store_credential,
@@ -21,7 +25,12 @@ use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::{Value, json};
 
-use super::{KeyReader, LoginIo, Plain, credential_key, login, logout, write_prompt};
+use doors::failure;
+
+use super::{
+    KeyReader, LoginIo, Plain, credential_key, finish, login, logout, run_login, run_logout,
+    write_prompt,
+};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -560,7 +569,7 @@ fn logout_without_a_provider_is_a_usage_error() {
     let setup = Setup::new();
     let e = failed(setup.logout(None).0);
     assert_eq!(e.code, ErrorCode::Usage);
-    assert_eq!(e.message, crate::cli::LOGOUT_SHAPE);
+    assert_eq!(e.message, crate::LOGOUT_SHAPE);
 }
 
 #[test]
@@ -640,4 +649,62 @@ fn a_prompt_is_written_before_the_key_is_read_and_an_empty_one_writes_nothing() 
     let mut quiet = Vec::new();
     write_prompt("", &mut quiet).unwrap();
     assert!(quiet.is_empty());
+}
+
+#[test]
+fn fail_gives_the_failures_exit_code() {
+    assert_eq!(crate::fail(failure(ErrorCode::Usage, "bad usage")), 2);
+    assert_eq!(crate::fail(failure(ErrorCode::IoFailed, "disk")), 1);
+}
+
+#[test]
+fn finish_is_zero_on_success_and_the_exit_code_on_failure() {
+    assert_eq!(finish(Ok(())), 0);
+    assert_eq!(finish(Err(failure(ErrorCode::Usage, "bad usage"))), 2);
+    assert_eq!(finish(Err(failure(ErrorCode::IoFailed, "disk"))), 1);
+}
+
+#[test]
+fn logout_without_a_provider_is_a_usage_failure() {
+    assert_eq!(run_logout(None), 2);
+}
+
+/// The child's marker: set, the test runs `run_login` and exits with its code.
+const CHILD: &str = "FIBER_CLI_TEST_CHILD";
+
+/// How long the child may run before the test kills it and fails.
+const CHILD_DEADLINE: Duration = Duration::from_secs(60);
+
+#[test]
+fn login_of_an_unknown_provider_is_a_usage_failure() {
+    // Fails in `installed`, before any lock, prompt or read of stdin. It runs
+    // in a child with an empty Fiber home and no stdin, so neither the
+    // owner's home nor a terminal can change the outcome.
+    if std::env::var_os(CHILD).is_some() {
+        std::process::exit(run_login(Some("no-such-provider-for-the-test")));
+    }
+    let home = fakes::TempDir::new("fiber-login-child");
+    let name = module_path!().split_once("::").unwrap().1;
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::login_of_an_unknown_provider_is_a_usage_failure"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", home.path())
+        .env(CHILD, "1")
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for `fiber login` of an unknown provider to exit");
+    };
+    assert_eq!(status.code(), Some(2), "{status}");
 }
