@@ -292,3 +292,69 @@ fn a_directory_and_a_fifo_never_reach_the_child() {
     assert_eq!(code(&output), Some(ErrorCode::UnsupportedFile));
     assert!(!dir.path().join("ran").exists());
 }
+
+/// How long the test waits for the child to start, and for the call to end
+/// after the cancel. A wait that reaches it fails the test.
+const LIMIT: std::time::Duration = std::time::Duration::from_secs(20);
+
+#[test]
+fn a_cancel_after_the_child_started_stops_and_reaps_it() {
+    let dir = workspace();
+    let ready = fakes::children::Ready::new(dir.path());
+    // `exec` keeps the pid: the one process the call must stop.
+    let fiber = stub(
+        dir.path(),
+        &format!("echo $$ > '{}'\nexec sleep 3600", ready.path().display()),
+    );
+    let files =
+        Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
+    let Value::Object(arguments) = json!({"path": "a.png"}) else {
+        panic!("an object");
+    };
+    let cancel = CancelToken::new();
+    let (done_tx, done_rx) = std::sync::mpsc::channel();
+    let call_cancel = cancel.clone();
+    let call = std::thread::spawn(move || {
+        let output = files
+            .read()
+            .run(&arguments, &call_cancel, &Recorder::default());
+        drop(done_tx.send(output));
+    });
+    let pid = ready.wait(LIMIT).first().copied().unwrap();
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the call ended before the cancel"
+    );
+    cancel.cancel();
+    let output = done_rx.recv_timeout(LIMIT).expect("the call ends");
+    call.join().unwrap();
+    assert_eq!(code(&output), None);
+    assert_eq!(message(&output), "Cancelled and stopped.\n");
+    // Reaped: the process no longer exists.
+    let alive = std::process::Command::new("ps")
+        .args(["-p", &pid.to_string()])
+        .stdout(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success();
+    assert!(!alive, "the child {pid} still exists");
+}
+
+#[test]
+fn a_child_that_fills_both_pipes_does_not_deadlock() {
+    let dir = workspace();
+    // 300 KiB on each pipe, past any pipe buffer, stderr first.
+    let fiber = stub(
+        dir.path(),
+        r#"head -c 300000 /dev/zero | tr '\0' x >&2
+head -c 300000 /dev/zero | tr '\0' y
+exit 3"#,
+    );
+    let output = run_with(dir.path(), &fiber, "a.png");
+    assert_eq!(code(&output), Some(ErrorCode::ToolError));
+    assert!(
+        message(&output).contains("exited with status 3"),
+        "{}",
+        message(&output)
+    );
+}

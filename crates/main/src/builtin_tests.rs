@@ -53,8 +53,16 @@ fn read_is_wired_to_the_image_child() {
     let root = fakes::TempDir::new("fiber-read-wired");
     std::fs::write(root.path().join("a.png"), b"\x89PNG\r\n\x1a\nrest").unwrap();
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    // A child that prints the one line a stored image has.
+    let fiber = root.path().join("fiber-stub");
+    std::fs::write(
+        &fiber,
+        "#!/bin/sh\nprintf '{\"file\":\"%s.png\",\"mime_type\":\"image/png\",\"width\":1,\"height\":1}\\n' \"$4\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fiber, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
     let (tools, _infos, _driver) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
+        super::with_binary(fiber, root.path(), &root.path().join("artifacts"), &clock).unwrap();
     let (_, read) = tools
         .iter()
         .find(|(_, tool)| tool.definition().name == "read")
@@ -65,12 +73,13 @@ fn read_is_wired_to_the_image_child() {
         serde_json::Value::String("a.png".to_owned()),
     );
     let output = read.run(&arguments, &Never, &Quiet);
-    // The running binary here is the test harness, not `fiber`, so the child
-    // fails; what matters is that it was started at all.
-    let failure = output.error.expect("the harness is not an image child");
+    assert_eq!(output.error, None);
     assert!(
-        !failure.message.contains("not configured"),
-        "{}",
-        failure.message
+        matches!(
+            output.content.get(1),
+            Some(contract::shapes::ContentPart::Image { .. })
+        ),
+        "{:?}",
+        output.content
     );
 }

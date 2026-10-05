@@ -25,7 +25,7 @@ grep-matcher = "0.1"
 grep-regex = "0.1"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 fast_image_resize = { version = "6", features = ["image"] }
-base64 = "0.22"
+base64 = "0.23"
 
 # The lints in docs/code-quality.md, "Lints". Every crate inherits them with
 # `lints.workspace = true`.

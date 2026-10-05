@@ -30,6 +30,18 @@ pub(crate) fn builtin(
 ) -> Result<SessionTools, Failure> {
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
+    with_binary(fiber, workspace, artifacts, clock)
+}
+
+/// [`builtin`] with the binary the shell's search and the image child run.
+/// Tests pass a stub, because the test harness would treat `image` as a
+/// test filter and run its suite.
+pub(crate) fn with_binary(
+    fiber: std::path::PathBuf,
+    workspace: &Path,
+    artifacts: &Path,
+    clock: &Arc<dyn Clock>,
+) -> Result<SessionTools, Failure> {
     let files = tools::Files::new(workspace.to_path_buf())
         .with_images(fiber.clone(), artifacts.to_path_buf());
     let shell =

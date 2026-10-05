@@ -657,6 +657,26 @@ fn tool_result(body: &[u8]) -> Value {
         .unwrap()
 }
 
+/// [`read_kinds`] on the Anthropic stream: the call's arguments arrive as a
+/// delta, and the second reply is one text delta.
+fn anthropic_read_kinds() -> Vec<&'static str> {
+    let mut kinds = read_kinds();
+    kinds.retain(|kind| *kind != "assistant_message_delta");
+    kinds.insert(
+        kinds
+            .iter()
+            .position(|kind| *kind == "tool_call_requested")
+            .unwrap(),
+        "tool_call_arguments_delta",
+    );
+    let text = kinds
+        .iter()
+        .position(|kind| *kind == "text_completed")
+        .unwrap();
+    kinds.insert(text, "assistant_message_delta");
+    kinds
+}
+
 fn completed_line(run: &Run) -> &Value {
     run.lines
         .iter()
@@ -679,6 +699,7 @@ fn an_image_is_stored_logged_by_path_and_sent_inside_the_tool_result_on_every_re
     let run = setup.run(&["ask", "look at the picture"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), anthropic_read_kinds());
     let completed = completed_line(&run);
     assert_eq!(completed["payload"]["status"], "completed");
     let content = completed["payload"]["content"].as_array().unwrap();
@@ -780,6 +801,7 @@ fn an_image_over_50_megapixels_fails_unsupported_file_with_the_pixel_count() {
     let run = setup.run(&["ask", "look at the big picture"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), anthropic_read_kinds());
     let completed = completed_line(&run);
     assert_eq!(completed["payload"]["status"], "failed");
     assert_eq!(completed["payload"]["error"]["code"], "unsupported_file");

@@ -110,7 +110,7 @@ impl Tool for Read {
             Ok(Inspected::Text { text }) => text,
             // `offset` and `limit` do not apply to an image.
             Ok(Inspected::Image { .. }) => {
-                return crate::image::read(self.shared.images(), &path);
+                return crate::image::read(self.shared.images(), &path, cancel);
             }
             Ok(Inspected::Unsupported { kind, size, hint }) => {
                 return failed(

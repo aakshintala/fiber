@@ -147,27 +147,50 @@ fn normalised(image: &DynamicImage) -> DynamicImage {
     }
 }
 
+/// The most attempts a fit makes. 0.75 to the 30th is under 1 px from 2000,
+/// so the bound is never the reason a real fit stops; it is what keeps a
+/// wrong step from looping.
+const MAX_ATTEMPTS: usize = 40;
+
+/// The side after one failed attempt: three quarters, at least 1 px.
+fn next_side(side: u32) -> u32 {
+    (side * 3 / 4).max(1)
+}
+
 /// Fits `image` into the caps: the first attempt is at the longest side's
 /// own size or 2000, whichever is smaller; each failure cuts the longest side
-/// to three quarters, until an attempt fits or the longest side is 1 px, when
-/// the last attempt is stored whatever its size.
+/// to three quarters, until an attempt fits. A 1 px image always fits; if
+/// [`MAX_ATTEMPTS`] pass first, the last attempt is stored whatever its size.
 fn fit(image: &DynamicImage, primary: Primary) -> Result<Stored, String> {
-    let mut side = image.width().max(image.height()).min(MAX_SIDE);
-    loop {
-        let candidate = resized(image, side)?;
-        let first = encode(&candidate, primary)?;
-        let fits = |bytes: &[u8]| base64_len(length(bytes)) <= MAX_BASE64;
-        if fits(&first) || side == 1 {
-            return Ok(stored(first, primary, &candidate));
+    let start = image.width().max(image.height()).min(MAX_SIDE);
+    let mut last = None;
+    for side in std::iter::successors(Some(start), |&side| Some(next_side(side))).take(MAX_ATTEMPTS)
+    {
+        let (stored, fits) = attempt(image, side, primary)?;
+        if fits {
+            return Ok(stored);
         }
-        if primary == Primary::Png {
-            let jpeg = encode_jpeg(&candidate)?;
-            if fits(&jpeg) {
-                return Ok(stored(jpeg, Primary::Jpeg, &candidate));
-            }
-        }
-        side = (side * 3 / 4).max(1);
+        last = Some(stored);
     }
+    last.ok_or_else(|| "no attempt was made".to_owned())
+}
+
+/// One attempt at `side`: the primary format, then for a PNG a JPEG. Whether
+/// the stored bytes are within the size cap comes with them.
+fn attempt(image: &DynamicImage, side: u32, primary: Primary) -> Result<(Stored, bool), String> {
+    let candidate = resized(image, side)?;
+    let first = encode(&candidate, primary)?;
+    let fits = |bytes: &[u8]| base64_len(length(bytes)) <= MAX_BASE64;
+    if fits(&first) {
+        return Ok((stored(first, primary, &candidate), true));
+    }
+    if primary == Primary::Png {
+        let jpeg = encode_jpeg(&candidate)?;
+        if fits(&jpeg) {
+            return Ok((stored(jpeg, Primary::Jpeg, &candidate), true));
+        }
+    }
+    Ok((stored(first, primary, &candidate), false))
 }
 
 /// `image` with its longest side at `side` px, keeping the aspect ratio and

@@ -5,15 +5,20 @@
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
+use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Command, Output as Collected, Stdio};
+use std::sync::{Arc, Condvar, Mutex, PoisonError};
+use std::thread;
+use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Wake;
 use contract::shapes::ContentPart;
-use contract::tool::Output;
+use contract::tool::{Cancel, Output};
 use serde_json::Value;
 
-use crate::files::failed;
+use crate::files::{failed, text_output};
 
 /// How much of the child's standard error a failure message keeps.
 const MESSAGE_CAP: usize = 2048;
@@ -40,7 +45,7 @@ struct Stored {
 
 /// Runs the child on `path`, which `read` has already resolved and classified
 /// as a regular file with an image's first bytes.
-pub(crate) fn read(child: Option<&ImageChild>, path: &Path) -> Output {
+pub(crate) fn read(child: Option<&ImageChild>, path: &Path, cancel: &dyn Cancel) -> Output {
     let Some(child) = child else {
         return failed(
             ErrorCode::ToolError,
@@ -50,14 +55,10 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path) -> Output {
     // A new name for every read: an older log line's path never points at
     // new bytes.
     let stem = format!("i_{:016x}", RandomState::new().hash_one(()));
-    let output = match Command::new(&child.fiber)
-        .arg("image")
-        .arg(path)
-        .arg(&child.artifacts)
-        .arg(&stem)
-        .stdin(Stdio::null())
-        .output()
-    {
+    let Some(output) = run_child(child, path, &stem, cancel) else {
+        return text_output("Cancelled and stopped.\n".to_owned());
+    };
+    let output = match output {
         Ok(output) => output,
         Err(error) => {
             return failed(
@@ -85,6 +86,107 @@ pub(crate) fn read(child: Option<&ImageChild>, path: &Path) -> Output {
             format!("the image child was killed by a signal: {message}"),
         ),
     }
+}
+
+/// Re-checks the child this often if no wake arrives. Picked, not measured.
+const POLL: Duration = Duration::from_millis(50);
+
+/// Wakes the wait below: a cancel, or a pipe that reached end-of-file.
+#[derive(Default)]
+struct Signal {
+    changed: Mutex<u64>,
+    cv: Condvar,
+}
+
+impl Wake for Signal {
+    fn wake(&self) {
+        // The count moves under the wait's lock, so a wake that lands before
+        // the wait starts is still seen.
+        *self.changed.lock().unwrap_or_else(PoisonError::into_inner) += 1;
+        self.cv.notify_all();
+    }
+}
+
+/// Reads a pipe to its end on its own thread, so neither pipe fills while
+/// the other is read.
+fn drain(mut pipe: impl Read + Send + 'static, signal: Arc<Signal>) -> thread::JoinHandle<Vec<u8>> {
+    thread::spawn(move || {
+        let mut bytes = Vec::new();
+        // A read error ends the capture with what arrived.
+        let _ended = pipe.read_to_end(&mut bytes);
+        signal.wake();
+        bytes
+    })
+}
+
+/// Runs the child to its end. `None` when the call was cancelled: the child
+/// is then killed and reaped, and its output is dropped. The child is the
+/// only process, so killing it needs no group.
+fn run_child(
+    child: &ImageChild,
+    path: &Path,
+    stem: &str,
+    cancel: &dyn Cancel,
+) -> Option<std::io::Result<Collected>> {
+    let spawned = Command::new(&child.fiber)
+        .arg("image")
+        .arg(path)
+        .arg(&child.artifacts)
+        .arg(stem)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn();
+    let mut process = match spawned {
+        Ok(process) => process,
+        Err(error) => return Some(Err(error)),
+    };
+    let signal = Arc::new(Signal::default());
+    let wake: Arc<dyn Wake> = signal.clone();
+    cancel.subscribe(Arc::downgrade(&wake));
+    let out = process
+        .stdout
+        .take()
+        .map(|pipe| drain(pipe, signal.clone()));
+    let err = process
+        .stderr
+        .take()
+        .map(|pipe| drain(pipe, signal.clone()));
+    let status = loop {
+        let seen = *signal
+            .changed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if cancel.is_cancelled() {
+            // Already exited, or killed here: either way it is reaped. The
+            // pipe threads are left to end with the pipes.
+            drop(process.kill());
+            drop(process.wait());
+            return None;
+        }
+        match process.try_wait() {
+            Ok(Some(status)) => break Ok(status),
+            Ok(None) => {}
+            Err(error) => break Err(error),
+        }
+        let guard = signal
+            .changed
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if *guard == seen {
+            drop(signal.cv.wait_timeout(guard, POLL));
+        }
+    };
+    let join = |handle: Option<thread::JoinHandle<Vec<u8>>>| {
+        handle
+            .and_then(|handle| handle.join().ok())
+            .unwrap_or_default()
+    };
+    Some(status.map(|status| Collected {
+        status,
+        stdout: join(out),
+        stderr: join(err),
+    }))
 }
 
 /// The first [`MESSAGE_CAP`] bytes of `stderr`, cut at a character boundary,

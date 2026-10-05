@@ -6,7 +6,7 @@ use image::codecs::png::PngEncoder;
 use image::codecs::webp::WebPEncoder;
 use image::{DynamicImage, Frame, ImageBuffer, ImageEncoder, ImageFormat, Rgb, RgbImage, Rgba};
 
-use super::{MAX_BASE64, Stored, base64_len, process};
+use super::{MAX_BASE64, Stored, base64_len, next_side, process};
 
 /// Deterministic noise: a linear congruential generator, so a fixture never
 /// changes between runs.
@@ -263,6 +263,8 @@ fn an_image_that_fits_neither_format_shrinks_by_three_quarters() {
         steps.push(side);
     }
     assert!(steps.contains(&stored.width), "{}", stored.width);
+    // Two cuts: 1400 and 1050 do not fit, 787 does.
+    assert_eq!((stored.width, stored.height), (787, 787));
     assert!(stored.width < 1400);
     assert_eq!(stored.width, stored.height);
     assert_eq!(stored.extension, "jpg");
@@ -405,4 +407,24 @@ fn a_truncated_png_within_the_caps_is_stored_as_it_is() {
     let mut input = png_of(&DynamicImage::ImageRgb8(noise(100, 100)));
     input.truncate(input.len() / 2);
     assert_eq!(process(&input).unwrap().bytes, input);
+}
+
+#[test]
+fn a_failed_attempt_cuts_the_side_to_three_quarters_rounded_down() {
+    assert_eq!(next_side(2000), 1500);
+    assert_eq!(next_side(1500), 1125);
+    assert_eq!(next_side(1125), 843);
+    assert_eq!(next_side(5), 3);
+    assert_eq!(next_side(1), 1);
+}
+
+#[test]
+fn the_sides_a_fit_tries_reach_one_pixel_in_under_forty_attempts() {
+    let mut side = 2000;
+    let mut attempts = 1;
+    while side > 1 {
+        side = next_side(side);
+        attempts += 1;
+    }
+    assert!(attempts < super::MAX_ATTEMPTS, "{attempts}");
 }
