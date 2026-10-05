@@ -7,7 +7,7 @@
 //! CRLF pair is two bytes seen as one. Untouched lines are copied from the
 //! original bytes, so a mixed-ending file keeps those endings.
 
-use crate::files::land::shape_replacement;
+use crate::files::land::shape_lines;
 use crate::write::line_count;
 
 const BOM: &[u8] = b"\xEF\xBB\xBF";
@@ -341,7 +341,7 @@ fn splice(body: &[u8], located: &[Located]) -> Vec<u8> {
         if let Some(gap) = body.get(cursor..item.body_start) {
             out.extend_from_slice(gap);
         }
-        out.extend(shape_replacement(body, &item.replacement));
+        out.extend(shape_lines(body, &item.replacement));
         cursor = item.body_end;
     }
     if let Some(tail) = body.get(cursor..) {

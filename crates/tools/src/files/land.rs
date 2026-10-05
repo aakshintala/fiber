@@ -39,11 +39,19 @@ pub(crate) fn ending_of(bytes: &[u8]) -> Ending {
 /// ending, so it is kept.
 pub(crate) fn shape_replacement(existing: &[u8], content: &str) -> Vec<u8> {
     let body = content.strip_prefix('\u{feff}').unwrap_or(content);
-    let lf = body.replace("\r\n", "\n");
     let mut out = Vec::new();
     if existing.starts_with(BOM) {
         out.extend_from_slice(BOM);
     }
+    out.extend(shape_lines(existing, body));
+    out
+}
+
+/// `content` stored with `existing`'s line endings. Every byte of `content`
+/// is kept, a leading byte order mark included.
+pub(crate) fn shape_lines(existing: &[u8], content: &str) -> Vec<u8> {
+    let lf = content.replace("\r\n", "\n");
+    let mut out = Vec::new();
     match ending_of(existing) {
         Ending::Lf => out.extend_from_slice(lf.as_bytes()),
         Ending::Crlf => {
