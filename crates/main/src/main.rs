@@ -127,10 +127,15 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
         cli::Invocation::Run(Some(cli::Commands::Login(args))) => {
-            ::cli::run_login(args.provider.as_deref())
+            ::cli::run_login(args.provider.as_deref(), args.label.as_deref())
         }
         cli::Invocation::Run(Some(cli::Commands::Logout(args))) => {
-            ::cli::run_logout(args.provider.as_deref())
+            let target = match (args.label.as_deref(), args.all) {
+                (_, true) => ::cli::LogoutTarget::All,
+                (Some(label), false) => ::cli::LogoutTarget::Label(label),
+                (None, false) => ::cli::LogoutTarget::Only,
+            };
+            ::cli::run_logout(args.provider.as_deref(), target)
         }
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").

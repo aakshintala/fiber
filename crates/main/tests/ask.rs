@@ -783,10 +783,10 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
 Fiber itself:
-  login [<provider>]  Store a provider's key
-  logout <provider>   Delete a provider's stored key
-  help [<command>]    Print this menu, or a command's help
-  version             Print the version
+  login [<provider>] [--as <label>]         Store a provider's key
+  logout <provider> [--as <label> | --all]  Delete a provider's stored key
+  help [<command>]                          Print this menu, or a command's help
+  version                                   Print the version
 
 Extensions:
   extension install <name or path>  Install an extension and its dependencies

@@ -28,8 +28,8 @@ use serde_json::{Value, json};
 use doors::failure;
 
 use super::{
-    KeyReader, LoginIo, Plain, credential_key, finish, login, logout, run_login, run_logout,
-    write_prompt,
+    KeyReader, LoginIo, LogoutTarget, Plain, credential_key, finish, login, logout, run_login,
+    run_logout, write_prompt,
 };
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
@@ -146,10 +146,23 @@ impl Setup {
         typed: &str,
         keys: &mut Fake,
     ) -> (Result<(), Failure>, String) {
+        self.login_as(provider, None, terminal, typed, keys)
+    }
+
+    /// Like [`Setup::login`], with an `--as` label.
+    fn login_as(
+        &self,
+        provider: Option<&str>,
+        label: Option<&str>,
+        terminal: bool,
+        typed: &str,
+        keys: &mut Fake,
+    ) -> (Result<(), Failure>, String) {
         let mut err = Vec::new();
         let providers = self.providers();
         let result = login(
             provider,
+            label,
             &mut LoginIo {
                 home: &self.home(),
                 providers: &providers,
@@ -163,9 +176,18 @@ impl Setup {
     }
 
     fn logout(&self, provider: Option<&str>) -> (Result<(), Failure>, String) {
+        self.logout_target(provider, LogoutTarget::Only)
+    }
+
+    fn logout_target(
+        &self,
+        provider: Option<&str>,
+        target: LogoutTarget<'_>,
+    ) -> (Result<(), Failure>, String) {
         let mut err = Vec::new();
         let result = logout(
             provider,
+            target,
             &self.home(),
             &self.providers(),
             &self.config(),
@@ -230,7 +252,7 @@ fn providers_that_share_a_credential_store_under_the_one_directory() {
     let e = failed(result);
     assert!(
         e.message.contains(
-            "credentials/opencode/default is already stored; run `fiber logout opencode-go` first"
+            "credentials/opencode/default is already stored; log in under another label with --as <label>, or run `fiber logout opencode-go --as default` first"
         ),
         "{}",
         e.message
@@ -248,7 +270,7 @@ fn a_label_already_stored_is_refused_and_the_file_is_untouched() {
     assert_eq!(e.code, ErrorCode::Usage);
     assert_eq!(
         e.message,
-        "credentials/acme/default is already stored; run `fiber logout acme` first. Run `fiber --help` for usage."
+        "credentials/acme/default is already stored; log in under another label with --as <label>, or run `fiber logout acme --as default` first. Run `fiber --help` for usage."
     );
     assert_eq!(err, "");
     assert_eq!(keys.asked, 0);
@@ -557,7 +579,7 @@ fn several_stored_labels_are_a_usage_error_listing_them_and_delete_nothing() {
     assert_eq!(e.code, ErrorCode::Usage);
     assert_eq!(
         e.message,
-        "`acme` has several stored credentials: default, work. Run `fiber --help` for usage."
+        "`acme` has several stored credentials: default, work; name one with --as <label>, or use --all. Run `fiber --help` for usage."
     );
     assert_eq!(err, "");
     assert_eq!(setup.stored("acme", "work").as_deref(), Some(KEY));
@@ -666,7 +688,7 @@ fn finish_is_zero_on_success_and_the_exit_code_on_failure() {
 
 #[test]
 fn logout_without_a_provider_is_a_usage_failure() {
-    assert_eq!(run_logout(None), 2);
+    assert_eq!(run_logout(None, LogoutTarget::Only), 2);
 }
 
 /// The child's marker: set, the test runs `run_login` and exits with its code.
@@ -681,7 +703,7 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     // in a child with an empty Fiber home and no stdin, so neither the
     // owner's home nor a terminal can change the outcome.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(run_login(Some("no-such-provider-for-the-test")));
+        std::process::exit(run_login(Some("no-such-provider-for-the-test"), None));
     }
     let home = fakes::TempDir::new("fiber-login-child");
     let name = module_path!().split_once("::").unwrap().1;
@@ -708,3 +730,6 @@ fn login_of_an_unknown_provider_is_a_usage_failure() {
     };
     assert_eq!(status.code(), Some(2), "{status}");
 }
+
+#[path = "login_label_tests.rs"]
+mod label;

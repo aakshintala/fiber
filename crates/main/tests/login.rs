@@ -437,7 +437,9 @@ fn a_key_on_a_pipe_is_stored_then_deleted_and_never_printed() {
     let again = setup.fiber(&["login", "acme"], "other\n");
     assert_eq!(again.code, Some(2));
     assert!(
-        again.stderr.contains("run `fiber logout acme` first"),
+        again
+            .stderr
+            .contains("with --as <label>, or run `fiber logout acme --as default` first"),
         "{}",
         again.stderr
     );
@@ -590,4 +592,48 @@ fn a_pipe_on_stdin_is_no_terminal_even_when_stderr_is_one() {
     assert!(shown.contains("no terminal"), "{shown:?}");
     assert!(!shown.contains("Providers:"), "{shown:?}");
     assert!(!setup.home().join("credentials").exists());
+}
+
+#[test]
+fn labels_are_stored_and_deleted_through_argv() {
+    let setup = Setup::new();
+    setup.provider("acme", None, None);
+    let work = setup.fiber(&["login", "acme", "--as", "work"], &format!("{KEY}\n"));
+    assert_eq!(work.code, Some(0), "{}", work.stderr);
+    assert_eq!(work.stdout, "");
+    assert_eq!(work.stderr, "fiber: stored credentials/acme/work\n");
+    let file = setup.home().join("credentials/acme/work");
+    assert_eq!(
+        fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+        0o600
+    );
+    let home = setup.fiber(&["login", "acme", "--as", "home"], "other-key\n");
+    assert_eq!(home.code, Some(0), "{}", home.stderr);
+    let same = setup.fiber(&["login", "acme", "--as", "work"], "third-key\n");
+    assert_eq!(same.code, Some(2));
+    assert!(same.stderr.contains("--as"), "{}", same.stderr);
+    assert_eq!(setup.files_holding(KEY), std::slice::from_ref(&file));
+    let config: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("config.json")).unwrap())
+            .unwrap();
+    assert_eq!(
+        config,
+        json!({"providers": {"acme": {"credential": "work"}}})
+    );
+
+    let bare = setup.fiber(&["logout", "acme"], "");
+    assert_eq!(bare.code, Some(2));
+    assert!(file.exists());
+    let both = setup.fiber(&["logout", "acme", "--as", "work", "--all"], "");
+    assert_eq!(both.code, Some(2));
+    assert!(file.exists());
+    let one = setup.fiber(&["logout", "acme", "--as", "work"], "");
+    assert_eq!(one.code, Some(0), "{}", one.stderr);
+    assert_eq!(one.stderr, "fiber: removed credentials/acme/work\n");
+    assert!(!file.exists());
+    let all = setup.fiber(&["logout", "acme", "--all"], "");
+    assert_eq!(all.code, Some(0), "{}", all.stderr);
+    assert_eq!(all.stderr, "fiber: removed credentials/acme/home\n");
+    assert!(!setup.home().join("credentials/acme/home").exists());
+    assert!(!format!("{}{}{}", work.stderr, same.stderr, bare.stderr).contains(KEY));
 }
