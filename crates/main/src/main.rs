@@ -81,8 +81,7 @@ struct Parts {
 }
 
 fn main() -> ExitCode {
-    let code = run();
-    ExitCode::from(u8::try_from(code).unwrap_or(1))
+    ExitCode::from(u8::try_from(run()).unwrap_or(1))
 }
 
 fn run() -> i32 {
@@ -96,8 +95,7 @@ fn run() -> i32 {
             0
         }
         cli::Invocation::Run(Some(cli::Commands::Version)) => {
-            let mut out = io::stdout().lock();
-            write!(out, "{}", cli::version_line()).unwrap_or(());
+            write!(io::stdout().lock(), "{}", cli::version_line()).unwrap_or(());
             0
         }
         cli::Invocation::Run(Some(cli::Commands::Help { command })) => {
