@@ -1,7 +1,7 @@
 import os
 # Probe: OpenRouter inline usage.cost vs GET /generation, stream vs not. Model z-ai/glm-5.3-flash.
 import json, urllib.request, urllib.error, time, threading, http.client
-KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
+KEY=os.environ['OPENROUTER_API_KEY']
 H={'Authorization':'Bearer '+KEY,'Content-Type':'application/json'}
 M='z-ai/glm-5.3-flash'
 DELAYS=[0,1,2,5,10,30,60,120]

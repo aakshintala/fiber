@@ -14,7 +14,7 @@ def post(url, headers, body):
 def name(n): return "a" * n
 def schema(): return {"type": "object", "properties": {"x": {"type": "string"}}, "required": ["x"]}
 def anthropic():
-    key = open(os.path.expanduser("~/.config/probe-keys/anthropic-key")).read().strip()
+    key = os.environ["ANTHROPIC_API_KEY"]
     def send(n):
         return post("https://api.anthropic.com/v1/messages", {"x-api-key": key, "anthropic-version": "2023-06-01"},
             {"model": "claude-sonnet-5-5", "max_tokens": 16, "messages": [{"role": "user", "content": "Say hi."}],
@@ -31,14 +31,14 @@ def codex():
         return st, raw[:600]
     return send
 def zen_responses():
-    key = open(os.path.expanduser("~/.config/probe-keys/opencode-key")).read().strip()
+    key = os.environ["OPENCODE_API_KEY"]
     def send(n):
         return post("https://opencode.ai/zen/v1/responses", {"Authorization": "Bearer " + key},
             {"model": "gpt-6-luna", "input": "Say hi.", "max_output_tokens": 16, "tool_choice": "none",
              "tools": [{"type": "function", "name": name(n), "description": "d", "parameters": schema()}]})
     return send
 def go_completions():
-    key = open(os.path.expanduser("~/.config/probe-keys/opencode-key")).read().strip()
+    key = os.environ["OPENCODE_API_KEY"]
     def send(n):
         return post("https://opencode.ai/zen/go/v1/chat/completions", {"Authorization": "Bearer " + key, "x-opencode-session": "fiber-probe-names"},
             {"model": "glm-5.3-flash", "max_tokens": 16, "messages": [{"role": "user", "content": "Say hi."}], "tool_choice": "none",

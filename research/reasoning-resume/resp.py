@@ -3,7 +3,7 @@ import os
 # reasoning item is resent, dropped, rebuilt, tampered with or sent to another model.
 # Usage: python3 resp.py [explore|main|include]
 import json, urllib.request, uuid, copy, sys, time
-KEY=open(os.path.expanduser('~/.config/probe-keys/openrouter-key')).read().strip()
+KEY=os.environ['OPENROUTER_API_KEY']
 URL='https://openrouter.ai/api/v1/responses'
 GPT,SON='openai/gpt-6-luna','anthropic/claude-sonnet-5'
 RAW=[]

@@ -3,10 +3,10 @@ import os
 import json, sys, urllib.request, urllib.error, time
 V = sys.argv[1]
 CFG = {
- 'openai': dict(url='https://api.openai.com/v1/chat/completions', key=os.path.expanduser('~/.config/probe-keys/openai-key'), model='gpt-6-luna', pin=0.1e-6, pout=0.5e-6, cap=0.5),
- 'openrouter': dict(url='https://openrouter.ai/api/v1/chat/completions', key=os.path.expanduser('~/.config/probe-keys/openrouter-key'), model='z-ai/glm-5.3-flash', pin=0.15e-6, pout=0.5e-6, cap=1.0),
+ 'openai': dict(url='https://api.openai.com/v1/chat/completions', key='OPENAI_API_KEY', model='gpt-6-luna', pin=0.1e-6, pout=0.5e-6, cap=0.5),
+ 'openrouter': dict(url='https://openrouter.ai/api/v1/chat/completions', key='OPENROUTER_API_KEY', model='z-ai/glm-5.3-flash', pin=0.15e-6, pout=0.5e-6, cap=1.0),
 }[V]
-KEY = open(CFG['key']).read().strip()
+KEY = os.environ[CFG['key']]
 spend = 0.0; n = 0
 TOOL = [{'type':'function','function':{'name':'get_weather','description':'Get weather','parameters':{'type':'object','properties':{'city':{'type':'string'}},'required':['city']}}}]
 def call(name, body, stream=False):
