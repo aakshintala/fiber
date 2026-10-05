@@ -151,12 +151,13 @@ fn serve(client: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     if reader.read_line(&mut line)? == 0 {
         return Ok(());
     }
-    let mut words = line.split_whitespace();
-    let (method, target) = (
-        words.next().unwrap_or("").to_owned(),
-        words.next().unwrap_or("").to_owned(),
-    );
-    drop(words);
+    let (method, target) = {
+        let mut words = line.split_whitespace();
+        (
+            words.next().unwrap_or("").to_owned(),
+            words.next().unwrap_or("").to_owned(),
+        )
+    };
     // The rest of the head is skipped: the proxy needs only the target.
     loop {
         line.clear();
@@ -169,7 +170,8 @@ fn serve(client: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     }
     let mut client = reader.into_inner();
     if method != "CONNECT" {
-        let reply = "HTTP/1.1 405 Method Not Allowed\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
+        let reply =
+            "HTTP/1.1 405 Method Not Allowed\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
         client.write_all(reply.as_bytes())?;
         client.flush()?;
         return Ok(());
@@ -183,7 +185,8 @@ fn serve(client: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     let origin = match TcpStream::connect(target.as_str()) {
         Ok(origin) => origin,
         Err(_) => {
-            let reply = "HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
+            let reply =
+                "HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
             client.write_all(reply.as_bytes())?;
             client.flush()?;
             return Ok(());

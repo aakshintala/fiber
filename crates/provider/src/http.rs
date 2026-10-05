@@ -19,8 +19,8 @@ use ureq::config::Config;
 use ureq::tls::{RootCerts, TlsConfig};
 use ureq::unversioned::resolver::DefaultResolver;
 use ureq::unversioned::transport::{
-    Buffers, ConnectProxyConnector, ConnectionDetails, Connector, Either, LazyBuffers,
-    NextTimeout, RustlsConnector, Transport,
+    Buffers, ConnectProxyConnector, ConnectionDetails, Connector, Either, LazyBuffers, NextTimeout,
+    RustlsConnector, Transport,
 };
 
 use crate::Error;
@@ -106,7 +106,14 @@ pub(crate) fn post_signed(
     signer: Option<&dyn Signer>,
     cancel: &Arc<Cancel>,
 ) -> Result<(impl Read + use<>, Option<bool>), Error> {
-    post_with(url, headers, body, signer, cancel, ureq::Proxy::try_from_env())
+    post_with(
+        url,
+        headers,
+        body,
+        signer,
+        cancel,
+        ureq::Proxy::try_from_env(),
+    )
 }
 
 /// [`post_signed`], with the proxy chosen by the caller: `None` connects
@@ -155,8 +162,7 @@ fn post_with(
     // The proxy step runs before the socket step: it opens the proxy
     // connection by re-running the chain, so the socket this connector
     // keeps is the proxy's, and a cancel still closes the tunnel.
-    let connector =
-        ConnectProxyConnector::default().chain(KeepSocket(Arc::clone(cancel)));
+    let connector = ConnectProxyConnector::default().chain(KeepSocket(Arc::clone(cancel)));
     let connector = connector.chain(RustlsConnector::default());
     let agent = Agent::with_parts(config, connector, DefaultResolver::default());
     let mut request = agent.post(url);

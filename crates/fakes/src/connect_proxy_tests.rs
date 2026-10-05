@@ -28,7 +28,9 @@ fn echo_once() -> (SocketAddr, JoinHandle<()>) {
             stream.read_exact(&mut heard).unwrap();
             stream.write_all(&heard).unwrap();
             let mut rest = Vec::new();
-            let _ = stream.read_to_end(&mut rest);
+            match stream.read_to_end(&mut rest) {
+                Ok(_) | Err(_) => {}
+            }
         })
         .unwrap();
     (addr, echo)
@@ -77,7 +79,9 @@ fn a_connect_tunnel_copies_both_ways_and_records_its_target() {
     client.write_all(b"ping").unwrap();
     client.flush().unwrap();
     let mut heard = [0; 4];
-    client.read_exact(&mut heard).expect("the echo through the tunnel");
+    client
+        .read_exact(&mut heard)
+        .expect("the echo through the tunnel");
     assert_eq!(&heard, b"ping");
 
     drop(client);
@@ -100,7 +104,9 @@ fn a_request_that_is_not_connect_gets_405_and_records_nothing() {
     .unwrap();
     reader.get_mut().flush().unwrap();
     let mut status = String::new();
-    reader.read_line(&mut status).expect("the proxy's 405 reply");
+    reader
+        .read_line(&mut status)
+        .expect("the proxy's 405 reply");
     assert!(
         status.starts_with("HTTP/1.1 405"),
         "a non-CONNECT reply: {status:?}"
@@ -114,7 +120,10 @@ fn a_request_that_is_not_connect_gets_405_and_records_nothing() {
             break;
         }
     }
-    assert!(head.contains("content-length: 0"), "an empty 405 body: {head:?}");
+    assert!(
+        head.contains("content-length: 0"),
+        "an empty 405 body: {head:?}"
+    );
     let mut rest = Vec::new();
     reader.read_to_end(&mut rest).unwrap();
     assert!(rest.is_empty(), "the proxy closes after a 405");

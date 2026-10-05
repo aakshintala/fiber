@@ -177,8 +177,7 @@ mod tests {
             assert_eq!(bytes, b"{}");
             return None;
         }
-        let server =
-            fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+        let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
         let proxy = fakes::ConnectProxy::start().unwrap();
         let child = std::process::Command::new(std::env::current_exe().unwrap())
             .args(["--exact", test, "--nocapture"])
@@ -193,7 +192,9 @@ mod tests {
         let (done, finished) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let output = child.wait_with_output().unwrap();
-            let _ = done.send(output);
+            match done.send(output) {
+                Ok(()) | Err(_) => {}
+            }
         });
         let output = match finished.recv_timeout(CHILD_WITHIN) {
             Ok(output) => output,

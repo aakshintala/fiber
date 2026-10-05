@@ -233,7 +233,9 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
     let worker = std::sync::Arc::clone(&cancel);
     thread::spawn(move || {
         let result = super::post(&url, &[], b"{}", &worker).map(|_| ());
-        let _ = done.send(result);
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
     });
     assert!(
         server.await_requests(1, REQUEST_WITHIN),
@@ -356,7 +358,9 @@ fn tls_runs_end_to_end_inside_the_tunnel() {
             Some(through),
         )
         .map(|_| ());
-        let _ = done.send(result);
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
     });
     assert_eq!(
         first
@@ -391,9 +395,10 @@ fn cancelling_a_call_mid_stream_through_the_proxy_closes_the_tunnel() {
     let worker = std::sync::Arc::clone(&cancel);
     let through = proxy_through(&proxy);
     thread::spawn(move || {
-        let result =
-            super::post_with(&url, &[], b"{}", None, &worker, Some(through)).map(|_| ());
-        let _ = done.send(result);
+        let result = super::post_with(&url, &[], b"{}", None, &worker, Some(through)).map(|_| ());
+        match done.send(result) {
+            Ok(()) | Err(_) => {}
+        }
     });
     assert!(
         server.await_requests(1, REQUEST_WITHIN),
@@ -459,7 +464,10 @@ fn a_proxy_that_refuses_connect_fails_the_call() {
                 break;
             }
         }
-        assert!(head.starts_with("CONNECT"), "the client sent CONNECT: {head:?}");
+        assert!(
+            head.starts_with("CONNECT"),
+            "the client sent CONNECT: {head:?}"
+        );
         stream
             .write_all(b"HTTP/1.1 403 Forbidden\r\nconnection: close\r\ncontent-length: 0\r\n\r\n")
             .unwrap();
@@ -531,7 +539,9 @@ fn the_proxy_environment_reaches_model_calls() {
     let (done, finished) = mpsc::channel();
     thread::spawn(move || {
         let output = child.wait_with_output().unwrap();
-        let _ = done.send(output);
+        match done.send(output) {
+            Ok(()) | Err(_) => {}
+        }
     });
     let output = match finished.recv_timeout(CHILD_WITHIN) {
         Ok(output) => output,

@@ -162,7 +162,9 @@ fn through_proxy_env(test: &str, server_path: &str) {
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = child.wait_with_output().unwrap();
-        let _ = done.send(output);
+        match done.send(output) {
+            Ok(()) | Err(_) => {}
+        }
     });
     let output = match finished.recv_timeout(CHILD_WITHIN) {
         Ok(output) => output,
@@ -225,7 +227,9 @@ fn host_http_bypasses_the_proxy_for_no_proxy_hosts() {
     let (done, finished) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let output = child.wait_with_output().unwrap();
-        let _ = done.send(output);
+        match done.send(output) {
+            Ok(()) | Err(_) => {}
+        }
     });
     let output = match finished.recv_timeout(CHILD_WITHIN) {
         Ok(output) => output,
