@@ -251,3 +251,5 @@ Only what no tool can:
 - every code a doc says something fails with, is rejected with, or carries
   as a notice's code has a row in `docs/errors.md`, "Registry", or its
   notices table
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docscode-qualitymd).

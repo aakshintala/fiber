@@ -135,3 +135,5 @@ own self-check failing is a failed run, not a slow sample.
 At each release, every ceiling more than twice its measured value drops to
 measured times two. Ceilings never rise at release; only a pull request
 raises one.
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsperformancemd).

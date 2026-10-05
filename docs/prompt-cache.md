@@ -195,12 +195,8 @@ The cap has a ceiling. A refresh costs 0.05 to 0.1 times the prompt's input
 price and a 1-hour rebuild 2 times, so warming through N lifetimes on a session
 nobody returns to wastes at most 0.1 × N. Below 19 lifetimes, that is always
 less than the one rebuild warming guards against. The default cap is 2
-lifetimes, `"2h"`. Replayed on the owner's interactive sessions with their real
-gaps, it cuts spend by 1.6 to 5.5 percent on Opus 5.5 and by 0.1 to 2.2 percent
-on Sonnet 5, and longer caps give most of it back as refreshes to sessions
-nobody resumed. A subagent session loses at every cap. Fiber has no savings
-threshold: one changes no total by more than a percentage point
-([research/prompt-cache/warm-cap.md](../research/prompt-cache/warm-cap.md)).
+lifetimes, `"2h"`. Fiber has no savings threshold. The replay is
+[research/prompt-cache/warm-cap.md](../research/prompt-cache/warm-cap.md).
 
 A `fiber ask` session and a delegate never warm: each exits when its run ends.
 A repository may set both keys, as a company's policy for its repository:

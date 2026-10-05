@@ -458,3 +458,5 @@ Not yet probed: `create-chat`, which is from `--help`; whether
 `--auto-review` overrides the person's `approvalMode`; what SIGTERM does; and
 where its quota comes from. Until its quota is known, the cursor-agent
 harness declares no `quota()`.
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsdelegatesmd).

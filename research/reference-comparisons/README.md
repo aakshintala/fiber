@@ -21,7 +21,7 @@ the two vocabularies collide. When reading pi:
 
 Section "Tools enforce the rules":
 
-> ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)). codex asks
+> ([ADR 0002](../../docs/adr/0002-module-boundaries-are-crate-boundaries.md)). codex asks
 > for Rust files under 800 lines in prose, and 270 of its 3,009 source files
 > are longer. A check
 
@@ -96,7 +96,7 @@ Section "Overflow":
 > A single step's results can be large: in the owner's pi sessions the largest
 > step, with each result cut at 16 KiB, was about 49,000 tokens, about 25% of a
 > 200,000 token window
-> ([research/compaction/usage.md](../research/compaction/usage.md), section 6).
+> ([research/compaction/usage.md](../compaction/usage.md), section 6).
 > That is why
 
 Section "Evidence":
@@ -145,7 +145,7 @@ Section "What the loop does not do":
 > - Detect repetition, or turn tool calls written into prose into calls. None
 >   of pi, Codex, Claude Code, opencode or rig does either, and neither
 >   appeared in 39,061 pi turns or 31,326 Claude Code turns of the owner's
->   sessions ([research/reply-faults](../research/reply-faults/README.md)).
+>   sessions ([research/reply-faults](../reply-faults/README.md)).
 
 ## From `docs/mcp.md`
 
@@ -185,7 +185,7 @@ Section "Elicitation, sampling and roots":
 
 Section "Model routing":
 
-> [ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md). pi is the
+> [ADR 0007](../../docs/adr/0007-protocols-are-native-providers-are-extensions.md). pi is the
 > reference for wire and auth behavior. What it does is in
 > [How pi does providers, auth and routing](https://github.com/aakshintala/fiber/issues/4).
 > Each protocol's wire facts, read from pi and rig side by side, are in
@@ -234,7 +234,7 @@ Section "Confinement":
 > ships a sandbox that is off by default, and its path denies are enforced by
 > the operating system only while that sandbox is on. How each works, and what
 > a fence would have broken in the owner's sessions, is
-> [research/sandbox/](../research/sandbox/).
+> [research/sandbox/](../sandbox).
 
 Section "What it is shown":
 
@@ -258,7 +258,7 @@ Section "Headless":
 Section "(top)":
 
 > The evidence, including what a fence would have broken in the owner's
-> sessions, is [research/sandbox/](../research/sandbox/).
+> sessions, is [research/sandbox/](../sandbox).
 
 ## From `docs/prompt-cache.md`
 
@@ -268,12 +268,21 @@ Section "Cache lifetime":
 > Opus 5.5, 1 hour costs 0.88 of 5 minutes across 641 pi sessions and 0.57 across
 > 169 Claude Code sessions. It costs 1.01 across 143 Claude Code subagent
 > sessions, and implementation delegates run longer tools than those did
-> ([research/prompt-cache/ttl.py](../research/prompt-cache/ttl.py)).
+> ([research/prompt-cache/ttl.py](../prompt-cache/ttl.py)).
 
 Section "Warming while idle":
 
 > warms. pi skips warming in the same case (`isReplayable` in its
 > `cache-warmer.js`).
+
+Section "Warming while idle":
+
+> lifetimes, `"2h"`. Replayed on the owner's interactive sessions with their real
+> gaps, it cuts spend by 1.6 to 5.5 percent on Opus 5.5 and by 0.1 to 2.2 percent
+> on Sonnet 5, and longer caps give most of it back as refreshes to sessions
+> nobody resumed. A subagent session loses at every cap. Fiber has no savings
+> threshold: one changes no total by more than a percentage point
+> ([research/prompt-cache/warm-cap.md](../prompt-cache/warm-cap.md)).
 
 ## From `docs/state.md`
 
@@ -294,7 +303,7 @@ Section "Two parts":
 > ("When something changes"). Codex and Claude
 > Code also carry this material in conversation messages; pi puts it in the
 > system prompt
-> ([research/system-prompt/reference-agents.md](../research/system-prompt/reference-agents.md)).
+> ([research/system-prompt/reference-agents.md](../system-prompt/reference-agents.md)).
 
 Section "Tool guidelines":
 
@@ -338,7 +347,7 @@ Section "Instruction files":
 
 > Measured on the owner's sessions, only `AGENTS.md` and `CLAUDE.md` occur, and
 > 2% of sessions ran in a repository with only a `CLAUDE.md`
-> ([research/system-prompt/instruction-files.md](../research/system-prompt/instruction-files.md)).
+> ([research/system-prompt/instruction-files.md](../system-prompt/instruction-files.md)).
 
 Section "Subdirectory files":
 

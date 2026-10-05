@@ -304,3 +304,5 @@ dependency.
 
 Fiber has no separate minimum supported Rust version. It is a binary, not a
 library, so the toolchain CI pins is the only version Fiber supports.
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsdependenciesmd).
