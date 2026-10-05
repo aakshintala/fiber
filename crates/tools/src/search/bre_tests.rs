@@ -102,6 +102,12 @@ fn brackets_copy_with_escapes_and_kept_leaders() {
     assert_eq!(bre("[a\\]"), Some("[a\\\\]".to_owned()));
     assert_eq!(bre("[a-z]"), Some("[a-z]".to_owned()));
     assert_eq!(bre("[[:alpha:]]"), Some("[[:alpha:]]".to_owned()));
+    // A `:` after an ordinary member is ordinary too: only right after
+    // `[` does `:` open a class.
+    assert_eq!(bre("[a::]"), Some("[a::]".to_owned()));
+    // A class with no closer hands over, even when a `:]` follows: the
+    // bracket never closed.
+    assert_eq!(bre("[a[:alpha:]"), None);
     assert_eq!(bre("a[bc"), None);
 }
 

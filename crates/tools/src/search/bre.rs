@@ -11,24 +11,26 @@
 /// zero-width assertion, a non-ASCII or control escape, or a trailing
 /// backslash.
 pub(crate) fn translate_bre(pattern: &str) -> Option<String> {
-    let chars: Vec<char> = pattern.chars().collect();
+    let mut chars = pattern.chars().peekable();
     let mut out = String::new();
-    let mut index = 0;
+    // Whether the pattern's start was just read: only there `^` anchors.
+    let mut at_start = true;
     // Whether the next `(` opens a group: only right after `\(` or `\|`.
     let mut group_open = false;
     // What `*` means where the scan stands.
     let mut star = Star::Literal;
-    while let Some(current) = chars.get(index) {
-        if *current == '\\' {
-            let Some(next) = chars.get(index + 1) else {
+    while let Some(current) = chars.next() {
+        let first = at_start;
+        at_start = false;
+        if current == '\\' {
+            let Some(next) = chars.next() else {
                 // A trailing backslash: the system reports it.
                 return None;
             };
-            index += 2;
             match next {
                 '(' | ')' | '{' | '}' | '|' | '+' | '?' => {
-                    out.push(*next);
-                    group_open = *next == '(' || *next == '|';
+                    out.push(next);
+                    group_open = next == '(' || next == '|';
                     star = if group_open {
                         Star::Literal
                     } else {
@@ -58,7 +60,7 @@ pub(crate) fn translate_bre(pattern: &str) -> Option<String> {
                 '1'..='9' => return None,
                 'w' | 'W' | 's' | 'S' => {
                     out.push('\\');
-                    out.push(*next);
+                    out.push(next);
                     group_open = false;
                     star = Star::Repeat;
                 }
@@ -67,16 +69,16 @@ pub(crate) fn translate_bre(pattern: &str) -> Option<String> {
                 // decides what follows one.
                 'b' | 'B' => {
                     out.push('\\');
-                    out.push(*next);
+                    out.push(next);
                     group_open = false;
                     star = Star::Invalid;
                 }
                 _ => {
                     if next.is_ascii_alphanumeric() {
-                        out.push(*next);
-                    } else if next.is_ascii_graphic() || *next == ' ' {
+                        out.push(next);
+                    } else if next.is_ascii_graphic() || next == ' ' {
                         out.push('\\');
-                        out.push(*next);
+                        out.push(next);
                     } else {
                         return None;
                     }
@@ -86,18 +88,17 @@ pub(crate) fn translate_bre(pattern: &str) -> Option<String> {
             }
             continue;
         }
-        if *current == '[' {
-            let Some((text, next)) = translate_class(&chars, index) else {
+        if current == '[' {
+            let Some(text) = translate_class(&mut chars) else {
                 // Unbalanced: the system reports it.
                 return None;
             };
             out.push_str(&text);
-            index = next;
             group_open = false;
             star = Star::Repeat;
             continue;
         }
-        if *current == '*' {
+        if current == '*' {
             match star {
                 // Probed on the runner's grep: `^*` reads a literal
                 // asterisk, so an anchor leaves the scan fresh.
@@ -105,45 +106,40 @@ pub(crate) fn translate_bre(pattern: &str) -> Option<String> {
                 Star::Repeat => out.push('*'),
                 Star::Invalid => return None,
             }
-            index += 1;
             group_open = false;
             star = Star::Repeat;
             continue;
         }
-        if *current == '^' {
-            if index == 0 || group_open {
+        if current == '^' {
+            if first || group_open {
                 out.push('^');
                 star = Star::Literal;
             } else {
                 out.push_str(r"\^");
                 star = Star::Repeat;
             }
-            index += 1;
             group_open = false;
             continue;
         }
-        if *current == '$' {
-            if dollar_anchor_ahead(&chars, index) {
+        if current == '$' {
+            if dollar_anchor_ahead(&mut chars) {
                 out.push('$');
                 star = Star::Invalid;
             } else {
                 out.push_str(r"\$");
                 star = Star::Repeat;
             }
-            index += 1;
             group_open = false;
             continue;
         }
-        if matches!(*current, '(' | ')' | '{' | '}' | '|' | '+' | '?') {
+        if matches!(current, '(' | ')' | '{' | '}' | '|' | '+' | '?') {
             out.push('\\');
-            out.push(*current);
-            index += 1;
+            out.push(current);
             group_open = false;
             star = Star::Repeat;
             continue;
         }
-        out.push(*current);
-        index += 1;
+        out.push(current);
         group_open = false;
         star = Star::Repeat;
     }
@@ -161,10 +157,10 @@ enum Star {
     Invalid,
 }
 
-/// Whether the `$` at `index` anchors: at the end, or right before `\)` or
-/// `\|`.
-fn dollar_anchor_ahead(chars: &[char], index: usize) -> bool {
-    let mut rest = chars.iter().skip(index + 1);
+/// Whether the `$` just read anchors: at the end, or right before `\)`
+/// or `\|`. What follows is only peeked at, never consumed.
+fn dollar_anchor_ahead(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> bool {
+    let mut rest = chars.clone();
     match rest.next() {
         None => true,
         Some('\\') => matches!(rest.next(), Some(')') | Some('|')),
@@ -172,64 +168,78 @@ fn dollar_anchor_ahead(chars: &[char], index: usize) -> bool {
     }
 }
 
-/// Translates the bracket expression opening at `open`: backslashes inside
-/// are escaped, a leading `]` is kept, and `[:class:]` names pass through.
+/// Translates the bracket expression whose opening `[` was just read:
+/// consumes through the closer from `chars`. Backslashes inside are
+/// escaped, a leading `]` is kept, and `[:class:]` names pass through.
 /// Nothing when no closer follows.
-fn translate_class(chars: &[char], open: usize) -> Option<(String, usize)> {
+fn translate_class(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
     let mut text = String::from("[");
-    let mut index = open + 1;
     // Negation is `^` only: a leading `!` is an ordinary member, as the
     // runner's grep reads it.
-    if chars.get(index) == Some(&'^') {
+    if chars.peek() == Some(&'^') {
         text.push('^');
-        index += 1;
+        chars.next();
     }
-    if chars.get(index) == Some(&'!') {
+    if chars.peek() == Some(&'!') {
         text.push_str("\\!");
-        index += 1;
+        chars.next();
     }
     // A leading `]` is a member, not the closer.
-    if chars.get(index) == Some(&']') {
+    if chars.peek() == Some(&']') {
         text.push(']');
-        index += 1;
+        chars.next();
     }
     loop {
-        let next = chars.get(index)?;
-        index += 1;
-        if *next == '[' {
+        let next = chars.next()?;
+        if next == '[' {
             // A character class such as `[:alpha:]` copies through; its
             // closer is not the bracket's.
-            if let Some(end) = class_end(chars, index) {
-                for member in chars.iter().skip(index - 1).take(end - (index - 1)) {
-                    text.push(*member);
-                }
-                index = end;
+            if let Some(chunk) = class_chunk(chars) {
+                text.push('[');
+                text.push_str(&chunk);
                 continue;
             }
         }
-        if *next == ']' {
+        if next == ']' {
             text.push(']');
-            return Some((text, index));
+            return Some(text);
         }
         // Inside brackets a backslash is ordinary, so escaping it keeps it
         // one: `[a\]` reads `a` and `\`, as the runner's grep does.
-        if *next == '\\' {
+        if next == '\\' {
             text.push_str("\\\\");
         } else {
-            text.push(*next);
+            text.push(next);
         }
     }
 }
 
-/// The index past the `:]` closing a `[:class:]` whose `:` sits at `colon`,
-/// or nothing when none follows.
-fn class_end(chars: &[char], colon: usize) -> Option<usize> {
-    if chars.get(colon) != Some(&':') {
+/// The `:...:]` opening after a `[` inside a bracket expression, through
+/// its closer: consumes nothing unless the closer follows, when the
+/// consumed text is returned. A `[` with no `:]` after it stays an
+/// ordinary member.
+fn class_chunk(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
+    if chars.peek() != Some(&':') {
         return None;
     }
-    ((colon + 1)..chars.len())
-        .find(|index| chars.get(*index) == Some(&':') && chars.get(index + 1) == Some(&']'))
-        .map(|index| index + 2)
+    // The probe finds the closer before anything is consumed, so a
+    // broken step cannot spin: the drain below runs once per chunk char.
+    let mut probe = chars.clone();
+    let mut chunk = String::new();
+    loop {
+        let current = probe.next()?;
+        chunk.push(current);
+        if current == ':' && probe.peek() == Some(&']') {
+            // Peeked above: the closer follows.
+            chunk.push(']');
+            probe.next();
+            break;
+        }
+    }
+    for _ in chunk.chars() {
+        chars.next();
+    }
+    Some(chunk)
 }
 
 /// Translates GNU extensions in an extended regular expression: `\<` and
@@ -239,24 +249,21 @@ fn class_end(chars: &[char], colon: usize) -> Option<usize> {
 /// `` \` `` and `\'` pass through untouched: ripgrep reads them as literal
 /// characters where GNU anchors, a corner too rare to hand over.
 pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
-    let chars: Vec<char> = pattern.chars().collect();
+    let mut chars = pattern.chars().peekable();
     let mut out = String::new();
-    let mut index = 0;
-    while let Some(current) = chars.get(index) {
-        if *current != '\\' {
-            out.push(*current);
-            index += 1;
+    while let Some(current) = chars.next() {
+        if current != '\\' {
+            out.push(current);
             continue;
         }
-        let next = chars.get(index + 1)?;
-        index += 2;
+        let next = chars.next()?;
         match next {
             '<' => out.push_str(r"\b{start}"),
             '>' => out.push_str(r"\b{end}"),
             '1'..='9' => return None,
             _ => {
                 out.push('\\');
-                out.push(*next);
+                out.push(next);
             }
         }
     }

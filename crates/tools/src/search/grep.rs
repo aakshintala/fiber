@@ -449,6 +449,7 @@ fn search_stream(
         out,
         matched: false,
         count: 0,
+        listed: false,
         printed: false,
         prefix: target.preceded && (options.before > 0 || options.after > 0),
     };
@@ -503,8 +504,11 @@ struct Emit<'a, 'w> {
     out: &'a mut Out<'w>,
     /// Whether any line matched.
     matched: bool,
-    /// How many lines matched, for `-c`; doubles as the `-l` printed flag.
+    /// How many lines matched, for `-c`.
     count: usize,
+    /// Whether the `-l` label already printed: the search stops at the
+    /// first match, so this only says it printed.
+    listed: bool,
     /// Whether any line printed, for the `--` between inputs.
     printed: bool,
     /// Whether `--` separates this input's first line from an earlier one.
@@ -517,11 +521,11 @@ impl Sink for Emit<'_, '_> {
     fn matched(&mut self, _: &Searcher, mat: &SinkMatch<'_>) -> Result<bool, std::io::Error> {
         self.matched = true;
         if self.options.files_with_matches {
-            if self.count == 0 {
+            if !self.listed {
+                self.listed = true;
                 self.out.emit(self.label.unwrap_or(b"(standard input)"));
                 self.out.emit(b"\n");
             }
-            self.count += 1;
             // The label is printed: nothing more to learn.
             return Ok(false);
         }

@@ -77,6 +77,15 @@ impl Read for Generator {
     }
 }
 
+/// A filter that fails every read.
+struct Failing;
+
+impl Read for Failing {
+    fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+        Err(io::Error::other("boom"))
+    }
+}
+
 /// A closed pipe: every write fails, and counts itself.
 struct Closed {
     writes: usize,
@@ -209,6 +218,33 @@ fn invert_match_counts_what_does_not_match() {
     let (code, counts, _) = text(&dir, &["-c", "-v", "needle", "a.txt"], "");
     assert_eq!(code, 0);
     assert_eq!(counts, "1\n");
+}
+
+#[test]
+fn count_counts_every_match_in_the_file() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "m1\nm2\n")]));
+    let (code, counts, _) = text(&dir, &["-c", "m", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(counts, "2\n");
+}
+
+#[test]
+fn count_without_a_match_exits_one() {
+    // The count still prints, but nothing matched.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let (code, counts, _) = text(&dir, &["-c", "absent", "a.txt"], "");
+    assert_eq!(code, 1);
+    assert_eq!(counts, "0\n");
+}
+
+#[test]
+fn count_with_context_prints_only_the_count() {
+    // Context and group breaks never print under `-c`: the count is the
+    // whole output.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "m1\nx\ny\nz\nm2\n")]));
+    let (code, counts, _) = text(&dir, &["-c", "-C1", "m", "a.txt"], "");
+    assert_eq!(code, 0);
+    assert_eq!(counts, "2\n");
 }
 
 #[test]
@@ -364,6 +400,43 @@ fn exits_zero_one_and_two() {
 }
 
 #[test]
+fn a_failing_filter_is_an_error() {
+    // A filter that cannot be read fails the run, as a file that cannot
+    // be opened does: the filter's failure reaches the exit code.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "x\n")]));
+    let owned: Vec<OsString> = [OsString::from("needle")].to_vec();
+    let mut failing = Failing;
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    let code = match run(dir.path(), &owned, &mut failing, &mut stdout, &mut stderr) {
+        Outcome::Done(code) => code,
+        Outcome::Fallback => panic!("fell back"),
+    };
+    assert_eq!(code, 2);
+    assert!(stdout.is_empty());
+    assert_eq!(stderr, b"grep: (standard input): boom\n");
+}
+
+#[test]
+fn an_unreadable_walked_file_complains_and_fails_the_run() {
+    // A file the walk finds but cannot open fails the run, even when
+    // another file matched: the failure reaches the exit code.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = text_tree(&BTreeMap::from([
+        ("sub/ok.txt", "needle\n"),
+        ("sub/locked.txt", "needle\n"),
+    ]));
+    let locked = dir.path().join("sub/locked.txt");
+    let kept = fs::metadata(&locked).unwrap().permissions();
+    fs::set_permissions(&locked, fs::Permissions::from_mode(0o000)).unwrap();
+    let (code, stdout, stderr) = text(&dir, &["-r", "needle", "sub"], "");
+    fs::set_permissions(&locked, kept).unwrap();
+    assert_eq!(code, 2);
+    assert_eq!(stdout, "sub/ok.txt:needle\n");
+    assert_eq!(stderr, "grep: sub/locked.txt: Permission denied\n");
+}
+
+#[test]
 fn nothing_found_with_skipped_directories_reports_them() {
     let dir = text_tree(&BTreeMap::from([
         (".gitignore", "skipped_dir/\n"),
@@ -457,6 +530,33 @@ fn context_breaks_separate_matching_files() {
     // An input with no match contributes no separator either.
     let (_, gapped, _) = text(&dir, &["-C1", "m1", "a.txt", "b.txt"], "");
     assert_eq!(gapped, "a.txt:m1\n");
+}
+
+#[test]
+fn one_sided_context_still_separates_matching_files() {
+    // The separator needs context on either side, not both.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "m1\n"), ("b.txt", "m2\n")]));
+    let (_, after, _) = text(&dir, &["-A1", "m", "a.txt", "b.txt"], "");
+    assert_eq!(after, "a.txt:m1\n--\nb.txt:m2\n");
+    let (_, before, _) = text(&dir, &["-B1", "m", "a.txt", "b.txt"], "");
+    assert_eq!(before, "a.txt:m1\n--\nb.txt:m2\n");
+}
+
+#[test]
+fn standard_input_with_context_separates_the_next_file() {
+    // The filter counts as an earlier input: its lines separate from the
+    // next file's with `--`, as two files do.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "m1\n")]));
+    let (_, stdout, _) = text(&dir, &["-C1", "m", "-", "a.txt"], "m0\n");
+    assert_eq!(stdout, "(standard input):m0\n--\na.txt:m1\n");
+}
+
+#[test]
+fn a_walked_directory_with_context_separates_the_next_file() {
+    // A walked directory's lines separate from the next input's too.
+    let dir = text_tree(&BTreeMap::from([("sub/c.txt", "m2\n"), ("a.txt", "m1\n")]));
+    let (_, stdout, _) = text(&dir, &["-r", "-C1", "m", "sub", "a.txt"], "");
+    assert_eq!(stdout, "sub/c.txt:m2\n--\na.txt:m1\n");
 }
 
 #[test]

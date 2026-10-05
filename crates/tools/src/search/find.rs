@@ -139,39 +139,49 @@ enum Decision {
 
 /// Splits the leading paths from the expression. A token outside the
 /// handled flags and primaries hands the call to the system `find`.
+/// The iterator advances in this loop, never inside a helper, so a
+/// declined helper cannot spin it.
 fn parse(args: &[OsString]) -> Result<Parsed, Decision> {
+    let mut args = args.iter().peekable();
     let mut roots = Vec::new();
-    let mut index = 0;
-    while let Some(arg) = args.get(index) {
+    loop {
         // `!`, `(` and `)` never start a path: they open the expression,
         // where the unknown-primary arm hands them over.
-        let bytes = arg.as_encoded_bytes();
-        if bytes.first().is_some_and(|byte| *byte == b'-') || matches!(bytes, b"!" | b"(" | b")") {
+        let is_path = match args.peek() {
+            Some(arg) => {
+                let bytes = arg.as_encoded_bytes();
+                !(bytes.first().is_some_and(|byte| *byte == b'-')
+                    || matches!(bytes, b"!" | b"(" | b")"))
+            }
+            None => false,
+        };
+        if !is_path {
             break;
         }
-        roots.push(PathBuf::from(arg));
-        index += 1;
+        if let Some(arg) = args.next() {
+            roots.push(PathBuf::from(arg));
+        }
     }
     if roots.is_empty() {
         roots.push(PathBuf::from("."));
     }
     let mut expr = Expr::default();
-    while let Some(token) = args.get(index) {
+    while let Some(token) = args.next() {
         match token.as_encoded_bytes() {
             b"-name" => expr.names.push(Glob {
-                pattern: take(args, &mut index, "-name")?,
+                pattern: take(&mut args, "-name")?,
                 ignore_case: false,
             }),
             b"-iname" => expr.names.push(Glob {
-                pattern: take(args, &mut index, "-iname")?,
+                pattern: take(&mut args, "-iname")?,
                 ignore_case: true,
             }),
             b"-path" => expr.paths.push(Glob {
-                pattern: take(args, &mut index, "-path")?,
+                pattern: take(&mut args, "-path")?,
                 ignore_case: false,
             }),
             b"-type" => {
-                let value = take(args, &mut index, "-type")?;
+                let value = take(&mut args, "-type")?;
                 match value.as_slice() {
                     [b'f'] => expr.kinds.push(Kind::File),
                     [b'd'] => expr.kinds.push(Kind::Dir),
@@ -180,15 +190,15 @@ fn parse(args: &[OsString]) -> Result<Parsed, Decision> {
                 }
             }
             b"-maxdepth" => {
-                let value = take(args, &mut index, "-maxdepth")?;
+                let value = take(&mut args, "-maxdepth")?;
                 expr.maxdepth = Some(depth(&value, "-maxdepth")?);
             }
             b"-mindepth" => {
-                let value = take(args, &mut index, "-mindepth")?;
+                let value = take(&mut args, "-mindepth")?;
                 expr.mindepth = Some(depth(&value, "-mindepth")?);
             }
             b"-newer" => {
-                let value = take(args, &mut index, "-newer")?;
+                let value = take(&mut args, "-newer")?;
                 expr.newers.push(PathBuf::from(OsString::from_vec(value)));
             }
             _ => return Err(Decision::Fallback),
@@ -198,13 +208,12 @@ fn parse(args: &[OsString]) -> Result<Parsed, Decision> {
 }
 
 /// Takes the value after a flag, or the missing-argument error.
-fn take(args: &[OsString], index: &mut usize, flag: &str) -> Result<Vec<u8>, Decision> {
-    *index += 1;
-    match args.get(*index) {
-        Some(value) => {
-            *index += 1;
-            Ok(value.as_encoded_bytes().to_vec())
-        }
+fn take(
+    args: &mut std::iter::Peekable<std::slice::Iter<'_, OsString>>,
+    flag: &str,
+) -> Result<Vec<u8>, Decision> {
+    match args.next() {
+        Some(value) => Ok(value.as_encoded_bytes().to_vec()),
         None => Err(Decision::Error(format!(
             "find: missing argument to '{flag}'"
         ))),

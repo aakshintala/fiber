@@ -428,3 +428,23 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
         ]
     );
 }
+
+#[test]
+fn find_keeps_the_argv_delimiter_like_grep() {
+    // Clap consumes the argv delimiter `--`, so only the raw slice after
+    // the subcommand restores it: without the find arm above, the parsed
+    // args would miss it.
+    let Invocation::Run(Some(Commands::Find { args })) =
+        parse_from(["fiber", "find", "--", "-name", "*.rs"])
+    else {
+        panic!("find keeps the argv delimiter");
+    };
+    assert_eq!(
+        args,
+        [
+            OsString::from("--"),
+            OsString::from("-name"),
+            OsString::from("*.rs")
+        ]
+    );
+}

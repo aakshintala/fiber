@@ -94,6 +94,18 @@ fn double_dash_ends_flags() {
 }
 
 #[test]
+fn a_lone_dash_is_standard_input_not_a_flag() {
+    // A lone `-` is shorter than any flag cluster, so it reads as the
+    // pattern or a path.
+    let options = run(&["-", "needle"]);
+    assert_eq!(options.pattern, b"-");
+    assert_eq!(options.paths.len(), 1);
+    let filter = run(&["needle", "-"]);
+    assert_eq!(filter.pattern, b"needle");
+    assert_eq!(filter.paths.len(), 1);
+}
+
+#[test]
 fn an_unhandled_flag_hands_over() {
     for words in [
         &["-e", "needle"][..],

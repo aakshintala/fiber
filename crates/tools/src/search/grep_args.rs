@@ -65,13 +65,15 @@ pub(crate) enum Parsed {
 /// Splits flags from the pattern and paths. Short flags combine, `--` ends
 /// flags, and a flag-like operand after the pattern hands the call over, as
 /// the system permutes what the built-in reads in order.
+/// The iterator advances in this loop, never inside a flag helper, so a
+/// declined helper cannot spin it.
 pub(crate) fn parse(args: &[OsString]) -> Parsed {
     let mut options = Options::default();
     let mut operands: Vec<PathBuf> = Vec::new();
-    let mut index = 0;
+    let mut args = args.iter().peekable();
     let mut flags = true;
     let mut dashes = false;
-    while let Some(arg) = args.get(index) {
+    while let Some(arg) = args.next() {
         let bytes = arg.as_encoded_bytes();
         if !flags {
             // The system permutes a flag-like operand into the flags; the
@@ -81,32 +83,29 @@ pub(crate) fn parse(args: &[OsString]) -> Parsed {
                 return Parsed::Fallback;
             }
             operands.push(PathBuf::from(arg));
-            index += 1;
             continue;
         }
         if bytes == b"--" {
             flags = false;
             dashes = true;
-            index += 1;
             continue;
         }
         if bytes.len() > 1 && bytes.first() == Some(&b'-') && bytes.get(1) != Some(&b'-') {
             let cluster = bytes.to_vec();
-            if let Err(decision) = short(&mut options, &cluster, args, &mut index) {
+            if let Err(decision) = short(&mut options, &cluster, &mut args) {
                 return decision.parsed();
             }
             continue;
         }
-        if bytes.len() > 2 && bytes.starts_with(b"--") {
+        if is_long(bytes) {
             let body = bytes.get(2..).unwrap_or_default().to_vec();
-            if let Err(decision) = long(&mut options, &body, args, &mut index) {
+            if let Err(decision) = long(&mut options, &body, &mut args) {
                 return decision.parsed();
             }
             continue;
         }
         flags = false;
         operands.push(PathBuf::from(arg));
-        index += 1;
     }
     let mut paths = operands.into_iter();
     let Some(pattern) = paths.next() else {
@@ -118,8 +117,14 @@ pub(crate) fn parse(args: &[OsString]) -> Parsed {
     Parsed::Run(options)
 }
 
-/// Parses one short-flag cluster, advancing past it and any value it takes
-/// from the next argument.
+/// Whether `bytes` opens a long flag: `--` plus a name. `--` alone is
+/// claimed by the exact arm above, and anything starting with `--` is
+/// longer, so `>=` would read the same.
+#[cfg_attr(false, mutants::skip)]
+fn is_long(bytes: &[u8]) -> bool {
+    bytes.len() > 2 && bytes.starts_with(b"--")
+}
+
 /// Why a flag parser declined.
 enum Decision {
     /// A flag the built-in does not handle.
@@ -138,11 +143,12 @@ impl Decision {
     }
 }
 
+/// Parses one short-flag cluster, taking any value it needs from the
+/// arguments after it.
 fn short(
     options: &mut Options,
     cluster: &[u8],
-    args: &[OsString],
-    index: &mut usize,
+    args: &mut std::iter::Peekable<std::slice::Iter<'_, OsString>>,
 ) -> Result<(), Decision> {
     let mut rest = cluster.get(1..).unwrap_or_default();
     while let Some((flag, tail)) = rest.split_first() {
@@ -159,7 +165,7 @@ fn short(
             b'w' => options.word = true,
             b'o' => options.only_matching = true,
             b'A' | b'B' | b'C' => {
-                let value = attached(rest, args, index, *flag)?;
+                let value = attached(rest, args, *flag)?;
                 rest = &[];
                 let count = super::decimal(&value).ok_or_else(|| {
                     Decision::Error(format!(
@@ -178,7 +184,6 @@ fn short(
             _ => return Err(Decision::Fallback),
         }
     }
-    *index += 1;
     Ok(())
 }
 
@@ -186,15 +191,13 @@ fn short(
 /// next argument.
 fn attached(
     rest: &[u8],
-    args: &[OsString],
-    index: &mut usize,
+    args: &mut std::iter::Peekable<std::slice::Iter<'_, OsString>>,
     flag: u8,
 ) -> Result<Vec<u8>, Decision> {
     if !rest.is_empty() {
         return Ok(rest.to_vec());
     }
-    *index += 1;
-    match args.get(*index) {
+    match args.next() {
         Some(value) => Ok(value.as_encoded_bytes().to_vec()),
         None => Err(Decision::Error(format!(
             "grep: option '-{}' requires an argument",
@@ -203,13 +206,12 @@ fn attached(
     }
 }
 
-/// Parses one long flag, `body` past the `--`, advancing past it and any
-/// value it takes from the next argument.
+/// Parses one long flag, `body` past the `--`, taking any value it needs
+/// from the arguments after it.
 fn long(
     options: &mut Options,
     body: &[u8],
-    args: &[OsString],
-    index: &mut usize,
+    args: &mut std::iter::Peekable<std::slice::Iter<'_, OsString>>,
 ) -> Result<(), Decision> {
     let (name, inline) = match body.iter().position(|byte| *byte == b'=') {
         Some(found) => {
@@ -224,24 +226,20 @@ fn long(
     }
     let value = match inline {
         Some(value) => value,
-        None => {
-            *index += 1;
-            match args.get(*index) {
-                Some(value) => value.as_encoded_bytes().to_vec(),
-                None => {
-                    return Err(Decision::Error(format!(
-                        "grep: option '--{name}' requires an argument"
-                    )));
-                }
+        None => match args.next() {
+            Some(value) => value.as_encoded_bytes().to_vec(),
+            None => {
+                return Err(Decision::Error(format!(
+                    "grep: option '--{name}' requires an argument"
+                )));
             }
-        }
+        },
     };
     if name == "include" {
         options.includes.push(value);
     } else {
         options.excludes.push(value);
     }
-    *index += 1;
     Ok(())
 }
 

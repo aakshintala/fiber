@@ -48,6 +48,17 @@ fn skipped_is_empty_when_nothing_was_skipped() {
 }
 
 #[test]
+fn skipped_leaves_ignored_files_out() {
+    // Only directories are reported: an ignored file is not a directory
+    // to search by name.
+    let dir = tree(&BTreeMap::from([
+        (".gitignore", "skipped.txt\n"),
+        ("skipped.txt", "hay"),
+    ]));
+    assert!(skipped(dir.path(), dir.path()).is_empty());
+}
+
+#[test]
 fn lines_name_the_directories_and_an_example() {
     let skipped = ["sk_a/".to_owned(), "sk_b/".to_owned()];
     assert_eq!(
