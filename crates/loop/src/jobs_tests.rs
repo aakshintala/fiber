@@ -1049,6 +1049,11 @@ impl Jobs for Listed {
     fn foreground(&self, _: contract::jobs::Foreground) {}
 
     fn running(&self) -> Vec<JobId> {
+        // The status observer reads the jobs too; its reads are not the
+        // loop's, so they neither fire a scripted arrival nor count.
+        if std::thread::current().name() == Some("status") {
+            return self.ids.lock().unwrap().clone();
+        }
         if let Some((inbox, deliveries)) = self.racing.lock().unwrap().take() {
             for delivery in deliveries {
                 inbox.send(delivery).unwrap();

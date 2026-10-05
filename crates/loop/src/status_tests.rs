@@ -752,3 +752,88 @@ fn the_branch_is_read_at_each_turn_start_and_a_change_is_a_change() {
     w.feed("turn_started", None, &prompt("three"));
     assert_eq!(w.status().git, None);
 }
+
+/// A watcher whose queue overflowed before the observer read it, and whose
+/// stop line, kept, comes ahead of the durable lines the queue dropped: the
+/// observer still folds those lines, so the last status is the final one.
+/// Nothing runs concurrently: the lines are written, the stop line is
+/// queued, then the observer's loop runs on this thread.
+#[test]
+fn a_lagging_observer_folds_every_written_line_before_it_stops() {
+    use contract::events::{
+        Empty, Event, InputItem, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    };
+    use contract::shapes::{ContentPart, Origin, Sender, Tokens};
+    use contract::{CommandId, GenerationId, TurnId};
+
+    let root = fakes::TempDir::new("status-lag");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let mut watcher = log.watch_all().unwrap();
+    let injector = watcher.injector();
+    injector.push_kept(super::control(super::LIVE));
+    let turn = Some(TurnId("t_1".into()));
+    let append = |event: Event| log.append(&event, turn.clone(), None).unwrap();
+    append(Event::TurnStarted(TurnStarted {
+        input: vec![InputItem::Message {
+            content: vec![ContentPart::Text { text: "go".into() }],
+            sender: Sender {
+                origin: Origin::Driver,
+                command_id: Some(CommandId("c_1".into())),
+            },
+            changed_by: None,
+        }],
+    }));
+    // More lines than a watcher's queue holds: the rest are dropped.
+    for _ in 0..2_000 {
+        append(Event::StepStarted(Empty {}));
+    }
+    append(Event::UsageRecorded(UsageRecorded {
+        generation_id: GenerationId("g_1".into()),
+        model: "fake/m".into(),
+        tokens: Tokens {
+            input: 10,
+            cache_read: 0,
+            cache_write: std::collections::BTreeMap::new(),
+            output: 3,
+        },
+        web_searches: None,
+        cost: Some(1.5),
+        subscription: None,
+        extension: None,
+        origin_session_id: None,
+    }));
+    append(Event::TurnCompleted(TurnCompleted {
+        outcome: TurnOutcome::Completed,
+        error: None,
+        questions: None,
+    }));
+    injector.push_kept(super::control(super::STOP));
+
+    let mut observer = super::Observer {
+        fold: Fold::new(
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(Vec::new),
+            Box::new(|| None),
+        ),
+        log: Arc::downgrade(&log),
+        live: false,
+        last: None,
+    };
+    super::follow(&mut watcher, &mut observer);
+
+    // The log keeps the latest status it was handed.
+    let last = log.latest("session_status").expect("a session_status");
+    assert_eq!(last.payload["state"], "idle");
+    assert_eq!(last.payload["name"], "go");
+    assert_eq!(last.payload["spend"]["cost"], 1.5);
+    assert_eq!(last.payload["spend"]["tokens"]["input"], 10);
+}

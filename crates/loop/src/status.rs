@@ -18,7 +18,7 @@ use contract::events::{
 };
 use contract::shapes::{ContentPart, Usage};
 use contract::{ActionId, Envelope, JobId, SessionId};
-use log::{Injector, Log};
+use log::{Injector, Log, Watcher};
 
 use crate::Loop;
 
@@ -450,26 +450,32 @@ pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
                 live: false,
                 last: None,
             };
-            while let Ok(Some(line)) = watcher.recv() {
-                match observer.line(&line) {
-                    Flow::Go => {}
-                    Flow::Stop => {
-                        // The stop line is kept, so it can come before durable
-                        // lines a lagging watcher has not read yet: fold every
-                        // one already written before the last status.
-                        while let Ok(Some(line)) = watcher.try_recv() {
-                            if matches!(observer.line(&line), Flow::Gone) {
-                                return;
-                            }
-                        }
-                        return;
-                    }
-                    Flow::Gone => return,
-                }
-            }
+            follow(&mut watcher, &mut observer);
         })
         .ok()?;
     Some(Status { injector, thread })
+}
+
+/// Folds the watcher's lines until the stop line, the end of the log, or a
+/// log that is gone.
+fn follow(watcher: &mut Watcher, observer: &mut Observer) {
+    while let Ok(Some(line)) = watcher.recv() {
+        match observer.line(&line) {
+            Flow::Go => {}
+            Flow::Stop => {
+                // The stop line is kept, so it can come before durable
+                // lines a lagging watcher has not read yet: fold every one
+                // already written before the thread ends.
+                while let Ok(Some(line)) = watcher.try_recv() {
+                    if matches!(observer.line(&line), Flow::Gone) {
+                        return;
+                    }
+                }
+                return;
+            }
+            Flow::Gone => return,
+        }
+    }
 }
 
 /// What the thread does after a line.
