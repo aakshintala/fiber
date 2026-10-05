@@ -69,8 +69,7 @@ judged is `docs/permissions.md`; the events themselves are `docs/events.md`.
   every protocol, model and tool, built-in, MCP or extension. The model is not
   told, and its call is sent back to it as written. `tool_call_requested`
   records what was repaired (`docs/events.md`). Arguments a `before_tool` hook
-  rewrote are never repaired. The faults seen in the owner's sessions, and
-  what pi, Codex, Claude Code, opencode and rig repair:
+  rewrote are never repaired. The evidence:
   [research/reply-faults](../research/reply-faults/README.md),
   [research/reply-repair-harvest](../research/reply-repair-harvest/README.md).
 - Arguments are checked against the input schema before the effects function is
@@ -149,13 +148,8 @@ by content.
 - There is no cap across one step's results. When they overflow the context
   window, the overflow rule in `docs/handoff.md` ("Overflow") moves them to
   the session's `artifacts/`.
-- In the owner's 648 pi sessions (measured 2026-09-22 with
-  `research/tool-result-sizes/sizes.py`; sizes, so they do not depend on the
-  platform), 16 KiB cuts 1.2% of 26,829 shell results and almost no result of
-  any other tool except file reads (16.8% of 5,070), search (about 9%) and web
-  fetch (24% of 21). A cut read continues from an offset, a cut fetch leaves
-  the whole page in the artifact, and search runs through the shell
-  ("Search").
+- A cut read continues from an offset, a cut fetch leaves the whole page in the
+  artifact, and search runs through the shell ("Search").
 
 ## Progress
 
@@ -163,7 +157,7 @@ While a call runs, it may stream output and progress as `tool_call_delta`,
 which is ephemeral. Fiber paces updates to at most one every
 `max(100 ms, encoded bytes ÷ 100 KiB/s)`; the first change after idle goes out
 immediately, held changes collapse to the latest, and completion forces a final
-flush. These are pi's numbers, not measured for Fiber.
+flush.
 
 ## Cancellation
 
@@ -186,7 +180,7 @@ with code `mcp_cancel_requested`, never `cancelled` (`docs/mcp.md`, "Calls").
 Settled by
 [File tools: read, write and edit](https://github.com/aakshintala/fiber/issues/52);
 that ticket's resolution holds the rationale and the rejected alternatives.
-How pi, codex, Claude Code and fiber-zig do it is
+How reference agents do it is
 [research/file-tools/reference-agents.md](../research/file-tools/reference-agents.md);
 the owner's usage is
 [research/file-tools/usage.md](../research/file-tools/usage.md).
@@ -226,7 +220,7 @@ path's directory, ending in `/`.
   result, the image goes in a user message right after the tool message, as
   rendered PDF pages do on `openai-completions`.
 - A PDF comes back as a PDF part. One of more than 10 pages needs `pages`,
-  and a request takes at most 20 pages; these are Claude Code's numbers. A
+  and a request takes at most 20 pages. A
   PDF of more than 10 pages without `pages`, a range of more than 20 pages,
   and `pages` on a file that is not a PDF each fail with `invalid_arguments`,
   the message saying which. The
@@ -267,7 +261,7 @@ path's directory, ending in `/`.
   block applies and the file is written once, or nothing is written.
 - Matching is exact first. When a block's exact text is not found, it is
   matched again with trailing spaces on each line ignored and Unicode quotes,
-  dashes and spaces folded to their ASCII forms (pi's rule). Only the lines a
+  dashes and spaces folded to their ASCII forms. Only the lines a
   block touches take the new text; every other line keeps its original bytes.
   A block is unique if it is unique in the form it was matched in.
 - Matching sets the byte order mark aside and treats line endings as LF. The
@@ -284,9 +278,6 @@ path's directory, ending in `/`.
   The diff goes in `details` for clients and is not sent to the model, and
   `changes` gives the lines added and removed.
 - Effects: an irreversible `writes`, with the resolved path.
-- In the owner's pi sessions, 32.5% of 3,837 edits carried more than one
-  block, and up to 27. Claude Code's replace-all was used in none of 505
-  edits.
 
 ### Stale files
 
@@ -304,10 +295,6 @@ path's directory, ending in `/`.
   handoff, because the model's context no longer holds the file
   (`docs/handoff.md`), and it starts empty after a resume, a fork or a rewind.
   Nothing is logged for it.
-- In the owner's Claude Code sessions, Claude Code's refusal to write a file
-  the model had not read fired 26 times; its refusal of a file modified since
-  it was read never fired. 86% to 94% of writes created files never read in
-  the session.
 
 ### How a change lands
 
@@ -327,7 +314,7 @@ path's directory, ending in `/`.
 Settled by
 [Search: built-in tools or the shell?](https://github.com/aakshintala/fiber/issues/54);
 that ticket's resolution holds the rationale and the rejected alternatives.
-How pi, codex, Claude Code and fiber-zig search is
+How reference agents search is
 [research/search/reference-agents.md](../research/search/reference-agents.md);
 the owner's usage is [research/search/usage.md](../research/search/usage.md).
 
@@ -335,9 +322,6 @@ There is no tool for searching code. The model searches with `grep` and
 `find` in the shell, and inside the shell tool those two names run a search built into
 Fiber.
 
-- In the owner's pi sessions, 83% of searches went through the shell although
-  pi offered `grep` and `find` tools; in their Claude Code sessions, all of
-  them did. codex has no search tool and tells the model to use `rg`.
 - The shell classifier already treats `grep` and `find` as read-only
   ("Shell", "Effects"), and the shell's cut bounds their output, so a tool
   would add neither.
@@ -350,8 +334,7 @@ Fiber.
   and `find`, that run the Fiber binary's hidden `grep` and `find`
   subcommands. The functions exist only in the model's own command line. A
   script or build the command starts gets the system tools, because shell
-  functions are not passed to child processes. Claude Code does the same with
-  an embedded ugrep and bfs.
+  functions are not passed to child processes.
 - The subcommands are hidden: undocumented for people and free to change.
 - `command grep`, or a full path such as `/usr/bin/grep`, runs the system
   tool. `rg` is not replaced; it already skips ignored files.
@@ -362,8 +345,7 @@ Fiber.
 ### Behaving like grep and find
 
 - With no path and no `-r`, `grep` reads its standard input, so a pipe such
-  as `cargo test | grep FAILED` works as before. About a fifth of the owner's
-  shell `grep` calls are filters of this kind.
+  as `cargo test | grep FAILED` works as before.
 - Output is GNU `grep`'s, byte for byte: `path:line:text`, `--` between
   context groups, and the path shown when more than one file is searched
   or `-r` names a directory. `find` prints one path per line.
@@ -375,12 +357,12 @@ Fiber.
 
 ### Flags
 
-- The built-in handles the flags the owner's sessions use most: `-n`, `-r`,
+- The built-in handles these flags: `-n`, `-r`,
   `-i`, `-v`, `-E`, `-F`, `-l`, `-c`, `-w`, `-o`, `-A`, `-B`, `-C`,
   `--include` and `--exclude` for `grep`; `-name`, `-iname`, `-path`,
   `-type`, `-maxdepth`, `-mindepth` and `-newer` for `find`.
-- A call with any other flag runs the system `grep` or `find` unchanged, as
-  Claude Code's does. `find` with `-exec`, `-execdir`, `-ok` or `-delete`
+- A call with any other flag runs the system `grep` or `find` unchanged.
+  `find` with `-exec`, `-execdir`, `-ok` or `-delete`
   always runs the system `find`, and the shell classifier already declares
   those calls `executes`.
 - Without `-E` or `-F`, a pattern is a basic regular expression, as in GNU
@@ -409,9 +391,7 @@ Fiber.
   is a command-line program the person installs. It reaches the model
   through the person's instruction files (`docs/system-prompt.md`,
   "Instruction files"). Prose works best when it maps a habit the model
-  already has onto the new tool. In the owner's pi-rig, tools under new names
-  (`ffgrep`, `fffind`: 180 calls in 30 days) lost to the shell's `grep`,
-  `rg`, `find` and `fd` (757 or more).
+  already has onto the new tool.
 - The person's configuration can add a command to the shell classifier's
   read-only list, with the flags it may take and stay read-only
   (`shell.read_only` in `docs/configuration.md`). A call to that command with
@@ -454,7 +434,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   code `invalid_arguments` and never starts. The message points to
   `run_in_background`, `jobs wait`, or a monitor running an `until` loop.
   A `sleep` inside a loop is not the first part of the command and is
-  allowed. This is Claude Code 2.1.280's rule, read from its binary.
+  allowed.
 
 ### Timeout
 
@@ -466,15 +446,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   where a hang is bounded: "Background jobs" has no cap on waiting.
 - A command that times out ends `failed` with code `timeout` and
   `process.timed_out` true.
-- The unit is milliseconds, as in Claude Code and codex. In the owner's pi
-  sessions (pi's timeout is in seconds), 1,347 of 9,372 timeouts the model
-  set (14%) were 10,000 or more, milliseconds written into a seconds field,
-  which made a wait 1,000 times longer; the opposite mistake in a
-  milliseconds field kills the command within a second, so the model sees
-  it straight away.
-- Of 26,687 foreground shell commands in the owner's pi sessions, 4 ran
-  past 10 minutes without a timeout the model set, and 3 of those 4 were
-  hangs (115 minutes, 291 minutes and 11.2 hours).
+- The unit is milliseconds.
 
 ### Moving to the background
 
@@ -490,10 +462,6 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   completes with the job's receipt, which says the command is still
   running, why it moved, the `job_id` and the output file's path. Output
   already produced and all later output go to the job's output file.
-- 5.1% of the owner's foreground pi commands ran longer than 30 s (8.6%
-  longer than 10 s, 2.9% longer than 2 minutes). Claude Code moves a
-  command at its 2-minute timeout; codex returns a still-running command
-  after 10 s.
 
 ### When a command ends
 
@@ -507,9 +475,6 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   timeout.
 - A process that left the group on purpose (for example with `nohup` or
   `setsid`) is not tracked.
-- The longest call in the owner's pi sessions, 11.2 hours, started a local
-  server with `&`; the server held the output pipe open and pi waited for
-  the pipe to close.
 
 ### Stopping a command
 
@@ -519,8 +484,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   archived Zig tree (fiber-zig). The grace period exists because programs
   clean up on SIGTERM: git, for example, removes its `index.lock` on
   SIGTERM and leaves it behind on SIGKILL.
-- After the kill, Fiber reads output for at most 2 seconds more (codex's
-  drain bound). If output is still held open after that, for example by a
+- After the kill, Fiber reads output for at most 2 seconds more. If output is still held open after that, for example by a
   descendant that escaped the group, Fiber stops reading and the result is
   `failed` with code `indeterminate`, never `completed`.
 - A shutdown (`docs/invocation.md`, "Shutdown") uses the same two values, on
@@ -535,8 +499,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - Output follows "Bounded results": the default 16 KiB cap applies, and the
   shell keeps the first 8 KiB and the last 8 KiB. The start is where a
   command reports its setup, its first error or its first matches; the end is
-  where it reports how it finished. codex also splits evenly; pi keeps only
-  the end and Claude Code only the start. The full output is in the
+  where it reports how it finished. The full output is in the
   session's `artifacts/`, and output streams as `tool_call_delta` while the call runs. After a
   move to the background, output goes to the job's output file.
 
@@ -549,8 +512,7 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   the first 250 ms.
 - The model types into it with the `jobs` action `write` ("Background
   jobs"). Output is the terminal's raw bytes. Fiber keeps no screen model
-  and runs no separate terminal host process. codex works the same way
-  (opt-in `tty`, raw bytes, typed input through a timed wait).
+  and runs no separate terminal host process.
 - Prompts do not fail at once on a terminal; that is the point of `tty`.
   The timeout still bounds the command.
 
@@ -613,9 +575,8 @@ The kinds are `docs/events.md`.
   example because the turn is cancelled) stops only the wait and leaves the
   job running. `write` sends input to a job started with `tty` and returns
   the output that arrives within a wait after the write, 250 ms by default,
-  at most 30 seconds. A write with no input waits at least 5 seconds
-  (codex's floor; [fiber-zig#8](https://github.com/aakshintala/fiber-zig/issues/8)
-  found shorter empty polls burned turns). `write` on a job not started with
+  at most 30 seconds. A write with no input waits at least 5 seconds.
+  `write` on a job not started with
   `tty` fails with `invalid_arguments`. A `write` call declares `executes`,
   because typed input can make the program do anything. `jobs` only sees
   and acts on jobs the calling session started, so a delegate cannot stop its
@@ -653,11 +614,10 @@ The kinds are `docs/events.md`.
     model is told the monitor expired and can start it again. The deadline
     is what stops a forgotten monitor from holding a non-interactive run
     open under the "ending with jobs running" rule in this section.
-  - Source and testing: these are Claude Code's numbers, taken as they are.
-    Timing-dependent behaviour is tested under an injected clock, never by
+  - Testing: timing-dependent behaviour is tested under an injected clock, never by
     waiting in real time.
 - A job whose output file passes 5 GB is stopped as `failed` with code
-  `output_cap` (Claude Code's documented kill threshold).
+  `output_cap`.
 - Stopping one job uses the same mechanism as cancelling a tool call
   ("Shell", "Stopping a command"). If a descendant that escaped the process
   group still holds the output pipe open past the bound, the job ends
@@ -774,7 +734,7 @@ A declined form is an answer, not a failure: the call completes with status
 Settled by
 [Web fetch and web search](https://github.com/aakshintala/fiber/issues/57);
 that ticket's resolution holds the rationale and the rejected alternatives.
-How Claude Code, codex, pi and fiber-zig do it is
+How reference agents do it is
 [research/web-tools/reference-agents.md](../research/web-tools/reference-agents.md);
 which providers host a search, and the search services a backend can call, is
 [research/web-tools/providers.md](../research/web-tools/providers.md).
@@ -801,17 +761,13 @@ backend.
   size.
 - The cap is the 16 KiB default ("Bounded results"). A cut keeps the start of
   the page, and the whole markdown is in the artifact.
-- A download larger than 10 MiB fails with `too_large`. Claude Code and
-  fiber-zig both use 10 MiB.
+- A download larger than 10 MiB fails with `too_large`.
 - Each request times out after 60 seconds, and the whole fetch, redirects
-  included, after 5 minutes. Both fail with `timeout`. These are Claude
-  Code's values.
+  included, after 5 minutes. Both fail with `timeout`.
 - A status other than 2xx fails with `http_error`, giving the status and the
   start of the body.
-- Redirects are followed, to any host, for at most 10 hops. Claude Code
-  returns a cross-host redirect to the model because it approves each host;
-  Fiber judges only the URL the model wrote, because the server chooses a
-  redirect ("Effects").
+- Redirects are followed, to any host, for at most 10 hops. Fiber judges only
+  the URL the model wrote, because the server chooses a redirect ("Effects").
 - A URL is fetched as written: `http://` is not upgraded, so a server on
   `localhost` or an intranet host works.
 - Fetch refuses link-local addresses (`169.254.0.0/16`, `fe80::/10`) and
@@ -829,8 +785,7 @@ backend.
   `blocked_domains`, never both. These match Anthropic's hosted tool, so the
   model sees the same arguments on every provider.
 - The description tells the model to end an answer that used search with a
-  list of the sources it used, as markdown links. Claude Code and fiber-zig
-  both ask for this.
+  list of the sources it used, as markdown links.
 - There is no limit on searches per turn or per session.
 
 #### Hosted by the provider
@@ -1151,8 +1106,6 @@ Fiber finds skills and how the listing is built are `docs/system-prompt.md`,
 - The tool declares `reads` on the skill's file and is never reviewed. It is
   declared in every session, in full, and counts toward the built-in budget
   ("Size budget in CI").
-- Claude Code has a `Skill` tool and codex `skills.read`. pi has the model
-  `read` the file, so pi cannot tell a skill load from any other read.
 
 ## Built in or extension
 
@@ -1220,20 +1173,14 @@ its tools are deferred, change only when the preamble is built.
 - MCP tools and `mcp_resources` are deferred by default. Every other built-in
   is declared in full.
 - A built-in is deferred by default only when it is used in under about 2% of
-  the owner's sessions and is not part of how they direct delegates. Measured
-  on September 25, 2026, across 686 pi sessions, 171 Claude Code sessions and
-  143 Claude Code subagent sessions, no built-in except `mcp_resources` meets
-  that. Web fetch, the rarest candidate, is used in 1% of pi sessions but 11%
-  of Claude Code sessions.
-- Deferring has a cost. Claude Code defers widely, and its tool search runs in
-  48% of those Claude Code sessions.
+  the owner's sessions and is not part of how they direct delegates.
 
 ### Tool search
 
 - `tool_search` is a built-in tool the model calls to load deferred tools. It
   is declared, in full, only when the model supports deferral and at least one
   tool is deferred.
-- Fiber runs the search itself, as codex does: BM25 over each deferred tool's
+- Fiber runs the search itself: BM25 over each deferred tool's
   name, description and parameter names. It returns at most 8 tools by default;
   the model may pass `limit`.
 - The result goes back in each protocol's native form: `tool_reference`
@@ -1254,8 +1201,7 @@ its tools are deferred, change only when the preamble is built.
 When the definitions declared in full take more than 10% of the model's
 context window, the preamble build is followed by a `notice` with code
 `tool_definitions_large`. It names the largest sources and the configuration
-that disables tools. The session runs anyway. 10% is the threshold at which
-Claude Code's opt-in automatic mode starts deferring tools.
+that disables tools. The session runs anyway.
 
 ### Seeing the tools
 
@@ -1281,11 +1227,10 @@ Claude Code's opt-in automatic mode starts deferring tools.
   definition.
 - Every CI run prints the size of each built-in definition, so the tool that
   grew can be seen without reproducing the build.
-- The owner's pi setup spent about 13,800 tokens a request on 31 tools
-  ([pi-extensions#1](https://github.com/aakshintala/pi-extensions/issues/1)).
 
 ## Not settled here
 
 - Each tool's own design: the tickets indexed in
   [Epic: tools](https://github.com/aakshintala/fiber/issues/59).
 - Delegates are `docs/delegates.md`, which lists what it leaves open.
+- Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)

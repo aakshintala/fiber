@@ -4,7 +4,7 @@ What one turn does, from its input arriving to `turn_completed`. This is what
 is true now, not a plan. It is settled by
 [The turn: what one run of the agent loop does](https://github.com/aakshintala/fiber/issues/112);
 that ticket's resolution holds the rationale and the rejected alternatives.
-How pi, codex and Claude Code run a turn is
+How reference agents run a turn is
 [research/the-turn/README.md](../research/the-turn/README.md).
 
 Vocabulary is `GLOSSARY.md`. Turn, step, action, tool call and event mean what
@@ -238,10 +238,8 @@ result. The model's own calls stay native and keep their signatures
 
 ## What the loop does not do
 
-- Detect repetition, or turn tool calls written into prose into calls. None
-  of pi, Codex, Claude Code, opencode or rig does either, and neither
-  appeared in 39,061 pi turns or 31,326 Claude Code turns of the owner's
-  sessions ([research/reply-faults](../research/reply-faults/README.md)).
+- Detect repetition, or turn tool calls written into prose into calls
+  ([research/reply-faults](../research/reply-faults/README.md)).
   The one repair Fiber makes to a reply is to tool-call arguments
   (`docs/tools.md`, "Before a call runs").
 - Guard against a `turn_end` hook that always continues. Such an extension

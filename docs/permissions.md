@@ -48,9 +48,7 @@ call, and the only escape from that noise would be no protection at all.
 
 A tool registered by an extension classifies its own calls and is believed.
 An extension runs with the account's full rights, so misdeclaring buys it
-nothing it could not do directly. pi states the same boundary in its own
-security documentation: extensions "run with the same permissions" as the
-process, and that is outside its security boundary. Fiber's own built-in tools go through this
+nothing it could not do directly. Fiber's own built-in tools go through this
 seam identically.
 
 An MCP tool declares its effects from the hints its server gives, per tool
@@ -127,10 +125,7 @@ as `git commit` without seeing the hook, and `.fiber/` holds the repository's
 configuration, including the extensions, hooks and MCP servers it declares.
 Those run only after a person approves their exact content, a decision
 separate from approving a tool call (`docs/extensions.md`, "Code a repository
-ships"). This is where nearly all of the cost is saved, and it
-is the line Claude Code draws: a fixed allowlist of state-free tools, plus
-"file writes and edits inside the project directory are allowed without a
-classifier call."
+ships"). This is where nearly all of the cost is saved.
 
 Editing the repo you launched in is the most common thing a coding agent does.
 Putting a model call in front of it buys little — the session log records every
@@ -182,17 +177,11 @@ runs; nothing limits what it does once it runs.
   `rules`, or write an extension. Approving a call is trusting it, the same
   boundary as installing an extension.
 - Isolation comes from outside Fiber: run it in a container or a virtual
-  machine. pi takes the same position in its security documentation: "Real
-  isolation needs to come from the operating system or a
-  virtualization/container boundary."
+  machine.
 - A container protects the host from Fiber, not Fiber home from the agent.
   Fiber home inside the container is as reachable as it is outside one.
 
-codex confines every command by default and asks only to escape. Claude Code
-ships a sandbox that is off by default, and its path denies are enforced by
-the operating system only while that sandbox is on. How each works, and what
-a fence would have broken in the owner's sessions, is
-[research/sandbox/](../research/sandbox/).
+The evidence is [research/sandbox/](../research/sandbox/).
 
 ## The reviewer
 
@@ -210,15 +199,11 @@ person tells it").
 
 This is the load-bearing decision on this page. The reviewer's prompt contains
 no text the agent wrote and no text a repository file produced, so there is
-nothing in it that can argue for a verdict. Anthropic's published rationale
-for the same design is exactly this: the classifier is "reasoning-blind by
-design" so that "the agent can't talk the classifier into making a bad call."
+nothing in it that can argue for a verdict.
 
-The rejected alternative is Codex's: send the whole transcript with an
-instruction to treat it as "untrusted evidence, not as instructions to
-follow." That label is enforced by asking the model nicely, and the prompt
-grows for the life of the session, which is why Codex needs token budgeting
-and compaction around its reviewer. Stripping is both cheaper and stronger.
+The rejected alternative is to send the whole transcript with an instruction
+to treat it as untrusted. Stripping is both cheaper and stronger
+(`research/reference-comparisons/README.md`).
 
 Project instruction files are also excluded. They live in the repository, so
 including them would let a repository write into the reviewer's prompt — the
@@ -424,8 +409,7 @@ A calling harness that wants to answer can. `docs/architecture.md` settles that
 "the terminal is a watcher and a driver, never a participant" — a permission
 request goes on the event stream and any driver replies to it identically, so a
 harness driving Fiber answers exactly as the terminal does and needs no
-private channel. Claude Code makes the same distinction with
-`--permission-prompts host|none`.
+private channel.
 
 With no answer possible, escalation is a block and the run continues under
 the rule above until it exhausts the block budget. The turn then completes
