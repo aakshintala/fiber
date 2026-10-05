@@ -202,3 +202,35 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         ["edit", "handoff", "read", "shell", "write", "jobs"]
     );
 }
+
+/// `builtin` serves only `fiber ask`, a non-interactive run, so its
+/// model shell allows a monitor 10 minutes at most.
+#[test]
+fn the_model_shell_is_non_interactive() {
+    let root = fakes::TempDir::new("fiber-builtin-monitor");
+    let marker = root.path().join("marker");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, _infos, _driver, _forget) = super::builtin(root.path(), &clock, &jobs).unwrap();
+    let shell = tools
+        .iter()
+        .map(|(_, tool)| tool)
+        .find(|tool| tool.definition().name == "shell")
+        .expect("a shell tool");
+    let mut arguments = serde_json::Map::new();
+    arguments.insert(
+        "command".to_owned(),
+        serde_json::Value::String(format!("touch {}", marker.display())),
+    );
+    arguments.insert("monitor".to_owned(), serde_json::Value::Bool(true));
+    arguments.insert("deadline_ms".to_owned(), serde_json::json!(700_000));
+    let output = shell.run(&arguments, &Never, &Quiet);
+    let error = output.error.expect("a refusal");
+    assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
+    assert!(error.message.contains("600000"), "{}", error.message);
+    assert!(!marker.exists());
+}

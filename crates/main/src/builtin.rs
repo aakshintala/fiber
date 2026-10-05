@@ -57,9 +57,11 @@ pub(crate) fn with_binary(
             .with_images(fiber.clone(), artifacts.to_path_buf()),
     );
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
+    // Only `fiber ask` reaches here, new or resumed: a non-interactive run.
     let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock))
         .with_search(fiber.clone())
-        .with_jobs(moves);
+        .with_jobs(moves)
+        .non_interactive();
     let driver =
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let built = [

@@ -1177,3 +1177,84 @@ fn a_background_shell_job_is_waited_for_before_ask_exits() {
     assert!(completed.get("action_id").is_none_or(Value::is_null));
     assert_eq!(server.requests().len(), 4);
 }
+
+#[test]
+fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
+    let setup = Setup::new();
+    let ready = setup.workspace().join("ready");
+    // The monitor prints once the test creates `ready`: past the receipt,
+    // the final reply and the ending notice.
+    fs::write(
+        setup.workspace().join("watch.sh"),
+        "until [ -e ready ]; do sleep 0.01; done\necho one\necho two\n",
+    )
+    .unwrap();
+    // How many turns the lines and the end take depends on when they
+    // arrive, so every later request is answered with text.
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_monitor",
+            "shell",
+            &json!({"command": "sh watch.sh", "monitor": true}),
+        )]),
+        hello(),
+        hello(),
+        hello(),
+        hello(),
+        hello(),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "shell", "prefix": "sh watch.sh"})
+        ),
+    )
+    .unwrap();
+
+    let run = setup.run_then(
+        &["ask", "start the monitor"],
+        |lines| {
+            lines
+                .iter()
+                .position(|line| line["kind"] == "jobs_pending_notified")
+                .is_some_and(|at| {
+                    lines[at..]
+                        .iter()
+                        .any(|line| line["kind"] == "turn_completed")
+                })
+        },
+        || fs::write(&ready, "").unwrap(),
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let started = of_kind(&run, "job_started");
+    assert_eq!(started.len(), 1);
+    let job_id = started[0]["payload"]["job_id"].as_str().unwrap();
+    let receipt = of_kind(&run, "tool_call_completed")[0]["payload"]["content"][0]["text"]
+        .as_str()
+        .unwrap();
+    assert!(receipt.starts_with("Started a monitor.\n"), "{receipt}");
+    let kinds = run.kinds();
+    let first_line = kinds.iter().position(|kind| *kind == "job_line").unwrap();
+    let completed_at = kinds
+        .iter()
+        .position(|kind| *kind == "job_completed")
+        .unwrap();
+    assert!(first_line < completed_at, "{kinds:?}");
+    let lines = of_kind(&run, "job_line");
+    assert!(lines.iter().all(|line| line["payload"]["job_id"] == job_id
+        && line.get("action_id").is_none_or(Value::is_null)));
+    let printed: Vec<&str> = lines
+        .iter()
+        .map(|line| line["payload"]["lines"].as_str().unwrap())
+        .collect();
+    assert_eq!(printed.join("\n"), "one\ntwo");
+    let completed = &run.lines[completed_at];
+    assert_eq!(completed["payload"]["job_id"], job_id);
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(kinds.last(), Some(&"fiber_exited"));
+}
