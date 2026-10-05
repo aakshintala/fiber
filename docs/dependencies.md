@@ -88,7 +88,12 @@ not in that together binary: the session never runs image code.
 
 A new crate gets a workload in the probe and a row here, measured on Linux
 x86_64, Linux arm64 and macOS arm64. A crate is measured again when its major
-version or its enabled features change. What a running session holds, broken down by Fiber's own
+version changes, or when a change to its features could plausibly move a
+session's memory by 200 KiB or more, the noise floor below. A new dependency
+in `Cargo.lock`, a subsystem or embedded data are reasons to measure; a
+feature that exposes a few more functions over code already compiled in is
+not. When the PR does not measure, it says in one line why the change is
+under that floor, and the row stands. What a running session holds, broken down by Fiber's own
 crates, belongs to the memory budget (`docs/performance.md`).
 
 Dev-dependencies are compiled only into tests and jigs (`docs/testing.md`,

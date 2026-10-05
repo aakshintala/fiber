@@ -404,9 +404,9 @@ and `reply` there like any session. No session forwards a command to another
 job is not running. The terminal lists jobs with `/jobs` and can stop one from
 there. The list is a fold of the log, so there is no driver list command.
 
-**`background` frees the turn without a message.** It does what a steering
-message does to running shell calls, with nothing sent to the model. The
-terminal binds it to Ctrl+B. It never kills a command: the command becomes a
+**`background` frees the turn without a message.** It moves every running
+shell call to the background, as a person's Ctrl+B does, with nothing sent
+to the model. The terminal binds it to Ctrl+B. It never kills a command: the command becomes a
 job and keeps its timeout.
 
 **`shell` runs the person's own command, and the model sees it only if asked.**
