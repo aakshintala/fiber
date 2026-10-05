@@ -132,3 +132,15 @@ fn answers_echo_a_string_id_unchanged() {
         r#"{"error":{"code":-32601,"message":"Method not found"},"id":"probe","jsonrpc":"2.0"}"#,
     );
 }
+
+#[test]
+fn a_server_request_with_a_negative_or_fractional_id_is_ignored() {
+    // The `as_u64` guard admits only non-negative integers: `true` in its
+    // place would answer these as server requests.
+    for line in [
+        r#"{"jsonrpc":"2.0","id":-1,"method":"ping"}"#,
+        r#"{"jsonrpc":"2.0","id":3.5,"method":"ping"}"#,
+    ] {
+        assert_eq!(decode_line(line), Incoming::Ignored, "line: {line}");
+    }
+}

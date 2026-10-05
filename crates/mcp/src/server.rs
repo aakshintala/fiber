@@ -563,7 +563,7 @@ enum ReadLine {
 
 /// Reads one newline-delimited line, capped at [`MAX_LINE`] bytes: past the
 /// cap the line is abandoned and the reader ends.
-fn read_line(reader: &mut BufReader<ChildStdout>) -> ReadLine {
+fn read_line(reader: &mut impl BufRead) -> ReadLine {
     let mut buf = Vec::new();
     match reader
         .by_ref()
@@ -583,6 +583,13 @@ fn read_line(reader: &mut BufReader<ChildStdout>) -> ReadLine {
     }
 }
 
+/// True when the waiter stops waiting: a response landed (`seq` moved) or
+/// the call was cancelled. A pure function of its inputs so a test pins all
+/// four combinations without parking a thread.
+fn should_stop(seq: u64, seen: u64, cancelled: bool) -> bool {
+    seq != seen || cancelled
+}
+
 /// Blocks until woken or `until` passes on the clock, releasing every lock
 /// first: the response lands under the shared lock, so joining ahead of
 /// that release would deadlock.
@@ -594,7 +601,7 @@ fn park(clock: &dyn Clock, shared: &Shared, cancel: &dyn Cancel, until: Instant,
         let Some(guard) = slot.take() else {
             return;
         };
-        if guard.seq != seen || cancel.is_cancelled() {
+        if should_stop(guard.seq, seen, cancel.is_cancelled()) {
             slot = Some(guard);
             return;
         }

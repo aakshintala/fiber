@@ -44,18 +44,30 @@ impl Setup {
     }
 
     fn start(&self, timeout: Duration) -> super::OpenServer {
+        // Threaded with a wall-clock limit: without `send`, `insert`,
+        // `deliver` or `read_stdout` the handshake would sit parked on the
+        // fake clock forever, so a bare direct start would hang the test
+        // instead of failing it.
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = self.dir.path().to_path_buf();
-        Server::start(
-            &script,
-            &[workspace.display().to_string()],
-            &BTreeMap::new(),
-            &workspace,
-            &self.clock(),
-            timeout,
-            "0.0.0",
-        )
-        .expect("the fixture server starts")
+        let clock = self.clock();
+        let (done, result) = mpsc::channel();
+        thread::spawn(move || {
+            let outcome = Server::start(
+                &script,
+                &[workspace.display().to_string()],
+                &BTreeMap::new(),
+                &workspace,
+                &clock,
+                timeout,
+                "0.0.0",
+            );
+            done.send(outcome).expect("collected");
+        });
+        result
+            .recv_timeout(WITHIN)
+            .expect("the server starts within 5s")
+            .expect("the fixture server starts")
     }
 
     fn pid(&self) -> u32 {
@@ -292,17 +304,26 @@ fn a_non_object_initialize_reply_fails_the_start() {
     let workspace = dir.path().to_path_buf();
     let fake = FakeClock::new();
     let clock: std::sync::Arc<dyn Clock> = fake;
-    let error = Server::start(
-        &script.display().to_string(),
-        &[],
-        &BTreeMap::new(),
-        &workspace,
-        &clock,
-        Duration::from_secs(5),
-        "0.0.0",
-    )
-    .err()
-    .expect("a non-object initialize fails");
+    // Threaded with a wall-clock limit: without `deliver` the handshake
+    // would sit parked on the fake clock forever instead of failing.
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = Server::start(
+            &script.display().to_string(),
+            &[],
+            &BTreeMap::new(),
+            &workspace,
+            &clock,
+            Duration::from_secs(5),
+            "0.0.0",
+        );
+        done.send(outcome).expect("collected");
+    });
+    let error = result
+        .recv_timeout(WITHIN)
+        .expect("the start ends within 5s")
+        .err()
+        .expect("a non-object initialize fails");
     match error {
         StartError::StartFailed(message) => assert!(
             message.contains("initialize"),
@@ -334,17 +355,27 @@ fn a_command_that_does_not_exist_fails_the_start() {
 fn a_server_that_exits_at_once_fails_the_start() {
     let setup = Setup::tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
-    let error = Server::start(
-        "/bin/true",
-        &[],
-        &BTreeMap::new(),
-        &workspace,
-        &setup.clock(),
-        Duration::from_secs(5),
-        "0.0.0",
-    )
-    .err()
-    .expect("an instant exit fails");
+    let clock = setup.clock();
+    // Threaded with a wall-clock limit: without `gone` (via
+    // `read_stdout`) the handshake would sit parked forever.
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = Server::start(
+            "/bin/true",
+            &[],
+            &BTreeMap::new(),
+            &workspace,
+            &clock,
+            Duration::from_secs(5),
+            "0.0.0",
+        );
+        done.send(outcome).expect("collected");
+    });
+    let error = result
+        .recv_timeout(WITHIN)
+        .expect("the start ends within 5s")
+        .err()
+        .expect("an instant exit fails");
     assert!(matches!(error, StartError::StartFailed(_)));
 }
 
@@ -592,4 +623,181 @@ fn stop_leaves_no_running_child() {
         }
     }
     panic!("waited 5s for pid {pid} to exit after the stop");
+}
+
+#[test]
+fn a_line_ending_in_a_newline_strips_it() {
+    // Without the `ends_with` guard the trailing newline would stay in
+    // the line: the `false` mutant returns `"hi\n"` here.
+    use std::io::Cursor;
+    let mut reader = Cursor::new(b"hi\n".to_vec());
+    match super::read_line(&mut reader) {
+        super::ReadLine::Line(line) => assert_eq!(line, "hi"),
+        super::ReadLine::Eof => panic!("a newline-terminated line is a line, got the end"),
+        super::ReadLine::TooLong => {
+            panic!("a newline-terminated line is a line, got too long")
+        }
+    }
+}
+
+#[test]
+fn a_final_line_without_a_newline_is_a_line() {
+    // Without the `ends_with` guard the last byte would be popped as if
+    // it were a newline: the `true` mutant returns `"h"` here.
+    use std::io::Cursor;
+    let mut reader = Cursor::new(b"hi".to_vec());
+    match super::read_line(&mut reader) {
+        super::ReadLine::Line(line) => assert_eq!(line, "hi"),
+        super::ReadLine::Eof => panic!("a final line without a newline is a line, got the end"),
+        super::ReadLine::TooLong => {
+            panic!("a final line without a newline is a line, got too long")
+        }
+    }
+}
+
+#[test]
+fn an_empty_read_is_the_end() {
+    use std::io::Cursor;
+    let mut reader = Cursor::new(Vec::new());
+    match super::read_line(&mut reader) {
+        super::ReadLine::Eof => {}
+        super::ReadLine::Line(_) => panic!("an empty read is the end, got a line"),
+        super::ReadLine::TooLong => panic!("an empty read is the end, got too long"),
+    }
+}
+
+#[test]
+fn exactly_max_line_bytes_is_a_line() {
+    // `>=` would end the reader here; only `>` lets exactly `MAX_LINE`
+    // bytes through as a line.
+    use std::io::Cursor;
+    let content = vec![b'x'; super::MAX_LINE];
+    let mut reader = Cursor::new(content);
+    match super::read_line(&mut reader) {
+        super::ReadLine::Line(line) => assert_eq!(line.len(), super::MAX_LINE),
+        super::ReadLine::Eof => panic!("exactly MAX_LINE bytes is a line, got the end"),
+        super::ReadLine::TooLong => panic!("exactly MAX_LINE bytes is a line, got too long"),
+    }
+}
+
+#[test]
+fn max_line_content_plus_a_newline_is_a_line() {
+    // The `take(MAX_LINE + 1)` lets a full line plus its newline through:
+    // `-` or `*` in place of `+` truncates it and the assertion on the
+    // exact length fails.
+    use std::io::Cursor;
+    let mut content = vec![b'x'; super::MAX_LINE];
+    content.push(b'\n');
+    let mut reader = Cursor::new(content);
+    match super::read_line(&mut reader) {
+        super::ReadLine::Line(line) => assert_eq!(line.len(), super::MAX_LINE),
+        super::ReadLine::Eof => panic!("MAX_LINE bytes plus a newline is a line, got the end"),
+        super::ReadLine::TooLong => {
+            panic!("MAX_LINE bytes plus a newline is a line, got too long")
+        }
+    }
+}
+
+#[test]
+fn max_line_plus_one_bytes_is_too_long() {
+    // `==` misses this length and `<` ends short lines instead: only `>`
+    // ends exactly the lines past the cap.
+    use std::io::Cursor;
+    let content = vec![b'x'; super::MAX_LINE + 1];
+    let mut reader = Cursor::new(content);
+    match super::read_line(&mut reader) {
+        super::ReadLine::TooLong => {}
+        super::ReadLine::Line(_) => panic!("MAX_LINE + 1 bytes is too long, got a line"),
+        super::ReadLine::Eof => panic!("MAX_LINE + 1 bytes is too long, got the end"),
+    }
+}
+
+#[test]
+fn a_read_error_without_bytes_is_the_end() {
+    // The `true` mutant would also end a read that did carry bytes, and
+    // the `false` mutant would return an empty line here.
+    let mut reader = AlwaysErr;
+    match super::read_line(&mut reader) {
+        super::ReadLine::Eof => {}
+        super::ReadLine::Line(_) => panic!("a failed read without bytes is the end, got a line"),
+        super::ReadLine::TooLong => {
+            panic!("a failed read without bytes is the end, got too long")
+        }
+    }
+}
+
+#[test]
+fn a_read_error_after_bytes_keeps_the_line() {
+    // The `true` mutant would discard these bytes and report the end.
+    let mut reader = DataThenErr {
+        data: b"hi".to_vec(),
+        done: false,
+    };
+    match super::read_line(&mut reader) {
+        super::ReadLine::Line(line) => assert_eq!(line, "hi"),
+        super::ReadLine::Eof => panic!("a failed read after bytes keeps them, got the end"),
+        super::ReadLine::TooLong => {
+            panic!("a failed read after bytes keeps them, got too long")
+        }
+    }
+}
+
+#[test]
+fn the_wait_ends_on_a_new_response_or_cancel() {
+    // All four combinations: `||` into `&&` misses the two mixed rows,
+    // and `!=` into `==` flips the two uncancelled rows.
+    assert!(!super::should_stop(7, 7, false));
+    assert!(super::should_stop(8, 7, false));
+    assert!(super::should_stop(7, 7, true));
+    assert!(super::should_stop(8, 7, true));
+}
+
+/// A reader whose every read fails, carrying no bytes.
+struct AlwaysErr;
+
+impl std::io::Read for AlwaysErr {
+    fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+        Err(std::io::Error::other("boom"))
+    }
+}
+
+impl std::io::BufRead for AlwaysErr {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        Err(std::io::Error::other("boom"))
+    }
+
+    fn consume(&mut self, _amount: usize) {}
+}
+
+/// A reader that hands over `data` once, then fails: the line reader sees
+/// a partial line followed by an error.
+struct DataThenErr {
+    data: Vec<u8>,
+    done: bool,
+}
+
+impl std::io::Read for DataThenErr {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        use std::io::BufRead;
+        let chunk = self.fill_buf()?;
+        let len = chunk.len().min(buf.len());
+        buf[..len].copy_from_slice(&chunk[..len]);
+        self.consume(len);
+        Ok(len)
+    }
+}
+
+impl std::io::BufRead for DataThenErr {
+    fn fill_buf(&mut self) -> std::io::Result<&[u8]> {
+        if self.done {
+            Err(std::io::Error::other("boom"))
+        } else {
+            Ok(&self.data)
+        }
+    }
+
+    fn consume(&mut self, _amount: usize) {
+        self.data.clear();
+        self.done = true;
+    }
 }
