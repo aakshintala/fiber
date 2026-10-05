@@ -57,6 +57,16 @@ fn a_stem_with_a_separator_is_a_usage_error() {
 }
 
 #[test]
+fn a_stem_may_hold_letters_digits_underscores_and_hyphens() {
+    let dir = fakes::TempDir::new("fiber-picture");
+    let input = dir.path().join("in.png");
+    std::fs::write(&input, png(4, 4)).unwrap();
+    let (code, stdout, _) = child(&args(&[&input, dir.path(), "Az_09-x".as_ref()]));
+    assert_eq!(code, 0);
+    assert!(stdout.contains("Az_09-x.png"), "{stdout}");
+}
+
+#[test]
 fn an_image_is_written_and_named_on_one_json_line() {
     let dir = fakes::TempDir::new("fiber-picture");
     let input = dir.path().join("in.png");
