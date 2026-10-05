@@ -23,6 +23,9 @@ mod background;
 #[path = "shell/command.rs"]
 mod command;
 
+#[path = "shell/output.rs"]
+mod output;
+
 #[path = "shell/prelude.rs"]
 mod prelude;
 

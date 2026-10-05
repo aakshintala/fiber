@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 
 use contract::JobId;
 use contract::clock::{Clock, Wake};
+use contract::emit::Emit;
 use contract::events::{JobCompleted, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, Foreground, JobRecord, OpenError, Opened, Opening};
@@ -21,6 +22,8 @@ use contract::tool::Cancel;
 pub struct Registry {
     artifacts: PathBuf,
     clock: Arc<dyn Clock>,
+    /// Handed to each opened job for its `job_delta` lines.
+    emit: Arc<dyn Emit>,
     inner: Mutex<Inner>,
     cv: Condvar,
     /// Upgrades to the `Arc` `new` returned, so `open` can hand that `Arc`
@@ -74,11 +77,13 @@ pub(crate) enum StopError {
 
 impl Registry {
     /// Jobs whose output files are created in `artifacts`. `clock` is the
-    /// session clock: a `wait` deadline is read from it.
-    pub fn new(artifacts: PathBuf, clock: Arc<dyn Clock>) -> Arc<Self> {
+    /// session clock: a `wait` deadline is read from it. `emit` carries the
+    /// jobs' `job_delta` lines.
+    pub fn new(artifacts: PathBuf, clock: Arc<dyn Clock>, emit: Arc<dyn Emit>) -> Arc<Self> {
         let registry = Arc::new_cyclic(|me| Self {
             artifacts,
             clock: Arc::clone(&clock),
+            emit,
             inner: Mutex::new(Inner {
                 jobs: Vec::new(),
                 seq: 0,
@@ -150,6 +155,7 @@ impl Registry {
             path,
             file,
             end,
+            emit: Arc::clone(&self.emit),
         })
     }
 
