@@ -892,6 +892,27 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
     });
     assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
     answered.join().unwrap();
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
     let request_id = request_rx.recv_timeout(DEADLINE).expect("the request id");
     let before = log::read(&session.dir).unwrap().len();
     let (rejected, waiting) = std::sync::mpsc::channel();

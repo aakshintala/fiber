@@ -100,9 +100,9 @@ impl Loop {
                 slot = Some(take(&self.inbox, bound));
             });
             match slot {
-                Some(Wait::Got(delivery)) => return InboxRecv::Delivery(delivery),
-                Some(Wait::Closed) => return InboxRecv::Closed,
-                Some(Wait::Empty) | None => {}
+                Some((false, Some(delivery))) => return InboxRecv::Delivery(delivery),
+                Some((true, _)) => return InboxRecv::Closed,
+                Some((false, None)) | None => {}
             }
         }
     }
@@ -328,30 +328,22 @@ impl Loop {
     }
 }
 
-/// What blocking on the inbox returned.
-enum Wait {
-    Got(Delivery),
-    Closed,
-    Empty,
-}
-
 /// Blocks in `inbox` for `bound` of real time. `None` blocks until a
-/// delivery or the channel closes. `Some(ZERO)` does not block.
-fn take(inbox: &std::sync::mpsc::Receiver<Delivery>, bound: Option<Duration>) -> Wait {
+/// delivery or the channel closes. `(true, None)` is a closed channel.
+/// `(false, None)` is a timeout, including a zero bound.
+fn take(
+    inbox: &std::sync::mpsc::Receiver<Delivery>,
+    bound: Option<Duration>,
+) -> (bool, Option<Delivery>) {
     match bound {
         None => match inbox.recv() {
-            Ok(delivery) => Wait::Got(delivery),
-            Err(_) => Wait::Closed,
-        },
-        Some(limit) if limit.is_zero() => match inbox.try_recv() {
-            Ok(delivery) => Wait::Got(delivery),
-            Err(std::sync::mpsc::TryRecvError::Disconnected) => Wait::Closed,
-            Err(std::sync::mpsc::TryRecvError::Empty) => Wait::Empty,
+            Ok(delivery) => (false, Some(delivery)),
+            Err(_) => (true, None),
         },
         Some(limit) => match inbox.recv_timeout(limit) {
-            Ok(delivery) => Wait::Got(delivery),
-            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Wait::Closed,
-            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Wait::Empty,
+            Ok(delivery) => (false, Some(delivery)),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => (true, None),
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => (false, None),
         },
     }
 }

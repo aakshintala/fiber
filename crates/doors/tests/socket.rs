@@ -1099,6 +1099,65 @@ impl Tool for Blocks {
     }
 }
 
+/// Longer than [`DEADLINE`], so a close that never cancels the shell fails
+/// the test's own wait rather than this tool's timeout.
+const SHELL_LIMIT: Duration = Duration::from_secs(30);
+
+struct Hangs {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    saw_cancel: Arc<AtomicBool>,
+}
+
+impl Tool for Hangs {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        let flag = Arc::new(Flag {
+            ready: Mutex::new(false),
+            cv: Condvar::new(),
+        });
+        let wake: Arc<dyn Wake> = flag.clone();
+        cancel.subscribe(Arc::downgrade(&wake));
+        if let Some(sender) = self.entered.lock().expect("the entered lock").take() {
+            sender.send(()).expect("the test is waiting");
+        }
+        if !cancel.is_cancelled() {
+            let guard = flag.ready.lock().expect("the flag lock");
+            let _wait = flag
+                .cv
+                .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled());
+        }
+        self.saw_cancel
+            .store(cancel.is_cancelled(), Ordering::Relaxed);
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Cancelled and stopped.\n".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: None,
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        Bound::DEFAULT
+    }
+}
+
 fn no_durable(dir: &Path) {
     assert!(
         log::read(dir).unwrap().is_empty(),
@@ -1319,6 +1378,44 @@ fn cancel_from_another_connection_stops_a_driver_shell() {
         })
         .unwrap();
     opened.close();
+}
+
+#[test]
+fn close_cancels_a_shell_blocked_in_its_tool() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let opened = Opened::open(vec![]);
+    opened.session.shell(Arc::new(Hangs {
+        entered: Mutex::new(Some(entered_tx)),
+        saw_cancel: Arc::clone(&saw_cancel),
+    }));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_shell", "sleep 60"));
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the shell is running");
+            Ok(())
+        })
+        .unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let session = opened.session;
+    let log = opened.log;
+    thread::spawn(move || {
+        session.close(log);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("close returned without the shell's timeout");
+    assert!(
+        saw_cancel.load(Ordering::Relaxed),
+        "the tool did not see its cancel"
+    );
 }
 
 #[test]

@@ -176,8 +176,10 @@ impl Session {
 
     /// Ends the door side: stops accepting, unlinks the socket, drops `log`
     /// (the last handle, which releases the lock), waits up to [`GRACE`] for
-    /// each writer, then shuts down whatever is still open.
+    /// each writer, then shuts down whatever is still open. A driver shell
+    /// is cancelled first: shutting its socket does not stop the tool.
     pub fn close(self, log: Arc<Log>) {
+        self.gate.cancel_shells();
         self.gate.mark_stopped();
         // Wakes `accept` if it is blocked in `accept`. A connection during
         // teardown is dropped, not served.
@@ -277,13 +279,17 @@ impl Gate {
     pub(crate) fn stop_running(&self) -> Stopped {
         let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
         let shells = lock(&self.shells).clone();
-        for shell in &shells {
-            shell.cancel();
-        }
+        cancel_each(&shells);
         Stopped {
             turn,
             shell: !shells.is_empty(),
         }
+    }
+
+    /// Cancels every driver shell still registered. Closing the socket does
+    /// not stop a tool blocked in `run`.
+    fn cancel_shells(&self) {
+        cancel_each(&lock(&self.shells).clone());
     }
 
     pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
@@ -401,6 +407,12 @@ impl Wake for Gate {
         // A clock move wakes the loop the way an accepted cancel does.
         // The delivery means only that the loop should look again.
         self.deliver(Delivery::Cancelled);
+    }
+}
+
+fn cancel_each(shells: &[Arc<crate::shell::ShellCancel>]) {
+    for shell in shells {
+        shell.cancel();
     }
 }
 

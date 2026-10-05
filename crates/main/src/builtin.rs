@@ -61,29 +61,10 @@ fn registered(tool: impl Tool + 'static) -> Result<(Arc<dyn Tool>, ToolInfo), Fa
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{Arc, Weak};
+    use std::sync::Arc;
 
-    use contract::clock::{Clock, Wake};
-    use contract::emit::Emit;
-    use contract::events::Event;
+    use contract::clock::Clock;
     use contract::shapes::ContentPart;
-    use contract::tool::Cancel;
-
-    struct Never;
-
-    impl Cancel for Never {
-        fn is_cancelled(&self) -> bool {
-            false
-        }
-
-        fn subscribe(&self, _waker: Weak<dyn Wake>) {}
-    }
-
-    struct Quiet;
-
-    impl Emit for Quiet {
-        fn emit(&self, _event: &Event) {}
-    }
 
     #[test]
     fn the_driver_shell_runs_echo() {
@@ -95,7 +76,11 @@ mod tests {
             "command".to_owned(),
             serde_json::Value::String("echo hi".to_owned()),
         );
-        let output = driver.run(&arguments, &Never, &Quiet);
+        let output = driver.run(
+            &arguments,
+            &fakes::CancelToken::new(),
+            &fakes::Recorder::default(),
+        );
         let text = output
             .content
             .iter()

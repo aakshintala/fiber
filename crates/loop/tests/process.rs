@@ -371,6 +371,17 @@ fn fiber_exited_names_the_unresolved_request() {
 
     assert_eq!(code, 0);
     assert_eq!(exited["suspended_on"], "r_question");
+    assert_eq!(
+        kinds(&session),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_resolved",
+            "permission_requested",
+            "interaction_requested",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -383,6 +394,15 @@ fn fiber_exited_has_no_suspended_on_once_the_request_is_resolved() {
     let (_, exited) = session.exit(Ok(()));
 
     assert_eq!(exited.get("suspended_on"), None);
+    assert_eq!(
+        kinds(&session),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_resolved",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
@@ -395,4 +415,40 @@ fn fiber_exited_ignores_a_request_from_the_previous_process() {
     let (_, exited) = session.exit(Ok(()));
 
     assert_eq!(exited.get("suspended_on"), None);
+    assert_eq!(
+        kinds(&session),
+        [
+            "fiber_started",
+            "permission_requested",
+            "fiber_started",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
+fn fiber_exited_keeps_the_request_that_was_not_resolved() {
+    let earlier = Session::new();
+    fiber_started(&earlier.log, "1.2.3", false).unwrap();
+    earlier.append(&permission("r_early"), Some("a_1"));
+    earlier.append(&permission("r_late"), Some("a_2"));
+    earlier.append(&resolved("r_early"), Some("a_1"));
+    let (_, exited) = earlier.exit(Ok(()));
+    assert_eq!(exited["suspended_on"], "r_late");
+
+    let later = Session::new();
+    fiber_started(&later.log, "1.2.3", false).unwrap();
+    later.append(&permission("r_early"), Some("a_1"));
+    later.append(&permission("r_late"), Some("a_2"));
+    later.append(&resolved("r_late"), Some("a_2"));
+    let (_, exited) = later.exit(Ok(()));
+    assert_eq!(exited["suspended_on"], "r_early");
+}
+
+fn kinds(session: &Session) -> Vec<String> {
+    log::read(&session.dir)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect()
 }

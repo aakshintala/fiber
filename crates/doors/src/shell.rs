@@ -32,9 +32,7 @@ pub(crate) enum Answer {
     },
 }
 
-/// The cancel signal one driver shell sees. Dropping [`Tracked`] removes it
-/// from the registry, including when `run` returns. A panic aborts the
-/// process (`docs/code-quality.md`, "Panics"), so no later `cancel` exists.
+/// The cancel signal one driver shell sees.
 pub(crate) struct ShellCancel {
     cancelled: AtomicBool,
     wakers: Mutex<Vec<Weak<dyn Wake>>>,
@@ -69,17 +67,6 @@ impl Cancel for ShellCancel {
     }
 }
 
-struct Tracked {
-    gate: Arc<Gate>,
-    cancel: Arc<ShellCancel>,
-}
-
-impl Drop for Tracked {
-    fn drop(&mut self) {
-        self.gate.untrack_shell(&self.cancel);
-    }
-}
-
 struct Silent;
 
 impl Emit for Silent {
@@ -99,16 +86,13 @@ pub(crate) fn run(gate: &Arc<Gate>, command: &Shell) -> Answer {
         };
     }
     let cancel = Arc::new(ShellCancel::new());
-    let tracked = Tracked {
-        gate: Arc::clone(gate),
-        cancel: Arc::clone(&cancel),
-    };
     gate.track_shell(Arc::clone(&cancel));
     let mut arguments = Map::new();
     arguments.insert("command".to_owned(), Value::String(command.command.clone()));
     let output = tool.run(&arguments, cancel.as_ref(), &Silent);
+    // A panic aborts the process, so nothing later cancels this shell.
+    gate.untrack_shell(&cancel);
     let bound = tool.bound();
-    drop(tracked);
     answered(gate, output, bound)
 }
 

@@ -128,7 +128,23 @@ fn a_queued_prompt_starts_a_turn_even_at_a_zero_delay() {
         session.turn(),
         Some(contract::events::TurnOutcome::Completed)
     );
-    assert!(kinds(&session.lines()).contains(&"turn_completed"));
+    assert_eq!(
+        kinds(&session.lines()),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 }
 
 #[test]
@@ -354,14 +370,21 @@ fn an_approval_wait_parks_until_the_idle_deadline_and_writes_nothing_more() {
         .recv_timeout(DEADLINE)
         .expect("run ended at the approval deadline");
     assert!(ran.is_ok(), "{ran:?}");
-    let kinds = durable(&session);
     assert_eq!(
-        kinds.last().map(String::as_str),
-        Some("permission_requested")
+        durable(&session),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+        ]
     );
-    assert!(!kinds.iter().any(|kind| kind == "permission_resolved"));
-    assert!(!kinds.iter().any(|kind| kind == "tool_call_completed"));
-    assert!(!kinds.iter().any(|kind| kind == "turn_completed"));
 }
 
 #[test]
@@ -391,7 +414,33 @@ fn a_reply_before_the_deadline_resolves_the_approval() {
     );
     answered.join().unwrap();
     let lines = session.lines();
-    assert!(kinds(&lines).contains(&"permission_resolved"));
-    assert!(kinds(&lines).contains(&"turn_completed"));
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     assert_eq!(lines.last().unwrap().payload["outcome"], "completed");
 }

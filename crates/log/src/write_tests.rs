@@ -106,6 +106,29 @@ fn cut_output_splits_on_char_boundaries_and_keeps_the_whole_text() {
     assert!(lines.next().is_none());
 }
 
+#[test]
+fn cut_output_with_no_tail_does_not_add_a_trailing_newline() {
+    let sessions = fakes::TempDir::new("log-unit-cut-end");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let full = "abcdefghij";
+    let (kept, artifact) =
+        log.cut_output(full, contract::tool::Bound { start: 4, end: 0 }, "out.txt");
+    let path = sessions.path().join("s_1").join(artifact.unwrap());
+    assert_eq!(fs::read_to_string(&path).unwrap(), full);
+    assert_eq!(
+        kept,
+        format!(
+            "abcd\n[6 bytes cut. The full output is in {}; read it with `read`.]",
+            path.display()
+        )
+    );
+}
+
 fn started() -> Event {
     Event::FiberStarted(FiberStarted {
         version: "0".into(),
