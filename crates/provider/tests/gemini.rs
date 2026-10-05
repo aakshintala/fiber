@@ -940,6 +940,7 @@ fn a_call_cancelled_before_it_runs_returns_without_connecting() {
     listener.set_nonblocking(true).unwrap();
     let endpoint = Endpoint {
         base_url: format!("http://{}", listener.local_addr().unwrap()),
+        direct: true,
         ..Endpoint::default()
     };
     let call = Gemini::new(endpoint).request(&request());
