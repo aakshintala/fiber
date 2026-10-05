@@ -1,33 +1,22 @@
 [package]
-name = "main"
+name = "cli"
 version = "0.0.0"
 edition.workspace = true
 license.workspace = true
 publish.workspace = true
 
-[[bin]]
-name = "fiber"
-path = "src/main.rs"
-
 [dependencies]
-clap.workspace = true
-cli = { path = "../cli" }
 config = { path = "../config" }
 contract = { path = "../contract" }
 doors = { path = "../doors" }
 extensions = { path = "../extensions" }
-jobs = { path = "../jobs" }
 log = { path = "../log" }
-loop = { path = "../loop" }
-mcp = { path = "../mcp" }
-picture = { path = "../picture" }
-provider = { path = "../provider" }
+rustix.workspace = true
 serde_json.workspace = true
-tools = { path = "../tools" }
+signal-hook = "0.3"
 
 [dev-dependencies]
 fakes = { path = "../fakes" }
-rustix.workspace = true
 
 [lints]
 workspace = true

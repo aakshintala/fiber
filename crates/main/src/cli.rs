@@ -45,10 +45,6 @@ const HELP_SUFFIX: &str = " Run `fiber --help` for usage.";
 
 const ASK_SHAPE: &str = "`fiber ask` takes one prompt, then an optional `-`; quote the prompt. Run `fiber --help` for usage.";
 
-/// What `fiber logout` says when it is given no provider.
-pub(crate) const LOGOUT_SHAPE: &str =
-    "`fiber logout` takes the provider to log out of. Run `fiber --help` for usage.";
-
 /// What `fiber` was asked to do, or the parse error.
 #[derive(Debug)]
 pub(crate) enum Invocation {

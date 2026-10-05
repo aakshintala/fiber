@@ -560,7 +560,7 @@ fn logout_without_a_provider_is_a_usage_error() {
     let setup = Setup::new();
     let e = failed(setup.logout(None).0);
     assert_eq!(e.code, ErrorCode::Usage);
-    assert_eq!(e.message, crate::cli::LOGOUT_SHAPE);
+    assert_eq!(e.message, crate::LOGOUT_SHAPE);
 }
 
 #[test]
