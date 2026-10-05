@@ -394,10 +394,7 @@ state.keys()
   "Extensions"). `state.unset` removes a key. `state.set` with `nil` is an
   error, so a missing value is never mistaken for a deletion.
 - **A value is at most 64 KiB.** A larger write fails with code
-  `state_too_large`. Across the owner's pi sessions over 60 days, 10,652
-  extension state entries in 605 sessions had a median of 162 bytes, a 99th
-  percentile of 3 KB and a largest of 27 KB (`research/extension-process/`).
-  Bigger things go in a data directory.
+  `state_too_large`. Bigger things go in a data directory.
 - **History takes one key per record.** A value that grows with the session,
   such as one record per turn or per delegate, is written under one key per
   record, so no write repeats the ones before it (`docs/events.md`,
@@ -787,7 +784,7 @@ or passes its timeout gives a `notice` naming the extension. There is no
 `fiber.command(name, { description, timeout, run })` adds a command. A person
 types `/name` and any text after it, which reaches `run` as its arguments. A
 driver sends the `command` driver command (`docs/invocation.md`). Names are
-plain, as in pi and Claude Code: `/databricks-models`, not
+plain: `/databricks-models`, not
 `/databricks:models`. When two extensions register the same name, neither
 gets it, a `notice` names both, and configuration can rename one. An
 extension may replace a built-in command by name, as it may a tool.
@@ -1079,8 +1076,8 @@ does not change a command's exit code.
 
 Installing an extension runs none of its code, except an install step its
 manifest declares, such as `npm ci`. Fiber runs that step in the extension's
-directory at install and at every update, as pi runs `npm install` for its
-packages. Like pi, Fiber does not pass `--ignore-scripts`, so a dependency's
+directory at install and at every update. Fiber does not pass
+`--ignore-scripts`, so a dependency's
 own install scripts run too, and the install summary says so. A pure-data
 provider is only ever read. Any other enabled Lua extension's script first
 runs at session start ("Loading, and cost when nothing is loaded").
@@ -1259,3 +1256,5 @@ The summary shows what the manifest and the files tell. It does not list the
 new tools, hooks, watchers or commands an extension adds: a Lua extension
 registers those only when its script runs, and installing runs none of its
 code. The full source is one key away, so a person can read them.
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsextensionsmd).

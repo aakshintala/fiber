@@ -89,7 +89,6 @@ The busy-or-resumed ceiling holds on three workloads:
 sessions in the archived Zig tree. That tree's session peaked at 2.1 GiB on
 this turn.
 
-1,000 sessions is twice the largest project in the owner's pi sessions (489).
 Listing reads each log line by line through its first `turn_started`, for the
 first prompt and branch, and the last 4 KiB, for the session's state. On macOS
 arm64 that costs 51 ms for 2,000 sessions, warm
@@ -136,3 +135,5 @@ own self-check failing is a failed run, not a slow sample.
 At each release, every ceiling more than twice its measured value drops to
 measured times two. Ceilings never rise at release; only a pull request
 raises one.
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsperformancemd).

@@ -90,7 +90,7 @@ The logo is `⌇ fiber 0.0.1`: the ⌇ in the accent colour, the name in the
 accent gradient, the version dim.
 
 - **On home it is four rows tall,** in pixel letters drawn with half
-  blocks, with each letter's counter shaded, as opencode draws its logo.
+  blocks, with each letter's counter shaded.
 - **Where the terminal speaks an image protocol** (kitty, iTerm2 or Sixel), an
   image replaces the pixel letters in exactly the same cells: a smooth wave
   and the name set in JetBrains Mono ExtraBold, in the gradient. Detection
@@ -358,7 +358,7 @@ While Fiber waits to retry a failed model call, the working line says so:
 ### The narrow layout
 
 The conversation has a minimum width. Below it the panel goes away, and rows
-under the conversation take its place, as pi-rig lays them out. From the top:
+under the conversation take its place. From the top:
 
 1. the working line
 2. the running delegates, up to 4 rows, while the conversation keeps at least
@@ -369,7 +369,7 @@ under the conversation take its place, as pi-rig lays them out. From the top:
 6. the status line, two rows under the input box
 
 Each card contributes its segments to the status line in the configured order,
-and each row is cut at the terminal's right edge, as pi-rig's footer is. The
+and each row is cut at the terminal's right edge. The
 second row opens with "N delegates running" and "N jobs running", so they are
 never cut; each opens a list of delegate or job cards in the conversation
 area. Clicking any other segment opens its card's view.
@@ -767,7 +767,7 @@ keyboard's reach.
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
 The key map, `/?` or `/help`, is an overlay over the conversation listing every
-binding by area with its other paths, as codex's shortcut overlay does. Esc closes it. Ctrl+L opens the model picker,
+binding by area with its other paths. Esc closes it. Ctrl+L opens the model picker,
 so it does not redraw the screen as it does in some terminal programs.
 
 Every action has a stable id, and `keys."<id>"` in the global configuration
@@ -889,8 +889,7 @@ Linux; the byte and frame counts do.
 Fiber ships a dark and a light theme. A person adds their own as files in
 Fiber home and picks one in `/settings`, which writes `tui.theme`. With no
 theme set, the theme follows the terminal's light or dark appearance and
-switches when the terminal reports a change, as pi's `light/dark` setting
-does.
+switches when the terminal reports a change.
 
 A theme sets colours only. It gives each colour role a value, and an
 extension's spans name the same roles ("What a renderer returns"). Anything
@@ -903,7 +902,7 @@ on, and it is on whenever a screen reader is detected.
 
 ### Screen readers
 
-Fiber detects VoiceOver on macOS and AT-SPI on Linux at start, as codex does,
+Fiber detects VoiceOver on macOS and AT-SPI on Linux at start,
 and draws flat:
 
 - no tints, half-block edges, stripes or animation
@@ -911,8 +910,7 @@ and draws flat:
 - state in words rather than glyphs
 - images as their one line, never inline
 
-`--screen-reader` and `tui.screen_reader` force the flat mode on or off, as
-Claude Code's `--ax-screen-reader` does.
+`--screen-reader` and `tui.screen_reader` force the flat mode on or off.
 
 ### Images
 
@@ -1264,3 +1262,4 @@ server's or an extension's `tools.enabled` and `tools.disabled`.
   [What is the event stream, and what is durable?](https://github.com/aakshintala/fiber/issues/6)
 - The front doors and driver commands: `docs/invocation.md`
 - Handoff: `docs/handoff.md`
+- Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)

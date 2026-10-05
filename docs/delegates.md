@@ -130,8 +130,7 @@ behaviour is `docs/tools.md`, "Background jobs"; the events are
   `delegate_message`, which resumes the delegate, or asks the person first
   (`docs/tools.md`, "Asking the person").
 - There is no status field beyond `job_completed`'s `completed`, `failed` and
-  `cancelled`. None of 529 results in the owner's pi sessions ended with a
-  requested `STATUS:` line.
+  `cancelled`.
 - The wake is built only from logged fields. Nothing in it is rendered from the
   clock.
 
@@ -198,8 +197,6 @@ final message, any questions, usage totals and worktree state. Their keys are
 - Both limits are local. A delegate is told its depth when it starts, and each
   session counts only its own delegates, so no state is shared across the tree.
   The worst case for one root is 10 + 100 = 110 delegates.
-- Measured: the owner peaked at 8 running at once in pi; 17 grandchildren were
-  started, from 1.6% of children.
 
 ## Lifetime
 
@@ -256,8 +253,6 @@ final message, any questions, usage totals and worktree state. Their keys are
 - A resume goes back into the kept worktree, or gets a fresh one from the
   current HEAD if it was removed.
 - `worktree` outside a git repository fails with `invalid_arguments`.
-- Measured: the owner isolated 6% of pi launches; 77% of cursor-delegate runs
-  used a path the caller made.
 
 ## Forks
 
@@ -463,3 +458,5 @@ Not yet probed: `create-chat`, which is from `--help`; whether
 `--auto-review` overrides the person's `approvalMode`; what SIGTERM does; and
 where its quota comes from. Until its quota is known, the cursor-agent
 harness declares no `quota()`.
+
+Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md#from-docsdelegatesmd).
