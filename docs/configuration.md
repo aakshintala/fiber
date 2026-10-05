@@ -448,6 +448,10 @@ provider extension declares") lists:
   `openai-completions` always sends `stream_options.include_usage: true`,
   because OpenAI sends no usage without it (`docs/model-routing.md`,
   "openai-completions facts").
+- `extra_body` is added to every request for the model. It may not name a
+  field Fiber builds, such as `tools` or `messages`; a model that does is
+  left out with the notice `model_invalid` (`docs/model-routing.md`, "Extra
+  request body fields").
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
 - `cost` is in US dollars per million tokens. A model priced by request size

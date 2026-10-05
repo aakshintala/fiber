@@ -250,7 +250,8 @@ For each model:
   (`docs/tools.md`, "Which tools the model sees")
 - whether its provider hosts a web search for it, and which variant
   (`docs/tools.md`, "Web fetch and web search")
-- extra request body fields
+- extra request body fields, which may not name a field Fiber builds
+  itself ("Extra request body fields")
 - a prompt addendum, text appended to the system prompt for this model only
   (`docs/system-prompt.md`, "The model's addendum")
 - context window, output token limit, input kinds and cost
@@ -258,6 +259,30 @@ For each model:
 
 Fiber never guesses a flag from a URL or a provider name. A flag the vendor
 needs is declared, or it is not set.
+
+### Extra request body fields
+
+A model's `extra_body` adds fields to every request sent to it, after Fiber
+has built the request. It may add a field or replace one such as
+`max_tokens` or a thinking setting. It may not name a field that carries
+what Fiber records, or that Fiber relies on to read the reply:
+
+| Protocol | Fields `extra_body` may not name |
+|---|---|
+| `anthropic-messages` | `model`, `system`, `messages`, `tools`, `tool_choice`, `stream` |
+| `openai-completions` | `model`, `messages`, `tools`, `tool_choice`, `stream` |
+| `openai-responses` | `model`, `instructions`, `input`, `tools`, `tool_choice`, `stream` |
+| `google-generative-ai` | `systemInstruction`, `contents`, `tools`, `toolConfig` |
+| `bedrock-converse` | `system`, `messages`, `toolConfig` |
+
+`google-generative-ai` and `bedrock-converse` carry the model and streaming
+in the URL, not the body.
+
+A model whose `extra_body` names one of these is left out of the model list,
+with the notice `model_invalid` naming the model and the field. The same
+applies to a model a provider's `models()` function returns. So the tools
+and system prompt in the session log are always the ones sent, and the tool
+set is fixed for a given Fiber build.
 
 ### openai-completions facts
 
