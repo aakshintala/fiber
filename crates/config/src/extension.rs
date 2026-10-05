@@ -45,6 +45,9 @@ pub struct Manifest {
     /// Raises a Lua extension's memory cap above the default of 1 MiB.
     #[serde(default)]
     pub memory_mib: Option<u64>,
+    /// The built-in tools and commands it replaces.
+    #[serde(default)]
+    pub replaces: Vec<String>,
 }
 
 /// One platform's binary: where it is downloaded from and its checksum.

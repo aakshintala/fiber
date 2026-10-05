@@ -256,6 +256,23 @@ fn memory_mib_absent_or_null_is_none_and_a_positive_value_reads() {
 }
 
 #[test]
+fn replaces_lists_the_built_ins_and_defaults_to_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let base = r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1"#;
+    setup.write(&dir.join("extension.json"), &format!("{base}}}"));
+    assert!(read_manifest(&dir).unwrap().replaces.is_empty());
+    setup.write(
+        &dir.join("extension.json"),
+        &format!(r#"{base}, "replaces": ["web_search", "shell"]}}"#),
+    );
+    assert_eq!(
+        read_manifest(&dir).unwrap().replaces,
+        ["web_search", "shell"]
+    );
+}
+
+#[test]
 fn memory_mib_zero_or_overflowing_bytes_is_invalid() {
     let setup = Setup::new();
     let dir = setup.root().join("ext");

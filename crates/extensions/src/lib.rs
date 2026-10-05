@@ -19,6 +19,7 @@ mod manage;
 mod oauth;
 mod prepare;
 mod providers;
+mod repository;
 mod resolve;
 
 use std::io;
@@ -37,6 +38,9 @@ pub use manage::{Item, Plan, Request, plan};
 pub use oauth::{Browser, SystemBrowser};
 pub use prepare::platform;
 pub use providers::{Model, Providers};
+pub use repository::{
+    Decision, Index, Pending, RepoItem, Store, declared_items, hash, kind_name, pending,
+};
 
 /// The extension API's major version this Fiber speaks
 /// (`docs/extensions.md`, "The extension API version").
@@ -318,6 +322,29 @@ pub enum Error {
     /// A `credential()` call failed. Only from [`LuaProvider::fetch_token`].
     #[error(transparent)]
     Credential(Box<Error>),
+    /// A `repository_extensions` path that is not a package directory inside
+    /// the repository.
+    #[error("`repository_extensions` path `{path}` {why}.")]
+    BadRepositoryPath {
+        /// The path as the repository wrote it.
+        path: String,
+        /// What is wrong with it.
+        why: &'static str,
+    },
+    /// Reading, hashing or copying what a repository ships failed.
+    #[error("`{item}`: {why}")]
+    Pin {
+        /// The extension, hook or MCP server.
+        item: String,
+        /// Why.
+        why: String,
+    },
+    /// A file that is not the one hashed was found when copying it.
+    #[error("`{item}` changed while it was being copied. Run `fiber approve` again.")]
+    ChangedWhileCopying {
+        /// The extension, hook or MCP server.
+        item: String,
+    },
 }
 
 impl Error {
@@ -325,7 +352,10 @@ impl Error {
     pub fn code(&self) -> ErrorCode {
         match self {
             Self::Config(e) => e.code(),
-            Self::Io { .. } => ErrorCode::IoFailed,
+            Self::Io { .. } | Self::Pin { .. } | Self::ChangedWhileCopying { .. } => {
+                ErrorCode::IoFailed
+            }
+            Self::BadRepositoryPath { .. } => ErrorCode::ConfigInvalid,
             Self::Overlaps { .. } | Self::GitMissing | Self::SlugTaken { .. } => ErrorCode::Usage,
             Self::Git { .. } | Self::Download { .. } => ErrorCode::FetchFailed,
             Self::Busy

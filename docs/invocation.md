@@ -490,7 +490,17 @@ running, no jobs running and no cache warming (`docs/prompt-cache.md`,
 "Warming while idle"). Waiting on an approval or a question is idle,
 because nothing is in flight. Connected clients do not keep a session alive: a
 phone or a terminal left open is connected all the time. Leaving never
-cancels. When the delay passes, Fiber gives the ending notice and exits.
+cancels. When the delay passes, Fiber exits.
+
+**A session left unattended with jobs running checks them once.** Unattended
+means no prompt from a person or a driver for `session.idle_exit_ms`, jobs or
+no jobs. A running job keeps a session from being idle, so the idle delay
+never ends it; instead, when it has been unattended that long with jobs
+running, Fiber wakes the model once with the jobs check: a notice listing
+the running jobs and telling it to stop any that look hung or that it no
+longer needs, judging from each job's output file. The session does not end.
+The check fires once and is armed again only by the next prompt, so a job
+the model keeps does not cost a turn every delay.
 
 **A delegate exits as soon as its run finishes**: its final answer is written
 and its own jobs are done. It does not wait for `session.idle_exit_ms`. A later

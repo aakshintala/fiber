@@ -30,7 +30,12 @@ costs what it costs (about 150 KiB and one thread for a Lua extension,
 A session in a repository that declares code also checks each declared path
 against `pinned.json` before its first request, hashing only a file whose size
 or modification time changed (`docs/extensions.md`, "Code a repository
-ships"). That cost is not yet measured.
+ships"). Measured on macOS arm64, in one process, with
+`cargo run -p extensions --example pin_check`: one MCP server naming 200
+files of 4 KiB each (819,200 bytes) takes about 9 ms with no `pinned.json`,
+and about 4 ms with every size and modification time unchanged; a release
+build takes about 8 ms and 2.5 ms. Both include resolving each path and
+reading the index. No Linux figure is measured.
 
 Memory follows the context window, not the transcript. After a handoff the
 session holds the handoff note and what came after it, and a resumed session

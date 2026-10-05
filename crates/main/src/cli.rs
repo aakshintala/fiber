@@ -25,6 +25,7 @@ Extensions:
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension list                    List installed extensions: name, version and commit
+  approve [--yes]                   Show what this repository ships and approve it
 
 Flags:
   -h, --help     Print this menu
@@ -76,6 +77,8 @@ pub(crate) enum Commands {
     /// Manage extensions
     #[command(subcommand, arg_required_else_help = false)]
     Extension(ExtensionCommands),
+    /// Show what this repository ships and approve it
+    Approve(ApproveArgs),
     /// Print the version
     Version,
     /// Print this menu, or a command's help
@@ -142,6 +145,13 @@ pub(crate) enum ExtensionCommands {
     },
     /// List installed extensions: name, version and commit
     List,
+}
+
+#[derive(Debug, clap::Args)]
+pub(crate) struct ApproveArgs {
+    /// Approve without asking, for a script or a machine image.
+    #[arg(long)]
+    pub(crate) yes: bool,
 }
 
 #[derive(Debug, clap::Args)]
