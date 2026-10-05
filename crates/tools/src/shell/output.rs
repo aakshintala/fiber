@@ -39,6 +39,52 @@ pub(super) struct Inner {
     /// Types into the command's terminal; `Some` only for a `tty` command,
     /// until the job takes it.
     pub(super) input: Option<contract::jobs::Input>,
+    /// A monitor's standard output not yet taken for its lines: what the
+    /// file kept. `None` for any other command.
+    pub(super) lines: Option<Vec<u8>>,
+    /// A monitor's standard error. `None` for any other command.
+    pub(super) errors: Option<Errors>,
+}
+
+/// A monitor's standard error: held until the move, then written to its own
+/// file, which stops growing past the cap without stopping the job
+/// (`docs/tools.md`, "Background jobs").
+#[derive(Default)]
+pub(super) struct Errors {
+    /// Bytes read before the move.
+    held: Vec<u8>,
+    /// The stderr file, after the move.
+    file: Option<File>,
+    /// Bytes in the file.
+    written: u64,
+    /// The file stops at this many bytes.
+    cap: u64,
+    /// The pipe closed.
+    pub(super) eof: bool,
+}
+
+impl Errors {
+    /// Writes what was held to `file` and makes it the sink. Bytes past
+    /// `cap` are dropped.
+    pub(super) fn attach(&mut self, file: File, cap: u64) {
+        self.file = Some(file);
+        self.cap = cap;
+        let held = std::mem::take(&mut self.held);
+        self.sink(&held);
+    }
+
+    fn sink(&mut self, bytes: &[u8]) {
+        let Some(file) = self.file.as_mut() else {
+            self.held.extend_from_slice(bytes);
+            return;
+        };
+        let room = usize::try_from(self.cap.saturating_sub(self.written)).unwrap_or(usize::MAX);
+        let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
+        write_or_drop(file, kept);
+        self.written = self
+            .written
+            .saturating_add(u64::try_from(kept.len()).unwrap_or(u64::MAX));
+    }
 }
 
 impl Default for Inner {
@@ -56,6 +102,8 @@ impl Default for Inner {
             cap_fired: false,
             pending: Vec::new(),
             input: None,
+            lines: None,
+            errors: None,
         }
     }
 }
@@ -66,6 +114,9 @@ impl Inner {
     pub(super) fn attach(&mut self, mut file: File, cap: u64) {
         let bytes = std::mem::take(&mut self.output);
         write_or_drop(&mut file, &bytes);
+        if let Some(lines) = self.lines.as_mut() {
+            lines.extend_from_slice(&bytes);
+        }
         self.cap = cap;
         self.written = u64::try_from(bytes.len()).unwrap_or(u64::MAX);
         self.cap_fired = self.written > cap;
@@ -87,7 +138,16 @@ impl Inner {
             .written
             .saturating_add(u64::try_from(kept.len()).unwrap_or(u64::MAX));
         self.pending.extend_from_slice(kept);
+        if let Some(lines) = self.lines.as_mut() {
+            lines.extend_from_slice(kept);
+        }
         self.cap_fired = kept.len() < bytes.len();
+    }
+
+    /// Both streams closed: standard output, and a monitor's standard
+    /// error when it has one.
+    pub(super) fn all_eof(&self) -> bool {
+        self.eof && self.errors.as_ref().is_none_or(|errors| errors.eof)
     }
 }
 
@@ -140,6 +200,36 @@ pub(super) fn read_output(mut read: impl Read, shared: &Shared) {
             }
         }
     }
+}
+
+/// Reads a monitor's standard error into [`Errors`]. Past the drain bound
+/// the bytes are dropped and the read continues, as for standard output.
+pub(super) fn read_errors(mut read: impl Read, shared: &Shared) {
+    let mut buf = [0_u8; 8192];
+    loop {
+        match read.read(&mut buf) {
+            Ok(0) => break,
+            Ok(n) => {
+                let bytes = buf.get(..n).unwrap_or(&[]);
+                let mut inner = lock(&shared.inner);
+                if !inner.discard
+                    && let Some(errors) = inner.errors.as_mut()
+                {
+                    errors.sink(bytes);
+                }
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => break,
+        }
+    }
+    let mut inner = lock(&shared.inner);
+    if let Some(errors) = inner.errors.as_mut() {
+        errors.eof = true;
+    }
+    // The drive loop waits for both streams to close: it wakes on this.
+    bump(&mut inner);
+    drop(inner);
+    shared.cv.notify_all();
 }
 
 pub(super) fn note_eof(shared: &Shared) {

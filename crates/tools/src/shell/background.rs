@@ -18,10 +18,11 @@ use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 use contract::{ErrorCode, JobId};
 
-use super::assemble;
 use super::command::{Finished, MovePolicy, MoveReason, Moved, StopKind};
+use super::monitor::Feed;
 use super::output::JobStream;
 use super::tty;
+use super::{Limit, assemble};
 
 /// A description longer than this is cut, with `…` as the last character.
 /// Picked, not measured.
@@ -41,6 +42,9 @@ const PS_POLL: Duration = Duration::from_millis(10);
 const UNNAMED: &str = "Processes are still running in its group.";
 
 const CAPPED: &str = "The output passed 5 GB and the job was stopped.";
+
+const FLOODED: &str = "The monitor's output was suppressed for 30 seconds, so it was stopped. \
+     Restart it with a more selective source.";
 
 const AFTER_THIRTY: &str = "Still running after 30 seconds, so it moved to the background.";
 const STARTED: &str = "Started in the background.";
@@ -83,10 +87,16 @@ pub(crate) fn running_step(
     }
     match policy {
         MovePolicy::Stay => Step::Park,
-        MovePolicy::Foreground | MovePolicy::Background | MovePolicy::Terminal => {
+        MovePolicy::Foreground
+        | MovePolicy::Background
+        | MovePolicy::Terminal
+        | MovePolicy::Monitor => {
             if let Some(code) = shell_exit {
                 Step::Move(MoveReason::ShellExited { code })
-            } else if matches!(policy, MovePolicy::Background | MovePolicy::Terminal) {
+            } else if matches!(
+                policy,
+                MovePolicy::Background | MovePolicy::Terminal | MovePolicy::Monitor
+            ) {
                 Step::Move(MoveReason::StartedInBackground)
             } else if asked && policy == MovePolicy::Foreground {
                 Step::Move(MoveReason::BackgroundCommand)
@@ -105,7 +115,9 @@ pub(crate) fn wait_deadline(
     move_at: Option<Instant>,
 ) -> Option<Instant> {
     match policy {
-        MovePolicy::Stay | MovePolicy::Background | MovePolicy::Terminal => timeout_at,
+        MovePolicy::Stay | MovePolicy::Background | MovePolicy::Terminal | MovePolicy::Monitor => {
+            timeout_at
+        }
         MovePolicy::Foreground => match (timeout_at, move_at) {
             (Some(timeout_at), Some(move_at)) => Some(timeout_at.min(move_at)),
             (Some(instant), None) | (None, Some(instant)) => Some(instant),
@@ -193,7 +205,7 @@ pub(crate) fn take(
     jobs: Arc<dyn Jobs>,
     clock: Arc<dyn Clock>,
     command: &str,
-    timeout_ms: u64,
+    limit: Limit,
     terminal: bool,
     cancel: &dyn Cancel,
     emit: &dyn Emit,
@@ -204,13 +216,12 @@ pub(crate) fn take(
         description: description_of(command),
         stop: job_cancel.stop(),
         input: moved.take_input(),
+        lines: limit.monitor,
     }) {
-        Ok(opened) => hand_off(
-            moved, opened, job_cancel, clock, timeout_ms, terminal, cancel,
-        ),
+        Ok(opened) => hand_off(moved, opened, job_cancel, clock, limit, terminal, cancel),
         Err(error) => {
             let finished = moved.resume(clock.as_ref(), cancel, emit);
-            note_open_failure(assemble(timeout_ms, finished), &error)
+            note_open_failure(assemble(limit, finished), &error)
         }
     }
 }
@@ -220,7 +231,7 @@ fn hand_off(
     opened: Opened,
     job_cancel: Arc<JobCancel>,
     clock: Arc<dyn Clock>,
-    timeout_ms: u64,
+    limit: Limit,
     terminal: bool,
     cancel: &dyn Cancel,
 ) -> Output {
@@ -236,13 +247,25 @@ fn hand_off(
     let job_id = opened.started.job_id.clone();
     let end = opened.end;
     let stream = JobStream::new(job_id.clone(), opened.emit);
+    let errors = errors_path(&opened.path);
+    let feed = opened.lines.map(|lines| {
+        // debt: a stderr file that cannot be created drops the monitor's standard error unreported, until docs/errors.md has a code for lost output
+        if let Ok(file) = File::create(&errors) {
+            moved.attach_errors(file);
+        }
+        Feed::new(job_id.clone(), lines, job_cancel.stop(), clock.now())
+    });
+    let monitor = feed.is_some();
     let job_clock = Arc::clone(&clock);
     // The job's thread starts before the receipt lists the group, so its
     // timeout and stop hold while `ps` runs.
     thread::spawn(move || {
-        let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream);
-        end.end(to_completed(job_id, &path, finished, timeout_ms));
+        let finished = moved.drive_job(job_clock.as_ref(), job_cancel.as_ref(), stream, feed);
+        end.end(to_completed(job_id, &path, finished, limit));
     });
+    if monitor {
+        return monitor_receipt(&opened.started, &opened.path, &errors, limit.ms);
+    }
     // The receipt carries what the terminal printed in its first 250 ms.
     let first = terminal.then(|| {
         tty::wait_first_output(&shared, clock.as_ref(), cancel);
@@ -292,6 +315,31 @@ fn terminal_receipt(
             text.push('\n');
         }
     }
+    Output {
+        content: vec![ContentPart::Text { text }],
+        jobs: vec![JobRecord::Started(started.clone())],
+        ..Output::default()
+    }
+}
+
+/// A monitor's standard error file: beside its output file, named
+/// `<job_id>.stderr.log`.
+fn errors_path(output: &Path) -> std::path::PathBuf {
+    let stem = output
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    output.with_file_name(format!("{stem}.stderr.log"))
+}
+
+/// A monitor's receipt: its files, and how its lines reach the model.
+fn monitor_receipt(started: &JobStarted, path: &Path, errors: &Path, deadline_ms: u64) -> Output {
+    let text = format!(
+        "Started a monitor.\nJob {id}. Output: {path}. Errors: {errors}. Lines it prints reach you in batches; its deadline is {deadline_ms} ms.\n",
+        id = started.job_id.0,
+        path = path.display(),
+        errors = errors.display(),
+    );
     Output {
         content: vec![ContentPart::Text { text }],
         jobs: vec![JobRecord::Started(started.clone())],
@@ -469,13 +517,18 @@ fn description_of(command: &str) -> String {
 
 /// The end maps as the foreground result does (`assemble`); a stop that
 /// was not indeterminate is `cancelled`.
-fn to_completed(job_id: JobId, path: &Path, finished: Finished, timeout_ms: u64) -> JobCompleted {
+fn to_completed(job_id: JobId, path: &Path, finished: Finished, limit: Limit) -> JobCompleted {
     let capped = finished.capped;
-    // The cap wins over every other end, a cancel included.
-    let stopped = !capped && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
-    let mut output = assemble(timeout_ms, finished);
+    let flooded = finished.flooded;
+    // The cap wins over every other end, a cancel included; a flood wins
+    // over every other end but the cap.
+    let stopped =
+        !capped && !flooded && finished.stop == Some(StopKind::Cancel) && !finished.indeterminate;
+    let mut output = assemble(limit, finished);
     if capped {
         output.error = Some(super::failure(ErrorCode::OutputCap, CAPPED.to_owned()));
+    } else if flooded {
+        output.error = Some(super::failure(ErrorCode::Flooded, FLOODED.to_owned()));
     }
     let status = if stopped {
         Outcome::Cancelled

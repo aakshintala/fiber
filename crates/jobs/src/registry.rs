@@ -13,9 +13,9 @@ use std::time::{Duration, Instant};
 use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{JobCompleted, JobStarted, Outcome};
+use contract::events::{JobCompleted, JobLine, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, JobRecord, OpenError, Opened, Opening};
+use contract::jobs::{End, Foreground, JobRecord, Lines, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
 /// The jobs one session started. `open` is the only way in; `list`, `wait`
@@ -140,6 +140,14 @@ impl Registry {
             description: opening.description,
             output_path: format!("artifacts/{id}.log"),
         };
+        let lines = opening.lines.then(|| {
+            let registry = Weak::clone(&self.me);
+            Lines(Box::new(move |line| {
+                if let Some(registry) = registry.upgrade() {
+                    registry.send_line(line);
+                }
+            }))
+        });
         let expected = job_id.clone();
         let end = End::new(
             job_id,
@@ -167,7 +175,19 @@ impl Registry {
             file,
             end,
             emit: Arc::clone(&self.emit),
+            lines,
         })
+    }
+
+    /// Sends a monitor's batch to the inbox, under the lock an end sends
+    /// under, so the job's lines and its end arrive in the order its drive
+    /// thread made them. Dropped when no inbox is set.
+    fn send_line(&self, line: JobLine) {
+        let inner = lock(&self.inner);
+        if let Some(inbox) = &inner.inbox {
+            // A loop that is gone takes no news.
+            let _sent = inbox.send(Delivery::JobLine(line));
+        }
     }
 
     /// The list the model sees, in start order. One line per job, or

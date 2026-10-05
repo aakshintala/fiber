@@ -10,9 +10,9 @@ use std::time::Duration;
 use contract::JobId;
 use contract::clock::Clock;
 use contract::emit::Emit;
-use contract::events::{Class, Event, JobCompleted, JobStarted};
+use contract::events::{Class, Event, JobCompleted, JobLine, JobStarted};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, Foreground, Jobs, OpenError, Opened, Opening};
+use contract::jobs::{End, Foreground, Jobs, Lines, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
 type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
@@ -41,6 +41,37 @@ pub struct FakeJobs {
     completed_tx: Sender<JobCompleted>,
     completed_rx: Mutex<Receiver<JobCompleted>>,
     deltas: Arc<JobDeltas>,
+    lines: Arc<JobLines>,
+}
+
+/// The batches every monitor of a [`FakeJobs`] sent, in order.
+#[derive(Default)]
+pub struct JobLines {
+    lines: Mutex<Vec<JobLine>>,
+    changed: Condvar,
+}
+
+impl JobLines {
+    /// Every batch so far, in arrival order.
+    pub fn lines(&self) -> Vec<JobLine> {
+        lock(&self.lines).clone()
+    }
+
+    /// Waits, at most `within` of real time, until at least `count` batches
+    /// arrived, and returns every batch so far.
+    pub fn wait_for(&self, count: usize, within: Duration) -> Vec<JobLine> {
+        let lines = lock(&self.lines);
+        let (lines, _) = self
+            .changed
+            .wait_timeout_while(lines, within, |lines| lines.len() < count)
+            .unwrap_or_else(PoisonError::into_inner);
+        lines.clone()
+    }
+
+    fn push(&self, line: JobLine) {
+        lock(&self.lines).push(line);
+        self.changed.notify_all();
+    }
 }
 
 /// The `job_delta` lines every job of a [`FakeJobs`] emitted, in order.
@@ -126,6 +157,7 @@ impl FakeJobs {
             completed_tx,
             completed_rx: Mutex::new(completed_rx),
             deltas: Arc::default(),
+            lines: Arc::default(),
         })
     }
 
@@ -137,6 +169,11 @@ impl FakeJobs {
     /// The `job_delta` lines the jobs emitted.
     pub fn deltas(&self) -> Arc<JobDeltas> {
         Arc::clone(&self.deltas)
+    }
+
+    /// The batches the monitors sent.
+    pub fn lines(&self) -> Arc<JobLines> {
+        Arc::clone(&self.lines)
     }
 
     /// Types `bytes` into `job_id`'s terminal, as `jobs write` does, with
@@ -195,6 +232,20 @@ impl Jobs for FakeJobs {
             inner.inputs.push((job_id.clone(), Arc::from(input.0)));
         }
         drop(inner);
+        let lines = opening.lines.then(|| {
+            let recorded = Arc::clone(&self.lines);
+            let book = Arc::clone(&self.inner);
+            Lines(Box::new(move |line: JobLine| {
+                // Under the lock the end sends under, as the registry does.
+                let inner = lock(&book);
+                if let Some(inbox) = &inner.inbox {
+                    match inbox.send(Delivery::JobLine(line.clone())) {
+                        Ok(()) | Err(_) => {}
+                    }
+                }
+                recorded.push(line);
+            }))
+        });
         let tx = self.completed_tx.clone();
         let expected = job_id.clone();
         let book = Arc::clone(&self.inner);
@@ -236,6 +287,7 @@ impl Jobs for FakeJobs {
             file,
             end,
             emit: Arc::clone(&self.deltas) as Arc<dyn Emit>,
+            lines,
         })
     }
 
@@ -292,7 +344,7 @@ impl Jobs for FakeJobs {
     }
 
     /// Each later end is also sent to `inbox` as a [`Delivery::Job`], whose
-    /// claim holds.
+    /// claim holds, and each later batch as a [`Delivery::JobLine`].
     fn deliver_to(&self, inbox: Sender<Delivery>) {
         lock(&self.inner).inbox = Some(inbox);
     }

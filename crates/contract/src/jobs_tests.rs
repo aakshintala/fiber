@@ -2,7 +2,7 @@
 
 use std::sync::mpsc;
 
-use super::{End, Foreground, Input, Stop};
+use super::{End, Foreground, Input, Lines, Stop};
 use crate::events::{JobCompleted, Outcome};
 use crate::shapes::Failure;
 use crate::{ErrorCode, JobId};
@@ -23,6 +23,8 @@ fn stop_and_end_debug_without_their_closures() {
     assert_eq!(format!("{stop:?}"), "Stop(..)");
     let input = Input(Box::new(|bytes, _, _| Ok(bytes.len())));
     assert_eq!(format!("{input:?}"), "Input(..)");
+    let lines = Lines(Box::new(|_| {}));
+    assert_eq!(format!("{lines:?}"), "Lines(..)");
     let end = End::new(JobId("j_abc".into()), Box::new(|_| {}));
     assert_eq!(format!("{end:?}"), "End(..)");
     let call: std::sync::Arc<dyn Fn() -> bool + Send + Sync> = std::sync::Arc::new(|| true);

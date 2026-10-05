@@ -749,6 +749,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             shared,
             ask: None,
             job: None,
+            feed: None,
         },
         cap: OUTPUT_CAP,
     }
@@ -843,7 +844,7 @@ impl Job {
         let job_clock = Arc::clone(&clock);
         let (tx, done) = mpsc::channel();
         thread::spawn(move || {
-            let finished = moved.drive_job(job_clock.as_ref(), &cancel, stream);
+            let finished = moved.drive_job(job_clock.as_ref(), &cancel, stream, None);
             let _sent = tx.send(finished);
         });
         // Both lines: the fifo exists and fd 3 is open once the second arrives.
@@ -960,4 +961,37 @@ fn a_job_streams_paced_deltas_and_flushes_the_rest_at_its_end() {
     assert!(!finished.capped);
     let texts: Vec<_> = deltas.deltas().into_iter().map(|(_, text)| text).collect();
     assert_eq!(texts, ["one", "two", "three"]);
+}
+
+/// A monitor moves as `run_in_background` does: a timeout (its deadline)
+/// and an empty group come first, then it moves on the first pass.
+#[test]
+fn a_monitor_moves_on_the_first_pass_after_its_deadline_and_an_empty_group() {
+    let step = |timed_out, empty| {
+        running_step(
+            MovePolicy::Monitor,
+            timed_out,
+            false,
+            empty,
+            None,
+            false,
+            false,
+        )
+    };
+    assert_eq!(step(true, true), Step::Stop(StopKind::Timeout));
+    assert_eq!(step(false, true), Step::Drain);
+    assert_eq!(
+        step(false, false),
+        Step::Move(MoveReason::StartedInBackground)
+    );
+    let clock = FakeClock::new();
+    let deadline = clock.now() + Duration::from_secs(300);
+    assert_eq!(
+        wait_deadline(
+            MovePolicy::Monitor,
+            Some(deadline),
+            Some(clock.now() + Duration::from_secs(30))
+        ),
+        Some(deadline)
+    );
 }

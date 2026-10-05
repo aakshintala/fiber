@@ -1003,6 +1003,7 @@ fn open_job(jobs: &FakeJobs) -> contract::jobs::Opened {
         tool: "shell".into(),
         description: "npm test".into(),
         stop: contract::jobs::Stop(Box::new(|| {})),
+        lines: false,
         input: None,
     })
     .unwrap()

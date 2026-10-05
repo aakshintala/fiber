@@ -6,7 +6,7 @@ use std::fmt;
 use std::path::PathBuf;
 
 use crate::ErrorCode;
-use crate::events::{JobCompleted, JobStarted};
+use crate::events::{JobCompleted, JobLine, JobStarted};
 use crate::shapes::Failure;
 
 /// What opening a job asks for. The opener supplies [`Stop`]; the registry
@@ -20,6 +20,23 @@ pub struct Opening {
     pub stop: Stop,
     /// Types into the job; `Some` only for a job started with `tty`.
     pub input: Option<Input>,
+    /// The job delivers lines to the model: true only for a monitor
+    /// (`docs/tools.md`, "Background jobs").
+    pub lines: bool,
+}
+
+/// Sends one batch of a monitor's lines to the model. The job's drive
+/// thread calls it, and calls every one before the job's [`End`], so the
+/// lines reach the inbox before the job's completion notice.
+pub struct Lines(
+    /// The registry's send.
+    pub Box<dyn Fn(JobLine) + Send + Sync>,
+);
+
+impl fmt::Debug for Lines {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Lines(..)")
+    }
 }
 
 /// Writes bytes to a job's terminal (`docs/tools.md`, "Terminal (`tty`)").
@@ -68,6 +85,9 @@ pub struct Opened {
     pub end: End,
     /// Where the job's `job_delta` lines go (`docs/events.md`, `job_delta`).
     pub emit: std::sync::Arc<dyn crate::emit::Emit>,
+    /// Where a monitor's batches go; `Some` only when [`Opening::lines`]
+    /// was true.
+    pub lines: Option<Lines>,
 }
 
 /// Reports how the job ended, once. Dropped uncalled, the job is recorded
@@ -150,9 +170,10 @@ pub trait Jobs: Send + Sync {
     fn running(&self) -> Vec<crate::JobId>;
 
     /// Sends each later job end to `inbox` as a
-    /// [`crate::inbox::Delivery::Job`], so the loop can wake the model with
-    /// it (`docs/tools.md`, "Background jobs"). Before this, an end sends
-    /// nothing.
+    /// [`crate::inbox::Delivery::Job`], and each later monitor batch as a
+    /// [`crate::inbox::Delivery::JobLine`], so the loop can wake the model
+    /// with it (`docs/tools.md`, "Background jobs"). Before this, an end or
+    /// a batch sends nothing.
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
 }
 

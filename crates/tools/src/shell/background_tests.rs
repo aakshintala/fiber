@@ -20,6 +20,7 @@ use fakes::children::Ready;
 use fakes::clock::FakeClock;
 use fakes::kill_pid;
 
+use super::super::Limit;
 use super::super::command::{Finished, MoveReason, StopKind};
 use super::{
     JobCancel, MoveAsk, PS_BOUND, align_char_boundary, description_of, format_rows, group_members,
@@ -41,6 +42,7 @@ fn finished(
         held_open,
         sent_signal,
         capped: false,
+        flooded: false,
     }
 }
 
@@ -293,8 +295,9 @@ fn the_end_maps_like_a_foreground_result_and_tails_only_failures() {
     std::fs::write(&path, "partial\n").unwrap();
     let id = JobId("j_1".into());
 
-    let end =
-        |finished: Finished, timeout_ms| to_completed(id.clone(), &path, finished, timeout_ms);
+    let end = |finished: Finished, ms| {
+        to_completed(id.clone(), &path, finished, Limit { ms, monitor: false })
+    };
 
     let unreaped = end(finished(None, None, false, false, false), 1);
     assert_eq!(unreaped.status, Outcome::Failed);
@@ -464,7 +467,15 @@ fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
     let id = JobId("j_1".into());
     let capped = |mut finished: Finished| {
         finished.capped = true;
-        to_completed(id.clone(), &path, finished, 5_000)
+        to_completed(
+            id.clone(),
+            &path,
+            finished,
+            Limit {
+                ms: 5_000,
+                monitor: false,
+            },
+        )
     };
     let cases = [
         finished(None, Some(StopKind::Cancel), false, true, false),
@@ -493,6 +504,75 @@ fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
         true,
     ));
     assert_eq!(exited.process.unwrap().exit_code, Some(3));
+}
+
+#[test]
+fn a_flooded_monitor_ends_flooded_unless_the_cap_fired() {
+    let dir = fakes::TempDir::new("fiber-shell-flooded");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let id = JobId("j_1".into());
+    let deadline = Limit {
+        ms: 5_000,
+        monitor: true,
+    };
+    let flooded = |mut finished: Finished| {
+        finished.flooded = true;
+        to_completed(id.clone(), &path, finished, deadline)
+    };
+    for case in [
+        finished(None, Some(StopKind::Cancel), false, true, false),
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        finished(None, Some(StopKind::Cancel), true, true, false),
+    ] {
+        let end = flooded(case);
+        assert_eq!(end.status, Outcome::Failed);
+        let error = end.error.unwrap();
+        assert_eq!(error.code, ErrorCode::Flooded);
+        assert_eq!(
+            error.message,
+            "The monitor's output was suppressed for 30 seconds, so it was stopped. Restart it with a more selective source."
+        );
+    }
+    let mut both = finished(None, Some(StopKind::Cancel), false, true, false);
+    both.capped = true;
+    let end = flooded(both);
+    assert_eq!(end.error.unwrap().code, ErrorCode::OutputCap);
+}
+
+#[test]
+fn a_monitor_at_its_deadline_says_it_expired() {
+    let dir = fakes::TempDir::new("fiber-shell-deadline-end");
+    let path = dir.path().join("out");
+    std::fs::write(&path, "partial\n").unwrap();
+    let end = to_completed(
+        JobId("j_1".into()),
+        &path,
+        finished(None, Some(StopKind::Timeout), false, true, false),
+        Limit {
+            ms: 5_000,
+            monitor: true,
+        },
+    );
+    assert_eq!(end.status, Outcome::Failed);
+    assert!(end.process.unwrap().timed_out);
+    let error = end.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert_eq!(
+        error.message,
+        "The monitor's deadline of 5000 ms passed; start it again if you still need it."
+    );
+    // An escapee holding the pipe past the drain is still indeterminate.
+    let held = to_completed(
+        JobId("j_1".into()),
+        &path,
+        finished(None, Some(StopKind::Timeout), true, true, false),
+        Limit {
+            ms: 5_000,
+            monitor: true,
+        },
+    );
+    assert_eq!(held.error.unwrap().code, ErrorCode::Indeterminate);
 }
 
 #[test]

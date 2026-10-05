@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use contract::events::{
-    Event, InputItem, JobCompleted, JobsPendingNotified, Outcome, PendingReason,
+    Event, InputItem, JobCompleted, JobLine, JobsPendingNotified, Outcome, PendingReason,
 };
 use contract::inbox::{JobNotice, Message};
 use contract::jobs::Jobs;
@@ -35,6 +35,9 @@ pub(crate) enum Queued {
     /// Written as `job_completed` with no action; named in a `jobs` item
     /// when it starts a turn.
     Job(JobCompleted),
+    /// A monitor's batch: written as `job_line`; named in a `jobs` item when
+    /// it starts a turn. No claim applies to it.
+    Line(JobLine),
     /// A person's `handoff`: named in a `handoff` item when it starts a
     /// turn, and run at the next step boundary (`docs/handoff.md`, "A
     /// person"); no line is written for it.
@@ -194,9 +197,10 @@ impl Loop {
 
     /// `turn_started`'s input, from what the idle wait collected, in
     /// arrival order: each message as a `message` item, each run of
-    /// consecutive job notices as one `jobs` item. The notices are queued,
-    /// so their `job_completed` lines are written at the first step
-    /// boundary (`docs/events.md`, `turn_started`).
+    /// consecutive job notices and monitor batches as one `jobs` item that
+    /// names each job once. They are queued, so their `job_completed` and
+    /// `job_line` lines are written at the first step boundary
+    /// (`docs/events.md`, `turn_started`).
     pub(crate) fn turn_input(&mut self, pieces: Vec<Queued>) -> Vec<InputItem> {
         let mut input: Vec<InputItem> = Vec::new();
         for piece in pieces {
@@ -214,13 +218,12 @@ impl Loop {
                         .push_back(Queued::Handoff(command_id, instructions));
                 }
                 Queued::Job(completed) => {
-                    let id = completed.job_id.clone();
+                    name_job(&mut input, &completed.job_id);
                     self.queued.push_back(Queued::Job(completed));
-                    if let Some(InputItem::Jobs { job_ids }) = input.last_mut() {
-                        job_ids.push(id);
-                    } else {
-                        input.push(InputItem::Jobs { job_ids: vec![id] });
-                    }
+                }
+                Queued::Line(line) => {
+                    name_job(&mut input, &line.job_id);
+                    self.queued.push_back(Queued::Line(line));
                 }
                 // A `jobs_pending_notified` a cancelled turn kept: its
                 // message is already logged, so it is no input item, and is
@@ -261,6 +264,7 @@ impl Loop {
                     })
                 }
                 Queued::Job(completed) => Event::JobCompleted(completed),
+                Queued::Line(line) => Event::JobLine(line),
                 // Held for the step's handoff check, which runs it.
                 Queued::Handoff(_, instructions) => {
                     self.handoff.held.push(instructions);
@@ -307,6 +311,19 @@ impl Loop {
             )?;
         }
         Ok(())
+    }
+}
+
+/// Names `id` in the `jobs` item `input` ends with, once, or starts one.
+fn name_job(input: &mut Vec<InputItem>, id: &JobId) {
+    if let Some(InputItem::Jobs { job_ids }) = input.last_mut() {
+        if !job_ids.contains(id) {
+            job_ids.push(id.clone());
+        }
+    } else {
+        input.push(InputItem::Jobs {
+            job_ids: vec![id.clone()],
+        });
     }
 }
 
@@ -360,6 +377,27 @@ pub(crate) fn pending_text(job_ids: &[JobId], reason: PendingReason) -> String {
         .trim_end(),
         &[("job_ids", ids.join(", ").as_str())],
     )
+}
+
+/// What a `job_line` tells the model: the monitor's batch, and the count
+/// the rate limit suppressed when there is one. Read from the line alone,
+/// so a resume renders the same bytes.
+pub(crate) fn line_text(line: &JobLine) -> String {
+    let mut text = fill(
+        body(crate::conversation::MESSAGES_MD, "job-line").trim_end(),
+        &[
+            ("job_id", line.job_id.0.as_str()),
+            ("lines", line.lines.as_str()),
+        ],
+    );
+    if let Some(suppressed) = line.suppressed {
+        text.push('\n');
+        text.push_str(&fill(
+            body(crate::conversation::MESSAGES_MD, "job-line-suppressed").trim_end(),
+            &[("suppressed", suppressed.to_string().as_str())],
+        ));
+    }
+    text
 }
 
 /// What a `job_completed` with no action tells the model: the job, how it

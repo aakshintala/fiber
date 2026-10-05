@@ -1752,26 +1752,458 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
 }
 
 #[test]
-fn a_tty_command_is_not_a_bare_wait() {
+fn a_tty_command_is_still_a_bare_wait() {
     let dir = fakes::TempDir::new("fiber-shell-tty-sleep");
+    let marker = dir.path().join("marker");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    // Only `run_in_background` skips the refusal. A zero timeout, so a
+    // command that wrongly starts stops at once.
+    let mut arguments = args(&format!("sleep 30; touch {}", quote(&marker)));
+    arguments.insert("tty".into(), json!(true));
+    arguments.insert("timeout_ms".into(), json!(0));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(text(&output).contains("jobs wait"), "{}", text(&output));
+    assert!(jobs.started().is_empty());
+    assert!(!marker.exists());
+}
+
+// Monitors: a job whose standard output lines reach the model in batches
+// (`docs/tools.md`, "Background jobs").
+
+/// The deadline the monitor tests give, so it never interferes.
+const LONG_DEADLINE_MS: u64 = 1_800_000;
+
+fn start_monitor(
+    dir: PathBuf,
+    command: String,
+    deadline_ms: Option<u64>,
+    jobs: Arc<FakeJobs>,
+) -> JobRun {
+    let clock = FakeClock::new();
+    let start = clock.origin();
+    let shell = Shell::new(dir, Arc::clone(&clock) as Arc<dyn contract::clock::Clock>)
+        .with_jobs(jobs.clone());
+    let mut arguments = args(&command);
+    arguments.insert("monitor".into(), json!(true));
+    if let Some(deadline_ms) = deadline_ms {
+        arguments.insert("deadline_ms".into(), json!(deadline_ms));
+    }
+    let recorder = Arc::new(Recorder::default());
+    let tapped = Arc::clone(&recorder);
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        tx.send(shell.run(&arguments, &CancelToken::new(), tapped.as_ref()))
+            .unwrap();
+    });
+    JobRun {
+        clock,
+        start,
+        output: rx,
+        jobs,
+        recorder,
+    }
+}
+
+/// Writes its group to `ready` twice, around making the feed fifo, then
+/// copies the feed to standard output until the feed closes.
+fn fed_by_fifo(ready: &Path, before: &str) -> String {
+    format!(
+        "{before}\necho $$ > {ready}\nmkfifo {feed}\necho $$ >> {ready}\ncat {feed}\n",
+        ready = quote(ready),
+        feed = quote(&block_of(ready)),
+    )
+}
+
+/// The feed's write end. The open waits for the command's read, so it runs
+/// on its own thread under the deadline.
+fn open_feed(ready: &Path) -> std::fs::File {
+    let feed = block_of(ready);
+    let (opened, open) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = opened.send(std::fs::OpenOptions::new().write(true).open(feed).unwrap());
+    });
+    open.recv_timeout(DEADLINE)
+        .expect("waited for the command's read of the feed fifo")
+}
+
+/// One step: waits for the drive thread to park at its deadline, moves the
+/// clock by `step`, prints `line` and waits until the job's delta shows the
+/// drive thread took it, which it offers first.
+fn print_step(
+    run: &JobRun,
+    deadline: Instant,
+    feed: &mut std::fs::File,
+    step: Duration,
+    line: &str,
+) {
+    assert!(
+        run.clock.await_parked(deadline, DEADLINE),
+        "the monitor did not park at its deadline before {line}"
+    );
+    run.clock.advance(step);
+    // One write: `writeln!` can split the newline into its own write, and
+    // a delta of the line alone would hold the newline past the step.
+    feed.write_all(format!("{line}\n").as_bytes()).unwrap();
+    assert!(
+        run.jobs
+            .deltas()
+            .wait_for_text(&format!("{line}\n"), DEADLINE),
+        "the monitor did not take {line}"
+    );
+}
+
+fn errors_file(dir: &Path, job: &JobStarted) -> PathBuf {
+    let id = &job.job_id.0;
+    dir.join(format!("{id}.stderr.log"))
+}
+
+#[test]
+fn a_monitor_moves_at_once_with_its_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-receipt");
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
-    // The first part is `sleep 30`, which a call that waits is refused for.
-    let command = format!("sleep 30 & echo $$ > {}; wait", quote(ready.path()));
-    let running = start_tty(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
+    let running = start_monitor(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "a", "b"),
+        None,
+        Arc::clone(&jobs),
+    );
     let pgid = ready.wait(DEADLINE)[0];
     let watchdog = Watchdog::group(pgid);
-    assert!(
-        running
-            .clock
-            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
-    );
-    running.clock.advance(Duration::from_millis(250));
+    let _own = ready.wait(DEADLINE);
     let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
     assert!(output.error.is_none(), "{}", text(&output));
     let job = started(&output);
+    assert_eq!(
+        text(&output),
+        format!(
+            "Started a monitor.\nJob {id}. Output: {out}. Errors: {err}. Lines it prints reach you in batches; its deadline is 300000 ms.\n",
+            id = job.job_id.0,
+            out = dir.path().join(&job.output_path).display(),
+            err = errors_file(dir.path(), &job).display(),
+        )
+    );
+    assert_eq!(jobs.started(), vec![job.clone()]);
+    // The default deadline: 5 minutes from the command's start.
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(300_000), DEADLINE)
+    );
     jobs.stop(&job.job_id);
-    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the monitor");
     assert_eq!(ended.status, Outcome::Cancelled);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_monitor_with_a_zero_deadline_times_out_in_the_foreground() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-zero");
+    let jobs = FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let mut arguments = args("echo hi");
+    arguments.insert("monitor".into(), json!(true));
+    arguments.insert("deadline_ms".into(), json!(0));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::Timeout));
+    assert!(output.process.as_ref().unwrap().timed_out);
+    let line = "The monitor's deadline of 0 ms passed; start it again if you still need it.";
+    assert_eq!(output.error.as_ref().unwrap().message, line);
+    assert!(
+        text(&output).ends_with(&format!("{line}\n")),
+        "{}",
+        text(&output)
+    );
+    assert!(jobs.started().is_empty());
+    assert!(jobs.lines().lines().is_empty());
+}
+
+#[test]
+fn standard_output_lines_reach_the_model_and_standard_error_its_own_file() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-streams");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let block = block_of(ready.path());
+    let command = format!(
+        "echo $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\necho out\necho err >&2\necho after\necho err2 >&2\n",
+        ready = quote(ready.path()),
+        block = quote(&block),
+    );
+    let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+    let path = ready.path().to_path_buf();
+    let (released, release) = mpsc::channel();
+    thread::spawn(move || {
+        release_block(&path);
+        let _sent = released.send(());
+    });
+    release.recv_timeout(DEADLINE).expect("the release");
+    let ended = jobs.ended(DEADLINE).expect("the monitor to end");
+    assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
+    let delivered: Vec<String> = jobs
+        .lines()
+        .lines()
+        .into_iter()
+        .map(|line| {
+            assert_eq!(line.job_id, job.job_id);
+            assert_eq!(line.suppressed, None);
+            line.lines
+        })
+        .collect();
+    assert_eq!(delivered.join("\n"), "out\nafter");
+    assert_eq!(job_output(dir.path(), &job), "out\nafter\n");
+    assert_eq!(
+        std::fs::read_to_string(errors_file(dir.path(), &job)).unwrap(),
+        "err\nerr2\n"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn an_incomplete_last_line_is_flushed_before_the_end() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-tail");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let (inbox, delivered) = mpsc::channel();
+    jobs.deliver_to(inbox);
+    let block = block_of(ready.path());
+    let command = format!(
+        "echo $$ > {ready}\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\nprintf 'a\\nb'\n",
+        ready = quote(ready.path()),
+        block = quote(&block),
+    );
+    let running = start_monitor(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let path = ready.path().to_path_buf();
+    let (released, release) = mpsc::channel();
+    thread::spawn(move || {
+        release_block(&path);
+        let _sent = released.send(());
+    });
+    release.recv_timeout(DEADLINE).expect("the release");
+    let ended = jobs.ended(DEADLINE).expect("the monitor to end");
+    assert_eq!(ended.status, Outcome::Completed);
+    let texts: Vec<String> = jobs
+        .lines()
+        .lines()
+        .into_iter()
+        .map(|line| line.lines)
+        .collect();
+    assert_eq!(texts, ["a", "b"]);
+    // Every batch is in the inbox before the end.
+    let kinds: Vec<&str> = delivered
+        .try_iter()
+        .map(|delivery| match delivery {
+            contract::inbox::Delivery::JobLine(_) => "line",
+            contract::inbox::Delivery::Job(_) => "end",
+            other => panic!("unexpected {other:?}"),
+        })
+        .collect();
+    assert_eq!(kinds, ["line", "line", "end"]);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_suppressed_count_still_pending_is_sent_before_the_end() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-suppressed");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let (inbox, delivered) = mpsc::channel();
+    jobs.deliver_to(inbox);
+    let running = start_monitor(
+        dir.path().to_path_buf(),
+        fed_by_fifo(ready.path(), ":"),
+        Some(LONG_DEADLINE_MS),
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
+    let mut feed = open_feed(ready.path());
+    // Twelve deliveries 100 ms apart: ten spend the budget, two are dropped.
+    for k in 1..=12 {
+        print_step(
+            &running,
+            deadline,
+            &mut feed,
+            Duration::from_millis(100),
+            &format!("line{k}"),
+        );
+    }
+    drop(feed);
+    let ended = jobs.ended(DEADLINE).expect("the monitor to end");
+    assert_eq!(ended.status, Outcome::Completed);
+    let lines = jobs.lines().lines();
+    let texts: Vec<&str> = lines.iter().map(|line| line.lines.as_str()).collect();
+    let mut expected: Vec<String> = (1..=10).map(|k| format!("line{k}")).collect();
+    expected.push(String::new());
+    assert_eq!(texts, expected);
+    assert_eq!(lines.last().unwrap().suppressed, Some(2));
+    assert!(lines[..10].iter().all(|line| line.suppressed.is_none()));
+    let kinds: Vec<bool> = delivered
+        .try_iter()
+        .map(|delivery| matches!(delivery, contract::inbox::Delivery::Job(_)))
+        .collect();
+    assert_eq!(kinds.iter().filter(|end| **end).count(), 1);
+    assert_eq!(kinds.last(), Some(&true), "the end came last");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn sustained_output_for_thirty_seconds_floods_and_stops_the_monitor() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-flood");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_monitor(
+        dir.path().to_path_buf(),
+        fed_by_fifo(ready.path(), ":"),
+        Some(LONG_DEADLINE_MS),
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
+    let mut feed = open_feed(ready.path());
+    // One delivery every 500 ms, faster than the refill: the budget runs
+    // out at the 14th (7 s), so the drop at the 74th (37 s) floods.
+    for k in 1..=73 {
+        print_step(
+            &running,
+            deadline,
+            &mut feed,
+            Duration::from_millis(500),
+            &format!("line{k}"),
+        );
+    }
+    assert!(jobs.ended(Duration::ZERO).is_none(), "flooded early");
+    assert!(group_alive(pgid));
+    print_step(
+        &running,
+        deadline,
+        &mut feed,
+        Duration::from_millis(500),
+        "line74",
+    );
+    let ended = jobs.ended(DEADLINE).expect("the flood to stop the monitor");
+    assert_eq!(ended.status, Outcome::Failed);
+    let error = ended.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Flooded);
+    assert_eq!(
+        error.message,
+        "The monitor's output was suppressed for 30 seconds, so it was stopped. Restart it with a more selective source."
+    );
+    assert!(!group_alive(pgid));
+    let lines = jobs.lines().lines();
+    assert_eq!(lines[13].lines, "line17");
+    assert_eq!(lines[13].suppressed, Some(3));
+    let last = lines.last().unwrap();
+    assert_eq!(last.lines, "");
+    assert!(last.suppressed.is_some_and(|count| count > 0), "{last:?}");
+    drop(feed);
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn output_that_pauses_for_two_seconds_ends_the_run_and_does_not_flood() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-pause");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_monitor(
+        dir.path().to_path_buf(),
+        fed_by_fifo(ready.path(), ":"),
+        Some(LONG_DEADLINE_MS),
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let deadline = running.start + Duration::from_millis(LONG_DEADLINE_MS);
+    let mut feed = open_feed(ready.path());
+    // Suppressed from 7 s to 25 s, then 2.5 s with nothing, then suppressed
+    // again to 50 s: 43 s after the first drop, but no run lasts 30 s.
+    for k in 1..=50 {
+        print_step(
+            &running,
+            deadline,
+            &mut feed,
+            Duration::from_millis(500),
+            &format!("line{k}"),
+        );
+    }
+    print_step(
+        &running,
+        deadline,
+        &mut feed,
+        Duration::from_millis(2_500),
+        "line51",
+    );
+    for k in 52..=96 {
+        print_step(
+            &running,
+            deadline,
+            &mut feed,
+            Duration::from_millis(500),
+            &format!("line{k}"),
+        );
+    }
+    assert!(jobs.ended(Duration::ZERO).is_none(), "the monitor flooded");
+    drop(feed);
+    let ended = jobs.ended(DEADLINE).expect("the monitor to end");
+    assert_eq!(ended.status, Outcome::Completed, "{ended:?}");
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_monitor_ends_at_its_deadline_as_a_timeout() {
+    let dir = fakes::TempDir::new("fiber-shell-monitor-deadline");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let running = start_monitor(
+        dir.path().to_path_buf(),
+        blocking(ready.path(), "partial", "later"),
+        Some(5_000),
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    let _receipt = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let due = running.start + Duration::from_secs(5);
+    assert!(running.clock.await_parked(due, DEADLINE));
+    assert!(group_alive(pgid), "stopped before the deadline");
+    running.clock.advance(Duration::from_secs(5));
+    let ended = jobs
+        .ended(DEADLINE)
+        .expect("the deadline to end the monitor");
+    assert_eq!(ended.status, Outcome::Failed);
+    let error = ended.error.unwrap();
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert_eq!(
+        error.message,
+        "The monitor's deadline of 5000 ms passed; start it again if you still need it."
+    );
+    assert!(ended.process.unwrap().timed_out);
+    let texts: Vec<String> = jobs
+        .lines()
+        .lines()
+        .into_iter()
+        .map(|line| line.lines)
+        .collect();
+    assert_eq!(texts, ["partial"]);
+    assert!(!group_alive(pgid));
     watchdog.stand_down(DEADLINE);
 }

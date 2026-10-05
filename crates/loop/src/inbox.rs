@@ -292,7 +292,10 @@ impl Loop {
                         content: message.content.clone(),
                         sender: message.sender.clone(),
                     }),
-                    Queued::Job(_) | Queued::Handoff(..) | Queued::Pending(..) => None,
+                    Queued::Job(_)
+                    | Queued::Line(_)
+                    | Queued::Handoff(..)
+                    | Queued::Pending(..) => None,
                 })
                 .collect(),
         });
@@ -341,6 +344,7 @@ impl Loop {
             | Delivery::Handoff(..)
             | Delivery::Reply(..)
             | Delivery::Job(_)
+            | Delivery::JobLine(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -405,6 +409,11 @@ impl Loop {
                     input.pieces.push(Queued::Job(completed));
                 }
             }
+            Delivery::JobLine(line) => {
+                if !(self.closing && input.pieces.is_empty() && !self.has_jobs()) {
+                    input.pieces.push(Queued::Line(line));
+                }
+            }
         }
     }
 
@@ -450,6 +459,8 @@ impl Loop {
             // meaning at a drain.
             Delivery::Cancelled => {}
             Delivery::Job(notice) => self.admit_job(notice),
+            // Held until the next step boundary, as a job's end is.
+            Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
         }
         Ok(())
     }
@@ -496,7 +507,7 @@ fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
             Queued::Steer(message) => {
                 !std::mem::take(&mut prompt) && message.sender.command_id.as_ref() == Some(id)
             }
-            Queued::Job(_) | Queued::Handoff(..) | Queued::Pending(..) => false,
+            Queued::Job(_) | Queued::Line(_) | Queued::Handoff(..) | Queued::Pending(..) => false,
         })
         .map(|index| input.pieces.remove(index))
         .is_some()

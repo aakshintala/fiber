@@ -69,6 +69,9 @@ pub enum Delivery {
     /// A background job ended (`docs/tools.md`, "Background jobs"). The
     /// loop takes it as news for the model only when its claim holds.
     Job(JobNotice),
+    /// A batch of a monitor's lines (`docs/tools.md`, "Background jobs").
+    /// It wakes the model as a job's end does; no claim applies.
+    JobLine(crate::events::JobLine),
     /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
     /// clock move. It carries no ack and no meaning: every drain discards
     /// it, and an approval wait reads the cancel signal after it wakes
