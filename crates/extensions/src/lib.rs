@@ -260,6 +260,23 @@ pub enum Error {
         /// Lua's message.
         message: String,
     },
+    /// The token endpoint rejected a `host.oauth.refresh`, so the function
+    /// passed to it raised after a reply.
+    #[error("`{extension}`: the OAuth refresh was rejected: {message}. Log in again.")]
+    RefreshRejected {
+        /// The extension.
+        extension: String,
+        /// What the refresh function raised.
+        message: String,
+    },
+    /// A `host.oauth.refresh` never reached the token endpoint.
+    #[error("`{extension}`: the OAuth refresh could not reach the token endpoint: {message}")]
+    RefreshUnreachable {
+        /// The extension.
+        extension: String,
+        /// What the refresh function raised.
+        message: String,
+    },
     /// A callback ran past the timeout it declared, and was stopped.
     #[error("`{extension}`: `{callback}` passed its {timeout_ms} ms timeout and was stopped.")]
     Timeout {
@@ -386,6 +403,8 @@ impl Error {
             Self::UnknownModel { .. } | Self::NoModel => ErrorCode::NoModel,
             Self::Ambiguous { .. } => ErrorCode::ModelAmbiguous,
             Self::Credential(_) => ErrorCode::CredentialFailed,
+            Self::RefreshRejected { .. } => ErrorCode::AuthenticationFailed,
+            Self::RefreshUnreachable { .. } => ErrorCode::ConnectionFailed,
         }
     }
 }

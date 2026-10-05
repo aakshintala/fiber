@@ -509,6 +509,8 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::UnknownCallback { .. }
         | Error::BadReturn { .. }
         | Error::Credential(_)
+        | Error::RefreshRejected { .. }
+        | Error::RefreshUnreachable { .. }
         | Error::BadRepositoryPath { .. }
         | Error::Pin { .. }
         | Error::ChangedWhileCopying { .. }

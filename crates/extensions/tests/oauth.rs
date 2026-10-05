@@ -24,6 +24,7 @@ use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use common::{Setup, write};
 use config::{CredentialFile, Secret, store_secret};
+use contract::ErrorCode;
 use contract::clock::Clock;
 use extensions::{Browser, Error, LuaExtension, LuaProvider};
 use fakes::OauthReply;
@@ -50,6 +51,15 @@ const WALL: u64 = 1_700_000_000;
 
 const INIT: &str = r#"
 local function opts_from(text) return load("return " .. text)() end
+
+-- Like `pcall(host.http, opts)`, which cannot yield across the VM's `pcall`:
+-- the call runs in a coroutine and its yield is passed up.
+local function try_http(opts)
+  local co = coroutine.create(host.http)
+  local r = table.pack(coroutine.resume(co, opts))
+  local answer = table.pack(coroutine.yield(table.unpack(r, 2, r.n)))
+  return coroutine.resume(co, table.unpack(answer, 1, answer.n))
+end
 
 fiber.command("callback", { timeout = 60000, run = function(text)
   return json.encode(host.oauth.callback({ port = tonumber(text) }))
@@ -82,9 +92,19 @@ end })
 
 -- The refresh function does what the secret `mode` says.
 fiber.provider("acme", { credential = { timeout = 60000, run = function()
+  if host.secret("mode") == "outside" then error("outside") end
   return host.oauth.refresh(function(stored)
     local mode = host.secret("mode")
     if mode == "raise" then error("boom") end
+    if mode == "pcall_dead" then
+      try_http({ url = host.secret("dead") .. "/token" })
+      error("my own failure")
+    end
+    if mode == "dead_then_live" then
+      try_http({ url = host.secret("dead") .. "/token" })
+      host.http({ url = host.secret("url") .. "/token", method = "POST" })
+      error("my own failure")
+    end
     if mode == "notoken" then return { expires_at = 1700003600 } end
     if mode == "numbertoken" then return { token = 5, expires_at = 1700003600 } end
     if mode == "floatexpiry" then return { token = "t", expires_at = 1.5 } end
@@ -692,12 +712,86 @@ fn a_function_that_raises_leaves_the_file_and_releases_the_lock() {
     env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
     let before = env.stored().unwrap();
     let error = finish(&start_token(&provider)).unwrap_err();
-    assert!(matches!(error, Error::Credential(_)));
-    assert!(lua_message(&error).contains("boom"));
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed);
+    assert!(error.to_string().contains("boom"), "{error}");
     assert_eq!(env.stored().unwrap(), before);
     // The lock is free: the next refresh runs.
     env.secret("mode", "wantold");
     assert_eq!(finish(&start_token(&provider)).unwrap(), "later");
+}
+
+/// The refresh function's secret `dead` is a URL nothing listens on.
+fn dead_url() -> String {
+    format!("http://127.0.0.1:{}", free_port())
+}
+
+#[test]
+fn a_refresh_the_token_endpoint_rejects_is_authentication_failed() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = OauthServer::start(vec![
+        OauthReply::raw(400, r#"{"error":"invalid_grant"}"#),
+        OauthReply::token("later", "rt", 3600),
+    ]);
+    let provider = env.provider(&ext, &server, "wantold");
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let before = env.stored().unwrap();
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+    assert!(error.to_string().contains("refresh failed: 400"), "{error}");
+    assert_eq!(env.stored().unwrap(), before);
+    // The lock is free: the next refresh runs.
+    assert_eq!(finish(&start_token(&provider)).unwrap(), "later");
+}
+
+#[test]
+fn a_refresh_that_never_reached_the_token_endpoint_is_connection_failed() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "ok");
+    env.secret("url", &dead_url());
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let before = env.stored().unwrap();
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConnectionFailed, "{error}");
+    assert_eq!(env.stored().unwrap(), before);
+}
+
+#[test]
+fn a_function_that_catches_the_transport_error_and_raises_its_own_is_connection_failed() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "pcall_dead");
+    env.secret("dead", &dead_url());
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::ConnectionFailed, "{error}");
+    assert!(error.to_string().contains("my own failure"), "{error}");
+}
+
+#[test]
+fn a_later_reply_clears_the_transport_failure() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = OauthServer::start(vec![OauthReply::raw(400, "{}")]);
+    let provider = env.provider(&ext, &server, "dead_then_live");
+    env.secret("dead", &dead_url());
+    env.store(&json!({ "token": "old", "expires_at": WALL + 100 }));
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::AuthenticationFailed, "{error}");
+}
+
+#[test]
+fn a_lua_error_in_credential_outside_the_refresh_is_credential_failed() {
+    let env = Env::new();
+    let ext = env.extension();
+    let server = OauthServer::start(vec![]);
+    let provider = env.provider(&ext, &server, "outside");
+    let error = finish(&start_token(&provider)).unwrap_err();
+    assert_eq!(error.code(), ErrorCode::CredentialFailed, "{error}");
+    assert!(error.to_string().contains("outside"), "{error}");
 }
 
 #[test]
@@ -743,6 +837,7 @@ fn a_function_that_returns_no_usable_credential_leaves_the_file() {
             lua_message(&error).contains("`token` string"),
             "{bad}: {error}"
         );
+        assert_eq!(error.code(), ErrorCode::CredentialFailed, "{bad}");
         assert_eq!(env.stored().unwrap(), before, "{bad}");
     }
 }

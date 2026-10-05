@@ -635,6 +635,14 @@ impl Vm {
     }
 
     fn error(&self, e: &mlua::Error) -> Error {
+        if let Some(failed) = crate::oauth::refresh_failure(e) {
+            let (extension, message) = (self.name.clone(), failed.message.clone());
+            return if failed.reached {
+                Error::RefreshRejected { extension, message }
+            } else {
+                Error::RefreshUnreachable { extension, message }
+            };
+        }
         Error::Lua {
             extension: self.name.clone(),
             message: setup::message(e),

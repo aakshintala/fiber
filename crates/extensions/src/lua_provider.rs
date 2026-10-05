@@ -143,7 +143,17 @@ impl LuaProvider {
             }
             Ok((Secret::new(token.to_owned()), expires))
         })();
-        inner.map_err(|e| Error::Credential(Box::new(e)))
+        // A failed refresh has its own code, not `credential_failed`.
+        inner.map_err(|e| {
+            if matches!(
+                e,
+                Error::RefreshRejected { .. } | Error::RefreshUnreachable { .. }
+            ) {
+                e
+            } else {
+                Error::Credential(Box::new(e))
+            }
+        })
     }
 
     fn call(&self, function: &'static str, arg: Value) -> Result<Value, Error> {

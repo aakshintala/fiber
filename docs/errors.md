@@ -121,7 +121,7 @@ policy is `docs/model-routing.md`, "When a model call fails".
 | `connection_failed` | DNS, TLS, a refused or dropped connection | yes |
 | `stream_incomplete` | a stream that ended before its protocol's terminal event, an `openai-responses` terminal event whose status is `in_progress` or `queued`, or an error inside an HTTP 200 response that no other code matches | yes |
 | `quota_exceeded` | quota, billing or a subscription limit | never |
-| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh that failed | never |
+| `authentication_failed` | HTTP 401, a rejected key, an OAuth refresh the token endpoint rejected | never |
 | `context_overflow` | the request does not fit the model's context window | the overflow rule (`docs/handoff.md`, "Overflow") |
 | `refused` | the provider declined to answer on policy grounds, including an `openai-completions` `finish_reason` of `content_filter` and a Gemini safety finish reason | never |
 | `model_not_found` | the provider does not know the model | never |
