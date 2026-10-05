@@ -58,6 +58,7 @@ ephemeral event where it is display-only.
 | `config` | Reads the configuration files in [Fiber home](state.md) and the repository's `.fiber/` ([Configuration](configuration.md)). Answers questions; never asks any. |
 | `hub` | Lists, starts and resumes sessions and relays every client connection to a session's socket, over its local socket and, when installed with a port, a websocket on `127.0.0.1` that authenticates each device by token (`docs/invocation.md`, "The hub"). Holds no session and no push credential; does no TLS. |
 | `doors` | `fiber ask` (argv or stdin in, JSON lines out), and the internal session command that it, the hub and a parent run. Which doors exist and what a driver may send is `docs/invocation.md`; this page only fixes that none has a privilege the TUI lacks. |
+| `picture` | The image child (`docs/invocation.md`, "Processes"): decodes, refuses, fits and re-encodes one image under the limits in `docs/model-routing.md`, "Image limits". Only `main` depends on it, so no session process links image code. |
 | `main` | The composition root. Parses argv, builds everything once, picks a door. No feature logic. |
 
 ### Why contract exists

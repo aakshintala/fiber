@@ -55,6 +55,11 @@ impl Setup {
     /// Installs a provider `fake` with model `m` on `openai-responses` at the
     /// fake server, and makes `fake/m` the configured model.
     fn provider(&self, server: &ProviderServer) {
+        self.provider_on(server, "openai-responses");
+    }
+
+    /// [`Setup::provider`] on `protocol`.
+    fn provider_on(&self, server: &ProviderServer, protocol: &str) {
         let source = self.root.path().join("src");
         write(
             &source.join("extension.json"),
@@ -65,7 +70,7 @@ impl Setup {
             &json!({
                 "name": "fake",
                 "credential": {"env": "FIBER_TEST_FAKE_KEY"},
-                "models": [{"id": "m", "protocol": "openai-responses", "base_url": format!("{}/v1", server.url())}]
+                "models": [{"id": "m", "protocol": protocol, "base_url": format!("{}/v1", server.url())}]
             }),
         );
         extensions::plan(
@@ -586,4 +591,208 @@ fn a_credential_path_is_denied_for_a_read_and_a_shell_cat_under_every_spelling()
         assert_no_marker(&format!("request {index}"), &request.body);
     }
     assert_session_has_no_marker(&run.session_dir(&setup));
+}
+
+/// A 1x1 PNG, 69 bytes: within every cap, so the image child stores it byte
+/// for byte.
+const PIXEL: [u8; 69] = [
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0x9c, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x03, 0x01, 0x01, 0x00, 0xc9, 0xfe, 0x92, 0xef, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e,
+    0x44, 0xae, 0x42, 0x60, 0x82,
+];
+
+/// [`PIXEL`] as base64.
+const PIXEL_BASE64: &str =
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC";
+
+/// An `anthropic-messages` stream of `events`, then its end.
+fn anthropic(events: &[Value]) -> Response {
+    let mut all = vec![json!({"type": "message_start", "message": {"id": "msg_1"}})];
+    all.extend(events.iter().cloned());
+    all.push(
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+        "usage": {"input_tokens": 10, "output_tokens": 3}}),
+    );
+    all.push(json!({"type": "message_stop"}));
+    Response::stream(
+        all.iter()
+            .map(|event| format!("data: {event}\n\n"))
+            .collect::<String>(),
+    )
+}
+
+/// An `anthropic-messages` reply that calls `read` on `path`.
+fn anthropic_read(path: &str) -> Response {
+    anthropic(&[
+        json!({"type": "content_block_start", "index": 0, "content_block": {
+            "type": "tool_use", "id": "toolu_1", "name": "read", "input": {}}}),
+        json!({"type": "content_block_delta", "index": 0, "delta": {
+            "type": "input_json_delta", "partial_json": json!({"path": path}).to_string()}}),
+        json!({"type": "content_block_stop", "index": 0}),
+    ])
+}
+
+/// An `anthropic-messages` reply of `Hello.`.
+fn anthropic_hello() -> Response {
+    anthropic(&[
+        json!({"type": "content_block_start", "index": 0,
+            "content_block": {"type": "text", "text": ""}}),
+        json!({"type": "content_block_delta", "index": 0,
+            "delta": {"type": "text_delta", "text": "Hello."}}),
+        json!({"type": "content_block_stop", "index": 0}),
+    ])
+}
+
+/// The `tool_result` block of a request body's messages.
+fn tool_result(body: &[u8]) -> Value {
+    let body: Value = serde_json::from_slice(body).unwrap();
+    body["messages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|message| message["content"].as_array().cloned().unwrap_or_default())
+        .find(|block| block["type"] == "tool_result")
+        .unwrap()
+}
+
+fn completed_line(run: &Run) -> &Value {
+    run.lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap()
+}
+
+#[test]
+fn an_image_is_stored_logged_by_path_and_sent_inside_the_tool_result_on_every_request() {
+    let setup = Setup::new();
+    fs::write(setup.workspace().join("pic.png"), PIXEL).unwrap();
+    let server = ProviderServer::start([
+        anthropic_read("pic.png"),
+        anthropic_hello(),
+        anthropic_hello(),
+    ])
+    .unwrap();
+    setup.provider_on(&server, "anthropic-messages");
+
+    let run = setup.run(&["ask", "look at the picture"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_line(&run);
+    assert_eq!(completed["payload"]["status"], "completed");
+    let content = completed["payload"]["content"].as_array().unwrap();
+    assert_eq!(content.len(), 2);
+    assert_eq!(content[0]["text"], "Image: 1x1 image/png.\n");
+    assert_eq!(content[1]["type"], "image");
+    assert_eq!(content[1]["mime_type"], "image/png");
+    assert_eq!(
+        (content[1]["width"].clone(), content[1]["height"].clone()),
+        (json!(1), json!(1))
+    );
+    let path = content[1]["path"].as_str().unwrap();
+    assert!(
+        path.starts_with("artifacts/i_") && path.ends_with(".png"),
+        "{path}"
+    );
+    let session = run.session_dir(&setup);
+    // The artifact is the processed file: here, the input byte for byte.
+    assert_eq!(fs::read(session.join(path)).unwrap(), PIXEL);
+    // The log names the file and never holds its bytes.
+    let log = fs::read(session.join("events.jsonl")).unwrap();
+    assert!(
+        !holds_marker(&log, PIXEL_BASE64),
+        "the log holds the image's base64"
+    );
+    assert!(
+        !log.windows(PIXEL.len()).any(|window| window == PIXEL),
+        "the log holds the image's bytes"
+    );
+
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(
+        tool_result(&requests[1].body)["content"],
+        json!([
+            {"type": "text", "text": "Image: 1x1 image/png.\n"},
+            {"type": "image", "source": {
+                "type": "base64", "media_type": "image/png", "data": PIXEL_BASE64}},
+        ])
+    );
+
+    let id = run.session_id().to_owned();
+    let resumed = setup.run(&["ask", "--resume", &id, "again"]);
+    assert_eq!(resumed.code, Some(0), "stderr: {}", resumed.stderr);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert_eq!(
+        tool_result(&requests[2].body),
+        tool_result(&requests[1].body),
+        "a resume sends the same bytes"
+    );
+}
+
+/// A PNG that holds a signature, an IHDR of `width` x `height` and the start
+/// of an IDAT, and no pixels.
+fn header_only_png(width: u32, height: u32) -> Vec<u8> {
+    fn crc32(bytes: &[u8]) -> u32 {
+        let mut crc = 0xFFFF_FFFF_u32;
+        for byte in bytes {
+            crc ^= u32::from(*byte);
+            for _ in 0..8 {
+                crc = if crc & 1 == 1 {
+                    (crc >> 1) ^ 0xEDB8_8320
+                } else {
+                    crc >> 1
+                };
+            }
+        }
+        !crc
+    }
+    fn chunk(kind: &[u8; 4], data: &[u8]) -> Vec<u8> {
+        let mut out = u32::try_from(data.len()).unwrap().to_be_bytes().to_vec();
+        let mut body = kind.to_vec();
+        body.extend_from_slice(data);
+        out.extend_from_slice(&body);
+        out.extend_from_slice(&crc32(&body).to_be_bytes());
+        out
+    }
+    let mut ihdr = width.to_be_bytes().to_vec();
+    ihdr.extend_from_slice(&height.to_be_bytes());
+    ihdr.extend_from_slice(&[8, 2, 0, 0, 0]);
+    let mut out = vec![0x89, b'P', b'N', b'G', 0x0D, 0x0A, 0x1A, 0x0A];
+    out.extend(chunk(b"IHDR", &ihdr));
+    out.extend(chunk(b"IDAT", &[0x78, 0x9C, 0x00]));
+    out
+}
+
+#[test]
+fn an_image_over_50_megapixels_fails_unsupported_file_with_the_pixel_count() {
+    let setup = Setup::new();
+    fs::write(
+        setup.workspace().join("big.png"),
+        header_only_png(8000, 7000),
+    )
+    .unwrap();
+    let server = ProviderServer::start([anthropic_read("big.png"), anthropic_hello()]).unwrap();
+    setup.provider_on(&server, "anthropic-messages");
+
+    let run = setup.run(&["ask", "look at the big picture"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let completed = completed_line(&run);
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "unsupported_file");
+    let message = completed["payload"]["error"]["message"].as_str().unwrap();
+    assert!(
+        message.contains("8000x7000 is 56000000 pixels; the limit is 50000000"),
+        "{message}"
+    );
+    let images = fs::read_dir(run.session_dir(&setup).join("artifacts"))
+        .unwrap()
+        .count();
+    assert_eq!(images, 0, "a refused image stores nothing");
+    let result = tool_result(&server.requests()[1].body);
+    assert_eq!(result["is_error"], true);
+    assert!(result["content"].is_string());
 }
