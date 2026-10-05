@@ -511,9 +511,14 @@ fn open_tty(
             tool: "shell".into(),
             description: "python3".into(),
             stop: Stop(Box::new(|| {})),
-            input: Some(contract::jobs::Input(Box::new(move |bytes| {
+            input: Some(contract::jobs::Input(Box::new(move |bytes, _, _| {
                 record.lock().unwrap().extend_from_slice(bytes);
-                file.lock().unwrap().as_mut().unwrap().write_all(reply)
+                file.lock()
+                    .unwrap()
+                    .as_mut()
+                    .unwrap()
+                    .write_all(reply)
+                    .map(|()| bytes.len())
             }))),
         })
         .unwrap();
@@ -641,7 +646,7 @@ fn a_failed_write_to_the_terminal_is_an_io_error() {
             tool: "shell".into(),
             description: "cat".into(),
             stop: Stop(Box::new(|| {})),
-            input: Some(contract::jobs::Input(Box::new(|_| {
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| {
                 Err(std::io::Error::other("the terminal is closed"))
             }))),
         })
@@ -655,59 +660,72 @@ fn a_failed_write_to_the_terminal_is_an_io_error() {
 }
 
 #[test]
-fn write_keeps_the_last_sixteen_kib_and_says_the_rest_is_omitted() {
-    const BIG: &[u8] = &[b'a'; 20 * 1024];
+fn write_returns_all_the_output_with_no_cut() {
+    const BIG: &[u8] = &[b'a'; 40 * 1024];
     let (_dir, _clock, registry) = clocked_world();
     let (id, opened, _typed) = open_tty(&registry, BIG);
     let answer = registry
         .write(&id, "x", 0, &CancelToken::new())
         .ok()
         .unwrap();
-    let kept = answer.text.lines().nth(1).unwrap().len();
-    assert_eq!(kept, 16 * 1024);
+    assert_eq!(answer.text.lines().next().unwrap().len(), 40 * 1024);
+    assert!(!answer.text.contains("omitted"));
+    drop(opened.end);
+}
+
+#[test]
+fn a_write_starting_inside_a_character_drops_its_continuation_bytes() {
+    let (_dir, _clock, registry) = clocked_world();
+    let (id, opened, _typed) = open_tty(&registry, b"\xA9ok");
+    // The file ends inside U+00E9 before the write, so the new bytes begin
+    // with its second byte.
+    (&opened.file).write_all(b"x\xC3").unwrap();
+    let answer = registry
+        .write(&id, "x", 0, &CancelToken::new())
+        .ok()
+        .unwrap();
+    assert!(answer.text.starts_with("ok\n"), "{:?}", answer.text);
+    drop(opened.end);
+}
+
+#[test]
+fn a_write_that_typed_less_than_it_was_given_says_so() {
+    let (_dir, _clock, registry) = clocked_world();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            input: Some(contract::jobs::Input(Box::new(|_, _, _| Ok(1)))),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let answer = registry
+        .write(&id, "abc", 0, &CancelToken::new())
+        .ok()
+        .unwrap();
     assert!(
-        answer
-            .text
-            .starts_with("Earlier output is omitted. Output: "),
+        answer.text.starts_with("Wrote 1 of 3 bytes.\n"),
         "{}",
-        &answer.text[..80]
+        answer.text
     );
+    let all = registry
+        .write(&id, "", 0, &CancelToken::new())
+        .ok()
+        .unwrap();
+    assert!(!all.text.contains("Wrote"), "{}", all.text);
     drop(opened.end);
 }
 
 #[test]
-fn write_cuts_a_multibyte_character_at_the_boundary_whole() {
-    static REPLY: [u8; 16 * 1024 + 2] = {
-        let mut bytes = [b'a'; 16 * 1024 + 2];
-        // U+00E9 is 0xC3 0xA9. The cut starts at index 2, on the second
-        // byte, which a decoder that is not aligned reads as U+FFFD.
-        bytes[1] = 0xC3;
-        bytes[2] = 0xA9;
-        bytes
-    };
+fn an_ended_job_drops_its_input() {
     let (_dir, _clock, registry) = clocked_world();
-    let (id, opened, _typed) = open_tty(&registry, &REPLY);
-    let answer = registry
-        .write(&id, "x", 0, &CancelToken::new())
-        .ok()
-        .unwrap();
-    assert!(
-        !answer.text.contains('\u{fffd}'),
-        "a half character was decoded"
-    );
-    drop(opened.end);
-}
-
-#[test]
-fn write_returns_exactly_sixteen_kib_whole() {
-    const EXACT: &[u8] = &[b'a'; 16 * 1024];
-    let (_dir, _clock, registry) = clocked_world();
-    let (id, opened, _typed) = open_tty(&registry, EXACT);
-    let answer = registry
-        .write(&id, "x", 0, &CancelToken::new())
-        .ok()
-        .unwrap();
-    assert!(!answer.text.contains("omitted"), "{}", answer.text.len());
-    assert_eq!(answer.text.lines().next().unwrap().len(), 16 * 1024);
-    drop(opened.end);
+    let (id, opened, typed) = open_tty(&registry, b"");
+    assert_eq!(Arc::strong_count(&typed), 2);
+    opened.end.end(ended_ok(&id));
+    assert_eq!(Arc::strong_count(&typed), 1, "the ended job kept its input");
+    assert!(matches!(
+        registry.write(&id, "x", 0, &CancelToken::new()),
+        Err(super::WriteError::Ended(Outcome::Completed))
+    ));
 }

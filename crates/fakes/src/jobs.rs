@@ -8,11 +8,13 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::Duration;
 
 use contract::JobId;
+use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Class, Event, JobCompleted, JobStarted};
 use contract::jobs::{End, Foreground, Jobs, OpenError, Opened, Opening};
+use contract::tool::Cancel;
 
-type Typer = Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>;
+type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
 struct Inner {
     next: u64,
@@ -133,15 +135,22 @@ impl FakeJobs {
         Arc::clone(&self.deltas)
     }
 
-    /// Types `bytes` into `job_id`'s terminal, as `jobs write` does. `None`
-    /// when the job is unknown or was not started with `tty`.
-    pub fn type_into(&self, job_id: &JobId, bytes: &[u8]) -> Option<std::io::Result<()>> {
+    /// Types `bytes` into `job_id`'s terminal, as `jobs write` does, with
+    /// the given clock and cancel. `None` when the job is unknown, ended, or
+    /// was not started with `tty`.
+    pub fn type_into(
+        &self,
+        job_id: &JobId,
+        bytes: &[u8],
+        clock: &dyn Clock,
+        cancel: &dyn Cancel,
+    ) -> Option<std::io::Result<usize>> {
         let input = lock(&self.inner)
             .inputs
             .iter()
             .find(|(id, _)| id == job_id)
             .map(|(_, input)| Arc::clone(input))?;
-        Some(input(bytes))
+        Some(input(bytes, clock, cancel))
     }
 
     /// The next completion, or `None` when none arrives within `within`.
@@ -188,7 +197,11 @@ impl Jobs for FakeJobs {
         let end = End::new(
             job_id,
             Box::new(move |completed| {
-                lock(&book).ended.push(expected.clone());
+                let mut book = lock(&book);
+                book.ended.push(expected.clone());
+                // The terminal closes with the job.
+                book.inputs.retain(|(id, _)| *id != expected);
+                drop(book);
                 // The same id the open minted, whatever the payload names.
                 match tx.send(JobCompleted {
                     job_id: expected,

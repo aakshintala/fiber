@@ -1623,7 +1623,12 @@ fn what_a_job_is_typed_reaches_the_program_and_its_answer_is_in_the_file() {
     assert!(
         running
             .jobs
-            .type_into(&job.job_id, b"hi\n")
+            .type_into(
+                &job.job_id,
+                b"hi\n",
+                running.clock.as_ref(),
+                &CancelToken::new()
+            )
             .expect("a terminal to type into")
             .is_ok()
     );
@@ -1669,5 +1674,69 @@ fn a_tty_job_past_its_timeout_fails_and_stop_cancels_it() {
     );
     assert!(ended.process.as_ref().unwrap().timed_out);
     assert!(!group_alive(pgid));
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-cancel-write");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    let block = block_of(ready.path());
+    // Raw mode with no echo, so the terminal's input queue fills and does
+    // not drop what does not fit; the program then waits on a fifo.
+    let body = format!(
+        "stty raw -echo\nmkfifo {block}\necho $$ >> {ready}\nread -r _ < {block}\n",
+        block = quote(&block),
+        ready = quote(ready.path()),
+    );
+    let running = start_tty(
+        dir.path().to_path_buf(),
+        on_terminal(ready.path(), &body),
+        None,
+        Arc::clone(&jobs),
+    );
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    let _own = ready.wait(DEADLINE);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    let job = started(&output);
+
+    let clock = FakeClock::new();
+    let cancel = CancelToken::new();
+    let input = vec![b'x'; 1 << 20];
+    let (done, written) = mpsc::channel();
+    let (typing_jobs, typing_clock, typing_cancel) =
+        (Arc::clone(&jobs), Arc::clone(&clock), cancel.clone());
+    let id = job.job_id.clone();
+    let length = input.len();
+    thread::spawn(move || {
+        let _sent = done.send(
+            typing_jobs
+                .type_into(&id, &input, typing_clock.as_ref(), &typing_cancel)
+                .expect("a terminal to type into"),
+        );
+    });
+    // Parked on the clock: the queue is full and the program does not read.
+    assert!(
+        clock.await_parked(clock.origin() + Duration::from_millis(10), DEADLINE),
+        "the write did not wait for room"
+    );
+    assert!(matches!(written.try_recv(), Err(mpsc::TryRecvError::Empty)));
+    cancel.cancel();
+    let count = written
+        .recv_timeout(DEADLINE)
+        .expect("the cancelled write to return")
+        .unwrap();
+    assert!(count < length, "the whole input fit: {count}");
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
     watchdog.stand_down(DEADLINE);
 }

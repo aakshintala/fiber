@@ -28,40 +28,46 @@ fn what_the_secondary_prints_is_read_from_the_primary_and_input_reaches_the_seco
     // The line discipline turns the newline into a carriage return and a
     // newline.
     assert_eq!(&seen, b"out\r\n");
-    (terminal.input.0)(b"typed\n").unwrap();
+    let clock = FakeClock::new();
+    let written = (terminal.input.0)(b"typed\n", clock.as_ref(), &CancelToken::new()).unwrap();
+    assert_eq!(written, 6);
     let mut got = [0_u8; 6];
     secondary.read_exact(&mut got).unwrap();
     assert_eq!(&got, b"typed\n");
 }
 
 #[test]
-fn output_so_far_is_the_whole_small_file_and_empty_for_a_missing_one() {
+fn the_reader_waits_for_output_written_later() {
+    let terminal = open().unwrap();
+    let mut secondary = std::fs::File::from(terminal.secondary);
+    let mut reader = terminal.reader;
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let mut seen = [0_u8; 5];
+        let _sent = tx.send(reader.read_exact(&mut seen).map(|()| seen));
+    });
+    secondary.write_all(b"late\n").unwrap();
+    let seen = rx
+        .recv_timeout(DEADLINE)
+        .expect("the read to return")
+        .unwrap();
+    assert_eq!(&seen, b"late\r");
+}
+
+#[test]
+fn output_so_far_is_the_whole_file_lossily_and_empty_for_a_missing_one() {
     let dir = TempDir::new("fiber-tty-so-far");
     let path = dir.path().join("out.log");
     assert_eq!(output_so_far(&path), "");
     std::fs::write(&path, b"one\ntwo").unwrap();
     assert_eq!(output_so_far(&path), "one\ntwo");
-}
-
-#[test]
-fn output_so_far_keeps_the_last_16_kib_and_not_half_a_character() {
-    let dir = TempDir::new("fiber-tty-cut");
-    let path = dir.path().join("out.log");
-    // 16 KiB + 2 bytes, with an e-acute whose second byte is where the cut
-    // starts.
-    let mut bytes = vec![b'a'; 16 * 1024 + 2];
-    bytes[1] = 0xC3;
-    bytes[2] = 0xA9;
-    std::fs::write(&path, &bytes).unwrap();
+    // Nothing is cut here: the loop bounds the result.
+    let mut big = vec![b'a'; 100 * 1024];
+    big.push(0xFF);
+    std::fs::write(&path, &big).unwrap();
     let text = output_so_far(&path);
-    assert_eq!(text.len(), 16 * 1024 - 1);
-    assert!(
-        text.bytes().all(|byte| byte == b'a'),
-        "a half character was kept"
-    );
-    // At exactly the cut nothing is dropped.
-    std::fs::write(&path, vec![b'b'; 16 * 1024]).unwrap();
-    assert_eq!(output_so_far(&path).len(), 16 * 1024);
+    assert_eq!(text.len(), 100 * 1024 + '\u{fffd}'.len_utf8());
+    assert!(text.ends_with('\u{fffd}'));
 }
 
 fn waiting() -> (

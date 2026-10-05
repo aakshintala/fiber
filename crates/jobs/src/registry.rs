@@ -55,11 +55,7 @@ struct Job {
     claimed: bool,
 }
 
-type Typer = Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>;
-
-/// The most of a `write`'s output one answer carries: 16 KiB, the tool's
-/// default cut (`docs/tools.md`, "Result and output").
-const WRITE_CUT: u64 = 16 * 1024;
+type Typer = Arc<dyn Fn(&[u8], &dyn Clock, &dyn Cancel) -> std::io::Result<usize> + Send + Sync>;
 
 enum Phase {
     Running,
@@ -271,10 +267,17 @@ impl Registry {
         let (typer, path) = self.typer_of(id)?;
         // Read before the write, so output the write causes is after it.
         let from = std::fs::metadata(&path).map_or(0, |meta| meta.len());
-        typer(input.as_bytes()).map_err(WriteError::Io)?;
+        let written =
+            typer(input.as_bytes(), self.clock.as_ref(), cancel).map_err(WriteError::Io)?;
         let until = self.clock.now().checked_add(Duration::from_millis(wait_ms));
         let parked = self.park_until(id, until, cancel);
-        let mut text = since_text(&path, from);
+        // A cancel stops the typing between chunks.
+        let mut text = if written < input.len() {
+            format!("Wrote {written} of {} bytes.\n", input.len())
+        } else {
+            String::new()
+        };
+        text.push_str(&since_text(&path, from));
         let state = match parked {
             Parked::Ended => self.answer_if_ended(id).unwrap_or_else(|| self.running(id)),
             Parked::Timeout | Parked::Cancelled => self.running(id),
@@ -368,6 +371,8 @@ impl Registry {
             let running = matches!(job.phase, Phase::Running);
             if running {
                 job.phase = Phase::Ended(Box::new(completed.clone()));
+                // The terminal closes with the job.
+                job.input = None;
                 if let Some(inbox) = &inner.inbox {
                     let registry = Weak::clone(&self.me);
                     let id = completed.job_id.0.clone();
@@ -528,39 +533,24 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
 }
 
 /// The file's bytes from `from`, decoded lossily and ending in a newline
-/// when there are any. Past [`WRITE_CUT`] bytes only the last are kept, under
-/// a line that says so.
+/// when there are any. `from` can fall inside a character, so a start past
+/// the file's beginning drops the continuation bytes it begins with.
 fn since_text(path: &Path, from: u64) -> String {
     let Ok(mut file) = File::open(path) else {
         return String::new();
     };
-    let len = file.metadata().map_or(0, |meta| meta.len());
-    let omitted = len.saturating_sub(from) > WRITE_CUT;
-    let start = if omitted {
-        len.saturating_sub(WRITE_CUT)
-    } else {
-        from.min(len)
-    };
     let mut bytes = Vec::new();
-    if file.seek(SeekFrom::Start(start)).is_ok() {
-        // The file only grows. `take` bounds what a reader that kept
-        // appending adds after `len` was read.
-        let _read = file.take(len.saturating_sub(start)).read_to_end(&mut bytes);
+    if file.seek(SeekFrom::Start(from)).is_ok() {
+        let _read = file.read_to_end(&mut bytes);
     }
-    let mut text = String::new();
-    if omitted {
-        text.push_str(&format!(
-            "Earlier output is omitted. Output: {}\n",
-            path.display()
-        ));
-        // A cut can land inside a character.
+    if from > 0 {
         let begin = bytes
             .iter()
             .position(|byte| byte & 0b1100_0000 != 0b1000_0000)
             .unwrap_or(bytes.len());
         bytes.drain(..begin);
     }
-    text.push_str(&String::from_utf8_lossy(&bytes));
+    let mut text = String::from_utf8_lossy(&bytes).into_owned();
     if !text.is_empty() && !text.ends_with('\n') {
         text.push('\n');
     }

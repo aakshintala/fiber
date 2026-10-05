@@ -23,13 +23,17 @@ pub struct Opening {
 }
 
 /// Writes bytes to a job's terminal (`docs/tools.md`, "Terminal (`tty`)").
-/// It returns once the bytes are written.
+/// It writes in chunks and checks the cancel between them, waiting on the
+/// clock when the terminal's queue is full. It returns how many bytes it
+/// wrote: fewer than given means the cancel fired.
 pub struct Input(
     /// The opener's write to the terminal.
     pub Box<Writes>,
 );
 
-type Writes = dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync;
+type Writes = dyn Fn(&[u8], &dyn crate::clock::Clock, &dyn crate::tool::Cancel) -> std::io::Result<usize>
+    + Send
+    + Sync;
 
 impl fmt::Debug for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

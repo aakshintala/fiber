@@ -4,16 +4,17 @@
 //! as stdin, stdout and stderr, and as its controlling terminal.
 
 use std::fs::File;
-use std::io::Write;
+use std::io::{ErrorKind, Read, Write};
 use std::os::fd::OwnedFd;
 use std::path::Path;
-use std::sync::Mutex;
-use std::time::Duration;
+use std::sync::{Arc, Condvar, Mutex};
+use std::time::{Duration, Instant};
 
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
 use contract::jobs::Input;
 use contract::tool::Cancel;
-use rustix::fs::{Mode, OFlags};
+use rustix::event::{PollFd, PollFlags, poll};
+use rustix::fs::{Mode, OFlags, fcntl_getfl, fcntl_setfl};
 use rustix::io::{FdFlags, fcntl_setfd};
 use rustix::pty::{OpenptFlags, grantpt, openpt, ptsname, unlockpt};
 
@@ -24,18 +25,37 @@ use super::output::{Shared, lock};
 /// (`docs/tools.md`, "Terminal (`tty`)").
 const FIRST_OUTPUT: Duration = Duration::from_millis(250);
 
-/// The receipt carries at most this much of the output: 16 KiB, the tool's
-/// default cut (`docs/tools.md`, "Result and output").
-const RECEIPT_CUT: u64 = 16 * 1024;
+/// How long a write waits on the clock before it tries a full terminal
+/// queue again. Picked, not measured.
+const WRITE_RETRY: Duration = Duration::from_millis(10);
 
 /// One terminal, before the command starts.
 pub(super) struct Terminal {
     /// The primary's read side: what the command prints.
-    pub reader: File,
+    pub reader: Primary,
     /// The secondary, for the command's three standard streams.
     pub secondary: OwnedFd,
     /// Types into the primary.
     pub input: Input,
+}
+
+/// The primary, read to the end of the command's output. It is nonblocking,
+/// so a write to the same description can give up on a full queue; a read
+/// that would block waits in `poll`.
+pub(super) struct Primary(File);
+
+impl Read for Primary {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            match self.0.read(buf) {
+                Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                    let mut fds = [PollFd::new(&self.0, PollFlags::IN)];
+                    poll(&mut fds, None)?;
+                }
+                other => return other,
+            }
+        }
+    }
 }
 
 /// Opens a terminal. The primary is close-on-exec, so no command inherits
@@ -45,6 +65,9 @@ pub(super) fn open() -> std::io::Result<Terminal> {
     // `openpt` has no close-on-exec flag on macOS, so it is set after, on
     // every platform.
     fcntl_setfd(&primary, FdFlags::CLOEXEC)?;
+    // The reader and the writer share the description, so both are
+    // nonblocking.
+    fcntl_setfl(&primary, fcntl_getfl(&primary)? | OFlags::NONBLOCK)?;
     grantpt(&primary)?;
     unlockpt(&primary)?;
     let name = ptsname(&primary, Vec::new())?;
@@ -54,18 +77,108 @@ pub(super) fn open() -> std::io::Result<Terminal> {
         Mode::empty(),
     )?;
     let writer = Mutex::new(File::from(primary.try_clone()?));
-    // debt: a write larger than the terminal's input queue blocks until the program reads, until `jobs write` can be cancelled mid-write
-    let input = Input(Box::new(move |bytes| {
-        writer
+    let input = Input(Box::new(move |bytes, clock, cancel| {
+        let mut file = writer
             .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .write_all(bytes)
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        write_chunks(&mut file, bytes, clock, cancel)
     }));
     Ok(Terminal {
-        reader: File::from(primary),
+        reader: Primary(File::from(primary)),
         secondary,
         input,
     })
+}
+
+/// Wakes a write that is waiting for room: the clock moved or the call was
+/// cancelled.
+#[derive(Default)]
+struct Nudge {
+    seq: Mutex<u64>,
+    cv: Condvar,
+}
+
+impl Wake for Nudge {
+    fn wake(&self) {
+        let mut seq = self
+            .seq
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *seq = seq.wrapping_add(1);
+        self.cv.notify_all();
+    }
+}
+
+impl Nudge {
+    fn seen(&self) -> u64 {
+        *self
+            .seq
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    /// Waits until `until` on `clock` or a wake after `seen`.
+    fn park(&self, clock: &dyn Clock, until: Option<Instant>, seen: u64) {
+        let mut slot = Some(
+            self.seq
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner),
+        );
+        clock.wait_until(until, &mut |bound| {
+            let Some(guard) = slot.take() else {
+                return;
+            };
+            if *guard != seen {
+                slot = Some(guard);
+                return;
+            }
+            slot = Some(match bound {
+                Some(bound) => {
+                    self.cv
+                        .wait_timeout(guard, bound)
+                        .unwrap_or_else(std::sync::PoisonError::into_inner)
+                        .0
+                }
+                None => self
+                    .cv
+                    .wait(guard)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            });
+        });
+    }
+}
+
+/// Writes `bytes` to the nonblocking primary as the queue takes them. A
+/// full queue parks on `clock` for [`WRITE_RETRY`], or until a wake; the
+/// cancel is checked before every write. Returns how many bytes went in:
+/// fewer than given means the cancel fired.
+fn write_chunks(
+    file: &mut File,
+    bytes: &[u8],
+    clock: &dyn Clock,
+    cancel: &dyn Cancel,
+) -> std::io::Result<usize> {
+    let nudge = Arc::new(Nudge::default());
+    let wake: Arc<dyn Wake> = nudge.clone();
+    cancel.subscribe(Arc::downgrade(&wake));
+    clock.subscribe(Arc::downgrade(&wake));
+    let mut done = 0;
+    while done < bytes.len() {
+        let seen = nudge.seen();
+        if cancel.is_cancelled() {
+            break;
+        }
+        match file.write(bytes.get(done..).unwrap_or_default()) {
+            Ok(0) => return Err(ErrorKind::WriteZero.into()),
+            Ok(n) => done += n,
+            Err(err) if err.kind() == ErrorKind::WouldBlock => {
+                nudge.park(clock, clock.now().checked_add(WRITE_RETRY), seen);
+            }
+            Err(err) if err.kind() == ErrorKind::Interrupted => {}
+            Err(err) => return Err(err),
+        }
+    }
+    Ok(done)
 }
 
 /// Waits until the output reached end of file or [`FIRST_OUTPUT`] passes on
@@ -85,29 +198,13 @@ pub(super) fn wait_first_output(shared: &Shared, clock: &dyn Clock, cancel: &dyn
     }
 }
 
-/// The output file's last [`RECEIPT_CUT`] bytes, decoded lossily; empty when
-/// the file cannot be read.
+/// The output file so far, decoded lossily; empty when it cannot be read.
+/// The loop bounds the result (`docs/tools.md`, "Bounded results").
 pub(super) fn output_so_far(path: &Path) -> String {
-    use std::io::{Read, Seek, SeekFrom};
-    let Ok(mut file) = File::open(path) else {
-        return String::new();
-    };
-    let len = file.metadata().map_or(0, |meta| meta.len());
-    let start = len.saturating_sub(RECEIPT_CUT);
-    let mut bytes = Vec::new();
-    if file.seek(SeekFrom::Start(start)).is_ok() {
-        let _read = file.take(len.saturating_sub(start)).read_to_end(&mut bytes);
-    }
-    // A cut can land inside a character.
-    let begin = if start == 0 {
-        0
-    } else {
-        bytes
-            .iter()
-            .position(|byte| byte & 0b1100_0000 != 0b1000_0000)
-            .unwrap_or(bytes.len())
-    };
-    String::from_utf8_lossy(bytes.get(begin..).unwrap_or_default()).into_owned()
+    std::fs::read(path).map_or_else(
+        |_| String::new(),
+        |bytes| String::from_utf8_lossy(&bytes).into_owned(),
+    )
 }
 
 #[cfg(test)]
