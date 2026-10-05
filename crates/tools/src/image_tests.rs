@@ -325,16 +325,18 @@ fn cancel_stops_and_reaps(prelude: &str) {
             ready.path().display()
         ),
     );
-    let files =
-        Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts"));
+    let files = std::sync::Arc::new(
+        Files::new(dir.path().to_path_buf()).with_images(fiber, dir.path().join("artifacts")),
+    );
     let Value::Object(arguments) = json!({"path": "a.png"}) else {
         panic!("an object");
     };
     let cancel = CancelToken::new();
+    let call_files = std::sync::Arc::clone(&files);
     let (done_tx, done_rx) = std::sync::mpsc::channel();
     let call_cancel = cancel.clone();
     let call = std::thread::spawn(move || {
-        let output = files
+        let output = call_files
             .read()
             .run(&arguments, &call_cancel, &Recorder::default());
         drop(done_tx.send(output));
@@ -357,6 +359,8 @@ fn cancel_stops_and_reaps(prelude: &str) {
         .unwrap()
         .success();
     assert!(!alive, "the child {pid} still exists");
+    // A cancelled read took in no image: a `write` is still stale.
+    assert_eq!(code(&write_png(&files)), Some(ErrorCode::StaleFile));
 }
 
 #[test]

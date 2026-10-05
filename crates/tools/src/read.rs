@@ -5,7 +5,7 @@ use std::sync::Arc;
 use contract::ErrorCode;
 use contract::emit::Emit;
 use contract::provider::ToolDefinition;
-use contract::shapes::Effect;
+use contract::shapes::{ContentPart, Effect};
 use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
@@ -111,8 +111,13 @@ impl Tool for Read {
             // `offset` and `limit` do not apply to an image.
             Ok(Inspected::Image { hash, .. }) => {
                 let output = crate::image::read(self.shared.images(), &path, cancel);
-                // Seen for a later `write`: the bytes this read took in.
-                if output.error.is_none() {
+                // Seen for a later `write`: the bytes this read took in. A
+                // failed or cancelled read returned no image, so saw nothing.
+                if output
+                    .content
+                    .iter()
+                    .any(|part| matches!(part, ContentPart::Image { .. }))
+                {
                     self.shared.set_seen(&path, hash);
                 }
                 return output;
