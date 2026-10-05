@@ -3198,7 +3198,9 @@ fn call_ids(conversation: &[Input]) -> Vec<(&'static str, String)> {
                 assert_eq!(*text, format!("result of {}", action_id.0));
                 ("result", action_id.0.clone())
             }
-            other => ("text", text_of(other).to_owned()),
+            Input::User { .. } | Input::Assistant { .. } | Input::Reasoning { .. } => {
+                ("text", text_of(input).to_owned())
+            }
         })
         .collect()
 }

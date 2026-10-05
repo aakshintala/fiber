@@ -1008,9 +1008,16 @@ fn handed_after_a_call() -> Vec<Scripted> {
 
 #[test]
 fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
+    let (ack, answer) = answered();
     let mut session = injected(
         handed_after_a_call(),
-        vec![handoff("c_h", Some("focus on tests"))],
+        vec![Delivery::Handoff(
+            contract::CommandId("c_h".into()),
+            contract::commands::Handoff {
+                instructions: Some("focus on tests".into()),
+            },
+            ack,
+        )],
         settings(),
     );
 
@@ -1021,6 +1028,8 @@ fn a_person_handoff_during_a_turn_runs_at_the_next_step_boundary() {
     );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
+    // Accepted when taken.
+    assert!(answer.recv_timeout(DEADLINE).unwrap().unwrap().is_none());
     assert_eq!(
         of_kind(&lines, "handoff_started")[0].payload["trigger"],
         "person"
@@ -1214,6 +1223,25 @@ fn a_steer_drop_cannot_drop_a_handoff() {
 }
 
 #[test]
+fn a_steer_drop_between_turns_cannot_drop_a_handoff_either() {
+    let (ack, answer) = answered();
+    let mut session = session(vec![Scripted::text("The note.")], settings());
+    session.inbox.send(handoff("c_h", None)).unwrap();
+    session
+        .inbox
+        .send(Delivery::SteerDrop(contract::CommandId("c_h".into()), ack))
+        .unwrap();
+
+    let outcome = session.turn();
+    let lines = session.lines();
+    assert_kinds(&lines, &[OPENING, STEP, HANDED_OFF, ENDED]);
+
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let rejected = answer.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    assert_eq!(rejected.code, ErrorCode::StaleRequest);
+}
+
+#[test]
 fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
     let (ack, answer) = answered();
     let mut session = session(
@@ -1245,11 +1273,16 @@ fn a_person_handoff_between_turns_is_a_turn_of_its_own() {
         of_kind(&lines, "handoff_started")[0].payload["trigger"],
         "person"
     );
-    // The opening message was all there was to hand off: tokens estimated.
-    assert!(of_kind(&lines, "handoff_completed")[0].payload["tokens_before"].as_u64() > Some(0));
     // No request after the note.
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
+    // The opening message was all there was to hand off, and no reply
+    // measured it: its size is estimated at a token to four bytes.
+    let opening = text_of(&requests[0].conversation[0]);
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["tokens_before"],
+        opening.len().div_ceil(4)
+    );
     assert_eq!(requests[0].conversation.len(), 2);
     assert!(is_opening(&requests[0].conversation[0]));
     assert!(note_request(&requests[0]).ends_with("focus on:\n\nfocus"));
@@ -1566,6 +1599,12 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
         of_kind(&lines, "handoff_completed")[0].payload["note"],
         json!([ids[1]])
     );
+    // The prompt tokens, and the two one-token results written after the
+    // reply that measured them.
+    assert_eq!(
+        of_kind(&lines, "handoff_completed")[0].payload["tokens_before"],
+        502
+    );
     let requests = session.requests();
     let next = &requests[1].conversation;
     assert_eq!(next.len(), 7);
@@ -1573,19 +1612,24 @@ fn the_other_calls_of_the_step_follow_the_note_in_call_order() {
     // The calls in call order, then their results in the same order.
     let called: Vec<&str> = next[3..5]
         .iter()
-        .map(|input| match input {
-            Input::ToolCall { action_id, .. } => action_id.0.as_str(),
-            other => panic!("a call: {other:?}"),
+        .map(|input| {
+            let Input::ToolCall { action_id, .. } = input else {
+                panic!("a call: {input:?}");
+            };
+            action_id.0.as_str()
         })
         .collect();
     assert_eq!(called, [ids[0], ids[2]]);
     let results: Vec<(&str, &str)> = next[5..]
         .iter()
-        .map(|input| match input {
-            Input::ToolResult {
+        .map(|input| {
+            let Input::ToolResult {
                 action_id, text, ..
-            } => (action_id.0.as_str(), text.as_str()),
-            other => panic!("a result: {other:?}"),
+            } = input
+            else {
+                panic!("a result: {input:?}");
+            };
+            (action_id.0.as_str(), text.as_str())
         })
         .collect();
     assert_eq!(results, [(ids[0], "abcd"), (ids[2], "abcd")]);
