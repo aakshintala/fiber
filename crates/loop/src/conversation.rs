@@ -171,6 +171,14 @@ impl Rendered {
                     }
                 }
             }
+            // A new process: no call the old one left without a result gets
+            // one later, so each gets its fixed one now. A handoff window the
+            // old process left open then closes, and its truncation takes
+            // each call with its result, so no result outlives its call.
+            Event::FiberStarted(_) => {
+                self.flush();
+                self.render(event, action, model);
+            }
             // The next round starts a new batch: every call of the last
             // one still without a result gets its fixed one first, before
             // the round's own input. Each is listed, so a new kind does
@@ -191,7 +199,6 @@ impl Rendered {
             Event::ReasoningCompleted(_)
             | Event::TextCompleted(_)
             | Event::AssistantMessageCompleted(_)
-            | Event::FiberStarted(_)
             | Event::FiberExited(_)
             | Event::SessionStarted(_)
             | Event::Rewound(_)

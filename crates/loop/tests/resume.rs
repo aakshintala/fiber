@@ -3015,6 +3015,24 @@ fn a_handoff_window_closes_at_each_completion_even_in_a_later_window() {
 }
 
 #[test]
+fn a_note_call_cut_short_by_a_crash_leaves_no_result_behind() {
+    let log = LogLines::new();
+    before_handoff(&log, false);
+    note_lines(&log);
+    // The process died after logging the note reply's call, before its
+    // completion; a new process resumed and took a turn.
+    log.append(requested("read"), Some("a_call"));
+    log.append(fiber_started(), None);
+    log.append(user_turn("two"), None);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    let mut expected = before(false);
+    expected.push(Input::User { text: "two".into() });
+    assert_eq!(conversation, expected);
+}
+
+#[test]
 fn the_nudge_renders_with_the_openings_session_log_path() {
     let log = LogLines::new();
     log.append(opening_of("old-os"), None);
