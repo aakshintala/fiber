@@ -385,6 +385,41 @@ fn a_resumed_session_offers_the_same_tools_in_the_same_order() {
     let second_body: Value = serde_json::from_slice(&requests[1].body).unwrap();
     assert_eq!(first_body["tools"], second_body["tools"]);
     assert_eq!(tool_names(&requests[0].body), TOOL_NAMES);
+    let turn = [
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ];
+    // A resume writes no `session_started` and no `opening_message`: the log
+    // already holds both.
+    assert_eq!(
+        first.kinds(),
+        [
+            &[
+                "session_started",
+                "fiber_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+            ][..],
+            &turn,
+        ]
+        .concat()
+    );
+    assert_eq!(
+        second.kinds(),
+        [
+            &["fiber_started", "preamble_built", "turn_started"][..],
+            &turn
+        ]
+        .concat()
+    );
     assert_preamble(&first, "start");
     assert_preamble(&second, "resume");
 }
