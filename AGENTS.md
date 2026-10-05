@@ -19,6 +19,12 @@ the code changes. When a doc cannot be met as written, or building it
 shows a problem or a simpler design, follow `docs/workflow.md`, "When a doc
 should change".
 
+Area docs and `GLOSSARY.md` describe only Fiber. What other tools do, and
+measurements of how the owner works, are evidence: they live in
+`research/<topic>/` or an ADR, and the doc points at them in one line where
+the reason matters. A fact Fiber's own behaviour depends on, such as a flag
+Fiber passes to another harness, stays in the area doc.
+
 Plans, specs and backlogs live on GitHub Issues, never in files in the
 repository.
 
