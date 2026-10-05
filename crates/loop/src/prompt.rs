@@ -57,66 +57,43 @@ pub(crate) fn section(md: &str, name: &str) -> String {
 /// `{date}` stays as is. An unknown `{x}` is left alone.
 pub(crate) fn fill(template: &str, values: &[(&str, &str)]) -> String {
     let mut out = String::with_capacity(template.len());
-    let bytes = template.as_bytes();
-    let mut i = 0;
-    while let Some(&byte) = bytes.get(i) {
-        if byte == b'{' {
-            if let Some(rest) = template.get(i..)
-                && let Some(end) = rest.find('}')
-                && let Some(name) = rest.get(1..end)
-                && !name.is_empty()
-                && name
-                    .bytes()
-                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'/')
-                && !name.contains('{')
-            {
-                if let Some((_, value)) = values.iter().find(|(k, _)| *k == name) {
-                    out.push_str(value);
-                } else if let Some(original) = rest.get(..end + 1) {
-                    out.push_str(original);
-                }
-                i += end + 1;
-                continue;
-            }
-            out.push('{');
-            i += 1;
-        } else if let Some(rest) = template.get(i..)
-            && let Some(ch) = rest.chars().next()
+    let mut rest = template;
+    while let Some(open) = rest.find('{') {
+        out.push_str(&rest[..open]);
+        let after = &rest[open..];
+        let Some(end) = after.find('}') else {
+            out.push_str(after);
+            return out;
+        };
+        let name = &after[1..end];
+        if !name.is_empty()
+            && name
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-' || b == b'/')
+            && !name.contains('{')
         {
-            // Advance by one char to keep UTF-8 boundaries.
-            out.push(ch);
-            i += ch.len_utf8();
+            if let Some((_, value)) = values.iter().find(|(k, _)| *k == name) {
+                out.push_str(value);
+            } else {
+                out.push_str(&after[..end + 1]);
+            }
+            rest = &after[end + 1..];
         } else {
-            break;
+            out.push('{');
+            rest = &after[1..];
         }
     }
+    out.push_str(rest);
     out
 }
 
 /// The body of a `messages.md` section: its `## name` line dropped and
 /// blank lines at either end removed, ready to `fill`.
 fn body(md: &str, name: &str) -> String {
-    let full = section(md, name);
-    let mut lines: Vec<&str> = full.lines().collect();
-    if lines.first().is_some_and(|l| l.starts_with("## ")) {
-        lines.remove(0);
-    }
-    let start = lines
-        .iter()
-        .position(|l| !l.trim().is_empty())
-        .unwrap_or(lines.len());
-    let end = lines
-        .iter()
-        .rposition(|l| !l.trim().is_empty())
-        .map_or(0, |at| at + 1);
-    if start >= end {
-        return String::new();
-    }
-    lines
-        .iter()
-        .skip(start)
-        .take(end.saturating_sub(start))
-        .copied()
+    section(md, name)
+        .lines()
+        .skip(1)
+        .skip_while(|l| l.trim().is_empty())
         .collect::<Vec<_>>()
         .join("\n")
 }
@@ -227,10 +204,6 @@ pub(crate) fn system_prompt(
 /// "`preamble_built`"). `effort`, `thinking`, `credential` and
 /// `trigger_at` are absent: no thinking levels, credential labels or
 /// handoff exist.
-#[allow(
-    clippy::too_many_arguments,
-    reason = "one build takes every preamble input"
-)]
 pub(crate) fn build(
     inputs: &PromptInputs,
     model: &str,
@@ -254,23 +227,20 @@ pub(crate) fn build(
         .map(|(_, _, definition)| definition.clone())
         .collect();
     let wire = provider.wire_tools(&definitions);
-    let mut names: Vec<(&String, &String, bool)> = tools
+    let sent: Vec<contract::events::SentTool> = tools
         .iter()
-        .map(|(name, (by, _, definition))| (name, by, definition.deferred))
-        .collect();
-    names.sort_by(|a, b| a.0.cmp(b.0));
-    let sent: Vec<contract::events::SentTool> = names
-        .into_iter()
         .zip(wire)
         .map(
-            |((name, by, deferred), definition)| contract::events::SentTool {
+            |((name, (by, _, definition)), definition_wire)| contract::events::SentTool {
                 name: name.clone(),
                 registered_by: by.clone(),
-                deferred,
-                definition,
+                deferred: definition.deferred,
+                definition: definition_wire,
             },
         )
         .collect();
+    let tool_choice = "auto".to_owned();
+    let cache_lifetime = contract::events::CacheLifetime::OneHour;
     let event = contract::events::PreambleBuilt {
         reason,
         model: model.to_owned(),
@@ -278,8 +248,8 @@ pub(crate) fn build(
         trigger_at: None,
         effort: None,
         thinking: None,
-        tool_choice: "auto".to_owned(),
-        cache_lifetime: contract::events::CacheLifetime::OneHour,
+        tool_choice,
+        cache_lifetime,
         credential: None,
         system_prompt: system.clone(),
         tools: sent,

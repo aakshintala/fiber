@@ -421,3 +421,16 @@ fn a_failed_read_records_nothing() {
     let resolved = canonical(dir.path()).join("a.txt");
     assert_eq!(files.seen_hash(&resolved), None);
 }
+
+#[test]
+fn guidelines_are_the_read_section() {
+    let files = Files::new(std::path::Path::new("/ws").to_path_buf());
+    let text = files.read().guidelines().unwrap();
+    assert_eq!(text, crate::guidelines::of("read").unwrap());
+    assert!(!text.is_empty(), "{text}");
+    let md = include_str!("../prompt/guidelines.md");
+    let rest = &md[md.find("## read\n").unwrap() + "## read\n".len()..];
+    let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
+    assert_eq!(text, rest[..end].trim(), "{text}");
+    assert!(text.contains("Read files with `read`"), "{text}");
+}

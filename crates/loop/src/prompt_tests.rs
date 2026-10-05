@@ -210,6 +210,46 @@ fn fill_does_not_rescan_inserted_text() {
 }
 
 #[test]
+fn fill_names_may_hold_dashes_underscores_slashes_and_digits() {
+    assert_eq!(fill("{a-b}", &[("a-b", "X")]), "X");
+    assert_eq!(fill("{a_b}", &[("a_b", "X")]), "X");
+    assert_eq!(fill("{a/b}", &[("a/b", "X")]), "X");
+    assert_eq!(fill("{a1}", &[("a1", "X")]), "X");
+    assert_eq!(fill("{a-b_c/d1}", &[("a-b_c/d1", "X")]), "X");
+}
+
+#[test]
+fn fill_leaves_unclosed_and_empty_braces_alone() {
+    assert_eq!(fill("a {oops", &[]), "a {oops");
+    assert_eq!(fill("a {", &[]), "a {");
+    assert_eq!(fill("a {}", &[]), "a {}");
+    assert_eq!(fill("{} {name}", &[("name", "X")]), "{} X");
+}
+
+#[test]
+fn fill_leaves_a_brace_inside_a_name_alone() {
+    assert_eq!(fill("{a{b}", &[]), "{a{b}");
+    assert_eq!(fill("{a{b}", &[("b", "B")]), "{aB");
+}
+
+#[test]
+fn fill_keeps_multibyte_text_around_placeholders() {
+    assert_eq!(
+        fill("héllo {name} wörld ", &[("name", "X")]),
+        "héllo X wörld "
+    );
+    assert_eq!(fill("日{name}本", &[("name", "X")]), "日X本");
+}
+
+#[test]
+fn fill_value_holding_placeholders_is_not_rescanned() {
+    assert_eq!(
+        fill("{a} {date}", &[("a", "{date}"), ("date", "today")]),
+        "{date} today"
+    );
+}
+
+#[test]
 fn section_strips_blank_lines_at_its_ends() {
     let md = "## a\n\nbody\n\n\n## b\nother\n";
     assert_eq!(section(md, "a"), "## a\n\nbody");

@@ -196,6 +196,10 @@ struct Preamble {
     system_prompt: String,
     /// The tools as sent, in name order.
     tools: Vec<ToolDefinition>,
+    /// The tool choice as sent, and as `preamble_built` records it.
+    tool_choice: String,
+    /// The cache lifetime as sent, and as `preamble_built` records it.
+    cache_lifetime: CacheLifetime,
 }
 
 impl Loop {
@@ -332,8 +336,7 @@ impl Loop {
         // already what the builder set, so an unattended loop's prompt
         // carries its line. A loop that never takes a turn writes none.
         // debt: extension texts and the addendum arrive empty from `main`;
-        // fixed by #510. The skills listing stays empty until Part C
-        // builds the opening message; fixed by #511.
+        // fixed by #510.
         self.ensure_preamble()?;
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
@@ -396,10 +399,13 @@ impl Loop {
             self.preamble_reason,
             self.replaced.clone(),
         );
-        self.log.append(&Event::PreambleBuilt(event), None, None)?;
+        self.log
+            .append(&Event::PreambleBuilt(event.clone()), None, None)?;
         self.preamble = Some(Preamble {
             system_prompt,
             tools,
+            tool_choice: event.tool_choice,
+            cache_lifetime: event.cache_lifetime,
         });
         Ok(())
     }
@@ -434,8 +440,8 @@ impl Loop {
             system_prompt: built.system_prompt.clone(),
             tools: built.tools.clone(),
             effort: None,
-            tool_choice: "auto".to_owned(),
-            cache_lifetime: CacheLifetime::OneHour,
+            tool_choice: built.tool_choice.clone(),
+            cache_lifetime: built.cache_lifetime,
             cache_key: self.cache_key.clone(),
             conversation: self.conversation.clone(),
             previous_end: self.sent,

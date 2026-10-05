@@ -9,28 +9,22 @@ use std::path::Path;
 
 use config::ProjectKey;
 
-/// `SYSTEM.md`: the project file wins; an empty file counts as absent and
-/// shadows the global one.
+/// `SYSTEM.md`: the project file wins; an empty file counts as absent, so
+/// the global one applies.
 pub(crate) fn system(home: &Path, project: &ProjectKey) -> Option<String> {
     read_one(home, project, "SYSTEM.md")
 }
 
 /// `APPEND_SYSTEM.md`: the project file wins; an empty file counts as
-/// absent and shadows the global one.
+/// absent, so the global one applies.
 pub(crate) fn append(home: &Path, project: &ProjectKey) -> Option<String> {
     read_one(home, project, "APPEND_SYSTEM.md")
 }
 
 fn read_one(home: &Path, project: &ProjectKey, name: &str) -> Option<String> {
     let project_file = home.join("projects").join(project.as_str()).join(name);
-    if let Some(text) = read_lossy(&project_file) {
-        return present(text);
-    }
-    // No project file: the global one applies. A project file that was
-    // empty shadows it (`present` returned `None` above only when the
-    // file existed; see below).
-    if project_file.symlink_metadata().is_ok() {
-        return None;
+    if let Some(text) = read_lossy(&project_file).and_then(present) {
+        return Some(text);
     }
     read_lossy(&home.join(name)).and_then(present)
 }

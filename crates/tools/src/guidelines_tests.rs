@@ -52,3 +52,24 @@ fn each_builtin_tool_returns_its_section() {
 fn unknown_tool_has_no_guidelines() {
     assert_eq!(of("nope"), None);
 }
+
+#[test]
+fn a_section_stops_before_the_next_heading() {
+    // `read` is followed by a blank line and `## edit`: neither the
+    // blank line nor the next section's text is part of it.
+    let read = of("read").unwrap();
+    assert!(!read.contains("Change an existing file"), "{read}");
+    assert!(!read.contains("## "), "{read}");
+    assert_eq!(read, read.trim(), "{read}");
+}
+
+#[test]
+fn leading_and_trailing_blank_lines_are_removed() {
+    // Every section starts with a blank line after its heading and
+    // ends before a blank line and the next heading.
+    for name in ["read", "edit", "write", "shell"] {
+        let text = of(name).unwrap();
+        assert!(!text.is_empty(), "{name}");
+        assert_eq!(text, text.trim(), "{name}: {text}");
+    }
+}

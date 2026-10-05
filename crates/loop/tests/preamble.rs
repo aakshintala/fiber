@@ -37,10 +37,19 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     assert!(built.payload.get("thinking").is_none());
     assert!(built.payload.get("credential").is_none());
     assert!(built.payload.get("trigger_at").is_none());
-    // The event's system prompt is the first request's.
+    // The event's system prompt is the first request's, and its tool
+    // choice and cache lifetime are what the request sends.
     let requests = session.requests();
     assert_eq!(requests.len(), 1);
     assert_eq!(built.payload["system_prompt"], requests[0].system_prompt);
+    assert_eq!(
+        built.payload["tool_choice"],
+        serde_json::json!(requests[0].tool_choice)
+    );
+    assert_eq!(
+        built.payload["cache_lifetime"],
+        serde_json::to_value(requests[0].cache_lifetime).unwrap()
+    );
     assert_eq!(built.payload["tools"], Value::Array(vec![]));
     assert!(built.payload.get("replaced").is_none());
 }

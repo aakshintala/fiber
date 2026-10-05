@@ -50,6 +50,30 @@ fn empty_file_is_absent() {
 }
 
 #[test]
+fn empty_project_file_falls_back_to_the_global_one() {
+    let (home, project) = home();
+    write(&home.path().join("SYSTEM.md"), "global");
+    write(
+        &home.path().join("projects").join("proj").join("SYSTEM.md"),
+        "  \n",
+    );
+    assert_eq!(system(home.path(), &project).as_deref(), Some("global"));
+    write(&home.path().join("APPEND_SYSTEM.md"), "global appendix");
+    write(
+        &home
+            .path()
+            .join("projects")
+            .join("proj")
+            .join("APPEND_SYSTEM.md"),
+        "\n",
+    );
+    assert_eq!(
+        append(home.path(), &project).as_deref(),
+        Some("global appendix")
+    );
+}
+
+#[test]
 fn missing_files_are_absent() {
     let (home, project) = home();
     assert_eq!(system(home.path(), &project), None);
