@@ -24,7 +24,7 @@ type SessionTools = (
     Arc<dyn Fn() + Send + Sync>,
 );
 
-/// `edit`, `read`, `shell` and `write`, each registered by `builtin`.
+/// `edit`, `handoff`, `read`, `shell` and `write`, each registered by `builtin`.
 /// `read`, `write` and `edit` share one session's file state, which a
 /// handoff forgets. A failure to
 /// find the running binary is `io_failed`, before any session line.
@@ -38,6 +38,7 @@ pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<Sessio
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let built = [
         registered(files.edit())?,
+        registered(tools::Handoff)?,
         registered(files.read())?,
         registered(shell)?,
         registered(files.write())?,

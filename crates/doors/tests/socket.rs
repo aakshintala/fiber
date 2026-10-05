@@ -326,6 +326,10 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             ack.0(Ok(None));
             format!("reply {}", reply.request_id.0)
         }
+        Delivery::Handoff(id, args, ack) => {
+            ack.0(Ok(None));
+            format!("handoff {} {:?}", id.0, args.instructions)
+        }
         Delivery::Close(ack) => {
             ack.0(Ok(None));
             "close".to_owned()
@@ -436,7 +440,6 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 "model",
                 "credential",
                 "name",
-                "handoff",
                 "rewind",
                 "command",
             ] {
@@ -766,14 +769,21 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
                 &sender,
                 r#"{"id":"c_reply","command":"reply","args":{"request_id":"r_1","confirmed":true}}"#,
             );
+            send(
+                &sender,
+                r#"{"id":"c_handoff","command":"handoff","args":{"instructions":"focus on tests"}}"#,
+            );
+            send(&sender, r#"{"id":"c_bare","command":"handoff","args":{}}"#);
             send(&sender, r#"{"id":"c_close","command":"close"}"#);
             assert_eq!(
-                (0..5).map(|_| take(&inbox)).collect::<Vec<_>>(),
+                (0..7).map(|_| take(&inbox)).collect::<Vec<_>>(),
                 vec![
                     "prompt hi".to_owned(),
                     "steer more".to_owned(),
                     "drop c_steer".to_owned(),
                     "reply r_1".to_owned(),
+                    "handoff c_handoff Some(\"focus on tests\")".to_owned(),
+                    "handoff c_bare None".to_owned(),
                     "close".to_owned(),
                 ]
             );
@@ -782,7 +792,15 @@ fn inbox_commands_are_answered_only_on_the_connection_that_sent_them() {
             let ids: Vec<&str> = own.iter().filter_map(command_id).collect();
             assert_eq!(
                 ids,
-                vec!["c_prompt", "c_steer", "c_drop", "c_reply", "c_close"]
+                vec![
+                    "c_prompt",
+                    "c_steer",
+                    "c_drop",
+                    "c_reply",
+                    "c_handoff",
+                    "c_bare",
+                    "c_close"
+                ]
             );
             assert!(own.iter().all(|line| kind(line) != "command_rejected"));
             let seen = until(&other, |line| line["seq"].as_u64() == Some(0));

@@ -391,9 +391,12 @@ impl Loop {
         }
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
-        self.handoff.new_turn();
         self.cancel.arm();
         let input = self.turn_input(started.pieces);
+        let person = input
+            .iter()
+            .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
+        self.handoff.new_turn(person);
         self.append(&Event::TurnStarted(TurnStarted { input }), &turn, None)?;
         // A prompt is accepted once its `turn_started` is written. A log
         // error above drops it uncalled.
@@ -752,6 +755,7 @@ impl Loop {
             // (`docs/permissions.md`, "Headless").
             return Ok(Step::Ended(ended(TurnOutcome::Failed, Some(error))));
         }
+        self.handoff_from_tools(turn)?;
         Ok(Step::Next)
     }
 
