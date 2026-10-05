@@ -527,7 +527,7 @@ request.
 **A pending approval or question does not keep a session alive past the idle
 delay.** When the delay passes with either pending, the session exits, and
 `fiber_exited` names the request it stopped on. Resuming the session raises
-the request again and the turn goes on from there. The hub lists such a
+the request again and the turn goes on from there. `fiber ask --resume` on such a session has no one to answer, so it refuses the request, lets the model finish the turn, and then runs its prompt as the next turn; the prompt waits behind that turn. The hub lists such a
 session as waiting on the person, from `recent.jsonl` (`docs/state.md`).
 Two cases have no one to wait for, and there escalation is a block as
 `docs/permissions.md` ("Headless") describes: a session started by

@@ -131,6 +131,15 @@ impl Loop {
                 messages: Vec::new(),
                 prompt: None,
             };
+            // Deliveries held aside across the finishing turn go first, in
+            // arrival order, ahead of the channel: the caller's prompt waits
+            // behind that turn instead of being rejected `busy`. When they
+            // are here the wait does not block: what is already waiting is
+            // drained as when steers were kept.
+            let held = !self.deferred.is_empty();
+            for delivery in std::mem::take(&mut self.deferred) {
+                self.admit_idle(delivery, &mut input);
+            }
             // Steers the previous turn kept start this one, in order,
             // ahead of whatever is already waiting. This holds after any
             // outcome, not only `interrupted`. While `closing` nothing
@@ -140,6 +149,13 @@ impl Loop {
             if kept > 0 {
                 // The queue moved into `turn_started`.
                 self.emit_queue(None)?;
+                for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
+                    self.admit_idle(delivery, &mut input);
+                }
+            } else if held {
+                // Held deliveries are already admitted above; what arrived
+                // since is drained without blocking or re-announcing the
+                // queue, which did not move.
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
                     self.admit_idle(delivery, &mut input);
                 }

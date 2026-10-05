@@ -513,7 +513,7 @@ impl Loop {
     /// Denies a call no person can answer (`docs/permissions.md`,
     /// "Headless"): a session started by `fiber ask`, or one `close` has
     /// been taken. `request_id` is set when the request was already raised.
-    fn unanswerable(
+    pub(crate) fn unanswerable(
         &mut self,
         id: &ActionId,
         turn: &TurnId,
