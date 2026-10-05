@@ -196,6 +196,24 @@ fn trigger_at_is_absent_when_automatic_handoff_is_off() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines)
+            .into_iter()
+            .filter(|kind| !kind.ends_with("_delta"))
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert!(built.payload.get("trigger_at").is_none());
 }
@@ -210,6 +228,24 @@ fn trigger_at_follows_the_configured_tokens() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines)
+            .into_iter()
+            .filter(|kind| !kind.ends_with("_delta"))
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["trigger_at"], 1_234);
 }

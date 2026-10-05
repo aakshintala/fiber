@@ -102,6 +102,56 @@ fn durable(lines: &[Envelope]) -> Vec<&str> {
         .collect()
 }
 
+const OPENING: &[&str] = &[
+    "session_started",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+];
+const STEP: &[&str] = &["step_started"];
+/// A reply that calls the weather tool, and the call's run.
+const CALL_BODY: &[&str] = &[
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+];
+/// A reply of text.
+const REPLY: &[&str] = &[
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+];
+/// A handoff that completed on a one-part note, to the new opening message.
+const HANDED_OFF: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+    "opening_message",
+];
+/// A handoff whose one-text-part note reply did not make a note.
+const FAILED_AFTER_TEXT: &[&str] = &[
+    "handoff_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+];
+const ENDED: &[&str] = &["turn_completed"];
+
+/// Asserts the complete, ordered durable event kinds of `lines`: `parts`,
+/// concatenated (`docs/testing.md`, "Event streams").
+fn assert_kinds(lines: &[Envelope], parts: &[&[&str]]) {
+    assert_eq!(durable(lines), parts.concat());
+}
+
 fn of_kind<'a>(lines: &'a [Envelope], kind: &str) -> Vec<&'a Envelope> {
     lines.iter().filter(|line| line.kind == kind).collect()
 }
@@ -128,6 +178,7 @@ fn a_context_below_the_trigger_does_not_hand_off() {
     let mut session = session(vec![called(100), said("Done.", 100)], settings());
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert!(of_kind(&lines, "handoff_started").is_empty());
@@ -140,6 +191,7 @@ fn a_context_one_token_short_of_the_trigger_does_not_hand_off() {
     let mut session = session(vec![called(TRIGGER - 2), said("Done.", 100)], settings());
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert!(of_kind(&lines, "handoff_started").is_empty());
@@ -163,37 +215,12 @@ fn a_context_exactly_at_the_trigger_hands_off() {
     }));
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
-    // The lines, in the order the ruling gives: the start, the note request's
-    // own reply, the completion, then the new opening message.
-    let order: Vec<&str> = durable(&lines)
-        .into_iter()
-        .filter(|kind| {
-            [
-                "handoff_started",
-                "assistant_message_started",
-                "text_completed",
-                "handoff_completed",
-                "opening_message",
-            ]
-            .contains(kind)
-        })
-        .collect();
-    assert_eq!(
-        order,
-        [
-            "opening_message",
-            "assistant_message_started",
-            "handoff_started",
-            "assistant_message_started",
-            "text_completed",
-            "handoff_completed",
-            "opening_message",
-            "assistant_message_started",
-            "text_completed",
-        ]
-    );
     let started = of_kind(&lines, "handoff_started");
     assert_eq!(started[0].payload["trigger"], "auto");
     let note_message = of_kind(&lines, "assistant_message_started")[1];
@@ -263,6 +290,10 @@ fn the_live_conversation_after_a_handoff_is_what_a_rebuild_renders() {
     );
 
     let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
 
     let requests = session.requests();
     let rebuilt = rebuild(&lines, MODEL).unwrap();
@@ -287,7 +318,28 @@ fn a_note_of_several_text_parts_joins_them_with_a_newline() {
         settings(),
     );
 
-    run(&mut session, "hi");
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "text_completed",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(
         session.requests()[2].conversation[2],
@@ -315,6 +367,28 @@ fn a_failed_note_request_leaves_the_context_and_blocks_the_rest_of_the_turn() {
     }));
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_completed",
+                "retry_scheduled",
+                "assistant_message_started",
+                "assistant_message_completed",
+                "handoff_completed",
+            ],
+            CALL_BODY,
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
@@ -349,12 +423,33 @@ fn a_new_turn_may_hand_off_after_a_failed_one() {
         settings(),
     );
     let (_, first) = run(&mut session, "hi");
+    assert_kinds(
+        &first,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "assistant_message_completed",
+                "handoff_completed",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
     assert_eq!(
         of_kind(&first, "handoff_completed")[0].payload["outcome"],
         "failed"
     );
 
     let (outcome, second) = run(&mut session, "again");
+    assert_kinds(
+        &second,
+        &[&["turn_started"], STEP, HANDED_OFF, REPLY, ENDED],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let done = of_kind(&second, "handoff_completed");
@@ -385,6 +480,21 @@ fn a_cancel_during_the_note_request_ends_the_turn_interrupted() {
     }));
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "handoff_completed",
+            ],
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Interrupted));
     let tail = durable(&lines);
@@ -416,6 +526,24 @@ fn a_note_with_no_text_fails_unreadable_reply() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let done = of_kind(&lines, "handoff_completed");
@@ -439,6 +567,18 @@ fn a_whitespace_note_fails_unreadable_reply() {
     );
 
     let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            FAILED_AFTER_TEXT,
+            REPLY,
+            ENDED,
+        ],
+    );
 
     let done = of_kind(&lines, "handoff_completed");
     assert_eq!(done[0].payload["error"]["code"], "unreadable_reply");
@@ -454,6 +594,18 @@ fn a_note_cut_off_by_the_output_limit_fails_output_truncated() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            FAILED_AFTER_TEXT,
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let done = of_kind(&lines, "handoff_completed");
@@ -479,6 +631,28 @@ fn a_tool_call_in_the_note_reply_never_runs_and_does_not_stop_the_note() {
     .handoff(settings());
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "text_completed",
+                "tool_call_requested",
+                "usage_recorded",
+                "assistant_message_completed",
+                "tool_call_completed",
+                "handoff_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     // Only the first step's call ran.
@@ -519,6 +693,17 @@ fn an_exhausted_budget_fails_the_handoff_and_then_the_turn() {
     .budget(Some(0.0005));
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &["handoff_started", "handoff_completed"],
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Failed));
     let done = of_kind(&lines, "handoff_completed");
@@ -542,6 +727,7 @@ fn automatic_handoff_off_never_hands_off() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert!(of_kind(&lines, "handoff_started").is_empty());
@@ -564,6 +750,10 @@ fn a_fresh_context_is_unmeasured_until_a_reply_measures_it() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[OPENING, STEP, CALL_BODY, STEP, HANDED_OFF, REPLY, ENDED],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     assert_eq!(of_kind(&lines, "handoff_started").len(), 1);
@@ -580,6 +770,20 @@ fn the_nudge_is_given_at_two_thirds_of_the_trigger() {
     );
 
     let (outcome, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &["context_nudged"],
+            CALL_BODY,
+            STEP,
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     let nudged = of_kind(&lines, "context_nudged");
@@ -605,6 +809,7 @@ fn a_context_a_token_below_two_thirds_is_not_nudged() {
     let mut session = session(vec![called(665), said("Done.", 100)], nudging());
 
     let (_, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert!(of_kind(&lines, "context_nudged").is_empty());
 }
@@ -614,6 +819,7 @@ fn the_nudge_can_be_turned_off() {
     let mut session = session(vec![called(900), said("Done.", 100)], settings());
 
     let (_, lines) = run(&mut session, "hi");
+    assert_kinds(&lines, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
 
     assert!(of_kind(&lines, "context_nudged").is_empty());
 }
@@ -636,18 +842,23 @@ fn each_handoff_starts_a_context_that_can_be_nudged_again() {
     assert_eq!(outcome, Some(TurnOutcome::Completed));
     // One nudge before the handoff, and none at it: the handoff took its
     // place. One in the new context.
-    let order: Vec<&str> = durable(&lines)
-        .into_iter()
-        .filter(|kind| ["context_nudged", "handoff_started", "handoff_completed"].contains(kind))
-        .collect();
-    assert_eq!(
-        order,
-        [
-            "context_nudged",
-            "handoff_started",
-            "handoff_completed",
-            "context_nudged"
-        ]
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &["context_nudged"],
+            CALL_BODY,
+            STEP,
+            HANDED_OFF,
+            CALL_BODY,
+            STEP,
+            &["context_nudged"],
+            REPLY,
+            ENDED,
+        ],
     );
 }
 
@@ -655,7 +866,7 @@ fn each_handoff_starts_a_context_that_can_be_nudged_again() {
 fn the_nudge_fires_when_three_times_the_size_equals_twice_the_trigger() {
     // 665 prompt tokens and a one-token result: 666, and 666 x 3 is 1,998,
     // exactly 999 x 2. One token less is 665 x 3 = 1,995: short.
-    let at = |prompt: u64| {
+    let at = |prompt: u64, expected: &[&[&str]]| {
         let mut session = session(
             vec![called(prompt), said("Done.", 100)],
             HandoffSettings {
@@ -664,10 +875,21 @@ fn the_nudge_fires_when_three_times_the_size_equals_twice_the_trigger() {
             },
         );
         let (_, lines) = run(&mut session, "hi");
+        assert_kinds(&lines, expected);
         of_kind(&lines, "context_nudged").len()
     };
-    assert_eq!(at(665), 1);
-    assert_eq!(at(664), 0);
+    let nudged: &[&[&str]] = &[
+        OPENING,
+        STEP,
+        CALL_BODY,
+        STEP,
+        &["context_nudged"],
+        REPLY,
+        ENDED,
+    ];
+    let quiet: &[&[&str]] = &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED];
+    assert_eq!(at(665, nudged), 1);
+    assert_eq!(at(664, quiet), 0);
 }
 
 #[test]
@@ -684,6 +906,18 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
         settings(),
     );
     let (first, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            HANDED_OFF,
+            &["assistant_message_started", "assistant_message_completed"],
+            ENDED,
+        ],
+    );
     assert_eq!(first, Some(TurnOutcome::Failed));
     assert_eq!(
         of_kind(&lines, "handoff_completed")[0].payload["outcome"],
@@ -691,6 +925,7 @@ fn a_new_context_is_unmeasured_in_the_next_turn_too() {
     );
 
     let (second, lines) = run(&mut session, "again");
+    assert_kinds(&lines, &[&["turn_started"], STEP, REPLY, ENDED]);
 
     assert_eq!(second, Some(TurnOutcome::Completed));
     assert!(of_kind(&lines, "handoff_started").is_empty());
@@ -707,7 +942,29 @@ fn a_notes_reasoning_is_not_part_of_the_note() {
         settings(),
     );
 
-    run(&mut session, "hi");
+    let (_, lines) = run(&mut session, "hi");
+    assert_kinds(
+        &lines,
+        &[
+            OPENING,
+            STEP,
+            CALL_BODY,
+            STEP,
+            &[
+                "handoff_started",
+                "assistant_message_started",
+                "reasoning_started",
+                "reasoning_completed",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "handoff_completed",
+                "opening_message",
+            ],
+            REPLY,
+            ENDED,
+        ],
+    );
 
     assert_eq!(session.requests()[2].conversation[2], user("The note."));
 }

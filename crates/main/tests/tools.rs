@@ -597,6 +597,37 @@ fn tiny_trigger(setup: &Setup) {
     );
 }
 
+/// A turn whose first reply reads a file, then hands off on the five-token
+/// trigger and answers from the new context, to the end of the process.
+const HANDOFF_TURN: &[&str] = &[
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "handoff_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "handoff_completed",
+    "opening_message",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 /// The lines of `run` of `kind`.
 fn of_kind<'a>(run: &'a Run, kind: &str) -> Vec<&'a Value> {
     run.lines
@@ -625,6 +656,20 @@ fn handoff_configuration_reaches_a_new_session() {
     let run = setup.run(&["ask", "read the note"]);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            &[
+                "session_started",
+                "fiber_started",
+                "extensions_loaded",
+                "preamble_built",
+                "opening_message",
+            ][..],
+            HANDOFF_TURN,
+        ]
+        .concat()
+    );
     assert_eq!(
         of_kind(&run, "preamble_built")[0]["payload"]["trigger_at"],
         5
@@ -663,6 +708,14 @@ fn handoff_configuration_reaches_a_resumed_session() {
     let second = setup.run(&["ask", "--resume", &id, "read the note"]);
 
     assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(
+        second.kinds(),
+        [
+            &["fiber_started", "extensions_loaded", "preamble_built"][..],
+            HANDOFF_TURN,
+        ]
+        .concat()
+    );
     assert_eq!(
         of_kind(&second, "preamble_built")[0]["payload"]["trigger_at"],
         5

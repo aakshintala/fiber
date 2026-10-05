@@ -3100,11 +3100,18 @@ fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
     assert_eq!(seen[1..], ["one", "the note", "two"]);
     // The new context has had no request, and its opening is written once.
     assert_eq!(history.provider.requests()[0].previous_end, None);
-    assert!(
-        history
-            .new_lines()
-            .iter()
-            .all(|line| line.kind != "opening_message")
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 
@@ -3155,14 +3162,44 @@ fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn
     assert!(!seen[0].contains("old-os"));
     assert_eq!(seen[1..], ["one", "the note", "two"]);
     assert_eq!(
-        history.new_kinds()[..3],
-        ["preamble_built", "opening_message", "turn_started"]
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
     );
 }
 
+/// The kinds of a resumed turn whose first reply calls a tool and whose
+/// second is text.
+const RESUMED_TURN: [&str; 15] = [
+    "preamble_built",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "tool_call_requested",
+    "usage_recorded",
+    "assistant_message_completed",
+    "tool_call_started",
+    "tool_call_completed",
+    "step_started",
+    "assistant_message_started",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+];
+
 /// A resumed turn whose first reply calls a tool with `tokens` in its
 /// prompt: the context is past two thirds of the default trigger.
-fn nudge_after_resume(nudged_before: bool) -> usize {
+fn nudge_after_resume(nudged_before: bool) -> Vec<String> {
     let mut history = History::new(vec![
         support::with_tokens(support::tool_call_reply("", &["get_weather"]), 270_000, 0),
         Scripted::text("Done."),
@@ -3184,19 +3221,17 @@ fn nudge_after_resume(nudged_before: bool) -> usize {
         Arc::new(support::TestTool::reads("get_weather", "abcd")) as Arc<dyn Tool>,
     )]);
     history.run(looped, "two");
-    history
-        .new_lines()
-        .iter()
-        .filter(|line| line.kind == "context_nudged")
-        .count()
+    history.new_kinds()
 }
 
 #[test]
 fn a_context_nudged_before_the_crash_is_not_nudged_again() {
-    assert_eq!(nudge_after_resume(true), 0);
+    assert_eq!(nudge_after_resume(true), RESUMED_TURN);
 }
 
 #[test]
 fn a_context_not_nudged_before_the_crash_is_nudged_once_a_reply_measures_it() {
-    assert_eq!(nudge_after_resume(false), 1);
+    let mut expected = RESUMED_TURN.to_vec();
+    expected.insert(10, "context_nudged");
+    assert_eq!(nudge_after_resume(false), expected);
 }
