@@ -30,9 +30,12 @@ Tests sit at three levels. Each proves something the others cannot.
 
 A binary-level test needs no test-only switch in the shipped binary. It sets
 `FIBER_HOME` to its own temporary directory, which holds an ordinary provider
-definition whose base URL points at a local fake server.
+definition whose base URL points at a local fake server, or it names the
+built-in `scripted` provider ("Testing an extension").
 
-Tests are Rust, run by cargo. There is no second test language.
+Fiber's own tests are Rust, run by cargo. The one exception is an extension's
+tests, Fiber's first-party extensions included: they are cases run by
+`fiber extension test` ("Testing an extension").
 
 ## What a test asserts
 
@@ -133,9 +136,14 @@ inputs are the same bytes" (`docs/prompt-cache.md`), across turns, resume and
 fork.
 
 Every first-party provider extension is tested in Fiber's CI, loaded into
-the built binary by local path: against their vendor's recorded streams and
-against scripted streams. A protocol change that breaks a shipped provider
-fails the pull request that caused it.
+the built binary by local path. What it declares for the wire (base URLs,
+compatibility flags, headers) is tested as part of its protocol, against the
+vendor's recorded streams and against scripted streams on the fake server,
+because that is the native protocol's decoding and request shaping, which is
+Fiber's own Rust. Its Lua functions (`models()`, `quota()`, `credential()`,
+`sign()`) are tested as an extension, with `fiber extension test` and
+scripted host calls ("Testing an extension"). A protocol change that breaks a
+shipped provider fails the pull request that caused it.
 
 ## Fakes
 
@@ -158,6 +166,41 @@ is a test-only dependency of the crates that use it (`docs/architecture.md`,
 
 The concrete scenarios each area needs are that area's acceptance criteria,
 written when its implementation tickets are.
+
+## Testing an extension
+
+Fiber tests its own extensions only with tooling it ships to everyone. The
+`fakes` crate tests Fiber's own Rust: the protocol decoders, the log writer,
+the loop's edge cases. Anything that tests an extension, first-party or not,
+uses what every author has, so that tooling is always good enough for a real
+extension and first-party code gets no private path.
+
+The shipped tooling has three parts:
+
+- **The `scripted` provider.** A built-in provider whose model is a script
+  file: steps such as reply with this text, call this tool with these
+  arguments, fail with this error, stream slowly. A session names it like any
+  model, so it is a provider, not a test switch, and nothing in the loop knows
+  a test is running. Replies are served in order, never matched to the
+  request, so an extension that changes the prompt still gets its scripted
+  replies. It bypasses the vendor decoders, which the fake server tests
+  (`docs/model-routing.md`, "The scripted provider").
+- **Test cases.** A case gives the script, the prompt and what must happen:
+  the event kinds in order and the fields under test, as an event-stream test
+  asserts ("Event streams"). One case format serves Lua and process
+  extensions alike. Its exact shape is set by the ticket that builds it and
+  proven on Fiber's first-party extensions before anyone else relies on it.
+- **A runner, `fiber extension test [path]`.** It runs an extension's cases
+  against the built binary in a temporary `FIBER_HOME` and exits non-zero when
+  any case fails (`docs/invocation.md`). While the runner drives a session, a
+  case may script the extension's host calls (a `host.http` reply, a
+  `host.exec` result) and advance a fake clock, so timers fire when the case
+  says, not when the wall clock does. These exist only under the runner, as
+  its documented feature; a session started any other way has neither.
+
+Fiber's CI runs `fiber extension test` for every first-party extension. An
+extension change that breaks one of its cases fails the pull request that
+caused it.
 
 ## Jigs
 

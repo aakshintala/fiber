@@ -362,7 +362,8 @@ _Avoid_: MCP tool server, plugin
 ### Provider
 
 An endpoint Fiber sends model requests to: a name, a credential and a list of
-models. Every provider is an extension. See `docs/model-routing.md`.
+models. Every provider is an extension except the built-in `scripted`
+provider. See `docs/model-routing.md`.
 _Avoid_: connection, backend, vendor
 
 ### Credential label

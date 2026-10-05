@@ -169,6 +169,7 @@ it does not check that a key is valid.
 | `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag. It never touches a repository's extension. |
 | `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. Run in a project on a repository's extension, it removes that and records never for its content. |
 | `extension list` | Lists installed extensions: name, version and commit; and each repository extension with its project, its path in the repository and the content it loads. |
+| `extension test [<path>]` | Runs an extension's test cases, from its directory or the current one, against the `scripted` provider in a temporary Fiber home, and exits non-zero if any fails (`docs/testing.md`, "Testing an extension"). |
 
 **MCP servers.** `fiber mcp` manages MCP servers (`docs/mcp.md`).
 

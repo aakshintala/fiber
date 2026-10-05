@@ -15,7 +15,7 @@ A protocol is a wire format: how a request is shaped, and how a streamed reply
 is parsed into actions. A provider is an endpoint that speaks one or more
 protocols: a name, a credential, base URLs and a list of models.
 
-Protocols are native Rust in the `provider` module. There are five:
+Protocols are native Rust in the `provider` module. Five speak to vendors:
 
 | Protocol | Used by |
 |---|---|
@@ -24,6 +24,9 @@ Protocols are native Rust in the `provider` module. There are five:
 | `openai-responses` | OpenAI, ChatGPT/codex, OpenCode, Databricks, muse, Azure |
 | `google-generative-ai` | the Gemini API, Google Vertex (Gemini), OpenCode (Zen's Gemini models) |
 | `bedrock-converse` | AWS Bedrock (models other than Claude) |
+
+A sixth, `scripted`, speaks to no vendor: it reads a script file
+("The scripted provider").
 
 AWS event-stream framing is a per-model flag, not a protocol. `anthropic-messages`
 reads it for Claude on Bedrock, which Bedrock serves through its Invoke API, and
@@ -58,7 +61,8 @@ tools are written to fit the strict subset.
 An extension cannot add a protocol. A vendor with a new wire format needs a
 Fiber release.
 
-Every provider is an extension, the first-party ones included. Extensions are
+Every provider is an extension, the first-party ones included, except the
+built-in `scripted` provider ("The scripted provider"). Extensions are
 fetched and installed, not built into the binary. Installing Fiber installs no
 provider: a person installs one by choosing it in the model picker, or with
 `fiber extension install <name>`. How extensions arrive and stay current is
@@ -193,6 +197,29 @@ Measured on October 1, 2026 with one OpenCode key (`research/opencode-probe`).
   missing x-opencode-session and cannot be routed efficiently", measured on
   October 1, 2026. Cloudflare answers 403 "error code: 1010" to Python's
   default `User-Agent`, so the probe sent its own.
+
+### The scripted provider
+
+`scripted` is the one provider built into the binary, and the only one that
+reaches no network. Its protocol of the same name reads a script file instead
+of a socket. A script is a list of steps, each one model reply: text, a tool
+call with its arguments, a given error such as a rate limit, or a reply
+streamed slowly. Each request takes the next step, in order. A request is
+never matched against a step, so a prompt that changes does not change the
+reply. A request after the last step fails the turn. The exact script format
+is set by the ticket that builds it (`docs/testing.md`, "Testing an
+extension").
+
+A session selects it with an ordinary model reference, `scripted/<path>`,
+where the model id is the script's path, resolved against the session's
+workspace. It needs no credential and has no quota, cost or prompt cache. The
+model picker does not offer it, and it is never chosen unless named.
+
+It exists for testing extensions, reproducing a bug from a script anyone can
+replay, and running a pipeline end to end without a model. It bypasses the
+vendor decoders, so it proves nothing about a vendor's wire format; recorded
+and scripted streams on the fake server prove that (`docs/testing.md`, "Model
+calls").
 
 ## What a provider extension declares
 

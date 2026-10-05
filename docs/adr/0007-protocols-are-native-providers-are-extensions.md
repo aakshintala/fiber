@@ -46,7 +46,10 @@ subscription logins in other harnesses.
 
 Protocols are native Rust in the `provider` module, and an extension cannot add
 one. Every provider is an extension, the eleven first-party ones included, and
-extensions are fetched and installed rather than built into the binary.
+extensions are fetched and installed rather than built into the binary. The
+one exception is the `scripted` provider, which reaches no network and reads a
+script file, so an extension can be tested with tooling everyone has
+(`docs/testing.md`, "Testing an extension").
 
 A provider is data, plus up to four optional Lua functions: `models()`
 discovers its model list, `quota()` reports its quota, `credential()` returns a
