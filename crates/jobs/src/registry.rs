@@ -13,7 +13,7 @@ use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::events::{JobCompleted, JobStarted, Outcome};
 use contract::inbox::{Claim, Delivery, JobNotice};
-use contract::jobs::{End, JobRecord, OpenError, Opened, Opening};
+use contract::jobs::{End, Foreground, JobRecord, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
 /// The jobs one session started. `open` is the only way in; `list`, `wait`
@@ -36,6 +36,8 @@ struct Inner {
     /// The loop's inbox, which a job's end is sent to. `None` until
     /// [`Registry::deliver_to`].
     inbox: Option<Sender<Delivery>>,
+    /// Running foreground calls, held weakly (`Jobs::foreground`).
+    foreground: Vec<Weak<dyn Fn() -> bool + Send + Sync>>,
 }
 
 struct Job {
@@ -81,6 +83,7 @@ impl Registry {
                 jobs: Vec::new(),
                 seq: 0,
                 inbox: None,
+                foreground: Vec::new(),
             }),
             cv: Condvar::new(),
             me: Weak::clone(me),
@@ -495,6 +498,34 @@ fn final_text(path: &Path, completed: &JobCompleted) -> String {
 impl contract::jobs::Jobs for Registry {
     fn open(&self, opening: Opening) -> Result<Opened, OpenError> {
         Registry::open(self, opening)
+    }
+
+    fn stop(&self, job_id: &JobId) -> bool {
+        match self.send_stop(&job_id.0) {
+            Ok(Some(stop)) => {
+                stop();
+                true
+            }
+            Ok(None) => true,
+            Err(StopError::Unknown | StopError::Ended(_)) => false,
+        }
+    }
+
+    fn background(&self) -> usize {
+        // The closures run with the lock released: each takes its call's
+        // own lock.
+        let calls: Vec<_> = {
+            let mut inner = lock(&self.inner);
+            inner.foreground.retain(|call| call.strong_count() > 0);
+            inner.foreground.iter().filter_map(Weak::upgrade).collect()
+        };
+        calls.iter().filter(|call| call()).count()
+    }
+
+    fn foreground(&self, call: Foreground) {
+        let mut inner = lock(&self.inner);
+        inner.foreground.retain(|call| call.strong_count() > 0);
+        inner.foreground.push(call.0);
     }
 }
 

@@ -13,9 +13,10 @@ use std::time::{Duration, Instant};
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{Event, Progress};
+use contract::jobs::Jobs;
 use contract::tool::Cancel;
 
-use super::background::{Step, running_step, wait_deadline};
+use super::background::{MoveAsk, Step, running_step, wait_deadline};
 use rustix::process::{Pid, Signal};
 
 /// How often a group is re-checked while the shell has exited and members
@@ -77,6 +78,8 @@ pub(crate) enum MoveReason {
     AfterThirtySeconds,
     /// It was started with `run_in_background`.
     StartedInBackground,
+    /// The `background` driver command asked for it.
+    BackgroundCommand,
     /// The shell exited and left processes in the group.
     ShellExited {
         /// The shell's exit code.
@@ -110,6 +113,7 @@ pub(crate) fn execute(
     cancel: &dyn Cancel,
     emit: &dyn Emit,
     policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
 ) -> Result<Ran, std::io::Error> {
     let (read, write) = std::io::pipe()?;
     let write_err = write.try_clone()?;
@@ -139,8 +143,19 @@ pub(crate) fn execute(
     clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
     cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
 
+    // Registered before the drive loop parks and held until it returns, so
+    // `background` finds the call for as long as it waits in the foreground.
+    let registered = jobs
+        .filter(|_| policy == MovePolicy::Foreground)
+        .map(|jobs| {
+            MoveAsk::register(
+                jobs,
+                Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)),
+            )
+        });
     let start = clock.now();
     let mut progress = Run {
+        ask: registered.as_ref().map(|(ask, _)| Arc::clone(ask)),
         phase: Phase::Running,
         stop: None,
         sent_signal: false,
@@ -154,7 +169,13 @@ pub(crate) fn execute(
         pgid,
         shared,
     };
-    match pump(&mut progress, policy, clock, cancel, emit) {
+    let ended = pump(&mut progress, policy, clock, cancel, emit);
+    // A call that left the foreground wait is no longer counted, whether it
+    // finished or moved: `background` must not find it during the open.
+    if let Some((ask, _)) = &registered {
+        ask.end();
+    }
+    match ended {
         LoopEnd::Finished(finished) => {
             drop(bridge);
             Ok(Ran::Finished(finished))
@@ -363,6 +384,8 @@ struct Run {
     move_at: Option<Instant>,
     pgid: u32,
     shared: Arc<Shared>,
+    /// Set when `background` can reach this foreground call.
+    ask: Option<Arc<MoveAsk>>,
 }
 
 /// The call's cancel reaches the command through this bridge. The cancel
@@ -494,6 +517,12 @@ fn pump(
         if view.reaped && !group_alive(progress.pgid) {
             progress.seen_empty = true;
         }
+        // Stopping or draining: a later `background` moves nothing.
+        if !matches!(progress.phase, Phase::Running)
+            && let Some(ask) = &progress.ask
+        {
+            ask.end();
+        }
         // The drive loop holds the emitter and streams every pass, woken by
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
@@ -506,6 +535,7 @@ fn pump(
                 progress.seen_empty,
                 view.shell_exit,
                 timeout_due(clock, progress.move_at),
+                progress.ask.as_ref().is_some_and(|ask| ask.asked()),
             ) {
                 Step::Stop(kind) => {
                     progress.stop = Some(kind);

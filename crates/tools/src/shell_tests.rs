@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use contract::ErrorCode;
 use contract::events::Outcome;
-use contract::jobs::JobRecord;
+use contract::jobs::{JobRecord, Jobs as _};
 use contract::shapes::Effect;
 use contract::tool::Tool;
 use fakes::clock::FakeClock;
@@ -366,6 +366,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         &CancelToken::new(),
         &Recorder::default(),
         super::command::MovePolicy::Stay,
+        None,
     );
     assert!(err.is_err());
 }

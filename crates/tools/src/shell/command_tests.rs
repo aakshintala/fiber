@@ -407,7 +407,7 @@ fn a_timeout_wins_over_every_move() {
         MovePolicy::Background,
     ] {
         assert_eq!(
-            running_step(policy, true, true, true, Some(3), true),
+            running_step(policy, true, true, true, Some(3), true, false),
             Step::Stop(StopKind::Timeout),
             "{policy:?}"
         );
@@ -417,7 +417,15 @@ fn a_timeout_wins_over_every_move() {
 #[test]
 fn a_cancel_wins_over_a_move_and_an_empty_group() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, true, true, Some(3), true),
+        running_step(
+            MovePolicy::Background,
+            false,
+            true,
+            true,
+            Some(3),
+            true,
+            false
+        ),
         Step::Stop(StopKind::Cancel)
     );
 }
@@ -425,11 +433,27 @@ fn a_cancel_wins_over_a_move_and_an_empty_group() {
 #[test]
 fn an_empty_group_finishes_in_the_foreground() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, true, Some(3), true),
+        running_step(
+            MovePolicy::Background,
+            false,
+            false,
+            true,
+            Some(3),
+            true,
+            false
+        ),
         Step::Drain
     );
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, true, None, true),
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            true,
+            None,
+            true,
+            false
+        ),
         Step::Drain
     );
 }
@@ -437,11 +461,27 @@ fn an_empty_group_finishes_in_the_foreground() {
 #[test]
 fn a_reaped_shell_with_members_moves_before_the_other_triggers() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, false, Some(3), true),
+        running_step(
+            MovePolicy::Background,
+            false,
+            false,
+            false,
+            Some(3),
+            true,
+            false
+        ),
         Step::Move(MoveReason::ShellExited { code: 3 })
     );
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, false, Some(3), false),
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            false,
+            Some(3),
+            false,
+            false
+        ),
         Step::Move(MoveReason::ShellExited { code: 3 })
     );
 }
@@ -449,11 +489,27 @@ fn a_reaped_shell_with_members_moves_before_the_other_triggers() {
 #[test]
 fn run_in_background_moves_on_the_first_pass() {
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, false, None, false),
+        running_step(
+            MovePolicy::Background,
+            false,
+            false,
+            false,
+            None,
+            false,
+            false
+        ),
         Step::Move(MoveReason::StartedInBackground)
     );
     assert_eq!(
-        running_step(MovePolicy::Background, false, false, false, None, true),
+        running_step(
+            MovePolicy::Background,
+            false,
+            false,
+            false,
+            None,
+            true,
+            false
+        ),
         Step::Move(MoveReason::StartedInBackground)
     );
 }
@@ -461,23 +517,139 @@ fn run_in_background_moves_on_the_first_pass() {
 #[test]
 fn thirty_seconds_moves_a_foreground_command_that_is_still_running() {
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, false, None, true),
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            false,
+            None,
+            true,
+            false
+        ),
         Step::Move(MoveReason::AfterThirtySeconds)
     );
     assert_eq!(
-        running_step(MovePolicy::Foreground, false, false, false, None, false),
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            false,
+            None,
+            false,
+            false
+        ),
         Step::Park
+    );
+}
+
+#[test]
+fn the_background_command_moves_a_foreground_command_before_thirty_seconds() {
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            false,
+            None,
+            false,
+            true
+        ),
+        Step::Move(MoveReason::BackgroundCommand)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            false,
+            None,
+            true,
+            true
+        ),
+        Step::Move(MoveReason::BackgroundCommand)
+    );
+}
+
+#[test]
+fn the_background_command_yields_to_a_stop_a_drain_and_a_shell_exit() {
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            true,
+            false,
+            false,
+            None,
+            false,
+            true
+        ),
+        Step::Stop(StopKind::Timeout)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            true,
+            false,
+            None,
+            false,
+            true
+        ),
+        Step::Stop(StopKind::Cancel)
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            true,
+            None,
+            false,
+            true
+        ),
+        Step::Drain
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Foreground,
+            false,
+            false,
+            false,
+            Some(3),
+            false,
+            true
+        ),
+        Step::Move(MoveReason::ShellExited { code: 3 })
+    );
+}
+
+#[test]
+fn the_background_command_does_not_move_a_command_that_never_moves() {
+    assert_eq!(
+        running_step(MovePolicy::Stay, false, false, false, None, false, true),
+        Step::Park
+    );
+    assert_eq!(
+        running_step(
+            MovePolicy::Background,
+            false,
+            false,
+            false,
+            None,
+            false,
+            true
+        ),
+        Step::Move(MoveReason::StartedInBackground)
     );
 }
 
 #[test]
 fn a_shell_without_jobs_never_moves() {
     assert_eq!(
-        running_step(MovePolicy::Stay, false, false, false, Some(3), true),
+        running_step(MovePolicy::Stay, false, false, false, Some(3), true, false),
         Step::Park
     );
     assert_eq!(
-        running_step(MovePolicy::Stay, false, false, false, None, true),
+        running_step(MovePolicy::Stay, false, false, false, None, true, false),
         Step::Park
     );
 }
@@ -581,6 +753,7 @@ fn parked(shared: Arc<Shared>) -> Moved {
             move_at: None,
             pgid: 2,
             shared,
+            ask: None,
         },
     }
 }

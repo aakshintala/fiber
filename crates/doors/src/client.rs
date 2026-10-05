@@ -31,6 +31,10 @@ const REVERSED: &str = "`to_seq` is before `from_seq`.";
 const ENDED: &str = "The session ended before answering.";
 /// A `cancel` names no running turn.
 const NO_TURN: &str = "No turn is running.";
+/// A `job_stop` names no running job.
+const NO_JOB: &str = "That job is not running.";
+/// A `background` finds no shell call in the foreground.
+const NO_CALL: &str = "No shell call is running.";
 const HISTORY: usize = 256;
 
 /// A line that is not one of the commands this process answers.
@@ -229,6 +233,8 @@ fn built(command: &str) -> bool {
             | "history"
             | "close"
             | "shell"
+            | "job_stop"
+            | "background"
     )
 }
 
@@ -284,9 +290,15 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
         }
+        Command::JobStop(args) => {
+            let stopped = conn.gate.jobs().is_some_and(|jobs| jobs.stop(&args.job_id));
+            answer(conn, id, stopped, NO_JOB);
+        }
+        Command::Background => {
+            let moving = conn.gate.jobs().is_some_and(|jobs| jobs.background() > 0);
+            answer(conn, id, moving, NO_CALL);
+        }
         Command::Message(_)
-        | Command::JobStop(_)
-        | Command::Background
         | Command::Reload
         | Command::Model(_)
         | Command::Credential(_)
@@ -294,6 +306,17 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         | Command::Handoff(_)
         | Command::Rewind(_)
         | Command::Command(_) => unknown(conn, id, name),
+    }
+}
+
+/// Accepted when `done`, else rejected `stale_request` with `message`. For
+/// the commands answered at once, on the reader thread, that write no
+/// durable event (`docs/architecture.md`, "One inbox").
+fn answer(conn: &mut Conn, id: CommandId, done: bool, message: &str) {
+    if done {
+        accept(conn, id, None);
+    } else {
+        reject(conn, Some(id), ErrorCode::StaleRequest, message);
     }
 }
 

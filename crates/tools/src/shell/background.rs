@@ -14,7 +14,7 @@ use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
 use contract::events::{JobCompleted, JobStarted, Outcome};
-use contract::jobs::{JobRecord, Jobs, OpenError, Opened, Opening, Stop};
+use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opened, Opening, Stop};
 use contract::shapes::ContentPart;
 use contract::tool::{Cancel, Output};
 
@@ -40,6 +40,7 @@ const UNNAMED: &str = "Processes are still running in its group.";
 
 const AFTER_THIRTY: &str = "Still running after 30 seconds, so it moved to the background.";
 const STARTED: &str = "Started in the background.";
+const COMMANDED: &str = "Moved to the background by the `background` command.";
 
 /// What the running phase does on this pass. Timeout wins over a move at
 /// the same instant; a shell that left members wins over moving at once.
@@ -55,7 +56,8 @@ pub(crate) enum Step {
     Park,
 }
 
-/// `shell_exit` is the shell's exit code once it was reaped.
+/// `shell_exit` is the shell's exit code once it was reaped. `asked` is the
+/// `background` command's request (`docs/invocation.md`, "Driver commands").
 pub(crate) fn running_step(
     policy: MovePolicy,
     timed_out: bool,
@@ -63,6 +65,7 @@ pub(crate) fn running_step(
     seen_empty: bool,
     shell_exit: Option<i32>,
     move_due: bool,
+    asked: bool,
 ) -> Step {
     if timed_out {
         return Step::Stop(StopKind::Timeout);
@@ -80,6 +83,8 @@ pub(crate) fn running_step(
                 Step::Move(MoveReason::ShellExited { code })
             } else if policy == MovePolicy::Background {
                 Step::Move(MoveReason::StartedInBackground)
+            } else if asked && policy == MovePolicy::Foreground {
+                Step::Move(MoveReason::BackgroundCommand)
             } else if move_due {
                 Step::Move(MoveReason::AfterThirtySeconds)
             } else {
@@ -102,6 +107,73 @@ pub(crate) fn wait_deadline(
             (None, None) => None,
         },
     }
+}
+
+/// Where the `background` command's request to one foreground call stands.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Ask {
+    /// Waiting in the foreground, not asked.
+    Waiting,
+    /// Asked to move.
+    Asked,
+    /// Stopping, finished or moved: a request moves nothing.
+    Over,
+}
+
+/// One foreground call's move request (`docs/invocation.md`, "Driver
+/// commands"). The call registers it with the jobs and holds the closure
+/// while it waits in the foreground; the drive loop reads [`MoveAsk::asked`].
+pub(super) struct MoveAsk {
+    state: Mutex<Ask>,
+    /// Wakes the drive loop, which then reads [`MoveAsk::asked`].
+    wake: Weak<dyn Wake>,
+}
+
+type Request = Arc<dyn Fn() -> bool + Send + Sync>;
+
+impl MoveAsk {
+    /// Registers a foreground call with `jobs`. `wake` wakes its drive
+    /// loop. The caller holds the returned closure for as long as the call
+    /// waits in the foreground: the jobs hold it weakly.
+    pub(super) fn register(jobs: &dyn Jobs, wake: Weak<dyn Wake>) -> (Arc<Self>, Request) {
+        let ask = Arc::new(Self {
+            state: Mutex::new(Ask::Waiting),
+            wake,
+        });
+        let this = Arc::clone(&ask);
+        let request: Request = Arc::new(move || this.request());
+        jobs.foreground(Foreground(Arc::downgrade(&request)));
+        (ask, request)
+    }
+
+    /// True when the call was still in the foreground and will now move.
+    fn request(&self) -> bool {
+        {
+            let mut state = lock_state(&self.state);
+            if *state == Ask::Over {
+                return false;
+            }
+            *state = Ask::Asked;
+        }
+        // After the state is set, so the loop that wakes reads it.
+        if let Some(wake) = self.wake.upgrade() {
+            wake.wake();
+        }
+        true
+    }
+
+    pub(super) fn asked(&self) -> bool {
+        *lock_state(&self.state) == Ask::Asked
+    }
+
+    /// Later requests move nothing.
+    pub(super) fn end(&self) {
+        *lock_state(&self.state) = Ask::Over;
+    }
+}
+
+fn lock_state(state: &Mutex<Ask>) -> MutexGuard<'_, Ask> {
+    state.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 /// Opens the job and either returns its receipt or, when open fails, the
@@ -155,7 +227,9 @@ fn hand_off(
     });
     let members = match reason {
         MoveReason::ShellExited { .. } => group_members(Path::new("ps"), pgid, clock.as_ref()),
-        MoveReason::AfterThirtySeconds | MoveReason::StartedInBackground => None,
+        MoveReason::AfterThirtySeconds
+        | MoveReason::StartedInBackground
+        | MoveReason::BackgroundCommand => None,
     };
     receipt(&opened.started, &opened.path, &reason, members.as_deref())
 }
@@ -192,6 +266,7 @@ fn sentence(reason: &MoveReason, members: Option<&str>) -> String {
     match reason {
         MoveReason::AfterThirtySeconds => AFTER_THIRTY.to_owned(),
         MoveReason::StartedInBackground => STARTED.to_owned(),
+        MoveReason::BackgroundCommand => COMMANDED.to_owned(),
         MoveReason::ShellExited { code } => shell_sentence(*code, members),
     }
 }
