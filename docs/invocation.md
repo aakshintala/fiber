@@ -301,7 +301,7 @@ One JSON object per line. Its keys follow the rules of `docs/events.md`,
 | `id` | string | yes | minted by the client from random bytes, as Fiber mints its own ids (`docs/events.md`, "Identity and ordering"). Acknowledgements and events name the command by it, as `command_id` |
 | `command` | string | yes | the command's name, from the table below |
 | `session_id` | string | no | on a connection to the hub, the session the command is for; the hub passes the line to that session without this key. Absent there, the command is for the hub itself ("The hub"). A session's own socket never receives it |
-| `args` | object | no | the command's own keys, below; absent when it takes none |
+| `args` | object | no | the command's own keys, below; a missing `args` is read as an empty object, so a command whose keys are all optional may leave it out |
 
 ```json
 {"id":"c_7f3a","command":"steer","args":{"content":[{"type":"text","text":"use the other test file"}]}}

@@ -145,6 +145,59 @@ fn defaults_fill_what_a_client_leaves_out() {
 }
 
 #[test]
+fn a_missing_args_is_read_as_an_empty_object() {
+    let line = parse(r#"{"id":"c","command":"handoff"}"#).unwrap();
+    assert_eq!(
+        line.command,
+        Command::Handoff(Handoff { instructions: None })
+    );
+    assert_eq!(
+        line.command,
+        parse(r#"{"id":"c","command":"handoff","args":{}}"#)
+            .unwrap()
+            .command
+    );
+    let line = parse(r#"{"id":"c","command":"rewind"}"#).unwrap();
+    assert_eq!(
+        line.command,
+        parse(r#"{"id":"c","command":"rewind","args":{}}"#)
+            .unwrap()
+            .command
+    );
+    assert_eq!(
+        parse(r#"{"id":"c","command":"cancel"}"#).unwrap().command,
+        Command::Cancel
+    );
+}
+
+#[test]
+fn args_that_are_present_are_never_replaced_by_an_empty_object() {
+    // Every key of `handoff` is optional, so only a present `args` that does
+    // not fit can be refused.
+    assert!(parse(r#"{"id":"c","command":"handoff","args":{"future":1}}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"handoff","args":"x"}"#).is_err());
+    assert!(parse(r#"{"id":"c","command":"rewind","args":{"seq":"7"}}"#).is_err());
+    assert!(parse(r#"{"id":"c","args":{}}"#).is_err());
+}
+
+#[test]
+fn a_missing_args_on_a_command_with_a_required_key_is_refused() {
+    for command in [
+        "subscribe",
+        "prompt",
+        "steer",
+        "steer_drop",
+        "history",
+        "model",
+        "name",
+        "shell",
+    ] {
+        let line = format!(r#"{{"id":"c","command":"{command}"}}"#);
+        assert!(parse(&line).is_err(), "{command} without args");
+    }
+}
+
+#[test]
 fn a_key_the_line_does_not_take_is_refused() {
     assert!(parse(r#"{"id":"c","command":"cancel","future":1}"#).is_err());
 }
