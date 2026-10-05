@@ -503,9 +503,7 @@ fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
     );
     // The script the step left reads the payload through the recorded
     // directory, so it only works when the step ran where the copy stayed.
-    let out = Command::new("sh").arg(dir.join("run.sh")).output().unwrap();
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), "payload\n");
+    assert_eq!(script_output(&dir.join("run.sh")), "payload\n");
     // A kill before the `.ready` marker and the approval: the next approve
     // clears the unfinished copy and builds it again.
     let hash = dir.file_name().unwrap().to_string_lossy().into_owned();
@@ -520,4 +518,33 @@ fn an_install_step_runs_at_the_pinned_path_and_an_unfinished_copy_is_rebuilt() {
         fs::read_to_string(dir.join("where")).unwrap(),
         format!("{}\n", canonical.display())
     );
+}
+
+/// What the script the install step left prints, run with a deadline in its
+/// own process group, so a hung script fails naming what it waited for.
+fn script_output(script: &Path) -> String {
+    let mut command = Command::new("sh");
+    command
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match finished.recv_timeout(DEADLINE) {
+        Ok(output) => output.unwrap(),
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            let reaped = finished.recv_timeout(DEADLINE).is_ok();
+            panic!(
+                "waited {DEADLINE:?} for `{}` to exit (reaped after the kill: {reaped})",
+                script.display()
+            );
+        }
+    };
+    watchdog.stand_down(DEADLINE);
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
 }

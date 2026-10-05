@@ -13,7 +13,7 @@
 
 use std::fs;
 use std::os::unix::process::CommandExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
@@ -140,9 +140,37 @@ fn assert_step_at_final_path(setup: &Setup, payload: &str) {
         fs::read_to_string(dir.join("where")).unwrap(),
         format!("{}\n", canonical.display())
     );
-    let out = Command::new("sh").arg(dir.join("run.sh")).output().unwrap();
-    assert!(out.status.success(), "{out:?}");
-    assert_eq!(String::from_utf8(out.stdout).unwrap(), payload);
+    let out = script_output(&dir.join("run.sh"));
+    assert_eq!(out, payload);
+}
+
+/// What the script the install step left prints, run with a deadline in its
+/// own process group, so a hung script fails naming what it waited for.
+fn script_output(script: &Path) -> String {
+    let mut command = Command::new("sh");
+    command
+        .arg(script)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    let (child, watchdog) = spawn_watched(&mut command);
+    let group = child.id();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match finished.recv_timeout(DEADLINE) {
+        Ok(output) => output.unwrap(),
+        Err(_) => {
+            fakes::kill_group(group, "KILL").unwrap();
+            let reaped = finished.recv_timeout(DEADLINE).is_ok();
+            panic!(
+                "waited {DEADLINE:?} for `{}` to exit (reaped after the kill: {reaped})",
+                script.display()
+            );
+        }
+    };
+    watchdog.stand_down(DEADLINE);
+    assert!(output.status.success(), "{output:?}");
+    String::from_utf8(output.stdout).unwrap()
 }
 
 #[test]

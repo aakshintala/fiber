@@ -82,6 +82,11 @@ fn approvals_dir(repo: &Repo, project: bool) -> PathBuf {
     }
 }
 
+/// The `.ready` marker beside a copy in `pinned/`.
+fn ready(repo: &Repo, hash: &str) -> PathBuf {
+    repo.home().join("pinned").join(format!("{hash}.ready"))
+}
+
 #[test]
 fn an_extension_copies_its_listed_files_and_runs_its_install_step_in_the_copy() {
     let repo = Repo::new();
@@ -241,13 +246,7 @@ fn a_failing_install_step_records_nothing_and_leaves_no_copy() {
         Some(Decision::Approve)
     );
     assert_eq!(pinned_names(&repo), [good_hash]);
-    assert!(
-        !repo
-            .home()
-            .join("pinned")
-            .join(format!("{bad_hash}.ready"))
-            .exists()
-    );
+    assert!(!ready(&repo, &bad_hash).exists());
 }
 
 #[test]
@@ -258,13 +257,7 @@ fn an_install_step_that_cannot_start_records_nothing() {
     let e = store(&repo).approve(&item, &hash).unwrap_err();
     assert!(matches!(e, Error::InstallStep { .. }), "{e}");
     assert!(pinned_names(&repo).is_empty());
-    assert!(
-        !repo
-            .home()
-            .join("pinned")
-            .join(format!("{hash}.ready"))
-            .exists()
-    );
+    assert!(!ready(&repo, &hash).exists());
     assert!(!approvals_dir(&repo, true).join(&hash).exists());
 }
 
@@ -343,13 +336,7 @@ fn a_file_changed_between_hashing_and_copying_fails_with_the_mismatch() {
         "{e}"
     );
     assert!(pinned_names(&repo).is_empty());
-    assert!(
-        !repo
-            .home()
-            .join("pinned")
-            .join(format!("{hash}.ready"))
-            .exists()
-    );
+    assert!(!ready(&repo, &hash).exists());
     assert!(!approvals_dir(&repo, false).join(&hash).exists());
 }
 
@@ -465,12 +452,7 @@ fn an_install_step_runs_at_the_pinned_path_and_leaves_a_ready_marker() {
         fs::read_to_string(copy.join("where.txt")).unwrap(),
         format!("{}\n", canonical.display()),
     );
-    assert!(
-        repo.home()
-            .join("pinned")
-            .join(format!("{hash}.ready"))
-            .is_file()
-    );
+    assert!(ready(&repo, &hash).is_file());
     // The step ran in no scratch directory: the copy, its marker and the
     // lock are everything in `pinned/`.
     assert_eq!(
@@ -491,17 +473,12 @@ fn a_copy_without_a_ready_marker_is_cleared_and_built_again() {
     store(&repo).approve(&item, &hash).unwrap();
     // A kill before the marker was written: the copy is unfinished, with
     // junk in it.
-    fs::remove_file(repo.home().join("pinned").join(format!("{hash}.ready"))).unwrap();
+    fs::remove_file(ready(&repo, &hash)).unwrap();
     fs::write(dir.join("junk"), "junk").unwrap();
     store(&repo).approve(&item, &hash).unwrap();
     assert!(!dir.join("junk").exists());
     assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "x\n");
-    assert!(
-        repo.home()
-            .join("pinned")
-            .join(format!("{hash}.ready"))
-            .is_file()
-    );
+    assert!(ready(&repo, &hash).is_file());
 }
 
 #[test]
@@ -533,14 +510,43 @@ fn a_failing_install_step_leaves_no_copy_and_no_ready_marker() {
     store(&repo).approve(&item, &hash).unwrap_err();
     // The step built into the copy before it failed, and all of it went.
     assert!(!repo.home().join("pinned").join(&hash).exists());
-    assert!(
-        !repo
-            .home()
-            .join("pinned")
-            .join(format!("{hash}.ready"))
-            .exists()
-    );
+    assert!(!ready(&repo, &hash).exists());
     assert!(pinned_names(&repo).is_empty());
+}
+
+#[test]
+fn a_rebuild_that_fails_clears_the_stale_ready_marker() {
+    let repo = Repo::new();
+    let flag = repo.home().join("fail");
+    let step = format!(
+        "test ! -e '{}' || {{ echo broken >&2; exit 3; }}; echo x >> counter",
+        flag.display()
+    );
+    let item = extension(&repo, &json!({"install": ["sh", "-c", step]}));
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap();
+    // The copy is gone but its marker is left, as when a copy is deleted
+    // outside an approval.
+    fs::remove_dir_all(repo.home().join("pinned").join(&hash)).unwrap();
+    assert!(ready(&repo, &hash).is_file());
+    // The rebuild runs the step again and fails: the stale marker goes
+    // with it, so no partial directory is left beside a marker the next
+    // approval would accept.
+    fs::write(&flag, "fail").unwrap();
+    let e = store(&repo).approve(&item, &hash).unwrap_err();
+    assert!(
+        matches!(&e, Error::InstallExited { name, .. } if name == "fiber.test/p"),
+        "{e}"
+    );
+    assert!(!repo.home().join("pinned").join(&hash).exists());
+    assert!(!ready(&repo, &hash).exists());
+    assert!(pinned_names(&repo).is_empty());
+    // With the failure gone, the next approval builds the copy again.
+    fs::remove_file(&flag).unwrap();
+    store(&repo).approve(&item, &hash).unwrap();
+    let copy = repo.home().join("pinned").join(&hash);
+    assert_eq!(fs::read_to_string(copy.join("counter")).unwrap(), "x\n");
+    assert!(ready(&repo, &hash).is_file());
 }
 
 #[test]

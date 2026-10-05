@@ -135,6 +135,14 @@ impl Store {
         if copy.is_dir() && ready.is_file() {
             return Ok(());
         }
+        // A missing copy can leave its marker behind. Remove it before
+        // rebuilding: a kill mid-rebuild would otherwise leave a partial
+        // directory beside the old marker, which the next approval accepts.
+        if let Err(e) = fs::remove_file(&ready)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            return Err(io_error(&ready)(e));
+        }
         match fs::symlink_metadata(copy) {
             Err(e) if e.kind() == io::ErrorKind::NotFound => {}
             Err(e) => return Err(io_error(copy)(e)),
