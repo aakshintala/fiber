@@ -133,10 +133,13 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
         return Ok(None);
     }
     let completed = crate::conversation::completed_actions(lines)?;
+    // Starting at the message line itself is safe: it is an
+    // `assistant_message_started`, never a `tool_call_requested`, so the
+    // scan below skips it either way.
     let start = lines
         .iter()
         .rposition(|l| l.kind == "assistant_message_started")
-        .map_or(0, |at| at + 1);
+        .unwrap_or(0);
     let mut batch = Vec::new();
     for line in lines.iter().skip(start) {
         if line.kind != "tool_call_requested" {
@@ -305,8 +308,10 @@ impl Loop {
     /// request is raised again under the same `request_id`, refused as
     /// headless, every call of the batch is completed in request order,
     /// and the turn takes its next step as after any completed batch. The
-    /// preamble and the instruction-file check run first, as before any
-    /// turn; `turn_started` is not written again. Deliveries already
+    /// preamble runs first, as before any turn; the finishing turn is not
+    /// a turn start, so it runs no instruction-file/date check (the next
+    /// turn, the prompt's, does it at its own start). `turn_started` is
+    /// not written again. Deliveries already
     /// waiting are held aside in `deferred`, so the finishing turn's
     /// drains do not reject the prompt `busy`.
     pub(crate) fn finish_suspended(
@@ -314,9 +319,7 @@ impl Loop {
         suspended: Suspended,
     ) -> Result<Option<TurnOutcome>, Error> {
         self.deferred.extend(self.inbox.try_iter());
-        if !self.ensure_preamble()? {
-            self.check_changes()?;
-        }
+        self.ensure_preamble()?;
         self.cut_off = false;
         self.cancel.arm();
         let turn = suspended.turn.clone();

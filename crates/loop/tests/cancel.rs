@@ -949,3 +949,80 @@ fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
     assert_eq!(after.len(), before, "a stale reply logs nothing");
     assert_eq!(after.last().unwrap().kind, "turn_completed");
 }
+
+#[test]
+fn a_kept_steer_with_a_clean_inbox_starts_the_next_turn_without_blocking() {
+    let ask = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("shell", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![ask.clone() as Arc<dyn contract::tool::Tool>],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.inbox.send(delivery("hi")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let answered = support::on_request(&session, move |_| {
+        // The cancel first, then the steer: the wait wakes on the steer
+        // with the signal already set, so it is kept and no wake (and no
+        // stale delivery) remains in the inbox.
+        assert!(cancel.cancel());
+        inbox.send(steer("next")).unwrap();
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    answered.join().unwrap();
+    let first = session.lines();
+    assert_eq!(
+        kinds(&first),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_requested",
+            "steering_queue",
+            "permission_resolved",
+            "tool_call_completed",
+            "turn_completed",
+        ]
+    );
+    // The inbox is empty with its sender alive, so a `wait_for_turn` that
+    // blocked would hang: `Session::turn` fails at `DEADLINE` instead.
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "steering_queue",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let started = lines.iter().find(|l| l.kind == "turn_started").unwrap();
+    let input: Vec<&str> = started.payload["input"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["content"][0]["text"].as_str().unwrap())
+        .collect();
+    assert_eq!(input, ["next"]);
+}
