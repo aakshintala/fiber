@@ -28,6 +28,8 @@ pub(crate) enum Kind {
     /// An object whose values are booleans, such as MCP hints.
     BoolMap,
     Credential,
+    /// A list of `{path, required}` objects: `repository_extensions`.
+    RepositoryExtensions,
 }
 
 impl Kind {
@@ -52,6 +54,14 @@ impl Kind {
                 Ok(CredentialSource::Env(_) | CredentialSource::File(_)) => true,
                 Err(_) => false,
             },
+            Self::RepositoryExtensions => value.as_array().is_some_and(|items| {
+                items.iter().all(|item| {
+                    item.as_object().is_some_and(|object| {
+                        object.get("path").is_some_and(Value::is_string)
+                            && object.get("required").is_none_or(Value::is_boolean)
+                    })
+                })
+            }),
         }
     }
 
@@ -68,6 +78,9 @@ impl Kind {
             Self::Credential => {
                 "one of {\"env\": name}, {\"file\": path} or {\"command\": [program, args]}".into()
             }
+            Self::RepositoryExtensions => {
+                "a list of objects, each with a string `path` and an optional true or false `required`".into()
+            }
         }
     }
 }
@@ -78,6 +91,9 @@ pub(crate) struct Key {
     pub(crate) kind: Kind,
     /// Whether a repository may set it ("What a repository may set").
     pub(crate) repo: bool,
+    /// Whether only a repository's file may set it: any other layer's value
+    /// is ignored with a notice.
+    pub(crate) repo_only: bool,
     /// The built-in default, as JSON text.
     pub(crate) default: Option<&'static str>,
 }
@@ -87,11 +103,25 @@ const fn key(path: &'static str, kind: Kind, repo: bool, default: Option<&'stati
         path,
         kind,
         repo,
+        repo_only: false,
         default,
     }
 }
 
-use Kind::{Bool, BoolMap, Count, Credential, Number, OneOf, Str, StrList, StrMap};
+/// A key only a repository's own file may set.
+const fn repo_only(path: &'static str, kind: Kind) -> Key {
+    Key {
+        path,
+        kind,
+        repo: true,
+        repo_only: true,
+        default: None,
+    }
+}
+
+use Kind::{
+    Bool, BoolMap, Count, Credential, Number, OneOf, RepositoryExtensions, Str, StrList, StrMap,
+};
 
 const YES: bool = true;
 const NO: bool = false;
@@ -134,6 +164,7 @@ pub(crate) const KEYS: &[Key] = &[
     key("mcp.servers.*.tools.enabled", StrList, YES, None),
     key("mcp.servers.*.tools.disabled", StrList, YES, None),
     key("mcp.servers.*.tools.*.hints", BoolMap, NO, None),
+    repo_only("repository_extensions", RepositoryExtensions),
     key("extensions.*.enabled", Bool, NO, Some("true")),
     key("extensions.*.startup_timeout_ms", Count, YES, Some("5000")),
     key("extensions.*.commands.*", Str, YES, None),
@@ -230,6 +261,8 @@ fn walk(
         if let Some(key) = leaf(path) {
             if matches!(source, Source::Repository(_)) && !key.repo {
                 notices.push(ignored(path, "a repository may not set"));
+            } else if key.repo_only && !matches!(source, Source::Repository(_)) {
+                notices.push(ignored(path, "only a repository's own file may set"));
             } else if key.kind.accepts(&value) {
                 kept.insert(name, value);
             } else {
