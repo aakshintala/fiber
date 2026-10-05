@@ -361,3 +361,151 @@ fn dir_of_falls_back_to_empty_without_a_parent() {
     assert_eq!(conversation.len(), 1);
     assert!(user_text(&conversation[0]).contains("Leaf.\n"));
 }
+
+fn orphaned(id: &str) -> Event {
+    Event::JobCompleted(contract::events::JobCompleted {
+        job_id: contract::JobId(id.into()),
+        status: contract::events::Outcome::Failed,
+        error: Some(contract::shapes::Failure {
+            code: contract::ErrorCode::Orphaned,
+            message: "The process that ran this job died; it may still be running.".into(),
+            retry_after: None,
+            provider: None,
+        }),
+        process: None,
+        output_tail: None,
+    })
+}
+
+#[test]
+fn a_job_notice_after_a_crash_follows_the_fixed_result() {
+    // A call that started a job, then a crash: the resume's orphan line
+    // comes after the call's fixed result, as the live loop sends it.
+    let requested = Event::ToolCallRequested(ToolCallRequested {
+        name: "shell".into(),
+        arguments: json!({"command": "npm test"}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+    });
+    let started = Event::ToolCallStarted(contract::events::ToolCallStarted {
+        declared: contract::shapes::DeclaredEffects {
+            effects: Vec::new(),
+            reversible: true,
+            paths: None,
+        },
+        arguments: None,
+        changed_by: None,
+    });
+    let job = Event::JobStarted(contract::events::JobStarted {
+        job_id: contract::JobId("j_1".into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "npm test".into(),
+        output_path: "artifacts/j_1.log".into(),
+    });
+    let cut = vec![
+        line("tool_call_requested", &requested, Some("a_1")),
+        line("tool_call_started", &started, Some("a_1")),
+        line("job_started", &job, Some("a_1")),
+    ];
+    // Live: the rebuild of the cut log, then the orphan line rendered as
+    // the resume writes it.
+    let mut live = super::rebuild(&cut, "fake/model-1").unwrap();
+    render(
+        &mut live,
+        &orphaned("j_1"),
+        None,
+        "fake/model-1",
+        &mut BTreeMap::new(),
+    );
+    let mut whole = cut.clone();
+    whole.push(line("job_completed", &orphaned("j_1"), None));
+    let rebuilt = super::rebuild(&whole, "fake/model-1").unwrap();
+    assert_eq!(live, rebuilt);
+    assert_eq!(rebuilt.len(), 3);
+    assert!(matches!(
+        &rebuilt[1],
+        Input::ToolResult { action_id, text, is_error: true } if action_id.0 == "a_1" && text.contains("may have run")
+    ));
+    assert_eq!(
+        user_text(&rebuilt[2]),
+        "Fiber: background job j_1 ended: failed.\nThe process that ran this job died; it may still be running."
+    );
+}
+
+#[test]
+fn a_job_completed_renders_a_notice_only_without_an_action() {
+    let notice = line("job_completed", &orphaned("j_1"), None);
+    let record = line("job_completed", &orphaned("j_2"), Some("a_1"));
+    let jobs = Event::TurnStarted(contract::events::TurnStarted {
+        input: vec![contract::events::InputItem::Jobs {
+            job_ids: vec![contract::JobId("j_1".into())],
+        }],
+    });
+    let lines = vec![
+        line("turn_started", &jobs, None),
+        record.clone(),
+        notice.clone(),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    // The `jobs` item and the record under an action render nothing.
+    assert_eq!(rebuilt.len(), 1);
+    assert_eq!(
+        user_text(&rebuilt[0]),
+        "Fiber: background job j_1 ended: failed.\nThe process that ran this job died; it may still be running."
+    );
+    let mut live = Vec::new();
+    for (event, action) in [
+        (jobs, None),
+        (orphaned("j_2"), Some(ActionId("a_1".into()))),
+        (orphaned("j_1"), None),
+    ] {
+        render(
+            &mut live,
+            &event,
+            action.as_ref(),
+            "fake/model-1",
+            &mut BTreeMap::new(),
+        );
+    }
+    assert_eq!(live, rebuilt);
+}
+
+#[test]
+fn a_job_record_under_an_action_does_not_flush_its_call() {
+    // A `wait` record continues its call's batch: the call's result, not a
+    // fixed one, follows it.
+    let requested = Event::ToolCallRequested(ToolCallRequested {
+        name: "jobs".into(),
+        arguments: json!({"action": "wait"}),
+        provider_id: None,
+        repair: None,
+        ran_by: None,
+    });
+    let completed = Event::ToolCallCompleted(contract::events::ToolCallCompleted {
+        status: contract::events::CallStatus::Completed,
+        reason: None,
+        error: None,
+        process: None,
+        content: vec![contract::shapes::ContentPart::Text {
+            text: "Job j_1 failed.\n".into(),
+        }],
+        details: None,
+        artifact: None,
+        changes: None,
+        control: None,
+        changed_by: None,
+    });
+    let lines = vec![
+        line("tool_call_requested", &requested, Some("a_1")),
+        line("job_completed", &orphaned("j_1"), Some("a_1")),
+        line("tool_call_completed", &completed, Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "fake/model-1").unwrap();
+    assert_eq!(rebuilt.len(), 2);
+    assert!(matches!(
+        &rebuilt[1],
+        Input::ToolResult { text, is_error: false, .. } if text == "Job j_1 failed.\n"
+    ));
+}
