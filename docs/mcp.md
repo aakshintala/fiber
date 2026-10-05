@@ -4,8 +4,8 @@ How Fiber uses MCP servers: what it starts, what the model sees, how a call is
 judged, and what happens when a server fails. It is settled by
 [MCP client](https://github.com/aakshintala/fiber/issues/22); the reasoning and
 the rejected alternatives are
-[ADR 0008](adr/0008-the-mcp-client-is-built-in.md). What pi, codex and Claude
-Code do is in `research/mcp-client/`.
+[ADR 0008](adr/0008-the-mcp-client-is-built-in.md). What reference
+agents do is in `research/mcp-client/`.
 
 Vocabulary is `GLOSSARY.md`. MCP server, tool call, effect, workspace, driver,
 driver command, session and event mean what it says there and nothing else.
@@ -22,8 +22,7 @@ Fiber speaks two transports:
 - stdio, for a server Fiber starts as a child process
 - streamable HTTP, for a remote server
 
-It has no legacy HTTP with server-sent events (HTTP+SSE). codex has none
-either.
+It has no legacy HTTP with server-sent events (HTTP+SSE).
 
 A remote server that needs OAuth uses MCP's OAuth flow, which the client
 carries ([ADR 0008](adr/0008-the-mcp-client-is-built-in.md)). A person logs in
@@ -45,8 +44,8 @@ another harness uses to send session messages (`docs/delegates.md`,
 
 ## Tools and their names
 
-Each tool a server offers becomes a Fiber tool named `mcp__<server>__<tool>`,
-the convention codex and Claude Code both use. A name longer than a protocol
+Each tool a server offers becomes a Fiber tool named `mcp__<server>__<tool>`.
+A name longer than a protocol
 allows is cut short and given a short hash suffix, so two long names stay
 distinct.
 
@@ -205,10 +204,8 @@ The 5-second deadline:
 
 - The MCP specification sets no number. It says only "Implementations SHOULD
   establish timeouts for all sent requests".
-- codex and Claude Code wait 30 seconds.
 - The owner's three local servers took 82 to 105 ms median, 143 ms at most,
   from launch to their tool list (macOS arm64, `research/mcp-client/`).
-- 5 seconds is Claude Code's connect timeout.
 - A cold `npx -y` start or a slow OAuth exchange can miss it. That server's
   configuration raises it.
 
@@ -285,9 +282,8 @@ server. When that session has more than one call in flight on the server, its
 log records the elicitation with the `action_id` of each.
 
 Fiber does not advertise sampling and does not answer a sampling request.
-Neither codex nor Claude Code advertises it.
 
-Fiber does not advertise roots. codex advertises none; Claude Code does.
+Fiber does not advertise roots.
 
 ## A repository's servers
 

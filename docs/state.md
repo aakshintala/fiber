@@ -52,11 +52,10 @@ share the person's real sessions and credentials.
 
 A missing directory is created, mode 0700. Two Fiber processes share state
 only by being given the same Fiber home. There is no second, narrower
-override: pi and codex each have one; Fiber has none.
+override.
 
-pi (`~/.pi/agent`, `PI_CODING_AGENT_DIR`), codex (`~/.codex`, `CODEX_HOME`)
-and Claude Code (`~/.claude`, `CLAUDE_CONFIG_DIR`) all use one root under the
-home directory. That is the model here: no XDG split, no `~/Library`.
+Fiber home is one root under the home directory: no XDG split, no
+`~/Library`.
 
 One person owns one Fiber home. There are no group permissions and no
 multi-user sharing.

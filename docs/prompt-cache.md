@@ -160,11 +160,8 @@ marker after a 5-minute one is refused. So the lifetime cannot vary by turn.
 
 A 1-hour write costs 2 times base input against 1.25 times for 5 minutes. A
 session that pauses longer than 5 minutes even once in about 100 requests is
-cheaper on 1 hour. Replayed on the owner's sessions with their real gaps, on
-Opus 5.5, 1 hour costs 0.88 of 5 minutes across 641 pi sessions and 0.57 across
-169 Claude Code sessions. It costs 1.01 across 143 Claude Code subagent
-sessions, and implementation delegates run longer tools than those did
-([research/prompt-cache/ttl.py](../research/prompt-cache/ttl.py)).
+cheaper on 1 hour. The replay is
+[research/prompt-cache/ttl.py](../research/prompt-cache/ttl.py).
 
 OpenAI offers one lifetime, 30 minutes, on GPT-5.6 and later, so the setting
 applies only where a protocol offers a choice.
@@ -187,8 +184,7 @@ different budget, and a change of thinking parameters invalidates Anthropic's
 cached messages ([research/prompt-cache/README.md](../research/prompt-cache/README.md)).
 The refresh would miss and pay for a full rebuild. A level sent as
 adaptive thinking or an effort parameter does not depend on the cap, and
-warms. pi skips warming in the same case (`isReplayable` in its
-`cache-warmer.js`).
+warms.
 
 Warming stops at `cache.warm_cap` after the last turn, whether or not a client
 is connected. A connected client is not a signal: a terminal left open is
@@ -272,3 +268,4 @@ A cache entry also expires after its lifetime with no request.
 - Live probes and results: [research/prompt-cache/probes.md](../research/prompt-cache/probes.md)
 - The audit of settled decisions:
   [#33 comment](https://github.com/aakshintala/fiber/issues/33#issuecomment-5802809634)
+- Comparisons with other tools, and the owner's usage, behind this area's rules: [research/reference-comparisons/README.md](../research/reference-comparisons/README.md)

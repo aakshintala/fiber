@@ -256,8 +256,8 @@ and brings 79 crates, more than every runtime crate together.
 
 The shell tool's recogniser splits a command on `&&`, `||`, `;` and `|` and
 reads each part as plain words. Anything it cannot read plainly makes the
-call declare `executes`, as `docs/tools.md` requires. codex parses shell with
-tree-sitter-bash; a recogniser that fails closed does not need a full parser.
+call declare `executes`, as `docs/tools.md` requires. A recogniser that fails
+closed does not need a full parser.
 
 Fiber uses the system allocator. Whether another allocator lowers resident
 memory is for the memory budget (`docs/performance.md`) to measure.
@@ -298,7 +298,7 @@ dependency.
   advisory run and a release (`docs/ci.md`), including one that marks a crate
   unmaintained.
   An exception names the advisory, the path that pulls the crate in and the
-  condition for removing the exception, as codex's `deny.toml` does.
+  condition for removing the exception.
 
 ## Toolchain
 

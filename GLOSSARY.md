@@ -495,15 +495,7 @@ ends as a test.
 _Avoid_: driver (a driver sends commands to a session), harness, rig (rig is a
 reference library, and pi-rig the owner's pi extension)
 
-## Reading pi's source
+## Reading another tool's source
 
-pi is Fiber's reference for provider and wire behaviour, not for these nouns, and
-the two vocabularies collide. When reading pi:
-
-| The thing | Fiber | pi |
-|---|---|---|
-| The whole piece of work | session | session |
-| Input arrives, Fiber works, Fiber yields | **turn** | agent run (`agent_start` … `agent_settled`) |
-| One round-trip to the model | **step** | **turn** (`turn_start` / `turn_end`) |
-| One message, reasoning block or tool call | **action** | message (`message_start` / `message_update`) |
-| One process, launch to exit | **process** | *(unnamed)* |
+Fiber's terms set against pi's, for reading pi's source:
+`research/reference-comparisons/README.md`.

@@ -3,10 +3,8 @@
 How Fiber reaches a model, and how one is chosen. Vocabulary is `GLOSSARY.md`.
 The provider seam is `docs/architecture.md`, and the extension runtime is
 `docs/extensions.md`. The reasoning behind the protocol and provider split is
-[ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md). pi is the
-reference for wire and auth behavior. What it does is in
-[How pi does providers, auth and routing](https://github.com/aakshintala/fiber/issues/4).
-Each protocol's wire facts, read from pi and rig side by side, are in
+[ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md).
+Each protocol's wire facts, read from reference implementations, are in
 [research/provider-harvest](../research/provider-harvest/README.md).
 
 ## Protocols and providers
@@ -232,9 +230,7 @@ Most of a provider is data. For the provider:
 - `reviewer_model`, optional: one of its models that reviews calls when
   `reviewer.model` is unset (`docs/permissions.md`, "How it runs"). A
   first-party package names the model its vendor's own agent reviews with,
-  at the current generation: `claude-sonnet-5-5` (Claude Code reviews with
-  Sonnet and never Haiku), `gpt-6-luna` (codex reviews with its luna
-  model); Google ships no reviewer, so `gemini` names its middle tier,
+  at the current generation: `claude-sonnet-5-5`, `gpt-6-luna`; Google ships no reviewer, so `gemini` names its middle tier,
   `gemini-3.8-flash`.
 
 For each model:
@@ -513,7 +509,7 @@ A delegate's model is named with its harness first:
 A session has one reasoning setting, its thinking level: `off`, `minimal`,
 `low`, `medium`, `high`, `xhigh` or `max`. Fiber has no separate effort
 setting. Each protocol module maps the level to whatever its vendor takes,
-whether a token budget, an effort parameter or both, as pi does. A model
+whether a token budget, an effort parameter or both. A model
 declares the levels it supports, and the model picker offers only those. A
 level the model does not support is `invalid_arguments`.
 

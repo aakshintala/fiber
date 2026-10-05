@@ -10,8 +10,7 @@ its files are written safely, is [Fiber home](state.md).
 Every file Fiber reads as configuration is JSON: configuration, an extension's
 settings, an extension's manifest and a provider's data. The parser is
 serde_json, which Fiber already uses for everything else
-(`docs/dependencies.md`), so configuration adds no crate. pi, Claude Code and
-the archived Zig tree all use JSON. codex uses TOML, which would have added 6
+(`docs/dependencies.md`), so configuration adds no crate. A TOML parser would have added 6
 crates and 167 KiB of stripped binary on macOS arm64 (`toml` 1.1 against
 serde_json alone, measured on September 25, 2026).
 
@@ -55,7 +54,7 @@ person tells it").
 The per-project file is the person's own setting for one project. It lives in
 Fiber home, not the repository, so it covers every worktree of the project
 (`docs/state.md`, "Projects"), and a delegate's fresh worktree has it too. A
-gitignored file in the working tree, as Claude Code uses, would be missing from
+gitignored file in the working tree would be missing from
 every new worktree.
 
 `-c` works on both doors: `fiber ask`, and the terminal, which passes it to
