@@ -576,7 +576,6 @@ fn read_line(reader: &mut impl BufRead) -> ReadLine {
             ReadLine::Line(String::from_utf8_lossy(&buf).into_owned())
         }
         Ok(_) if buf.len() > MAX_LINE => ReadLine::TooLong,
-        Ok(_) if buf.is_empty() => ReadLine::Eof,
         Ok(_) => ReadLine::Line(String::from_utf8_lossy(&buf).into_owned()),
         Err(_) if buf.is_empty() => ReadLine::Eof,
         Err(_) => ReadLine::Line(String::from_utf8_lossy(&buf).into_owned()),
