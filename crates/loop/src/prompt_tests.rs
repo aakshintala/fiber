@@ -163,8 +163,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        2531,
-        0x602985dc4aec731d,
+        2627,
+        0xc74f81af9ae04004,
     );
 }
 
@@ -198,6 +198,7 @@ fn messages_md_holds_every_section_the_doc_names() {
         "handoff-note",
         "handoff-focus",
         "handoff-jobs",
+        "moved-result",
     ] {
         assert!(
             !section(md, name).is_empty(),

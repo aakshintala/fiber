@@ -514,26 +514,7 @@ impl Loop {
         if let Some(completed) = self.check_context(turn)? {
             return Ok(Step::Ended(completed));
         }
-        let Some(request) = self.request_for(self.conversation.clone()) else {
-            // `turn` builds the preamble before its `turn_started`; reaching
-            // a step without one is a bug, so the turn fails closed.
-            return Ok(Step::Ended(ended(
-                TurnOutcome::Failed,
-                Some(Failure {
-                    code: ErrorCode::LogCorrupt,
-                    message: "The preamble was not built.".to_owned(),
-                    retry_after: None,
-                    provider: None,
-                }),
-            )));
-        };
-        if let Some(completed) = self.over_budget() {
-            return Ok(Step::Ended(completed));
-        }
-        // A refused request leaves the previous request's end in place, so a
-        // later request still marks the cache where that request ended.
-        self.sent = Some(self.conversation.len());
-        self.attempt(&request, turn)
+        self.send(turn)
     }
 
     /// When billed spend has reached `budget.usd`, the turn fails and the
