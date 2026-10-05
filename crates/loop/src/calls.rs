@@ -38,11 +38,14 @@ enum State {
     /// Decided without running: its completion is written in request order.
     Ready(Box<ToolCallCompleted>),
     /// Running on its own thread, streaming through its call's emitter.
-    /// `declared` rides along for the change check at completion.
+    /// `declared` rides along for the change check at completion; `tool`
+    /// and `arguments` for the hooks.
     Running {
         bound: Bound,
         stream: Arc<Stream>,
         declared: DeclaredEffects,
+        tool: String,
+        arguments: Arc<Map<String, Value>>,
     },
     /// Its completion is written.
     Done,
@@ -150,7 +153,7 @@ impl Loop {
             // `cancelled` with no `tool_call_started` and no permission
             // lines. A decision line already written stays.
             if self.turn_cancelled() {
-                decided.push((id, Err(super::cancel::never_ran())));
+                decided.push((id, call.name, Err(super::cancel::never_ran())));
                 continue;
             }
             let decision = self.decide(&call, &id, turn)?;
@@ -160,10 +163,10 @@ impl Loop {
                 return Ok(false);
             }
             if self.turn_cancelled() {
-                decided.push((id, Err(super::cancel::never_ran())));
+                decided.push((id, call.name, Err(super::cancel::never_ran())));
                 continue;
             }
-            decided.push((id, decision));
+            decided.push((id, call.name, decision));
         }
         let cancel = Arc::clone(&self.cancel);
         thread::scope(|scope| {
@@ -180,7 +183,7 @@ impl Loop {
             let clock_wake: Arc<dyn Wake> = wake.clone();
             clock.subscribe(Arc::downgrade(&clock_wake));
             let mut running: Vec<Running> = Vec::new();
-            for (id, decision) in decided {
+            for (id, name, decision) in decided {
                 let state = match decision {
                     Err(completed) => State::Ready(completed),
                     // A cancel that landed while a later call was decided
@@ -202,15 +205,22 @@ impl Loop {
                         let stream = Arc::new(Stream::new(Arc::clone(&wake)));
                         let thread_stream = Arc::clone(&stream);
                         let call_cancel = Arc::clone(&cancel);
+                        let arguments = Arc::new(arguments);
+                        let thread_arguments = Arc::clone(&arguments);
                         scope.spawn(move || {
-                            let output =
-                                tool.run(&arguments, call_cancel.as_ref(), thread_stream.as_ref());
+                            let output = tool.run(
+                                &thread_arguments,
+                                call_cancel.as_ref(),
+                                thread_stream.as_ref(),
+                            );
                             thread_stream.finish(output);
                         });
                         State::Running {
                             bound,
                             stream,
                             declared,
+                            tool: name,
+                            arguments,
                         }
                     }
                 };
@@ -584,12 +594,15 @@ impl Loop {
         Some(answered)
     }
 
-    /// The completion of a call that ran and returned `output`, its text cut
-    /// to `bound` (`docs/tools.md`, "Bounded results"). Writes the call's
-    /// job lines under `id` before the caller writes `tool_call_completed`.
+    /// The completion of a call of `tool` with `arguments` that ran and
+    /// returned `output`, as the hooks left it, its text cut to `bound`
+    /// (`docs/tools.md`, "Bounded results"). Writes the call's job lines and
+    /// the hooks' notices under `id` before the caller writes
+    /// `tool_call_completed`.
     fn finish(
         &mut self,
         output: Output,
+        (tool, arguments): (&str, &Map<String, Value>),
         bound: Bound,
         id: &ActionId,
         turn: &TurnId,
@@ -613,27 +626,38 @@ impl Loop {
         let (text, images): (Vec<ContentPart>, Vec<ContentPart>) = content
             .into_iter()
             .partition(|part| matches!(part, ContentPart::Text { .. }));
-        let full = crate::conversation::text(&text);
-        let cap = bound.start.saturating_add(bound.end);
-        let (content, artifact) = if full.len() > cap {
-            let (kept, artifact) = self.log.cut_output(&full, bound, &format!("{}.txt", id.0));
-            (vec![ContentPart::Text { text: kept }], artifact)
+        // A running call keeps running until its tool returns, then
+        // completes with what the tool gave, `cancelled` instead of
+        // `completed`. A tool that returned an error keeps `failed` with
+        // that error: those outcomes are never `cancelled`. The hooks see
+        // the status the completion carries.
+        let status = if error.is_some() {
+            CallStatus::Failed
+        } else if self.turn_cancelled() {
+            CallStatus::Cancelled
         } else {
-            (text, None)
+            CallStatus::Completed
         };
+        let ran = super::hooks::Ran {
+            tool,
+            arguments,
+            status,
+            text,
+            images,
+            details,
+            process: process.as_ref(),
+        };
+        let shaped = self.shape(ran, bound, id, turn)?;
         Ok(ToolCallCompleted {
-            status: if error.is_some() {
-                CallStatus::Failed
-            } else {
-                CallStatus::Completed
-            },
+            status,
             error,
             process,
-            details,
+            details: shaped.details,
             changes,
             control,
-            artifact,
-            content: content.into_iter().chain(images).collect(),
+            artifact: shaped.artifact,
+            content: shaped.content,
+            changed_by: shaped.changed_by,
             ..completed(String::new(), None)
         })
     }
@@ -668,21 +692,19 @@ impl Loop {
             // `permission_resolved` line already written stays.
             State::Ready(_) if self.turn_cancelled() => super::cancel::never_ran(),
             State::Ready(completed) => completed.clone(),
-            State::Running { stream, bound, .. } => match stream.take_finished() {
+            State::Running {
+                stream,
+                bound,
+                tool,
+                arguments,
+                ..
+            } => match stream.take_finished() {
                 Some((output, flushed)) => {
                     if let Some(delta) = flushed {
                         self.write_delta(&delta, turn, &call.id);
                     }
-                    let mut finished = self.finish(output, *bound, &call.id, turn)?;
-                    // A running call keeps running until its tool returns,
-                    // then completes with what the tool gave, `cancelled`
-                    // instead of `completed`. A tool that returned an error
-                    // keeps `failed` with that error: those outcomes are
-                    // never `cancelled`.
-                    if self.turn_cancelled() && finished.error.is_none() {
-                        finished.status = CallStatus::Cancelled;
-                    }
-                    Box::new(finished)
+                    let call_of = (tool.as_str(), arguments.as_ref());
+                    Box::new(self.finish(output, call_of, *bound, &call.id, turn)?)
                 }
                 None => return Ok(false),
             },

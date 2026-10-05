@@ -32,6 +32,7 @@ mod cancel;
 mod changes;
 mod completion;
 mod conversation;
+mod hooks;
 mod inbox;
 mod jobs;
 mod opening;
@@ -48,7 +49,7 @@ mod util;
 
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
-pub use process::{fiber_exited, fiber_started};
+pub use process::{extensions_loaded, fiber_exited, fiber_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
 pub use retry::Retry;
@@ -209,6 +210,8 @@ pub struct Loop {
     idle_exit: Option<std::time::Duration>,
     /// Set when an idle deadline ended an approval wait.
     idle_left: bool,
+    /// The session's hooks; `None` runs none.
+    hooks: Option<Arc<dyn contract::hook::Hooks>>,
 }
 
 /// The one built preamble: what every request sends and what
@@ -308,6 +311,7 @@ impl Loop {
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,
+            hooks: None,
         })
     }
 
