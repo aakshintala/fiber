@@ -129,7 +129,7 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{binary_name, hex, platform};
+    use super::{binary_name, download, hex, platform};
 
     #[test]
     fn a_url_names_its_file_without_the_query() {
@@ -149,5 +149,95 @@ mod tests {
         let key = platform();
         assert!(key.contains('-'), "{key}");
         assert!(!key.contains("macos") && !key.contains("aarch64"), "{key}");
+    }
+
+    /// Present in a re-executed child, absent in the parent.
+    const PROXY_CHILD: &str = "FIBER_TEST_PREPARE_PROXY_CHILD";
+
+    /// The download URL, passed to the child on its environment.
+    const PROXY_CHILD_URL: &str = "FIBER_TEST_PREPARE_URL";
+
+    /// How long the parent waits for the re-executed child to exit.
+    const CHILD_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
+
+    /// How long the parent waits for the proxy to record a CONNECT.
+    const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
+
+    /// Downloads the scripted bytes in a child whose environment holds
+    /// `extra`, on top of the proxy URL and the marker. The child re-runs
+    /// this same test, which downloads and fails the child when the bytes do
+    /// not arrive. `None` in the child, after its assertions.
+    fn download_in_child(
+        test: &str,
+        extra: &[(&str, &str)],
+    ) -> Option<(fakes::ProviderServer, fakes::ConnectProxy)> {
+        if std::env::var_os(PROXY_CHILD).is_some() {
+            let url = std::env::var(PROXY_CHILD_URL).unwrap();
+            let bytes = download("probe", &url).unwrap();
+            assert_eq!(bytes, b"{}");
+            return None;
+        }
+        let server =
+            fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
+        let proxy = fakes::ConnectProxy::start().unwrap();
+        let child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", test, "--nocapture"])
+            .env(PROXY_CHILD, "1")
+            .env("HTTPS_PROXY", proxy.url())
+            .envs(extra.iter().copied())
+            .env(PROXY_CHILD_URL, format!("{}/tool", server.url()))
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let (done, finished) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let output = child.wait_with_output().unwrap();
+            let _ = done.send(output);
+        });
+        let output = match finished.recv_timeout(CHILD_WITHIN) {
+            Ok(output) => output,
+            Err(_) => panic!("waited {CHILD_WITHIN:?} for the proxy-env child"),
+        };
+        assert!(
+            output.status.success(),
+            "the proxy-env child downloaded:\nstdout:\n{}\nstderr:\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Some((server, proxy))
+    }
+
+    #[test]
+    fn download_tunnels_through_the_proxy_environment() {
+        let Some((server, proxy)) = download_in_child(
+            "prepare::tests::download_tunnels_through_the_proxy_environment",
+            &[],
+        ) else {
+            return;
+        };
+        let port = server.url().rsplit(':').next().unwrap().to_owned();
+        let target = format!("127.0.0.1:{port}");
+        assert!(
+            proxy.await_connects(1, CONNECT_WITHIN),
+            "the proxy recorded CONNECT {target}"
+        );
+        assert_eq!(proxy.connects(), [target]);
+        assert_eq!(server.requests().len(), 1);
+    }
+
+    #[test]
+    fn download_bypasses_the_proxy_for_no_proxy_hosts() {
+        let Some((server, proxy)) = download_in_child(
+            "prepare::tests::download_bypasses_the_proxy_for_no_proxy_hosts",
+            &[("NO_PROXY", "127.0.0.1")],
+        ) else {
+            return;
+        };
+        assert!(
+            proxy.connects().is_empty(),
+            "nothing went through the proxy"
+        );
+        assert_eq!(server.requests().len(), 1);
     }
 }
