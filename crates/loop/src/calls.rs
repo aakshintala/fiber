@@ -154,6 +154,11 @@ impl Loop {
                 continue;
             }
             let decision = self.decide(&call, &id, turn)?;
+            // An idle deadline ended the approval. Drop the decision: no
+            // completion is written, including for calls already decided.
+            if self.idle_left {
+                return Ok(false);
+            }
             if self.turn_cancelled() {
                 decided.push((id, Err(super::cancel::never_ran())));
                 continue;
@@ -347,6 +352,9 @@ impl Loop {
                 Asked::Allow => Ok(Ok((tool, arguments, effects.declared))),
                 Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
                 Asked::Cancelled => Ok(Err(super::cancel::never_ran())),
+                // The idle delay passed. Nothing more is written; `run_calls`
+                // sees `idle_left` and the turn unwinds.
+                Asked::Idle => Ok(Err(super::cancel::never_ran())),
                 Asked::Closed(request_id) => {
                     Ok(Err(self.unanswerable(id, turn, Some(request_id))?))
                 }
@@ -414,11 +422,18 @@ impl Loop {
             turn,
             Some(id),
         )?;
+        // Waiting on an approval is idle (`docs/invocation.md`, "Lifecycle").
+        // The deadline is this moment, and a rejected reply does not move it.
+        let deadline = self.idle_deadline();
         loop {
-            let delivery = match self.inbox.recv() {
-                Ok(delivery) => delivery,
+            let delivery = match self.recv_until(deadline) {
+                super::inbox::InboxRecv::Delivery(delivery) => delivery,
+                super::inbox::InboxRecv::Idle => {
+                    self.idle_left = true;
+                    return Ok(Asked::Idle);
+                }
                 // Every sender is gone, so no answer can come.
-                Err(_) => {
+                super::inbox::InboxRecv::Closed => {
                     let reason = "The session ended while waiting for an answer.";
                     self.decided(
                         id,
@@ -601,7 +616,7 @@ impl Loop {
         let full = crate::conversation::text(&text);
         let cap = bound.start.saturating_add(bound.end);
         let (content, artifact) = if full.len() > cap {
-            let (kept, artifact) = self.cut(&full, bound, id);
+            let (kept, artifact) = self.log.cut_output(&full, bound, &format!("{}.txt", id.0));
             (vec![ContentPart::Text { text: kept }], artifact)
         } else {
             (text, None)
@@ -621,39 +636,6 @@ impl Loop {
             content: content.into_iter().chain(images).collect(),
             ..completed(String::new(), None)
         })
-    }
-
-    /// `full` cut to `bound`, with a notice of how many bytes were cut and
-    /// where the whole text is, and the artifact's path relative to the
-    /// session directory.
-    fn cut(&self, full: &str, bound: Bound, id: &ActionId) -> (String, Option<String>) {
-        let head = full.floor_char_boundary(bound.start);
-        let tail = full.ceil_char_boundary(full.len().saturating_sub(bound.end).max(head));
-        let removed = tail.saturating_sub(head);
-        let (notice, artifact) = match self
-            .log
-            .write_artifact(&format!("{}.txt", id.0), full.as_bytes())
-        {
-            Ok((relative, path)) => (
-                format!(
-                    "[{removed} bytes cut. The full output is in {}; read it with `read`.]",
-                    path.display()
-                ),
-                Some(relative),
-            ),
-            Err(e) => (
-                format!("[{removed} bytes cut. The full output could not be saved: {e}.]"),
-                None,
-            ),
-        };
-        let mut kept = full.get(..head).unwrap_or_default().to_owned();
-        kept.push('\n');
-        kept.push_str(&notice);
-        if tail < full.len() {
-            kept.push('\n');
-            kept.push_str(full.get(tail..).unwrap_or_default());
-        }
-        (kept, artifact)
     }
 }
 
@@ -738,6 +720,9 @@ pub(crate) enum Asked {
     /// A cancel woke the wait: the caller completes the call `cancelled`.
     /// The deny-by-cancel line is written.
     Cancelled,
+    /// The idle delay passed. No decision line is written. The turn unwinds
+    /// without `tool_call_completed` or `turn_completed`.
+    Idle,
 }
 
 /// Whether a call with `declared` effects takes a fast path

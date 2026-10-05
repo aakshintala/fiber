@@ -11,11 +11,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use contract::events::{
-    AssistantMessageCompleted, Empty, Event, InputItem, MessageOutcome, TextCompleted,
-    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    AskStep, AssistantMessageCompleted, DecidedBy, Decision, Empty, Event, InputItem, Interaction,
+    InteractionRequested, MessageOutcome, PermissionRequested, PermissionResolved, RuleScope,
+    StandingRule, TextCompleted, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
-use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens};
-use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId, TurnId};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender, Tokens};
+use contract::{ActionId, CommandId, ErrorCode, GenerationId, RequestId, SessionId, TurnId};
 use log::Log;
 use r#loop::{fiber_exited, fiber_started};
 use serde_json::Value;
@@ -315,4 +316,203 @@ fn fiber_exited_after_a_resume_reports_only_the_resumed_process_lines() {
     // Only the resumed process's usage: g2, not g1.
     assert_eq!(exited["usage"]["tokens"]["output"], 5);
     assert_eq!(exited["usage"]["cost"], 0.25);
+}
+
+fn permission(id: &str) -> Event {
+    Event::PermissionRequested(PermissionRequested {
+        request_id: RequestId(id.into()),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: false,
+            paths: None,
+        },
+        step: AskStep::StandingAsk {
+            standing_rule: StandingRule {
+                scope: RuleScope::Project,
+                prefix: "npm".into(),
+            },
+        },
+    })
+}
+
+fn resolved(id: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        request_id: Some(RequestId(id.into())),
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Cancel,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
+#[test]
+fn fiber_exited_names_the_unresolved_request() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    session.append(&resolved("r_old"), Some("a_1"));
+    session.append(&permission("r_ask"), Some("a_2"));
+    session.append(
+        &Event::InteractionRequested(InteractionRequested {
+            request_id: RequestId("r_question".into()),
+            interaction: Interaction::Confirm {
+                prompt: "go?".into(),
+            },
+            action_ids: None,
+            extension: None,
+        }),
+        None,
+    );
+
+    let (code, exited) = session.exit(Ok(()));
+
+    assert_eq!(code, 0);
+    assert_eq!(exited["suspended_on"], "r_question");
+    assert_eq!(
+        kinds(&session),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_resolved",
+            "permission_requested",
+            "interaction_requested",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
+fn fiber_exited_has_no_suspended_on_once_the_request_is_resolved() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_ask"), Some("a_1"));
+    session.append(&resolved("r_ask"), Some("a_1"));
+
+    let (_, exited) = session.exit(Ok(()));
+
+    assert_eq!(exited.get("suspended_on"), None);
+    assert_eq!(
+        kinds(&session),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_resolved",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
+fn fiber_exited_ignores_a_request_from_the_previous_process() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+
+    let (_, exited) = session.exit(Ok(()));
+
+    assert_eq!(exited.get("suspended_on"), None);
+    assert_eq!(
+        kinds(&session),
+        [
+            "fiber_started",
+            "permission_requested",
+            "fiber_started",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
+fn fiber_exited_keeps_the_request_that_was_not_resolved() {
+    let earlier = Session::new();
+    fiber_started(&earlier.log, "1.2.3", false).unwrap();
+    earlier.append(&permission("r_early"), Some("a_1"));
+    earlier.append(&permission("r_late"), Some("a_2"));
+    earlier.append(&resolved("r_early"), Some("a_1"));
+    let (_, exited) = earlier.exit(Ok(()));
+    assert_eq!(exited["suspended_on"], "r_late");
+    assert_eq!(
+        kinds(&earlier),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_requested",
+            "permission_resolved",
+            "fiber_exited",
+        ]
+    );
+
+    let later = Session::new();
+    fiber_started(&later.log, "1.2.3", false).unwrap();
+    later.append(&permission("r_early"), Some("a_1"));
+    later.append(&permission("r_late"), Some("a_2"));
+    later.append(&resolved("r_late"), Some("a_2"));
+    let (_, exited) = later.exit(Ok(()));
+    assert_eq!(exited["suspended_on"], "r_early");
+    assert_eq!(
+        kinds(&later),
+        [
+            "fiber_started",
+            "permission_requested",
+            "permission_requested",
+            "permission_resolved",
+            "fiber_exited",
+        ]
+    );
+}
+
+fn interaction(id: &str) -> Event {
+    Event::InteractionRequested(InteractionRequested {
+        request_id: RequestId(id.into()),
+        interaction: Interaction::Confirm {
+            prompt: "go?".into(),
+        },
+        action_ids: None,
+        extension: None,
+    })
+}
+
+fn answered(id: &str) -> Event {
+    Event::InteractionResolved(contract::events::InteractionResolved {
+        request_id: RequestId(id.into()),
+        by: contract::events::ResolvedBy::Fiber,
+        answer: contract::events::Answer::Declined {
+            declined: contract::shapes::True,
+        },
+    })
+}
+
+#[test]
+fn fiber_exited_keeps_the_question_that_was_not_resolved() {
+    for (resolve, left) in [("q_early", "q_late"), ("q_late", "q_early")] {
+        let session = Session::new();
+        fiber_started(&session.log, "1.2.3", false).unwrap();
+        session.append(&interaction("q_early"), None);
+        session.append(&interaction("q_late"), None);
+        session.append(&answered(resolve), None);
+        let (_, exited) = session.exit(Ok(()));
+        assert_eq!(exited["suspended_on"], left);
+        assert_eq!(
+            kinds(&session),
+            [
+                "fiber_started",
+                "interaction_requested",
+                "interaction_requested",
+                "interaction_resolved",
+                "fiber_exited",
+            ]
+        );
+    }
+}
+
+fn kinds(session: &Session) -> Vec<String> {
+    log::read(&session.dir)
+        .unwrap()
+        .into_iter()
+        .map(|line| line.kind)
+        .collect()
 }

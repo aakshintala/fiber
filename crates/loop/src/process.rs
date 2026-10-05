@@ -5,11 +5,11 @@
 
 use std::path::Path;
 
-use contract::Envelope;
 use contract::events::{
     Event, FiberExited, FiberStarted, FinalMessage, MessageOutcome, TurnOutcome,
 };
 use contract::shapes::{Failure, Question};
+use contract::{Envelope, RequestId};
 use log::Log;
 
 use crate::Error;
@@ -52,7 +52,7 @@ pub fn fiber_exited(log: &Log, dir: &Path, ran: Result<(), Failure>) -> Result<i
         usage: fold.ledger.usage(),
         final_message: fold.final_message,
         error,
-        suspended_on: None,
+        suspended_on: fold.suspended_on,
         questions: fold.questions,
     });
     log.append(&exited, None, None)?;
@@ -66,6 +66,8 @@ struct Fold {
     error: Option<Failure>,
     questions: Option<Vec<Question>>,
     ledger: Ledger,
+    /// The latest approval or question this process left unresolved.
+    suspended_on: Option<RequestId>,
 }
 
 fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
@@ -74,6 +76,9 @@ fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
     // Every message takes them: messages never interleave, and a failed
     // call logs none, so the next message must not inherit them.
     let mut text = String::new();
+    // Requests this process raised and has not resolved, oldest first.
+    // `suspended_on` is the latest (`docs/events.md`, `fiber_exited`).
+    let mut open = Vec::new();
     for line in lines {
         let event = Event::from_envelope(line)?;
         // Each process reports its own lines only: the fold restarts at
@@ -82,7 +87,19 @@ fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
         if matches!(&event, Some(Event::FiberStarted(_))) {
             fold = Fold::default();
             text.clear();
+            open.clear();
             continue;
+        }
+        if let Some(Event::PermissionRequested(requested)) = &event {
+            open.push(requested.request_id.clone());
+        } else if let Some(Event::InteractionRequested(requested)) = &event {
+            open.push(requested.request_id.clone());
+        } else if let Some(Event::PermissionResolved(resolved)) = &event {
+            if let Some(id) = &resolved.request_id {
+                open.retain(|pending| pending != id);
+            }
+        } else if let Some(Event::InteractionResolved(resolved)) = &event {
+            open.retain(|pending| pending != &resolved.request_id);
         }
         if let Some(Event::TurnStarted(_)) = &event {
             fold.final_message = None;
@@ -110,5 +127,6 @@ fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
             fold.ledger.record(call);
         }
     }
+    fold.suspended_on = open.last().cloned();
     Ok(fold)
 }

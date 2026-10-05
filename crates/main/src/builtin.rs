@@ -14,10 +14,9 @@ use contract::tool::Tool;
 
 use crate::failed;
 
-/// The loop's `(who, tool)` pairs and the infos the `tools` command answers
-/// with. One alias, so the signature stays the pair [`r#loop::Loop`] and
-/// [`doors::Session`] already take.
-type SessionTools = (Vec<(String, Arc<dyn Tool>)>, Vec<ToolInfo>);
+/// The loop's `(who, tool)` pairs, the infos the `tools` command answers
+/// with, and the driver shell [`doors::Session::shell`] runs.
+type SessionTools = (Vec<(String, Arc<dyn Tool>)>, Vec<ToolInfo>, Arc<dyn Tool>);
 
 /// `edit`, `read`, `shell` and `write`, each registered by `builtin`.
 /// `read`, `write` and `edit` share one session's file state. A failure to
@@ -26,7 +25,10 @@ pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<Sessio
     let files = tools::Files::new(workspace.to_path_buf());
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
-    let shell = tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber);
+    let shell =
+        tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber.clone());
+    let driver =
+        Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
     let built = [
         registered(files.edit())?,
         registered(files.read())?,
@@ -39,7 +41,7 @@ pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<Sessio
         pairs.push((String::from("builtin"), tool));
         infos.push(info);
     }
-    Ok((pairs, infos))
+    Ok((pairs, infos, driver))
 }
 
 /// One tool and what the `tools` command answers for it.
@@ -56,3 +58,7 @@ fn registered(tool: impl Tool + 'static) -> Result<(Arc<dyn Tool>, ToolInfo), Fa
     };
     Ok((Arc::new(tool), info))
 }
+
+#[cfg(test)]
+#[path = "builtin_tests.rs"]
+mod tests;

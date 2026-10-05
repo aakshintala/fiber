@@ -228,6 +228,7 @@ fn built(command: &str) -> bool {
             | "tools"
             | "history"
             | "close"
+            | "shell"
     )
 }
 
@@ -260,6 +261,25 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
             conn.gate.deliver(Delivery::Reply(reply, ack));
         }
         Command::Cancel => cancel(conn, id),
+        Command::Shell(args) => match crate::shell::run(&conn.gate, &args) {
+            crate::shell::Answer::Unknown => unknown(conn, id, name),
+            crate::shell::Answer::Rejected { code, message } => {
+                reject(conn, Some(id), code, &message);
+            }
+            crate::shell::Answer::Accepted {
+                output,
+                artifact,
+                process,
+            } => accept(
+                conn,
+                id,
+                Some(CommandResult::Shell {
+                    output,
+                    artifact,
+                    process,
+                }),
+            ),
+        },
         Command::Close => {
             let ack = inbox_ack(conn, id);
             conn.gate.deliver(Delivery::Close(ack));
@@ -273,20 +293,21 @@ fn dispatch(conn: &mut Conn, line: CommandLine, name: &str) {
         | Command::Name(_)
         | Command::Handoff(_)
         | Command::Rewind(_)
-        | Command::Shell(_)
         | Command::Command(_) => unknown(conn, id, name),
     }
 }
 
-/// Ends the running turn (`docs/architecture.md`, "Cancellation").
-/// Accepted when a turn is running, even one already cancelled; rejected
-/// `stale_request` when none is. Answered at once, on the reader thread,
-/// never through the loop. After an accepted cancel the loop gets a wake
-/// for its inbox, which carries no meaning beyond waking it.
+/// Ends the running turn (`docs/architecture.md`, "Cancellation") and stops
+/// a running driver `shell`. Accepted when either is running; rejected
+/// `stale_request` when neither is. Answered at once, on the reader thread.
+/// The loop's wake is sent only when a turn was running.
 fn cancel(conn: &mut Conn, id: CommandId) {
-    if conn.gate.cancel_turn() {
+    let stopped = conn.gate.stop_running();
+    if stopped.turn || stopped.shell {
         accept(conn, id, None);
-        conn.gate.deliver(Delivery::Cancelled);
+        if stopped.turn {
+            conn.gate.deliver(Delivery::Cancelled);
+        }
     } else {
         reject(conn, Some(id), ErrorCode::StaleRequest, NO_TURN);
     }

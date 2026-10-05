@@ -501,6 +501,9 @@ impl Loop {
             // the run of consecutive blocks stands (`docs/permissions.md`,
             // "What happens on a block").
             Asked::Cancelled => Ok(Err(crate::cancel::never_ran())),
+            // The idle delay passed. `idle_left` is set; the caller writes
+            // nothing for this call.
+            Asked::Idle => Ok(Err(crate::cancel::never_ran())),
             Asked::Closed(request_id) => {
                 let completed =
                     self.reviewer_deny(under.id, under.turn, Some(request_id), reason, reviewer)?;

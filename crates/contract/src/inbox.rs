@@ -62,9 +62,9 @@ pub enum Delivery {
     /// Accept no more prompts. The turn in flight finishes, then the loop
     /// exits.
     Close(Ack),
-    /// Wakes a loop blocked on its inbox after an accepted `cancel`. It
-    /// carries no ack and no meaning: every drain discards it, and an
-    /// approval wait reads the cancel signal after it wakes
+    /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
+    /// clock move. It carries no ack and no meaning: every drain discards
+    /// it, and an approval wait reads the cancel signal after it wakes
     /// (`docs/architecture.md`, "Cancellation").
     Cancelled,
 }

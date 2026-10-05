@@ -10,6 +10,7 @@
 mod attach;
 mod client;
 mod session;
+mod shell;
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;

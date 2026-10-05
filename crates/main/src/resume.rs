@@ -87,6 +87,7 @@ pub(crate) fn ask_resume(
         limits,
         budget,
         retry,
+        idle,
         home,
         project,
         ..
@@ -94,7 +95,8 @@ pub(crate) fn ask_resume(
     // The recorded workspace, not the launch directory. A failure here,
     // such as not finding the running binary, returns before `fiber_started`,
     // so the log stays as it was.
-    let (tools, infos) = match crate::builtin::builtin(Path::new(&folded.workspace), &clock) {
+    let (tools, infos, driver) = match crate::builtin::builtin(Path::new(&folded.workspace), &clock)
+    {
         Ok(built) => built,
         Err(e) => return ask_failed(e),
     };
@@ -103,6 +105,7 @@ pub(crate) fn ask_resume(
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
+    session.shell(driver);
     if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true) {
         session.close(log);
         return ask_failed(failed(e.code(), e));
@@ -120,6 +123,7 @@ pub(crate) fn ask_resume(
                 permissions,
             ),
             budget,
+            idle,
             reviewer,
             limits,
             retry,

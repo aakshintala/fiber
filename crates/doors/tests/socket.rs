@@ -12,25 +12,29 @@
 use std::fs;
 use std::io::{BufRead, BufReader, Write};
 use std::os::unix::net::UnixStream;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
+use contract::emit::Emit;
 use contract::events::{
     Empty, Event, ExtensionsLoaded, FiberExited, InputItem, LoadedExtension, Notice, QueuedMessage,
     SessionState, SessionStatus, SteeringQueue, ToolInfo, ToolSource, ToolState, TurnStarted,
 };
 use contract::inbox::{Delivery, Message};
-use contract::shapes::{ContentPart, Origin, Sender, Tokens, Usage};
+use contract::provider::ToolDefinition;
+use contract::shapes::{ContentPart, Failure, Origin, Process, Sender, Tokens, Usage};
+use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, ErrorCode, SessionId};
 use doors::{Session, mint};
 use fakes::Client;
 use fakes::clock::FakeClock;
 use log::Log;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// A hang bound for one line, the same order as the log crate's watcher tests.
 const DEADLINE: Duration = Duration::from_secs(10);
@@ -424,7 +428,7 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
             for name in [
                 "message", "job_stop", "background", "reload", "model", "credential",
                 "name",
-                "handoff", "rewind", "shell", "command",
+                "handoff", "rewind", "command",
             ] {
                 send(
                     &client,
@@ -441,6 +445,11 @@ fn subscribe_is_first_and_unknown_or_unfit_commands_are_rejected() {
                 );
             }
 
+            send(&client, r#"{"id":"c_shell","command":"shell"}"#);
+            assert_eq!(
+                rejection(&response(&client, "c_shell")),
+                ("invalid_arguments", UNFIT)
+            );
             send(
                 &client,
                 r#"{"id":"c_bad","command":"prompt","args":{"content":"nope"}}"#,
@@ -947,6 +956,553 @@ fn a_full_subscriber_after_a_queued_steer_gets_the_latest_steering_queue() {
                 "later"
             );
             assert_eq!(lines[at]["payload"]["messages"][0]["command_id"], "c_later");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+fn shell_line(id: &str, command: &str) -> String {
+    format!(r#"{{"id":"{id}","command":"shell","args":{{"command":"{command}"}}}}"#)
+}
+
+fn ended(code: i32, text: &str) -> Output {
+    Output {
+        content: vec![ContentPart::Text {
+            text: text.to_owned(),
+        }],
+        process: Some(Process {
+            exit_code: Some(code),
+            signal: None,
+            timed_out: false,
+        }),
+        ..Output::default()
+    }
+}
+
+fn fixed(output: Output, bound: Bound) -> Arc<dyn Tool> {
+    Arc::new(Fixed {
+        output,
+        bound,
+        ran: Arc::new(AtomicBool::new(false)),
+    })
+}
+
+fn fixed_ran(output: Output, bound: Bound, ran: Arc<AtomicBool>) -> Arc<dyn Tool> {
+    Arc::new(Fixed { output, bound, ran })
+}
+
+struct Fixed {
+    output: Output,
+    bound: Bound,
+    ran: Arc<AtomicBool>,
+}
+
+impl Tool for Fixed {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        // True when the command started with no cancel on it.
+        self.ran.store(!cancel.is_cancelled(), Ordering::Relaxed);
+        self.output.clone()
+    }
+
+    fn bound(&self) -> Bound {
+        self.bound
+    }
+}
+
+fn shell_definition() -> ToolDefinition {
+    ToolDefinition {
+        name: "shell".to_owned(),
+        description: "test".to_owned(),
+        input_schema: Value::Object(Map::new()),
+        deferred: false,
+    }
+}
+
+struct Flag {
+    ready: Mutex<bool>,
+    cv: Condvar,
+}
+
+impl Wake for Flag {
+    fn wake(&self) {
+        *self.ready.lock().expect("the flag lock") = true;
+        self.cv.notify_all();
+    }
+}
+
+struct Blocks {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+}
+
+impl Tool for Blocks {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        let flag = Arc::new(Flag {
+            ready: Mutex::new(false),
+            cv: Condvar::new(),
+        });
+        let wake: Arc<dyn Wake> = flag.clone();
+        cancel.subscribe(Arc::downgrade(&wake));
+        if let Some(sender) = self.entered.lock().expect("the entered lock").take() {
+            sender.send(()).expect("the test is waiting");
+        }
+        if !cancel.is_cancelled() {
+            let guard = flag.ready.lock().expect("the flag lock");
+            let _wait = flag
+                .cv
+                .wait_timeout_while(guard, DEADLINE, |_| !cancel.is_cancelled());
+        }
+        assert!(
+            cancel.is_cancelled(),
+            "timed out waiting for the shell to be cancelled"
+        );
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Cancelled and stopped.\n".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: None,
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        Bound::DEFAULT
+    }
+}
+
+/// Longer than [`DEADLINE`], so a close that never cancels the shell fails
+/// the test's own wait rather than this tool's timeout.
+const SHELL_LIMIT: Duration = Duration::from_secs(30);
+
+struct Hangs {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    saw_cancel: Arc<AtomicBool>,
+}
+
+impl Tool for Hangs {
+    fn definition(&self) -> ToolDefinition {
+        shell_definition()
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        let flag = Arc::new(Flag {
+            ready: Mutex::new(false),
+            cv: Condvar::new(),
+        });
+        let wake: Arc<dyn Wake> = flag.clone();
+        cancel.subscribe(Arc::downgrade(&wake));
+        if let Some(sender) = self.entered.lock().expect("the entered lock").take() {
+            sender.send(()).expect("the test is waiting");
+        }
+        if !cancel.is_cancelled() {
+            let guard = flag.ready.lock().expect("the flag lock");
+            let _wait = flag
+                .cv
+                .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled());
+        }
+        self.saw_cancel
+            .store(cancel.is_cancelled(), Ordering::Relaxed);
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Cancelled and stopped.\n".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: None,
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+
+    fn bound(&self) -> Bound {
+        Bound::DEFAULT
+    }
+}
+
+fn no_durable(dir: &Path) {
+    assert!(
+        log::read(dir).unwrap().is_empty(),
+        "a driver shell writes nothing to the log"
+    );
+}
+
+#[test]
+fn shell_before_subscribe_is_not_subscribed() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .shell(fixed(ended(0, "hi\n"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            send(&client, &shell_line("c_1", "echo hi"));
+            let line = response(&client, "c_1");
+            assert_eq!(rejection(&line), ("not_subscribed", NOT_SUBSCRIBED));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_with_no_tool_is_unknown() {
+    let opened = Opened::open(vec![]);
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_1", "echo hi"));
+            let line = response(&client, "c_1");
+            assert_eq!(
+                rejection(&line),
+                ("unknown_command", "`shell` is not built in this Fiber yet.")
+            );
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_exit_zero_stays_on_the_sending_connection() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .shell(fixed(ended(0, "hi\n"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            let other = Client::connect(&socket).unwrap();
+            subscribe(&other, "c_other", "full");
+            send(&client, &shell_line("c_1", "echo hi"));
+            let line = response(&client, "c_1");
+            let answered = &line["payload"]["result"];
+            assert_eq!(answered["output"], "hi\n");
+            assert_eq!(answered["process"]["exit_code"], 0);
+            assert_eq!(answered["process"]["timed_out"], false);
+            assert!(answered.get("artifact").is_none());
+            send(&other, r#"{"id":"c_tools","command":"tools"}"#);
+            let seen = until(&other, |line| command_id(line) == Some("c_tools"));
+            assert!(
+                seen.iter().all(|line| command_id(line) != Some("c_1")),
+                "the other client sees the shell answer"
+            );
+            send(&client, r#"{"id":"c_cancel","command":"cancel"}"#);
+            let rejected = response(&client, "c_cancel");
+            assert_eq!(
+                rejection(&rejected),
+                ("stale_request", "No turn is running.")
+            );
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_nonzero_exit_is_accepted() {
+    let opened = Opened::open(vec![]);
+    opened.session.shell(fixed(ended(2, "no"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_1", "false"));
+            let line = response(&client, "c_1");
+            assert_eq!(kind(&line), "command_accepted");
+            assert_eq!(line["payload"]["result"]["output"], "no");
+            assert_eq!(line["payload"]["result"]["process"]["exit_code"], 2);
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_output_over_the_cap_is_cut_under_a_minted_name() {
+    let opened = Opened::open(vec![]);
+    let full = "0123456789abcdefghij";
+    opened
+        .session
+        .shell(fixed(ended(0, full), Bound { start: 4, end: 4 }));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"../x","command":"shell","args":{"command":"big"}}"#,
+            );
+            let line = response(&client, "../x");
+            let artifact = line["payload"]["result"]["artifact"]
+                .as_str()
+                .expect("the cut output names an artifact");
+            assert!(artifact.starts_with("artifacts/o_"), "{artifact}");
+            assert!(!artifact.contains("../x"), "{artifact}");
+            let saved = fs::read(dir.join(artifact)).unwrap();
+            assert_eq!(saved, full.as_bytes());
+            let output = line["payload"]["result"]["output"].as_str().unwrap();
+            assert_ne!(output, full);
+            assert!(output.contains("bytes cut"), "{output}");
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_is_answered_while_a_turn_sits_in_the_inbox() {
+    let opened = Opened::open(vec![]);
+    opened
+        .session
+        .shell(fixed(ended(0, "hi\n"), Bound::DEFAULT));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"wait"}]}}"#,
+            );
+            send(&client, &shell_line("c_shell", "echo hi"));
+            let line = response(&client, "c_shell");
+            assert_eq!(line["payload"]["result"]["output"], "hi\n");
+            let delivery = inbox.recv_timeout(DEADLINE).expect("the prompt is still queued");
+            assert!(matches!(delivery, Delivery::Prompt(..)));
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn cancel_from_another_connection_stops_a_driver_shell() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let opened = Opened::open(vec![]);
+    opened.session.shell(Arc::new(Blocks {
+        entered: Mutex::new(Some(entered_tx)),
+    }));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            let other = Client::connect(&socket).unwrap();
+            subscribe(&other, "c_other", "full");
+            send(&client, &shell_line("c_shell", "sleep 60"));
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the shell is running");
+            send(&other, r#"{"id":"c_cancel","command":"cancel"}"#);
+            let accepted = response(&other, "c_cancel");
+            assert_eq!(kind(&accepted), "command_accepted");
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "a shell cancel does not wake the loop"
+            );
+            let line = response(&client, "c_shell");
+            assert_eq!(
+                line["payload"]["result"]["output"],
+                "Cancelled and stopped.\n"
+            );
+            assert!(
+                line["payload"]["result"]["process"]
+                    .get("exit_code")
+                    .is_none()
+            );
+            assert_eq!(line["payload"]["result"]["process"]["timed_out"], false);
+            no_durable(&dir);
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn close_cancels_a_shell_blocked_in_its_tool() {
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let saw_cancel = Arc::new(AtomicBool::new(false));
+    let opened = Opened::open(vec![]);
+    opened.session.shell(Arc::new(Hangs {
+        entered: Mutex::new(Some(entered_tx)),
+        saw_cancel: Arc::clone(&saw_cancel),
+    }));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_shell", "sleep 60"));
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the shell is running");
+            Ok(())
+        })
+        .unwrap();
+    let (done_tx, done_rx) = mpsc::channel();
+    let session = opened.session;
+    let log = opened.log;
+    thread::spawn(move || {
+        session.close(log);
+        if let Ok(()) = done_tx.send(()) {}
+    });
+    done_rx
+        .recv_timeout(DEADLINE)
+        .expect("close returned without the shell's timeout");
+    assert!(
+        saw_cancel.load(Ordering::Relaxed),
+        "the tool did not see its cancel"
+    );
+}
+
+#[test]
+fn a_shell_nobody_cancelled_starts_uncancelled() {
+    let opened = Opened::open(vec![]);
+    let ran = Arc::new(AtomicBool::new(false));
+    opened.session.shell(fixed_ran(
+        ended(0, "hi\n"),
+        Bound::DEFAULT,
+        Arc::clone(&ran),
+    ));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_1", "echo hi"));
+            response(&client, "c_1");
+            assert!(ran.load(Ordering::Relaxed), "the tool saw a cancel");
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_send_true_is_rejected_and_does_not_run() {
+    let opened = Opened::open(vec![]);
+    let ran = Arc::new(AtomicBool::new(false));
+    opened.session.shell(fixed_ran(
+        ended(0, "hi\n"),
+        Bound::DEFAULT,
+        Arc::clone(&ran),
+    ));
+    let socket = opened.socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(
+                &client,
+                r#"{"id":"c_2","command":"shell","args":{"command":"echo hi","send":true}}"#,
+            );
+            let line = response(&client, "c_2");
+            assert_eq!(
+                rejection(&line),
+                (
+                    "invalid_arguments",
+                    "`send` is not built in this Fiber yet."
+                )
+            );
+            assert!(!ran.load(Ordering::Relaxed));
+            Ok(())
+        })
+        .unwrap();
+    opened.close();
+}
+
+#[test]
+fn shell_without_a_process_is_invalid_arguments() {
+    let opened = Opened::open(vec![]);
+    opened.session.shell(fixed(
+        Output {
+            error: Some(Failure {
+                code: ErrorCode::InvalidArguments,
+                message: "Give one command.".to_owned(),
+                retry_after: None,
+                provider: None,
+            }),
+            ..Output::default()
+        },
+        Bound::DEFAULT,
+    ));
+    let socket = opened.socket.clone();
+    let dir = opened.dir.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |_inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_sub", "full");
+            send(&client, &shell_line("c_1", ""));
+            let line = response(&client, "c_1");
+            assert_eq!(rejection(&line), ("invalid_arguments", "Give one command."));
+            no_durable(&dir);
             Ok(())
         })
         .unwrap();

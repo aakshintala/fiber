@@ -64,6 +64,8 @@ struct Parts {
     /// How a failed model call is retried (`docs/model-routing.md`, "When
     /// a model call fails").
     retry: r#loop::Retry,
+    /// How long an idle session waits before it exits.
+    idle: Option<Duration>,
 }
 
 fn main() -> ExitCode {
@@ -354,6 +356,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         limits,
         budget,
         retry,
+        idle,
         home,
         project,
         workspace,
@@ -361,7 +364,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     } = parts;
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line.
-    let (tools, infos) = match builtin::builtin(&workspace, &clock) {
+    let (tools, infos, driver) = match builtin::builtin(&workspace, &clock) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),
     };
@@ -386,6 +389,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Ok(session) => session,
         Err(e) => return ask_failed(e),
     };
+    session.shell(driver);
     let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
         finish(
             // `Loop::start` writes `session_started`, which `fiber_started`
@@ -404,6 +408,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 Ok(looped)
             }),
             budget,
+            idle,
             reviewer,
             limits,
             retry,
@@ -439,6 +444,7 @@ fn ask_permissions(
 fn finish(
     looped: Result<Loop, r#loop::Error>,
     budget: Option<f64>,
+    idle: Option<Duration>,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
     retry: r#loop::Retry,
@@ -448,6 +454,7 @@ fn finish(
         .map(|looped| {
             looped
                 .budget(budget)
+                .idle_exit(idle)
                 .answerable(false)
                 .reviewer(reviewer, limits)
                 .retry(retry)
@@ -530,6 +537,7 @@ fn parts_with(
     let reviewer = choose_reviewer(&providers, &config, &model);
     let limits = block_limits(&config);
     let retry = retry_policy(&config);
+    let idle = idle_exit(&config);
     // debt: extension prompt texts and the model's addendum arrive empty;
     // filled by #510.
     // The session log's path is set by the caller, which mints the session
@@ -559,7 +567,19 @@ fn parts_with(
         limits,
         budget,
         retry,
+        idle,
     })
+}
+
+/// How long an idle session waits before it exits, from
+/// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
+/// empty wait. A missing value is 30 minutes.
+pub(crate) fn idle_exit(config: &Config) -> Option<Duration> {
+    let ms = config
+        .get("session.idle_exit_ms", None)
+        .and_then(|(value, _)| value.as_u64())
+        .unwrap_or(1_800_000);
+    Some(Duration::from_millis(ms))
 }
 
 /// The provider a model reaches: the endpoint and protocol construction the
@@ -728,6 +748,10 @@ fn failed(code: ErrorCode, e: impl Display) -> Failure {
 fn ask_failed(e: Failure) -> i32 {
     doors::exit_before_session(e, &mut io::stdout(), &mut io::stderr())
 }
+
+#[cfg(test)]
+#[path = "idle_tests.rs"]
+mod idle_tests;
 
 #[cfg(test)]
 mod retry_policy_tests {
