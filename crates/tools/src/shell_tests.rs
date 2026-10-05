@@ -2,6 +2,8 @@ use std::path::Path;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::events::Outcome;
+use contract::jobs::JobRecord;
 use contract::shapes::Effect;
 use contract::tool::Tool;
 use fakes::clock::FakeClock;
@@ -43,8 +45,9 @@ fn the_schema_is_command_workdir_and_timeout() {
     let properties = schema["properties"].as_object().unwrap();
     assert_eq!(
         properties.keys().cloned().collect::<Vec<_>>(),
-        ["command", "timeout_ms", "workdir"]
+        ["command", "run_in_background", "timeout_ms", "workdir"]
     );
+    assert_eq!(properties["run_in_background"]["type"], "boolean");
     assert_eq!(properties["command"]["type"], "string");
     assert_eq!(properties["workdir"]["type"], "string");
     assert_eq!(properties["timeout_ms"]["type"], "integer");
@@ -197,7 +200,9 @@ fn an_invalid_call_is_executes_with_no_subject() {
     bad_dir.insert("workdir".into(), json!("no/such/directory"));
     let mut not_string = Map::new();
     not_string.insert("command".into(), json!(1));
-    for arguments in [Map::new(), bad_timeout, bad_dir, not_string] {
+    let mut bad_background = args("git status");
+    bad_background.insert("run_in_background".into(), json!("yes"));
+    for arguments in [Map::new(), bad_timeout, bad_dir, not_string, bad_background] {
         let effects = shell.effects(&arguments).unwrap();
         assert_closed(&effects);
         assert!(effects.subject.is_none());
@@ -360,6 +365,7 @@ fn execute_fails_when_the_program_does_not_exist() {
         FakeClock::new().as_ref(),
         &CancelToken::new(),
         &Recorder::default(),
+        super::command::MovePolicy::Stay,
     );
     assert!(err.is_err());
 }
@@ -393,4 +399,68 @@ fn guidelines_are_the_shell_section() {
     let end = rest.find("\n## ").map(|i| i + 1).unwrap_or(rest.len());
     assert_eq!(text, rest[..end].trim(), "{text}");
     assert!(text.contains("Commands run with no terminal"), "{text}");
+}
+
+#[test]
+fn a_non_boolean_run_in_background_never_starts() {
+    let dir = fakes::TempDir::new("fiber-shell-bg-arg");
+    let marker = dir.path().join("marker");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    for value in [json!("yes"), json!(1)] {
+        let mut arguments = args(&format!("touch {}", marker.display()));
+        arguments.insert("run_in_background".into(), value);
+        let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+        assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+        assert!(text(&output).contains("boolean"), "{}", text(&output));
+        assert!(output.process.is_none());
+        assert!(!marker.exists());
+    }
+}
+
+#[test]
+fn run_in_background_without_jobs_never_starts() {
+    let dir = fakes::TempDir::new("fiber-shell-no-jobs");
+    let marker = dir.path().join("marker");
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new());
+    let mut arguments = args(&format!("sleep 30; touch {}", marker.display()));
+    arguments.insert("run_in_background".into(), json!(true));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert_eq!(code(&output), Some(ErrorCode::InvalidArguments));
+    assert!(
+        text(&output).contains("Background jobs are not available in this session."),
+        "{}",
+        text(&output)
+    );
+    assert!(!text(&output).contains("for 25 seconds"));
+    assert!(output.process.is_none());
+    assert!(!marker.exists());
+}
+
+#[test]
+fn run_in_background_skips_the_bare_wait_and_returns_a_receipt() {
+    let dir = fakes::TempDir::new("fiber-shell-bg-sleep");
+    let jobs = fakes::jobs::FakeJobs::new(dir.path());
+    let shell = Shell::new(dir.path().to_path_buf(), FakeClock::new()).with_jobs(jobs.clone());
+    let mut arguments = args("sleep 30");
+    arguments.insert("run_in_background".into(), json!(true));
+    let output = shell.run(&arguments, &CancelToken::new(), &Recorder::default());
+    assert!(output.error.is_none(), "{}", text(&output));
+    assert!(output.process.is_none());
+    assert!(
+        text(&output).starts_with("Started in the background.\n"),
+        "{}",
+        text(&output)
+    );
+    let started = match output.jobs.as_slice() {
+        [JobRecord::Started(started)] => started.clone(),
+        other => panic!("expected one started job, got {other:?}"),
+    };
+    assert_eq!(started.description, "sleep 30");
+    assert_eq!(started.tool.as_deref(), Some("shell"));
+    jobs.stop(&started.job_id);
+    let ended = jobs
+        .ended(Duration::from_secs(10))
+        .expect("the stopped sleep to end");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    assert!(ended.output_tail.is_none());
 }
