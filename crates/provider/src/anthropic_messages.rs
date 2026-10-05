@@ -15,6 +15,7 @@ use contract::events::{
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
@@ -69,6 +70,10 @@ impl Provider for Messages {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         Box::new(self.request(request))
     }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        wire_tools(tools)
+    }
 }
 
 /// One `anthropic-messages` call, ready to send.
@@ -113,26 +118,20 @@ impl ModelCall for Call {
     }
 }
 
-/// The request body. Its objects serialise with their keys sorted, because
-/// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
-/// "Bytes").
-///
-/// debt: deferred tools are sent in full, without defer_loading, until tool
-/// search is built (#368); nothing defers a tool yet.
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
-    let mut tools: Vec<_> = request.tools.iter().collect();
-    tools.sort_by(|a, b| a.name.cmp(&b.name));
-    // `strict` per tool (`docs/model-routing.md`, "Protocols and
-    // providers"). Anthropic's strict subset is wider than OpenAI's (it
-    // takes optional properties, `anyOf` and `$ref`), so a schema that fits
-    // `strict::fits` fits Anthropic's too, except an enum with an object or
-    // array value, which Anthropic excludes (platform.claude.com, "JSON
-    // Schema limitations": "complex types in enums"). Anthropic refuses a request with
-    // more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:
-    // "The maximum number of strict tools supported is 20"), so past 20 the
-    // rest are sent `strict: false`, in name order.
+/// Each tool in Anthropic's shape, in name order. `strict` per tool
+/// (`docs/model-routing.md`, "Protocols and providers"). Anthropic's strict
+/// subset is wider than OpenAI's (it takes optional properties, `anyOf` and
+/// `$ref`), so a schema that fits `strict::fits` fits Anthropic's too, except
+/// an enum with an object or array value, which Anthropic excludes
+/// (platform.claude.com, "JSON Schema limitations": "complex types in enums").
+/// Anthropic refuses a request with more than 20 strict tools (probed 2026-10-01
+/// on `claude-sonnet-5-5`: "The maximum number of strict tools supported is 20"),
+/// so past 20 the rest are sent `strict: false`, in name order.
+fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let mut strict_left = MAX_STRICT_TOOLS;
-    let tools: Vec<Value> = tools
+    sorted
         .into_iter()
         .map(|tool| {
             let strict = strict_left > 0
@@ -147,7 +146,23 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
                 "input_schema": tool.input_schema,
                 "strict": strict,
             })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
         })
+        .collect()
+}
+
+/// The request body. Its objects serialise with their keys sorted, because
+/// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
+/// "Bytes").
+///
+/// debt: deferred tools are sent in full, without defer_loading, until tool
+/// search is built (#368); nothing defers a tool yet.
+fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
+    let tools: Vec<Value> = wire_tools(&request.tools)
+        .into_iter()
+        .map(Value::Object)
         .collect();
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));

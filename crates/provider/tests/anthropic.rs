@@ -1383,3 +1383,66 @@ fn an_empty_text_block_is_not_logged() {
         [ReplyAction::Text(part)] if part.text == "B" && part.provider_item.is_none()
     ));
 }
+
+#[test]
+fn wire_tools_is_what_the_request_sends() {
+    let strict_tool = |name: &str| ToolDefinition {
+        name: name.into(),
+        ..weather_tool()
+    };
+    let loose = ToolDefinition {
+        name: "a_loose".into(),
+        description: "Loose.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+            "required": ["a"]
+        }),
+        deferred: false,
+    };
+    let with_enum_object = ToolDefinition {
+        name: "z_enum".into(),
+        description: "Enum with an object value.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"pick": {"type": "string", "enum": [{"x": 1}]}},
+            "required": ["pick"],
+            "additionalProperties": false
+        }),
+        deferred: false,
+    };
+    let mut tools: Vec<ToolDefinition> = (0..22)
+        .map(|i| strict_tool(&format!("tool_{i:02}")))
+        .collect();
+    tools.push(loose);
+    tools.push(with_enum_object);
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let messages = Messages::new(endpoint(&server));
+    let wired: Vec<Value> = messages
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let mut request = request();
+    request.tools = tools.clone();
+    run(Box::new(messages.request(&request))).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"].clone();
+    assert_eq!(Value::Array(wired.clone()), sent);
+    let strict: Vec<bool> = sent
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["strict"].as_bool().unwrap())
+        .collect();
+    assert_eq!(strict.iter().filter(|s| **s).count(), 20);
+    let by_name = |name: &str| {
+        sent.as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap()["strict"]
+            .clone()
+    };
+    assert_eq!(by_name("a_loose"), json!(false));
+    assert_eq!(by_name("z_enum"), json!(false));
+}

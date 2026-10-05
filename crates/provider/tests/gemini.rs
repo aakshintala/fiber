@@ -1349,3 +1349,59 @@ fn a_bare_call_signature_parks_before_user_content_and_not_on_a_later_call() {
         ])
     );
 }
+
+#[test]
+fn wire_tools_is_what_the_request_sends() {
+    let strict_tool = |name: &str| ToolDefinition {
+        name: name.into(),
+        ..weather_tool()
+    };
+    let loose = ToolDefinition {
+        name: "a_loose".into(),
+        description: "Loose.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"a": {"type": "string"}, "b": {"type": "string"}},
+            "required": ["a"]
+        }),
+        deferred: false,
+    };
+    let with_enum_object = ToolDefinition {
+        name: "z_enum".into(),
+        description: "Enum with an object value.".into(),
+        input_schema: json!({
+            "type": "object",
+            "properties": {"pick": {"type": "string", "enum": [{"x": 1}]}},
+            "required": ["pick"],
+            "additionalProperties": false
+        }),
+        deferred: false,
+    };
+    let mut tools: Vec<ToolDefinition> = (0..22)
+        .map(|i| strict_tool(&format!("tool_{i:02}")))
+        .collect();
+    tools.push(loose);
+    tools.push(with_enum_object);
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let gemini = Gemini::new(endpoint(&server));
+    let wired: Vec<Value> = gemini
+        .wire_tools(&tools)
+        .into_iter()
+        .map(Value::Object)
+        .collect();
+    let mut request = request();
+    request.tools = tools.clone();
+    run(Box::new(gemini.request(&request))).0.unwrap();
+    let sent = sent_body(&server, 0)["tools"][0]["functionDeclarations"].clone();
+    assert_eq!(Value::Array(wired.clone()), sent);
+    let names: Vec<String> = sent
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_owned())
+        .collect();
+    let mut sorted = names.clone();
+    sorted.sort();
+    assert_eq!(names, sorted);
+    assert_eq!(names.len(), 24);
+}

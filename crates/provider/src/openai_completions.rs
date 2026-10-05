@@ -15,6 +15,7 @@ use contract::events::{
 };
 use contract::provider::{
     CallError, Delta, Finish, Input, ModelCall, ModelRequest, Provider, Reply, ReplyAction,
+    ToolDefinition,
 };
 use contract::shapes::Tokens;
 use contract::{ActionId, GenerationId, ProviderCallId};
@@ -71,6 +72,10 @@ impl Provider for Completions {
     fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
         Box::new(self.request(request))
     }
+
+    fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+        wire_tools(&self.endpoint, tools)
+    }
 }
 
 /// One `openai-completions` call, ready to send.
@@ -114,31 +119,16 @@ impl ModelCall for Call {
     }
 }
 
-/// The request body, and the lifetime its cache writes are counted under.
-/// Its objects serialise with their keys sorted, because serde_json's
-/// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime) {
-    let mut tools: Vec<_> = request.tools.iter().collect();
-    tools.sort_by(|a, b| a.name.cmp(&b.name));
-    let compat = &endpoint.compat;
-    // `strict` per tool (`docs/model-routing.md`, "Protocols and
-    // providers"). For an Anthropic model, Anthropic's limits apply too: no
-    // enum with an object or array value, and at most 20 strict tools
-    // (platform.claude.com/docs/en/build-with-claude/structured-outputs,
-    // "JSON Schema limitations"; `anthropic_messages`). OpenRouter forwards
-    // `strict` to Anthropic when the `structured-outputs-2025-11-13` beta
-    // header is sent, and strips it otherwise
-    // (openrouter.ai/docs/guides/routing/provider-selection, "Anthropic beta
-    // features").
-    // A model without deferral declares every tool in full (docs/tools.md,
-    // "Deferral is a property of the model"); Chat Completions has no
-    // defer_loading.
+/// Each tool in Chat Completions' shape, in name order.
+fn wire_tools(endpoint: &Endpoint, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
+    let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
+    sorted.sort_by(|a, b| a.name.cmp(&b.name));
     let mut strict_left = MAX_STRICT_TOOLS;
-    let tools: Vec<Value> = tools
+    sorted
         .into_iter()
         .map(|tool| {
             let mut strict = strict::fits(&tool.input_schema);
-            if compat.anthropic {
+            if endpoint.compat.anthropic {
                 strict = strict && strict_left > 0 && !complex_enum(&tool.input_schema);
                 strict_left -= usize::from(strict);
             }
@@ -151,7 +141,20 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
                     "strict": strict,
                 },
             })
+            .as_object()
+            .cloned()
+            .unwrap_or_default()
         })
+        .collect()
+}
+
+/// The request body, and the lifetime its cache writes are counted under.
+/// Its objects serialise with their keys sorted, because serde_json's
+/// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
+fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime) {
+    let tools: Vec<Value> = wire_tools(endpoint, &request.tools)
+        .into_iter()
+        .map(Value::Object)
         .collect();
     let mut body = Map::new();
     body.insert("model".into(), json!(endpoint.model));
@@ -162,7 +165,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
     body.insert("prompt_cache_key".into(), json!(request.cache_key));
     // OpenRouter takes `session_id` as a top-level body field
     // (openrouter.ai/docs/guides/best-practices/prompt-caching).
-    if let Some(field) = &compat.cache_key_field {
+    if let Some(field) = &endpoint.compat.cache_key_field {
         body.insert(field.clone(), json!(request.cache_key));
     }
     // OpenAI sends no usage without it (`docs/model-routing.md`,
@@ -175,19 +178,19 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
         body.insert("tool_choice".into(), tool_choice(&request.tool_choice));
     }
     if let Some(effort) = &request.effort {
-        if compat.reasoning_object {
+        if endpoint.compat.reasoning_object {
             body.insert("reasoning".into(), json!({ "effort": effort }));
         } else {
             body.insert("reasoning_effort".into(), json!(effort));
         }
     }
-    if let Some(store) = compat.store {
+    if let Some(store) = endpoint.compat.store {
         body.insert("store".into(), json!(store));
     }
     body.extend(endpoint.extra_body.clone());
     // The model's limit, or the model data's own when that is lower
     // (`docs/errors.md`, "Output tokens").
-    let field = if compat.max_tokens {
+    let field = if endpoint.compat.max_tokens {
         "max_tokens"
     } else {
         "max_completion_tokens"
