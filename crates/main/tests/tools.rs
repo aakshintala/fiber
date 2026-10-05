@@ -702,7 +702,26 @@ fn handoff_configuration_reaches_a_resumed_session() {
     let first = setup.run(&["ask", "one"]);
     assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
     // One reply, and no second step: nothing handed off yet.
-    assert!(of_kind(&first, "handoff_started").is_empty());
+    assert_eq!(
+        first.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
     let id = first.session_id().to_owned();
 
     let second = setup.run(&["ask", "--resume", &id, "read the note"]);
