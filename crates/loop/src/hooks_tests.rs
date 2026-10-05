@@ -177,6 +177,8 @@ fn script(name: &str, arguments: Value) -> Vec<fakes::Scripted> {
 }
 
 struct Ran {
+    /// What the turn returned.
+    turn: Result<Option<contract::events::TurnOutcome>, crate::Error>,
     requests: Vec<ModelRequest>,
     lines: Vec<Envelope>,
     /// Every line written, ephemeral ones included, through `turn_completed`.
@@ -232,6 +234,20 @@ fn run(
     hooks: Option<Arc<FakeHooks>>,
     cancel: Arc<TurnCancel>,
 ) -> Ran {
+    let ran = run_with(tool, script, hooks, cancel, false);
+    assert!(ran.turn.is_ok(), "{:?}", ran.turn);
+    ran
+}
+
+/// [`run`], with the session's `artifacts/` replaced by a file when
+/// `break_artifacts` is set, so no artifact can be written.
+fn run_with(
+    tool: Fixed,
+    script: Vec<fakes::Scripted>,
+    hooks: Option<Arc<FakeHooks>>,
+    cancel: Arc<TurnCancel>,
+    break_artifacts: bool,
+) -> Ran {
     let home = fakes::TempDir::new("fiber-hooks");
     let workspace = home.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
@@ -239,6 +255,11 @@ fn run(
     let log =
         Arc::new(Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap());
     let mut watcher = log.watch();
+    if break_artifacts {
+        let artifacts = home.path().join("s_test").join("artifacts");
+        std::fs::remove_dir_all(&artifacts).unwrap();
+        std::fs::write(&artifacts, "not a directory").unwrap();
+    }
     let provider = Arc::new(fakes::ScriptedProvider::new(script));
     let (inbox, rx) = mpsc::channel();
     inbox
@@ -288,13 +309,11 @@ fn run(
     thread::spawn(move || {
         let _sent = done_tx.send(looped.turn());
     });
-    done_rx
-        .recv_timeout(TURN_DEADLINE)
-        .expect("the turn ended")
-        .unwrap();
+    let turn = done_rx.recv_timeout(TURN_DEADLINE).expect("the turn ended");
     drop(inbox);
     let mut streamed = Vec::new();
-    while let Some(line) = watcher.recv().unwrap() {
+    // The loop is dropped once its turn returns, so the watcher ends.
+    while let Ok(Some(line)) = watcher.recv() {
         let last = line.kind == "turn_completed";
         streamed.push(line);
         if last {
@@ -303,6 +322,7 @@ fn run(
     }
     let session = home.path().join("s_test");
     Ran {
+        turn,
         streamed,
         requests: provider.requests(),
         lines: log::read(&session).unwrap(),
@@ -740,4 +760,88 @@ fn without_hooks_the_output_is_the_tools() {
     assert_eq!(completed.payload["content"][0]["text"], "plain");
     assert!(completed.payload.get("changed_by").is_none());
     assert_eq!(ran.result_sent(), "plain");
+}
+
+#[test]
+fn a_hooks_artifact_that_cannot_be_written_fails_the_turn() {
+    let hooks = FakeHooks::new(
+        changed(Some("summary"), None, Some("the whole log")),
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run_with(
+        fixed(text("raw")),
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+        true,
+    );
+    let Err(crate::Error::Log(_)) = &ran.turn else {
+        panic!("the turn went on: {:?}", ran.turn)
+    };
+    assert!(
+        !ran.lines
+            .iter()
+            .any(|line| line.kind == "tool_call_completed")
+    );
+}
+
+#[test]
+fn a_cut_whose_output_could_not_be_saved_points_at_no_artifact() {
+    let hooks = FakeHooks::new(
+        changed(Some("summary-past-the-cap"), None, Some("the whole log")),
+        &["acme"],
+        Vec::new(),
+    );
+    let ran = run_with(
+        Fixed {
+            bound: Bound { start: 4, end: 0 },
+            ..fixed(text("raw"))
+        },
+        script("probe", json!({})),
+        Some(hooks),
+        Arc::new(TurnCancel::default()),
+        true,
+    );
+    assert!(ran.turn.is_ok(), "{:?}", ran.turn);
+    let completed = ran.completed();
+    assert!(completed.payload.get("artifact").is_none());
+    let content = completed.payload["content"][0]["text"].as_str().unwrap();
+    assert!(content.contains("could not be saved"), "{content}");
+}
+
+#[test]
+fn extensions_loaded_writes_the_set_then_each_notice() {
+    let home = fakes::TempDir::new("fiber-extensions-loaded");
+    let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+    let log = Log::create(home.path(), SessionId("s_test".into()), clock).unwrap();
+    let mut watcher = log.watch();
+    let notice = Notice {
+        code: ErrorCode::ExtensionFailed,
+        message: "`after_tool` hook not registered: missing `timeout`".into(),
+        extension: Some("acme".into()),
+    };
+    crate::extensions_loaded(
+        &log,
+        vec![contract::events::LoadedExtension {
+            name: "acme".into(),
+            version: "v1.0.0".into(),
+        }],
+        vec![notice],
+    )
+    .unwrap();
+    drop(log);
+    let mut streamed = Vec::new();
+    while let Ok(Some(line)) = watcher.recv() {
+        streamed.push(line);
+    }
+    let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
+    assert_eq!(kinds, ["extensions_loaded", "notice"]);
+    assert_eq!(
+        serde_json::to_value(&streamed[0].payload).unwrap(),
+        json!({"extensions": [{"name": "acme", "version": "v1.0.0"}]})
+    );
+    assert!(streamed[0].seq.is_some());
+    assert_eq!(streamed[1].payload["code"], "extension_failed");
+    assert_eq!(streamed[1].payload["extension"], "acme");
 }

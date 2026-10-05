@@ -10,6 +10,8 @@
 
 use std::fs;
 use std::path::PathBuf;
+use std::sync::{Arc, mpsc};
+use std::thread;
 use std::time::Duration;
 
 use config::{Config, ProjectKey, Sources};
@@ -21,6 +23,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, json};
 
 use super::SessionExtensions;
+use crate::lua::HookPhase;
 use crate::{Origin, Request, plan};
 
 struct Home {
@@ -65,7 +68,23 @@ impl Home {
         .unwrap();
     }
 
-    fn load(&self, overrides: &[&str]) -> SessionExtensions {
+    /// The session's extensions, loaded on a thread under [`WAIT`]: the
+    /// fake clock never ends a wait the runtime does not end itself.
+    /// Rewrites the installed `fiber.test/<short>`'s manifest with `change`,
+    /// as an upgrade of Fiber or a hand edit would leave it.
+    fn edit_manifest(&self, short: &str, change: impl FnOnce(&mut serde_json::Value)) {
+        let path = self
+            .home()
+            .join("extensions")
+            .join(format!("fiber.test-{short}"))
+            .join("extension.json");
+        let mut manifest: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+        change(&mut manifest);
+        fs::write(&path, manifest.to_string()).unwrap();
+    }
+
+    fn load(&self, overrides: &[&str]) -> Arc<SessionExtensions> {
         let config = Config::load(Sources {
             home: self.home(),
             workspace: self.root.path().join("workspace"),
@@ -73,7 +92,10 @@ impl Home {
             overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
         })
         .unwrap();
-        SessionExtensions::load(&self.home(), &config, FakeClock::new())
+        let home = self.home();
+        Arc::new(bounded(move || {
+            SessionExtensions::load(&home, &config, FakeClock::new())
+        }))
     }
 }
 
@@ -93,15 +115,31 @@ fn hook(on_failure: &str, body: &str) -> String {
     )
 }
 
-fn after_tool(session: &SessionExtensions, content: &str) -> AfterToolAnswer {
-    let arguments = Map::new();
-    session.after_tool(&AfterToolCall {
-        tool: "read",
-        arguments: &arguments,
-        status: CallStatus::Completed,
-        content,
-        details: None,
-        process: None,
+/// How long a test waits for a load or a chain before failing.
+const WAIT: Duration = Duration::from_secs(5);
+
+/// Runs `f` on its own thread and waits for it under [`WAIT`], so a runtime
+/// that never answers fails the test instead of hanging it.
+fn bounded<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(f());
+    });
+    rx.recv_timeout(WAIT).expect("waited for the extensions")
+}
+
+fn after_tool(session: &Arc<SessionExtensions>, content: &str) -> AfterToolAnswer {
+    let (session, content) = (Arc::clone(session), content.to_owned());
+    bounded(move || {
+        let arguments = Map::new();
+        session.after_tool(&AfterToolCall {
+            tool: "read",
+            arguments: &arguments,
+            status: CallStatus::Completed,
+            content: &content,
+            details: None,
+            process: None,
+        })
     })
 }
 
@@ -267,21 +305,23 @@ fn the_hook_is_shown_the_call_and_its_output() {
         )),
     );
     let session = home.load(&[]);
-    let mut arguments = Map::new();
-    arguments.insert("path".into(), json!("a.txt"));
-    let details = json!({"n": 3});
-    let process = Process {
-        exit_code: Some(2),
-        signal: None,
-        timed_out: false,
-    };
-    let answer = session.after_tool(&AfterToolCall {
-        tool: "shell",
-        arguments: &arguments,
-        status: CallStatus::Cancelled,
-        content: "out",
-        details: Some(&details),
-        process: Some(&process),
+    let answer = bounded(move || {
+        let mut arguments = Map::new();
+        arguments.insert("path".into(), json!("a.txt"));
+        let details = json!({"n": 3});
+        let process = Process {
+            exit_code: Some(2),
+            signal: None,
+            timed_out: false,
+        };
+        session.after_tool(&AfterToolCall {
+            tool: "shell",
+            arguments: &arguments,
+            status: CallStatus::Cancelled,
+            content: "out",
+            details: Some(&details),
+            process: Some(&process),
+        })
     });
     assert_eq!(
         changed_content(&answer),
@@ -397,6 +437,7 @@ fn a_return_that_is_not_a_change_is_the_hooks_failure() {
         ("return { artifact = true }", "`artifact` as a boolean"),
         ("return { colour = \"red\" }", "`colour`"),
         ("return { content = function() end }", "cannot be JSON"),
+        ("return { \"a\", \"b\" }", "a list, not a table"),
     ] {
         let home = Home::new();
         home.install("odd", Some(&hook("non-blocking", body)));
@@ -472,5 +513,85 @@ fn hook_timeout_ms_overrides_the_declared_timeout() {
     assert_eq!(
         declared_timeout(&home.load(&["extensions.\"fiber.test/b\".hook_timeout_ms=5"])),
         Duration::from_millis(1000)
+    );
+}
+
+#[test]
+fn an_extension_for_another_api_or_a_process_extension_starts_no_vm() {
+    let home = Home::new();
+    home.install("old", Some(&tagging("old", "transform")));
+    home.install("proc", Some(&tagging("proc", "transform")));
+    home.install("lua", Some(&tagging("lua", "transform")));
+    home.edit_manifest("old", |m| m["api"] = json!(2));
+    home.edit_manifest("proc", |m| m["process"] = json!({"program": "true"}));
+    let session = home.load(&[]);
+    let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
+    assert_eq!(loaded, names(&["lua"]));
+    assert_eq!(session.lua.len(), 1);
+    assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|lua"));
+}
+
+#[test]
+fn memory_mib_raises_the_cap_a_hook_runs_under() {
+    let grow = hook(
+        "non-blocking",
+        "local s = string.rep(\"x\", 3 * 1024 * 1024) return { content = tostring(#s) }",
+    );
+    let home = Home::new();
+    home.install("small", Some(&grow));
+    home.install("big", Some(&grow));
+    home.edit_manifest("big", |m| m["memory_mib"] = json!(8));
+    let session = home.load(&[r#"hooks.order.after_tool=["fiber.test/big"]"#]);
+    let answer = after_tool(&session, "x");
+    // The extension with 8 MiB makes its 3 MiB string; the one at the
+    // default 1 MiB cap fails.
+    assert_eq!(changed_content(&answer), Some("3145728"));
+    assert_eq!(answer.changed_by, names(&["big"]));
+    assert_eq!(answer.notices.len(), 1, "{:?}", answer.notices);
+    assert_eq!(
+        answer.notices[0].extension.as_deref(),
+        Some("fiber.test/small")
+    );
+}
+
+#[test]
+fn a_hook_timeout_ms_of_zero_overrides_nothing() {
+    let home = Home::new();
+    home.install("a", Some(&tagging("a", "transform")));
+    assert_eq!(
+        declared_timeout(&home.load(&["extensions.\"fiber.test/a\".hook_timeout_ms=0"])),
+        Duration::from_millis(1000)
+    );
+    assert_eq!(
+        declared_timeout(&home.load(&["extensions.\"fiber.test/a\".hook_timeout_ms=1"])),
+        Duration::from_millis(1)
+    );
+}
+
+#[test]
+fn each_hooks_phase_is_read_as_registered() {
+    let home = Home::new();
+    home.install(
+        "phases",
+        Some(
+            "local run = function(call) end\n\
+             fiber.hook(\"before_tool\", { phase = \"check\", timeout = 1, on_failure = \"blocking\", run = run })\n\
+             fiber.hook(\"before_tool\", { phase = \"sanitize\", timeout = 1, on_failure = \"blocking\", run = run })\n\
+             fiber.hook(\"before_tool\", { timeout = 1, on_failure = \"non-blocking\", run = run })\n",
+        ),
+    );
+    let session = home.load(&[]);
+    let declared = session.lua[0].hooks().unwrap();
+    let read: Vec<(HookPhase, bool)> = declared.by_point["before_tool"]
+        .iter()
+        .map(|h| (h.phase, h.blocking))
+        .collect();
+    assert_eq!(
+        read,
+        [
+            (HookPhase::Check, true),
+            (HookPhase::Sanitize, true),
+            (HookPhase::Transform, false),
+        ]
     );
 }

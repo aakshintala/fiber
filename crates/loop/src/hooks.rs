@@ -67,7 +67,7 @@ impl Loop {
         let full = crate::conversation::text(&ran.text);
         let Some(hooks) = self.hooks.clone() else {
             return Ok(self
-                .capped(ran.text, full, ran.details, None, bound, id)
+                .capped(ran.text, full, ran.details, None, bound, id)?
                 .with(ran.images));
         };
         let answer = hooks.after_tool(&AfterToolCall {
@@ -84,7 +84,7 @@ impl Loop {
         let changed_by = (!answer.changed_by.is_empty()).then_some(answer.changed_by);
         let mut shaped = match answer.outcome {
             AfterToolOutcome::Unchanged => self
-                .capped(ran.text, full, ran.details, None, bound, id)
+                .capped(ran.text, full, ran.details, None, bound, id)?
                 .with(ran.images),
             // Its only content is the line: images go too.
             AfterToolOutcome::Withheld { extension } => Shaped {
@@ -108,7 +108,7 @@ impl Loop {
                     Some(text) => (vec![ContentPart::Text { text: text.clone() }], text),
                     None => (ran.text, full),
                 };
-                self.capped(text, full, details, artifact, bound, id)
+                self.capped(text, full, details, artifact, bound, id)?
                     .with(ran.images)
             }
         };
@@ -118,7 +118,8 @@ impl Loop {
 
     /// `text`, whose joined text is `full`, cut to `bound`. The artifact
     /// holds `artifact` when a hook returned it, written even when `full`
-    /// fits, or else `full` when it was cut.
+    /// fits, or else `full` when it was cut. A hook's artifact that cannot
+    /// be written fails the turn, as a log write does.
     fn capped(
         &self,
         text: Vec<ContentPart>,
@@ -127,31 +128,31 @@ impl Loop {
         artifact: Option<String>,
         bound: Bound,
         id: &ActionId,
-    ) -> Shaped {
+    ) -> Result<Shaped, Error> {
         let name = format!("{}.txt", id.0);
         let cap = bound.start.saturating_add(bound.end);
-        let (content, cut) = if full.len() > cap {
+        let was_cut = full.len() > cap;
+        let (content, cut) = if was_cut {
             let (kept, artifact) = self.log.cut_output(&full, bound, &name);
             (vec![ContentPart::Text { text: kept }], artifact)
         } else {
             (text, None)
         };
-        // The hook's text replaces what the cut wrote under the same name.
-        // A write that fails leaves no artifact to point at.
         let artifact = match artifact {
-            Some(artifact) => self
-                .log
-                .write_artifact(&name, artifact.as_bytes())
-                .ok()
-                .map(|(relative, _)| relative),
+            // The cut's notice already says the output could not be saved:
+            // no artifact is written for it to contradict.
+            Some(_) if was_cut && cut.is_none() => None,
+            // The hook's text replaces what the cut wrote under the same
+            // name, so the cut's notice points at it.
+            Some(artifact) => Some(self.log.write_artifact(&name, artifact.as_bytes())?.0),
             None => cut,
         };
-        Shaped {
+        Ok(Shaped {
             content,
             details,
             artifact,
             changed_by: None,
-        }
+        })
     }
 }
 

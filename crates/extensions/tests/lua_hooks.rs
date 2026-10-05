@@ -71,6 +71,7 @@ fn go_module(dir: &Path) -> mpsc::Receiver<()> {
 }
 
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::expect_used, reason = "a test helper; a failure is the test's")]
 fn load(setup: &Setup, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<SessionExtensions> {
     let config = Config::load(Sources {
         home: setup.home(),
@@ -79,7 +80,17 @@ fn load(setup: &Setup, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<Session
         overrides: overrides.iter().map(|s| (*s).to_owned()).collect(),
     })
     .unwrap();
-    Arc::new(SessionExtensions::load(&setup.home(), &config, clock))
+    // On its own thread under `WAIT`: the fake clock never ends a wait the
+    // runtime does not end itself.
+    let home = setup.home();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = tx.send(SessionExtensions::load(&home, &config, clock));
+    });
+    Arc::new(
+        rx.recv_timeout(WAIT)
+            .expect("waited for the extensions to load"),
+    )
 }
 
 /// Asks the hooks about a completed call whose output is `x`, on its own

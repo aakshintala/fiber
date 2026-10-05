@@ -171,6 +171,10 @@ fn write(file: &Path, text: &str) {
     fs::write(file, text).unwrap();
 }
 
+// debt: the runner, `spawn_watched` and `KillGroup` copy `tools.rs`'s, as
+// the six other binary test files in this crate each do; move all seven
+// copies into `fakes` together when a change to one has to be made in all.
+
 /// Spawns `command` in a new process group, then a watchdog in its own
 /// group, which kills the group if this process dies first.
 fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
@@ -329,6 +333,41 @@ fn hello() -> Response {
     ])
 }
 
+/// The complete event kinds of a run whose model reads the note, then
+/// answers: `loading` follows `extensions_loaded`, the notices loading
+/// raised, and `hooked` precedes the read's `tool_call_completed`, the
+/// notices its hooks raised.
+fn read_kinds(loading: &[&'static str], hooked: &[&'static str]) -> Vec<&'static str> {
+    [
+        &["session_started", "fiber_started", "extensions_loaded"][..],
+        loading,
+        &[
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+        ],
+        hooked,
+        &[
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ],
+    ]
+    .concat()
+}
+
 /// An `after_tool` hook of `phase` that appends `|<tag>`.
 fn tagging(tag: &str, phase: &str) -> String {
     format!(
@@ -344,10 +383,7 @@ fn an_installed_extension_is_loaded_before_the_first_request_and_its_hook_redact
     let (run, server) = setup.read_note("the password is hunter2\n", &json!({}));
 
     // `extensions_loaded` follows `fiber_started`, before the first step.
-    let kinds = run.kinds();
-    let at = |kind: &str| kinds.iter().position(|k| *k == kind).unwrap();
-    assert_eq!(at("extensions_loaded"), at("fiber_started") + 1);
-    assert!(at("extensions_loaded") < at("step_started"));
+    assert_eq!(run.kinds(), read_kinds(&[], &[]));
     assert_eq!(
         run.first("extensions_loaded")["payload"]["extensions"],
         json!([
@@ -374,6 +410,7 @@ fn a_result_no_hook_changes_names_nobody() {
     let setup = Setup::new();
     setup.install(fakes::lua_fixture());
     let (run, server) = setup.read_note("nothing secret\n", &json!({}));
+    assert_eq!(run.kinds(), read_kinds(&[], &[]));
     let completed = run.completed();
     assert_eq!(completed["content"][0]["text"], "nothing secret\n");
     assert!(completed.get("changed_by").is_none());
@@ -389,6 +426,7 @@ fn the_artifact_holds_the_hooks_artifact_text() {
            run = function(call) return { content = \"summary\", artifact = \"the whole log\" } end })\n",
     );
     let (run, server) = setup.read_note("raw build output\n", &json!({}));
+    assert_eq!(run.kinds(), read_kinds(&[], &[]));
     let completed = run.completed();
     assert_eq!(completed["content"][0]["text"], "summary");
     assert_eq!(completed["changed_by"], json!(["fiber.test/art"]));
@@ -417,6 +455,7 @@ fn hooks_that_do_not_register_or_fail_softly_leave_the_output_with_a_notice() {
            run = function(call) error(\"soft failure\") end })\n",
     );
     let (run, server) = setup.read_note("original\n", &json!({}));
+    assert_eq!(run.kinds(), read_kinds(&["notice", "notice"], &["notice"]));
     let notices = run.all("notice");
     let registered: Vec<(&str, &str, &str)> = notices
         .iter()
@@ -466,6 +505,7 @@ fn a_blocking_hook_that_fails_withholds_the_output_and_keeps_the_status() {
            run = function(call) error(\"hard failure\") end })\n",
     );
     let (run, server) = setup.read_note("secret text\n", &json!({}));
+    assert_eq!(run.kinds(), read_kinds(&[], &[]));
     let withheld = "Output withheld: the `after_tool` hook of extension fiber.test/hard failed.";
     let completed = run.completed();
     assert_eq!(completed["status"], "completed");
@@ -500,6 +540,7 @@ fn hooks_run_by_phase_then_hooks_order_then_name() {
         "x",
         &json!({"hooks": {"order": {"after_tool": ["fiber.test/c"]}}}),
     );
+    assert_eq!(run.kinds(), read_kinds(&[], &[]));
     let completed = run.completed();
     assert_eq!(completed["content"][0]["text"], "x|b-s|c|a|b-t");
     assert_eq!(
