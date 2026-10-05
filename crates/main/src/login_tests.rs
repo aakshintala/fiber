@@ -21,7 +21,7 @@ use contract::shapes::Failure;
 use extensions::Providers;
 use serde_json::{Value, json};
 
-use super::{KeyReader, LoginIo, credential_key, login, logout};
+use super::{KeyReader, LoginIo, Plain, credential_key, login, logout, write_prompt};
 
 const KEY: &str = "sk-live-7f3a9c0d1e2b";
 
@@ -425,6 +425,11 @@ fn the_menu_refuses_a_bad_answer_and_stores_nothing() {
         let (result, _) = setup.login(None, true, typed, &mut keys);
         let e = failed(result);
         assert_eq!(e.code, ErrorCode::Usage, "{typed:?}");
+        if typed.trim().is_empty() {
+            assert!(e.message.contains("No provider was chosen"), "{typed:?}");
+        } else {
+            assert!(e.message.contains("is neither a listed"), "{typed:?}");
+        }
         assert_eq!(keys.asked, 0, "{typed:?}");
         assert!(!setup.home().join("credentials/alpha").exists());
         assert!(!setup.home().join("credentials/beta").exists());
@@ -622,4 +627,17 @@ fn no_stored_key_and_no_source_is_a_failure_that_names_neither() {
     let e = failed(setup.logout(Some("acme")).0);
     assert_eq!(e.code, ErrorCode::CredentialMissing);
     assert_eq!(e.message, "no stored credential for acme");
+}
+
+#[test]
+fn a_prompt_is_written_before_the_key_is_read_and_an_empty_one_writes_nothing() {
+    let mut err = Vec::new();
+    let key = Plain
+        .read_key("Key: ", &mut Cursor::new(" k \n"), &mut err)
+        .unwrap();
+    assert_eq!(key.expose(), "k");
+    assert_eq!(err, b"Key: ");
+    let mut quiet = Vec::new();
+    write_prompt("", &mut quiet).unwrap();
+    assert!(quiet.is_empty());
 }

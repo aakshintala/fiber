@@ -217,9 +217,9 @@ fn choose(io: &mut LoginIo<'_>) -> Result<String, Failure> {
         .and_then(|()| io.err.flush())
         .map_err(terminal_failure)?;
     let mut answer = String::new();
-    let read = io.stdin.read_line(&mut answer).map_err(terminal_failure)?;
+    io.stdin.read_line(&mut answer).map_err(terminal_failure)?;
     let answer = answer.trim();
-    if read == 0 || answer.is_empty() {
+    if answer.is_empty() {
         return Err(usage("No provider was chosen."));
     }
     let picked = match answer.parse::<usize>() {

@@ -104,10 +104,7 @@ impl Setup {
         let (mut child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
         let guard = KillGroup(group);
-        // Taking the pipe closes it once written.
-        let mut pipe = child.stdin.take().unwrap();
-        pipe.write_all(input.as_bytes()).unwrap();
-        drop(pipe);
+        feed(&mut child, input);
         let (done, finished) = mpsc::channel();
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(DEADLINE) {
@@ -142,6 +139,28 @@ impl Setup {
             .stderr(terminal.stdio());
         let (child, watchdog) = spawn_watched(&mut command);
         let group = child.id();
+        OnTerminal {
+            screen: Screen::new(&terminal),
+            terminal,
+            child: Some(child),
+            guard: Some(KillGroup(group)),
+            watchdog: Some(watchdog),
+            group,
+        }
+    }
+
+    /// Starts `fiber` with stdin on a pipe holding `input` and stderr on a
+    /// new pseudo-terminal.
+    fn stderr_on_terminal(&self, args: &[&str], input: &str) -> OnTerminal {
+        let terminal = Terminal::open();
+        let mut command = self.command(args);
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(terminal.stdio());
+        let (mut child, watchdog) = spawn_watched(&mut command);
+        let group = child.id();
+        feed(&mut child, input);
         OnTerminal {
             screen: Screen::new(&terminal),
             terminal,
@@ -188,6 +207,19 @@ fn spawn_watched(command: &mut Command) -> (Child, Watchdog) {
     let watchdog = Watchdog::group(group);
     std::mem::forget(guard);
     (child, watchdog)
+}
+
+/// Writes `input` to the child's stdin and closes it. `fiber` may refuse a
+/// run before it reads stdin and exit, so a closed pipe is not a failure
+/// here: the run's own exit code and message are what the test asserts.
+fn feed(child: &mut Child, input: &str) {
+    // Taking the pipe closes it once written.
+    let mut pipe = child.stdin.take().unwrap();
+    match pipe.write_all(input.as_bytes()) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::BrokenPipe => {}
+        Err(e) => panic!("writing to the stdin of `fiber`: {e}"),
+    }
 }
 
 /// Kills process group `group` on drop. After the child is reaped and the
@@ -544,4 +576,18 @@ fn an_interrupt_at_the_key_prompt_restores_echo_and_ends_the_login() {
     assert_eq!(status.signal(), Some(2), "{status:?}");
     assert!(run.terminal.echoes(), "echo was not restored");
     assert!(!setup.home().join("credentials/acme/default").exists());
+}
+
+#[test]
+fn a_pipe_on_stdin_is_no_terminal_even_when_stderr_is_one() {
+    let setup = Setup::new();
+    setup.provider("acme", None, None);
+    let mut run = setup.stderr_on_terminal(&["login"], "acme\n");
+    // The usage line ends the message; a menu would not print it.
+    let shown = run.screen.wait_for("Run `fiber --help` for usage.");
+    let status = run.finish();
+    assert_eq!(status.code(), Some(2), "{shown:?}");
+    assert!(shown.contains("no terminal"), "{shown:?}");
+    assert!(!shown.contains("Providers:"), "{shown:?}");
+    assert!(!setup.home().join("credentials").exists());
 }
