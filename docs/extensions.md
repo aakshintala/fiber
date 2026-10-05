@@ -185,7 +185,13 @@ expect another callback to have run in between.
 
 **Every callback declares its timeout, with no default.** Tools, hooks,
 watchers, commands and timers alike. A `timeout` is in milliseconds, a whole number above
-0. A hook's clock starts when Fiber asks, so time
+0. No single value fits every callback: a computation needs milliseconds, a
+notifier seconds and a test run minutes. A missing `timeout` fails once, at
+registration, with a notice naming it, where a wrong default would fail
+quietly: spurious failures when it is too short, a frozen session when it is
+too long. A hook's `on_failure` has no default for the same reason: `non-blocking`
+would let a forgotten guard fail open, and `blocking` would let a forgotten
+notifier stop a session. A hook's clock starts when Fiber asks, so time
 spent waiting behind earlier items in the stream counts against it. A callback
 past its timeout is stopped ("When an extension misbehaves"). When the hook
 cannot stop the VM, the caller waits 1 second more after the timeout before it
@@ -689,7 +695,10 @@ entries instead of replacing the list:
       "point": "session_start", "command": "scripts/warn-main.sh",
       "timeout": 2000, "on_failure": "non-blocking"
     },
-    "done": { "watch": ["turn_completed"], "command": "notify-send", "args": ["turn done"] }
+    "done": {
+      "watch": ["turn_completed"], "command": "notify-send", "args": ["turn done"],
+      "timeout": 2000
+    }
   }
 }
 ```
@@ -702,7 +711,10 @@ entries instead of replacing the list:
   `after_tool` hook. The command runs only for those tools, so a formatter
   does not start a process on every `read`.
 - **A watcher entry** names `watch`, the event kinds it wants
-  (`docs/events.md`), and its `command`.
+  (`docs/events.md`), its `command` and `args`, and a `timeout`. It has no
+  `on_failure`: a watcher changes nothing, so its failure only gives a
+  `notice`. An entry missing `timeout` is not registered, and a `notice` names
+  the entry and the missing field.
 
 The command runs as `host.exec` runs a program ("Host calls"): in the
 session's workspace, in its own process group, with the session's
