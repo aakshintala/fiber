@@ -77,8 +77,11 @@ fn context_takes_joined_separate_and_both_sides() {
 #[test]
 fn include_and_exclude_take_equals_and_separate_forms() {
     let options = run(&["--include=*.rs", "--exclude", "*.log", "needle"]);
-    assert_eq!(options.includes, [b"*.rs".to_vec()]);
-    assert_eq!(options.excludes, [b"*.log".to_vec()]);
+    assert_eq!(options.filters.len(), 2);
+    assert!(options.filters[0].include);
+    assert_eq!(options.filters[0].glob, b"*.rs");
+    assert!(!options.filters[1].include);
+    assert_eq!(options.filters[1].glob, b"*.log");
 }
 
 #[test]

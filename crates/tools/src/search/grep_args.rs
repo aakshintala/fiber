@@ -47,10 +47,18 @@ pub(crate) struct Options {
     pub before: usize,
     /// The `-A` context lines.
     pub after: usize,
-    /// The `--include` globs, matched against the base name.
-    pub includes: Vec<Vec<u8>>,
-    /// The `--exclude` globs, matched against the base name.
-    pub excludes: Vec<Vec<u8>>,
+    /// The `--include` and `--exclude` globs in the order given, matched
+    /// against the base name: the last rule a file matches decides.
+    pub filters: Vec<Filter>,
+}
+
+/// One `--include` or `--exclude` rule, in the order given on the command
+/// line: the last rule a file matches decides whether it is searched.
+pub(crate) struct Filter {
+    /// Whether the rule includes rather than excludes.
+    pub include: bool,
+    /// The glob, matched against the base name.
+    pub glob: Vec<u8>,
 }
 
 /// Why parsing declined.
@@ -119,11 +127,9 @@ pub(crate) fn parse(args: &[OsString]) -> Parsed {
 }
 
 /// Whether `bytes` opens a long flag: `--` plus a name. `--` alone is
-/// claimed by the exact arm above, and anything starting with `--` is
-/// longer, so `>=` would read the same.
-#[cfg_attr(false, mutants::skip)]
+/// claimed by the exact arm above, so any `--` prefix here is longer.
 fn is_long(bytes: &[u8]) -> bool {
-    bytes.len() > 2 && bytes.starts_with(b"--")
+    bytes.starts_with(b"--")
 }
 
 /// Why a flag parser declined.
@@ -237,9 +243,15 @@ fn long(
         },
     };
     if name == "include" {
-        options.includes.push(value);
+        options.filters.push(Filter {
+            include: true,
+            glob: value,
+        });
     } else {
-        options.excludes.push(value);
+        options.filters.push(Filter {
+            include: false,
+            glob: value,
+        });
     }
     Ok(())
 }

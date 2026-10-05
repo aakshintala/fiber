@@ -406,22 +406,21 @@ fn strip_implicit(mut label: Vec<u8>, implicit: bool) -> Vec<u8> {
     label
 }
 
-/// Whether the file passes `--include` and `--exclude`: an exclusion wins,
-/// an empty include list keeps all.
+/// Whether the file passes `--include` and `--exclude`: the last rule
+/// matching the base name decides, as GNU reads them. A file no rule
+/// matches is searched only when no `--include` was given.
 fn included(options: &Options, display: &Path) -> bool {
     let base = basename(display);
-    if options
-        .excludes
-        .iter()
-        .any(|glob| glob_match(glob, base, false))
-    {
-        return false;
+    let mut decision = None;
+    for filter in &options.filters {
+        if glob_match(&filter.glob, base, false) {
+            decision = Some(filter.include);
+        }
     }
-    options.includes.is_empty()
-        || options
-            .includes
-            .iter()
-            .any(|glob| glob_match(glob, base, false))
+    match decision {
+        Some(include) => include,
+        None => !options.filters.iter().any(|filter| filter.include),
+    }
 }
 
 /// What searching one input found.

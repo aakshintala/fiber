@@ -112,6 +112,51 @@ fn brackets_copy_with_escapes_and_kept_leaders() {
 }
 
 #[test]
+fn class_operators_escape_as_members() {
+    // Rust reads these as set operators while GNU reads members: the
+    // translation escapes them, keeping ranges untouched.
+    assert_eq!(bre("[a&&b]"), Some("[a\\&\\&b]".to_owned()));
+    assert_eq!(bre("[a&b]"), Some("[a\\&b]".to_owned()));
+    assert_eq!(bre("[a~~b]"), Some("[a\\~\\~b]".to_owned()));
+    assert_eq!(bre("[a~b]"), Some("[a\\~b]".to_owned()));
+    assert_eq!(bre("[a[b]"), Some("[a\\[b]".to_owned()));
+    assert_eq!(bre("[a-z]"), Some("[a-z]".to_owned()));
+    assert_eq!(bre("[a-]"), Some("[a-]".to_owned()));
+    assert_eq!(bre("[[:alpha:]&&b]"), Some("[[:alpha:]\\&\\&b]".to_owned()));
+}
+
+#[test]
+fn a_double_dash_in_a_class_hands_over() {
+    // A `--` there is a range or an error in GNU, never set difference:
+    // no escaping keeps both readings, so the system decides.
+    assert_eq!(bre("[a--b]"), None);
+    assert_eq!(bre("[--a]"), None);
+}
+
+#[test]
+fn ere_class_operators_escape_as_members() {
+    assert_eq!(translate_ere("[a&&b]"), Some("[a\\&\\&b]".to_owned()));
+    assert_eq!(translate_ere("[a&b]"), Some("[a\\&b]".to_owned()));
+    assert_eq!(translate_ere("[a~~b]"), Some("[a\\~\\~b]".to_owned()));
+    assert_eq!(translate_ere("[a~b]"), Some("[a\\~b]".to_owned()));
+    assert_eq!(translate_ere("[a[b]"), Some("[a\\[b]".to_owned()));
+    assert_eq!(translate_ere("[a-z]"), Some("[a-z]".to_owned()));
+    assert_eq!(translate_ere("[a-]"), Some("[a-]".to_owned()));
+    assert_eq!(translate_ere("[^ab]"), Some("[^ab]".to_owned()));
+    assert_eq!(translate_ere("[]a]"), Some("[]a]".to_owned()));
+    assert_eq!(translate_ere("[[:alpha:]]"), Some("[[:alpha:]]".to_owned()));
+    // Outside a class the operators stay literal, as before.
+    assert_eq!(translate_ere("a&&b"), Some("a&&b".to_owned()));
+    assert_eq!(translate_ere("a--b"), Some("a--b".to_owned()));
+}
+
+#[test]
+fn ere_double_dash_in_a_class_hands_over() {
+    assert_eq!(translate_ere("[a--b]"), None);
+    assert_eq!(translate_ere("[--a]"), None);
+}
+
+#[test]
 fn ere_keeps_everything_but_the_gnu_extensions() {
     assert_eq!(translate_ere("a+b"), Some("a+b".to_owned()));
     assert_eq!(translate_ere("(a|b)"), Some("(a|b)".to_owned()));
@@ -288,6 +333,76 @@ fn ere_translations_match_grep_line_for_line() {
         );
         matches_like_grep(pattern, translated, &["-E"], false);
     }
+}
+
+#[test]
+fn class_operators_match_grep_line_for_line() {
+    // Each case is the BRE pattern, the ERE spelling and the shared
+    // pinned translation: GNU reads the operators as members.
+    let cases = [
+        ("[a&&b]", "[a&&b]", "[a\\&\\&b]"),
+        ("[a~~b]", "[a~~b]", "[a\\~\\~b]"),
+        ("[a[b]", "[a[b]", "[a\\[b]"),
+    ];
+    for (bre_pattern, ere_pattern, translated) in cases {
+        assert_eq!(
+            translate_bre(bre_pattern),
+            Some(translated.to_owned()),
+            "{bre_pattern:?}"
+        );
+        assert_eq!(
+            translate_ere(ere_pattern),
+            Some(translated.to_owned()),
+            "{ere_pattern:?}"
+        );
+        class_matches_like_grep(bre_pattern, translated, &[]);
+        class_matches_like_grep(ere_pattern, translated, &["-E"]);
+    }
+}
+
+/// Checks a class-operator translation against the system grep on lines
+/// holding the operators themselves: every corpus line the translated
+/// pattern matches through the searcher's own engine is one the system
+/// grep prints, and vice versa. Only where the runner's grep is GNU;
+/// elsewhere the pinned translations above carry it.
+fn class_matches_like_grep(pattern: &str, translated: &str, grep_args: &[&str]) {
+    if !gnu_grep() {
+        return;
+    }
+    let corpus = [
+        "a", "&", "b", "~", "-", "[", "a&b", "ab", "a-b", "a~b", "[ab]", "c",
+    ];
+    let matcher = RegexMatcherBuilder::new().build(translated).unwrap();
+    let mut searcher = SearcherBuilder::new().build();
+    let mut engine: Vec<&str> = Vec::new();
+    for line in corpus {
+        let mut hit = Hit(false);
+        searcher
+            .search_slice(&matcher, format!("{line}\n").as_bytes(), &mut hit)
+            .unwrap();
+        if hit.0 {
+            engine.push(line);
+        }
+    }
+    let dir = fakes::TempDir::new("fiber-search-classes");
+    let file = dir.path().join("corpus.txt");
+    fs::write(&file, corpus.join("\n") + "\n").unwrap();
+    let child = Command::new("grep")
+        .env("LC_ALL", "C")
+        .args(grep_args)
+        .arg("-e")
+        .arg(pattern)
+        .arg(&file)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .process_group(0)
+        .spawn()
+        .unwrap();
+    let output = super::super::wait_output(child, &format!("grep -e {pattern:?}"));
+    let system_text = String::from_utf8(output.stdout).unwrap();
+    let system: Vec<&str> = system_text.lines().collect();
+    assert_eq!(engine, system, "class {pattern:?} as {translated:?}");
 }
 
 #[test]

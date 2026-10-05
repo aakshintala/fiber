@@ -312,7 +312,7 @@ fn include_and_exclude_filter_base_names() {
         excluded,
         "./keep_needle.txt:needle\n./sub/keep_too.txt:needle\n"
     );
-    // An exclusion wins over an inclusion, on a named file too.
+    // The last matching rule wins, on a named file too.
     let (_, named_out, _) = text(
         &dir,
         &[
@@ -324,6 +324,52 @@ fn include_and_exclude_filter_base_names() {
         "",
     );
     assert_eq!(named_out, "");
+}
+
+#[test]
+fn a_later_include_beats_an_earlier_exclude() {
+    // As GNU reads the rules: the last matching one decides.
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let (_, stdout, _) = text(
+        &dir,
+        &["-r", "--exclude=*.txt", "--include=*.txt", "needle", "."],
+        "",
+    );
+    assert_eq!(stdout, "./a.txt:needle\n");
+}
+
+#[test]
+fn a_later_exclude_beats_an_earlier_include() {
+    let dir = text_tree(&BTreeMap::from([("a.txt", "needle\n")]));
+    let (code, stdout, _) = text(
+        &dir,
+        &["-r", "--include=*.txt", "--exclude=*.txt", "needle", "."],
+        "",
+    );
+    assert_eq!(code, 1);
+    assert_eq!(stdout, "");
+}
+
+#[test]
+fn a_file_no_rule_matches_is_skipped_when_an_include_exists() {
+    // With an `--include` given, only matched files are searched.
+    let dir = text_tree(&BTreeMap::from([
+        ("a.txt", "needle\n"),
+        ("b.log", "needle\n"),
+    ]));
+    let (_, stdout, _) = text(&dir, &["-r", "--include=*.txt", "needle", "."], "");
+    assert_eq!(stdout, "./a.txt:needle\n");
+}
+
+#[test]
+fn a_file_no_rule_matches_is_searched_without_an_include() {
+    // With only `--exclude` given, unmatched files are still searched.
+    let dir = text_tree(&BTreeMap::from([
+        ("a.txt", "needle\n"),
+        ("b.log", "needle\n"),
+    ]));
+    let (_, stdout, _) = text(&dir, &["-r", "--exclude=*.bak", "needle", "."], "");
+    assert_eq!(stdout, "./a.txt:needle\n./b.log:needle\n");
 }
 
 #[test]
@@ -1325,6 +1371,15 @@ fn outputs_match_grep_byte_for_byte() {
         (&["-l", "needle", "a.txt"], None),
         (&["-r", "--include=*.txt", "needle", "."], None),
         (&["-r", "--exclude=c.txt", "needle", "."], None),
+        // The last matching rule wins, either way round.
+        (
+            &["-r", "--exclude=*.txt", "--include=*.txt", "needle", "."],
+            None,
+        ),
+        (
+            &["-r", "--include=*.txt", "--exclude=*.txt", "needle", "."],
+            None,
+        ),
         (&["", "a.txt"], None),
         (&["needle", "a.txt", "b.txt", "sub/c.txt"], None),
     ];

@@ -172,22 +172,33 @@ fn dollar_anchor_ahead(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> 
 /// consumes through the closer from `chars`. Backslashes inside are
 /// escaped, a leading `]` is kept, and `[:class:]` names pass through.
 /// Nothing when no closer follows.
+///
+/// Rust reads `&&`, `~~`, `--` and a nested `[` as set operators while
+/// GNU reads them as members, so `&` and `~` escape, a `[` outside
+/// `[:...:]` escapes, and a class holding `--` hands over to the system
+/// grep instead: a `--` there is a range or an error in GNU, never set
+/// difference, and no escaping keeps both readings.
 fn translate_class(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<String> {
     let mut text = String::from("[");
+    // The previous raw char in the class, for `--`.
+    let mut prev = '[';
     // Negation is `^` only: a leading `!` is an ordinary member, as the
     // runner's grep reads it.
     if chars.peek() == Some(&'^') {
         text.push('^');
         chars.next();
+        prev = '^';
     }
     if chars.peek() == Some(&'!') {
         text.push_str("\\!");
         chars.next();
+        prev = '!';
     }
     // A leading `]` is a member, not the closer.
     if chars.peek() == Some(&']') {
         text.push(']');
         chars.next();
+        prev = ']';
     }
     loop {
         let next = chars.next()?;
@@ -197,8 +208,19 @@ fn translate_class(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opti
             if let Some(chunk) = class_chunk(chars) {
                 text.push('[');
                 text.push_str(&chunk);
+                for current in chunk.chars() {
+                    if current == '-' && prev == '-' {
+                        return None;
+                    }
+                    prev = current;
+                }
                 continue;
             }
+            // Any other `[` is a member in GNU but opens a set in Rust:
+            // escape it.
+            text.push_str("\\[");
+            prev = '[';
+            continue;
         }
         if next == ']' {
             text.push(']');
@@ -208,8 +230,17 @@ fn translate_class(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Opti
         // one: `[a\]` reads `a` and `\`, as the runner's grep does.
         if next == '\\' {
             text.push_str("\\\\");
+            prev = '\\';
+        } else if next == '&' || next == '~' {
+            // Single or doubled, GNU reads these as members.
+            text.push('\\');
+            text.push(next);
+            prev = next;
+        } else if next == '-' && prev == '-' {
+            return None;
         } else {
             text.push(next);
+            prev = next;
         }
     }
 }
@@ -244,28 +275,101 @@ fn class_chunk(chars: &mut std::iter::Peekable<std::str::Chars<'_>>) -> Option<S
 
 /// Translates GNU extensions in an extended regular expression: `\<` and
 /// `\>` become word boundaries, `\1` to `\9` fall back. The rest is already
-/// ripgrep's syntax.
+/// ripgrep's syntax, except inside `[...]`: there Rust reads `&&`, `~~`,
+/// `--` and a nested `[` as set operators while GNU reads members, so
+/// `&` and `~` escape, a `[` outside `[:...:]` escapes, and a class
+/// holding `--` hands over to the system grep, as
+/// [`translate_class`] does for basic expressions.
 ///
 /// `` \` `` and `\'` pass through untouched: ripgrep reads them as literal
 /// characters where GNU anchors, a corner too rare to hand over.
 pub(crate) fn translate_ere(pattern: &str) -> Option<String> {
     let mut chars = pattern.chars().peekable();
     let mut out = String::new();
+    // Whether the scan stands inside a bracket expression.
+    let mut class = false;
+    // Whether only `^` and a leading `]` were read in the class: a `]`
+    // here is a member, not the closer.
+    let mut fresh = false;
+    // The previous raw char in the class, for `--`.
+    let mut prev = '\0';
     while let Some(current) = chars.next() {
-        if current != '\\' {
-            out.push(current);
+        if current == '\\' {
+            let next = chars.next()?;
+            match next {
+                '<' => out.push_str(r"\b{start}"),
+                '>' => out.push_str(r"\b{end}"),
+                '1'..='9' => return None,
+                _ => {
+                    out.push('\\');
+                    out.push(next);
+                }
+            }
+            if class {
+                fresh = false;
+                prev = next;
+            }
             continue;
         }
-        let next = chars.next()?;
-        match next {
-            '<' => out.push_str(r"\b{start}"),
-            '>' => out.push_str(r"\b{end}"),
-            '1'..='9' => return None,
-            _ => {
-                out.push('\\');
-                out.push(next);
+        if class {
+            if current == ']' {
+                out.push(']');
+                if fresh {
+                    fresh = false;
+                    prev = ']';
+                } else {
+                    class = false;
+                }
+                continue;
             }
+            if current == '^' && fresh {
+                out.push('^');
+                prev = '^';
+                continue;
+            }
+            if current == '[' {
+                // A character class such as `[:alpha:]` copies through;
+                // its closer is not the bracket's.
+                if let Some(chunk) = class_chunk(&mut chars) {
+                    out.push('[');
+                    out.push_str(&chunk);
+                    for member in chunk.chars() {
+                        if member == '-' && prev == '-' {
+                            return None;
+                        }
+                        prev = member;
+                    }
+                    fresh = false;
+                    continue;
+                }
+                out.push_str(r"\[");
+                fresh = false;
+                prev = '[';
+                continue;
+            }
+            if current == '&' || current == '~' {
+                out.push('\\');
+                out.push(current);
+                fresh = false;
+                prev = current;
+                continue;
+            }
+            if current == '-' && prev == '-' {
+                return None;
+            }
+            out.push(current);
+            fresh = false;
+            prev = current;
+            continue;
         }
+        if current == '[' {
+            out.push('[');
+            class = true;
+            fresh = true;
+            prev = '[';
+            continue;
+        }
+        out.push(current);
     }
     Some(out)
 }
