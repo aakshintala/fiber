@@ -122,9 +122,6 @@ const PROXY_CHILD: &str = "FIBER_TEST_HOST_HTTP_PROXY_CHILD";
 /// The server URL, passed to the child on its environment.
 const PROXY_CHILD_SERVER: &str = "FIBER_TEST_HOST_HTTP_SERVER";
 
-/// How long the parent waits for the re-executed child to exit.
-const CHILD_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
-
 /// How long the parent waits for the proxy to record a CONNECT.
 const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -150,26 +147,16 @@ fn through_proxy_env(test: &str, server_path: &str) {
     let proxy = fakes::ConnectProxy::start().unwrap();
     let port = server.url().rsplit(':').next().unwrap().to_owned();
     let target = format!("127.0.0.1:{port}");
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args(["--exact", test, "--nocapture"])
-        .env(PROXY_CHILD, "1")
-        .env("HTTPS_PROXY", proxy.url())
-        .env(PROXY_CHILD_SERVER, server.url())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let output = child.wait_with_output().unwrap();
-        match done.send(output) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    let output = match finished.recv_timeout(CHILD_WITHIN) {
-        Ok(output) => output,
-        Err(_) => panic!("waited {CHILD_WITHIN:?} for the proxy-env child"),
-    };
+    let proxy_url = proxy.url();
+    let server_url = server.url();
+    let output = fakes::rerun(
+        test,
+        &[
+            (PROXY_CHILD, "1"),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            (PROXY_CHILD_SERVER, server_url.as_str()),
+        ],
+    );
     assert!(
         output.status.success(),
         "the proxy-env child called through the proxy:\nstdout:\n{}\nstderr:\n{}",
@@ -210,31 +197,17 @@ fn host_http_bypasses_the_proxy_for_no_proxy_hosts() {
     }
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
     let proxy = fakes::ConnectProxy::start().unwrap();
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "host::tests::host_http_bypasses_the_proxy_for_no_proxy_hosts",
-            "--nocapture",
-        ])
-        .env(PROXY_CHILD, "1")
-        .env("HTTPS_PROXY", proxy.url())
-        .env("NO_PROXY", "127.0.0.1")
-        .env(PROXY_CHILD_SERVER, server.url())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let (done, finished) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let output = child.wait_with_output().unwrap();
-        match done.send(output) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    let output = match finished.recv_timeout(CHILD_WITHIN) {
-        Ok(output) => output,
-        Err(_) => panic!("waited {CHILD_WITHIN:?} for the proxy-env child"),
-    };
+    let proxy_url = proxy.url();
+    let server_url = server.url();
+    let output = fakes::rerun(
+        "host::tests::host_http_bypasses_the_proxy_for_no_proxy_hosts",
+        &[
+            (PROXY_CHILD, "1"),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            ("NO_PROXY", "127.0.0.1"),
+            (PROXY_CHILD_SERVER, server_url.as_str()),
+        ],
+    );
     assert!(
         output.status.success(),
         "the proxy-env child bypassed the proxy:\nstdout:\n{}\nstderr:\n{}",

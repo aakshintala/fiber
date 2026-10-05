@@ -232,7 +232,9 @@ fn cancelling_a_call_mid_stream_closes_the_socket_without_a_proxy() {
     let (done, finished) = mpsc::channel();
     let worker = std::sync::Arc::clone(&cancel);
     thread::spawn(move || {
-        let result = super::post(&url, &[], b"{}", &worker).map(|_| ());
+        // An explicit direct connection, so the test holds without a proxy
+        // whatever the developer's shell names: `post` would read it.
+        let result = super::post_with(&url, &[], b"{}", None, &worker, None).map(|_| ());
         match done.send(result) {
             Ok(()) | Err(_) => {}
         }
@@ -500,9 +502,6 @@ const PROXY_CHILD: &str = "FIBER_TEST_PROXY_CHILD";
 /// The server URL, passed to the child on its environment.
 const PROXY_CHILD_SERVER: &str = "FIBER_TEST_PROXY_SERVER";
 
-/// How long the parent waits for the re-executed child to exit.
-const CHILD_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
-
 #[test]
 fn the_proxy_environment_reaches_model_calls() {
     if std::env::var_os(PROXY_CHILD).is_some() {
@@ -523,30 +522,16 @@ fn the_proxy_environment_reaches_model_calls() {
     let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
     let proxy = fakes::ConnectProxy::start().unwrap();
     let target = target_of(&server);
-    let child = std::process::Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            "http::tests::the_proxy_environment_reaches_model_calls",
-            "--nocapture",
-        ])
-        .env(PROXY_CHILD, "1")
-        .env("HTTPS_PROXY", proxy.url())
-        .env(PROXY_CHILD_SERVER, server.url())
-        .stdout(std::process::Stdio::piped())
-        .stderr(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
-    let (done, finished) = mpsc::channel();
-    thread::spawn(move || {
-        let output = child.wait_with_output().unwrap();
-        match done.send(output) {
-            Ok(()) | Err(_) => {}
-        }
-    });
-    let output = match finished.recv_timeout(CHILD_WITHIN) {
-        Ok(output) => output,
-        Err(_) => panic!("waited {CHILD_WITHIN:?} for the proxy-env child"),
-    };
+    let proxy_url = proxy.url();
+    let server_url = server.url();
+    let output = fakes::rerun(
+        "http::tests::the_proxy_environment_reaches_model_calls",
+        &[
+            (PROXY_CHILD, "1"),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            (PROXY_CHILD_SERVER, server_url.as_str()),
+        ],
+    );
     assert!(
         output.status.success(),
         "the proxy-env child called through the proxy:\nstdout:\n{}\nstderr:\n{}",

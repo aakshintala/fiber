@@ -157,9 +157,6 @@ mod tests {
     /// The download URL, passed to the child on its environment.
     const PROXY_CHILD_URL: &str = "FIBER_TEST_PREPARE_URL";
 
-    /// How long the parent waits for the re-executed child to exit.
-    const CHILD_WITHIN: std::time::Duration = std::time::Duration::from_secs(10);
-
     /// How long the parent waits for the proxy to record a CONNECT.
     const CONNECT_WITHIN: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -179,27 +176,15 @@ mod tests {
         }
         let server = fakes::ProviderServer::start([fakes::Response::status(200, "{}")]).unwrap();
         let proxy = fakes::ConnectProxy::start().unwrap();
-        let child = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", test, "--nocapture"])
-            .env(PROXY_CHILD, "1")
-            .env("HTTPS_PROXY", proxy.url())
-            .envs(extra.iter().copied())
-            .env(PROXY_CHILD_URL, format!("{}/tool", server.url()))
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .unwrap();
-        let (done, finished) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let output = child.wait_with_output().unwrap();
-            match done.send(output) {
-                Ok(()) | Err(_) => {}
-            }
-        });
-        let output = match finished.recv_timeout(CHILD_WITHIN) {
-            Ok(output) => output,
-            Err(_) => panic!("waited {CHILD_WITHIN:?} for the proxy-env child"),
-        };
+        let proxy_url = proxy.url();
+        let download_url = format!("{}/tool", server.url());
+        let mut env = vec![
+            (PROXY_CHILD, "1"),
+            ("HTTPS_PROXY", proxy_url.as_str()),
+            (PROXY_CHILD_URL, download_url.as_str()),
+        ];
+        env.extend(extra.iter().copied());
+        let output = fakes::rerun(test, &env);
         assert!(
             output.status.success(),
             "the proxy-env child downloaded:\nstdout:\n{}\nstderr:\n{}",

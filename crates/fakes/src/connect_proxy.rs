@@ -223,31 +223,25 @@ fn tunnel(client: TcpStream, origin: TcpStream, state: &Mutex<State>, arrived: &
     let Ok(origin_read) = origin.try_clone() else {
         return;
     };
-    let closer = TunnelCloser {
-        client,
-        origin,
-        state,
-        arrived,
-    };
     // The serving thread pumps one direction; one more thread pumps the
     // other. Both are joined, so no thread outlives the tunnel.
     let other = thread::Builder::new()
         .name("fake-connect-proxy-pump".to_owned())
         .spawn(move || {
             let mut read = origin_read;
-            let mut write = closer.client;
+            let mut write = client;
             let _copied = io::copy(&mut read, &mut write);
             let _closed = read.shutdown(Shutdown::Both);
             let _closed = write.shutdown(Shutdown::Both);
         });
     let mut read = client_read;
-    let mut write = closer.origin;
+    let mut write = origin;
     let copied = io::copy(&mut read, &mut write);
     // A clean end of the client side is the client going away, such as a
     // cancelled call closing its socket.
     if copied.is_ok() {
-        lock(closer.state).closed += 1;
-        closer.arrived.notify_all();
+        lock(state).closed += 1;
+        arrived.notify_all();
     }
     let _closed = read.shutdown(Shutdown::Both);
     let _closed = write.shutdown(Shutdown::Both);
@@ -256,15 +250,6 @@ fn tunnel(client: TcpStream, origin: TcpStream, state: &Mutex<State>, arrived: &
             Ok(()) | Err(_) => {}
         }
     }
-}
-
-/// The two handles a pump's shutdown closes. Only the counts live past the
-/// pumps.
-struct TunnelCloser<'a> {
-    client: TcpStream,
-    origin: TcpStream,
-    state: &'a Mutex<State>,
-    arrived: &'a Condvar,
 }
 
 #[cfg(test)]
