@@ -442,10 +442,11 @@ fn a_monitors_lines_are_recorded_in_order_and_reach_the_inbox_before_its_end() {
         vec![line("one"), line("two")]
     );
     for text in ["one", "two"] {
-        match rx.try_recv().unwrap() {
-            contract::inbox::Delivery::JobLine(sent) => assert_eq!(sent, line(text)),
-            other => panic!("expected a line, got {other:?}"),
-        }
+        let delivery = rx.try_recv().unwrap();
+        let contract::inbox::Delivery::JobLine(sent) = delivery else {
+            panic!("expected a line, got {delivery:?}");
+        };
+        assert_eq!(sent, line(text));
     }
     assert!(matches!(
         rx.try_recv().unwrap(),

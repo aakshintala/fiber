@@ -348,10 +348,11 @@ fn a_monitors_lines_reach_the_inbox_in_order_before_its_notice() {
     (lines.0)(line(&id, "two", Some(3)));
     opened.end.end(ended_ok(&id));
     for expected in [line(&id, "one", None), line(&id, "two", Some(3))] {
-        match rx.try_recv().expect("a batch") {
-            Delivery::JobLine(sent) => assert_eq!(sent, expected),
-            other => panic!("expected a line, got {other:?}"),
-        }
+        let delivery = rx.try_recv().expect("a batch");
+        let Delivery::JobLine(sent) = delivery else {
+            panic!("expected a line, got {delivery:?}");
+        };
+        assert_eq!(sent, expected);
     }
     let _end = notice(&rx);
     assert!(rx.try_recv().is_err());

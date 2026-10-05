@@ -2002,10 +2002,16 @@ fn an_incomplete_last_line_is_flushed_before_the_end() {
     // Every batch is in the inbox before the end.
     let kinds: Vec<&str> = delivered
         .try_iter()
-        .map(|delivery| match delivery {
-            contract::inbox::Delivery::JobLine(_) => "line",
-            contract::inbox::Delivery::Job(_) => "end",
-            other => panic!("unexpected {other:?}"),
+        .map(|delivery| {
+            if matches!(delivery, contract::inbox::Delivery::Job(_)) {
+                "end"
+            } else {
+                assert!(
+                    matches!(delivery, contract::inbox::Delivery::JobLine(_)),
+                    "unexpected {delivery:?}"
+                );
+                "line"
+            }
         })
         .collect();
     assert_eq!(kinds, ["line", "line", "end"]);

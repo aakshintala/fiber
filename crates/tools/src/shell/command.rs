@@ -320,8 +320,9 @@ struct Run {
     shared: Arc<Shared>,
     /// A job's `job_delta` lines. Set only on a job's drive.
     job: Option<JobStream>,
-    /// A monitor's deliveries. Set only on a monitor's drive.
-    feed: Option<Feed>,
+    /// A monitor's deliveries. Set only on a monitor's drive. Boxed, so a
+    /// command that is not a monitor carries one pointer.
+    feed: Option<Box<Feed>>,
     /// Set when `background` can reach this foreground call.
     ask: Option<Arc<MoveAsk>>,
 }
@@ -405,7 +406,7 @@ impl Moved {
         feed: Option<Feed>,
     ) -> Finished {
         self.progress.job = Some(stream);
-        self.progress.feed = feed;
+        self.progress.feed = feed.map(Box::new);
         self.run(MovePolicy::Stay, clock, cancel, &Silent)
     }
 
