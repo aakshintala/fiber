@@ -570,8 +570,15 @@ impl Loop {
     }
 
     /// The completion of a call that ran and returned `output`, its text cut
-    /// to `bound` (`docs/tools.md`, "Bounded results").
-    fn finish(&self, output: Output, bound: Bound, id: &ActionId) -> ToolCallCompleted {
+    /// to `bound` (`docs/tools.md`, "Bounded results"). Writes the call's
+    /// job lines under `id` before the caller writes `tool_call_completed`.
+    fn finish(
+        &mut self,
+        output: Output,
+        bound: Bound,
+        id: &ActionId,
+        turn: &TurnId,
+    ) -> Result<ToolCallCompleted, Error> {
         let Output {
             content,
             error,
@@ -579,7 +586,15 @@ impl Loop {
             details,
             changes,
             control,
+            jobs,
         } = output;
+        for record in jobs {
+            let event = match record {
+                contract::jobs::JobRecord::Started(started) => Event::JobStarted(started),
+                contract::jobs::JobRecord::Completed(completed) => Event::JobCompleted(completed),
+            };
+            self.append(&event, turn, Some(id))?;
+        }
         let (text, images): (Vec<ContentPart>, Vec<ContentPart>) = content
             .into_iter()
             .partition(|part| matches!(part, ContentPart::Text { .. }));
@@ -591,7 +606,7 @@ impl Loop {
         } else {
             (text, None)
         };
-        ToolCallCompleted {
+        Ok(ToolCallCompleted {
             status: if error.is_some() {
                 CallStatus::Failed
             } else {
@@ -605,7 +620,7 @@ impl Loop {
             artifact,
             content: content.into_iter().chain(images).collect(),
             ..completed(String::new(), None)
-        }
+        })
     }
 
     /// `full` cut to `bound`, with a notice of how many bytes were cut and
@@ -676,7 +691,7 @@ impl Loop {
                     if let Some(delta) = flushed {
                         self.write_delta(&delta, turn, &call.id);
                     }
-                    let mut finished = self.finish(output, *bound, &call.id);
+                    let mut finished = self.finish(output, *bound, &call.id, turn)?;
                     // A running call keeps running until its tool returns,
                     // then completes with what the tool gave, `cancelled`
                     // instead of `completed`. A tool that returned an error

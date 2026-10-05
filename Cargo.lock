@@ -536,6 +536,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "jobs"
+version = "0.0.0"
+dependencies = [
+ "contract",
+ "fakes",
+ "serde_json",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.189"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -1,0 +1,456 @@
+//! The session's jobs: one id, one output file, one lifecycle
+//! (`docs/tools.md`, "Background jobs").
+
+use std::collections::hash_map::RandomState;
+use std::fs::File;
+use std::hash::BuildHasher;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
+
+use contract::JobId;
+use contract::clock::{Clock, Wake};
+use contract::events::{JobCompleted, JobStarted, Outcome};
+use contract::jobs::{End, JobRecord, OpenError, Opened, Opening};
+use contract::tool::Cancel;
+
+/// The jobs one session started. `open` is the only way in; `list`, `wait`
+/// and `stop` are what the `jobs` tool calls.
+pub struct Registry {
+    artifacts: PathBuf,
+    clock: Arc<dyn Clock>,
+    inner: Mutex<Inner>,
+    cv: Condvar,
+}
+
+struct Inner {
+    jobs: Vec<Job>,
+    /// Bumped under this mutex on every end, cancel wake and clock wake, so
+    /// a wake that lands before the condvar wait is still visible.
+    seq: u64,
+}
+
+struct Job {
+    started: JobStarted,
+    path: PathBuf,
+    phase: Phase,
+    stop: Arc<dyn Fn() + Send + Sync>,
+    stop_sent: bool,
+    claimed: bool,
+}
+
+enum Phase {
+    Running,
+    /// Boxed: `JobCompleted` is far larger than `Running`, and a registry
+    /// holds one phase per job.
+    Ended(Box<JobCompleted>),
+}
+
+/// What a `wait` or a `stop` that reached a job returns to the model.
+pub(crate) struct Answer {
+    /// The lines the model sees.
+    pub(crate) text: String,
+    /// The completion, the first time it is delivered.
+    pub(crate) record: Option<JobRecord>,
+}
+
+/// `stop` could not ask the job to stop.
+pub(crate) enum StopError {
+    /// No job has this id.
+    Unknown,
+    /// The job had already ended, with this status.
+    Ended(Outcome),
+}
+
+impl Registry {
+    /// Jobs whose output files are created in `artifacts`. `clock` is the
+    /// session clock: a `wait` deadline is read from it.
+    pub fn new(artifacts: PathBuf, clock: Arc<dyn Clock>) -> Arc<Self> {
+        let registry = Arc::new(Self {
+            artifacts,
+            clock: Arc::clone(&clock),
+            inner: Mutex::new(Inner {
+                jobs: Vec::new(),
+                seq: 0,
+            }),
+            cv: Condvar::new(),
+        });
+        let wake: Arc<dyn Wake> = registry.clone();
+        clock.subscribe(Arc::downgrade(&wake));
+        registry
+    }
+
+    /// Mints the id, creates the empty output file, and records the job
+    /// running. Does not create `artifacts`: when the file cannot be
+    /// created, returns [`OpenError::Io`] and records nothing.
+    pub fn open(self: &Arc<Self>, opening: Opening) -> Result<Opened, OpenError> {
+        let mut inner = lock(&self.inner);
+        let id = mint_id();
+        let path = self.artifacts.join(format!("{id}.log"));
+        let file = match File::create(&path) {
+            Ok(file) => file,
+            Err(source) => return Err(OpenError::Io { path, source }),
+        };
+        let job_id = JobId(id.clone());
+        let started = JobStarted {
+            job_id: job_id.clone(),
+            tool: Some(opening.tool),
+            extension: None,
+            description: opening.description,
+            output_path: format!("artifacts/{id}.log"),
+        };
+        let registry = Arc::clone(self);
+        let expected = job_id.clone();
+        let end = End::new(
+            job_id,
+            Box::new(move |completed| {
+                // This end belongs to one job. A payload that names another
+                // id would record the wrong job, or none.
+                registry.finish(JobCompleted {
+                    job_id: expected.clone(),
+                    ..completed
+                });
+            }),
+        );
+        inner.jobs.push(Job {
+            started: started.clone(),
+            path: path.clone(),
+            phase: Phase::Running,
+            stop: Arc::from(opening.stop.0),
+            stop_sent: false,
+            claimed: false,
+        });
+        Ok(Opened {
+            started,
+            path,
+            file,
+            end,
+        })
+    }
+
+    /// The list the model sees, in start order. One line per job, or
+    /// `No jobs.` when the session has none.
+    pub(crate) fn list_text(&self) -> String {
+        let inner = lock(&self.inner);
+        if inner.jobs.is_empty() {
+            return "No jobs.\n".to_owned();
+        }
+        let mut text = String::new();
+        for job in &inner.jobs {
+            text.push_str(&format!(
+                "{} {} {} \u{2014} {}\n",
+                job.started.job_id.0,
+                phase_word(&job.phase),
+                job.started.description,
+                job.path.display()
+            ));
+        }
+        text
+    }
+
+    /// Whether `id` is a job this registry opened.
+    pub(crate) fn contains(&self, id: &str) -> bool {
+        lock(&self.inner)
+            .jobs
+            .iter()
+            .any(|job| job.started.job_id.0 == id)
+    }
+
+    /// Blocks until `id` ends, `timeout_ms` passes, or `cancel` fires.
+    /// A job that has already ended returns at once. A timeout or a cancel
+    /// leaves the job running.
+    pub(crate) fn wait(
+        self: &Arc<Self>,
+        id: &str,
+        timeout_ms: u64,
+        cancel: &dyn Cancel,
+    ) -> Result<Answer, ()> {
+        if !self.contains(id) {
+            return Err(());
+        }
+        if let Some(answer) = self.answer_if_ended(id) {
+            return Ok(answer);
+        }
+        // `checked_add` is `None` when the timeout does not fit on the
+        // clock. That wait has no deadline: it runs until the job ends or
+        // the wait is cancelled.
+        let until = self
+            .clock
+            .now()
+            .checked_add(Duration::from_millis(timeout_ms));
+        match self.park_until(id, until, cancel) {
+            Parked::Ended => Ok(self.answer_if_ended(id).unwrap_or_else(|| self.running(id))),
+            Parked::Timeout | Parked::Cancelled => Ok(self.running(id)),
+        }
+    }
+
+    /// Asks `id` to stop, once, then waits until it ends or `cancel` fires.
+    /// A cancel returns at once; the stop already sent stands.
+    pub(crate) fn stop(
+        self: &Arc<Self>,
+        id: &str,
+        cancel: &dyn Cancel,
+    ) -> Result<Answer, StopError> {
+        if let Some(stop) = self.send_stop(id)? {
+            stop();
+        }
+        if let Some(answer) = self.answer_if_ended(id) {
+            return Ok(answer);
+        }
+        match self.park_until(id, None, cancel) {
+            Parked::Ended => Ok(self.answer_if_ended(id).unwrap_or_else(|| self.running(id))),
+            Parked::Timeout | Parked::Cancelled => Ok(self.running(id)),
+        }
+    }
+
+    /// The stop closure, when this call is the one that sends it. `None`
+    /// when a stop was already sent. `Err` when the job is unknown or has
+    /// ended.
+    fn send_stop(&self, id: &str) -> Result<Option<Arc<dyn Fn() + Send + Sync>>, StopError> {
+        let mut inner = lock(&self.inner);
+        let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
+            return Err(StopError::Unknown);
+        };
+        if let Phase::Ended(completed) = &job.phase {
+            return Err(StopError::Ended(completed.status));
+        }
+        if job.stop_sent {
+            return Ok(None);
+        }
+        job.stop_sent = true;
+        Ok(Some(Arc::clone(&job.stop)))
+    }
+
+    fn running(&self, id: &str) -> Answer {
+        let inner = lock(&self.inner);
+        let path = inner
+            .jobs
+            .iter()
+            .find(|job| job.started.job_id.0 == id)
+            .map(|job| job.path.clone());
+        let text = match path {
+            Some(path) => running_text(id, &path),
+            None => format!("Job {id} is still running.\n"),
+        };
+        Answer { text, record: None }
+    }
+
+    /// The final state, claiming its [`JobRecord::Completed`] the first
+    /// time. `None` when the job is still running.
+    fn answer_if_ended(&self, id: &str) -> Option<Answer> {
+        let mut inner = lock(&self.inner);
+        let job = inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id.0 == id)?;
+        let completed = match &job.phase {
+            Phase::Ended(completed) => (**completed).clone(),
+            Phase::Running => return None,
+        };
+        let text = final_text(&job.path, &completed);
+        let record = if job.claimed {
+            None
+        } else {
+            job.claimed = true;
+            Some(JobRecord::Completed(completed))
+        };
+        Some(Answer { text, record })
+    }
+
+    fn finish(&self, completed: JobCompleted) {
+        let mut inner = lock(&self.inner);
+        if let Some(job) = inner
+            .jobs
+            .iter_mut()
+            .find(|job| job.started.job_id.0 == completed.job_id.0)
+        {
+            // The borrow from `matches!` ends at this statement, so the
+            // assignment below can replace `phase`.
+            let running = matches!(job.phase, Phase::Running);
+            if running {
+                job.phase = Phase::Ended(Box::new(completed));
+            }
+        }
+        bump(&mut inner, &self.cv);
+    }
+
+    /// Parks until `id` ends, `until` passes, or `cancel` fires. `until`
+    /// of `None` waits without a deadline. The `Arc` stays alive for the
+    /// park: a cancel subscribed here upgrades it.
+    fn park_until(
+        self: &Arc<Self>,
+        id: &str,
+        until: Option<Instant>,
+        cancel: &dyn Cancel,
+    ) -> Parked {
+        // Held until this wait returns, so the cancel's weak can upgrade
+        // for the whole park. The clock was subscribed in `new`.
+        let registry = Arc::clone(self);
+        let wake: Arc<dyn Wake> = registry;
+        cancel.subscribe(Arc::downgrade(&wake));
+        let _wake = wake;
+        if cancel.is_cancelled() {
+            return Parked::Cancelled;
+        }
+        loop {
+            let seen = {
+                let inner = lock(&self.inner);
+                if ended(&inner, id) {
+                    return Parked::Ended;
+                }
+                if cancel.is_cancelled() {
+                    return Parked::Cancelled;
+                }
+                if timed_out(self.clock.as_ref(), until) {
+                    return Parked::Timeout;
+                }
+                inner.seq
+            };
+            #[cfg(test)]
+            BEFORE_PARK.with(|slot| {
+                if let Some(hook) = slot.borrow_mut().take() {
+                    hook();
+                }
+            });
+            self.park_once(until, seen);
+        }
+    }
+
+    /// One wait on the clock. The mutex is taken before `wait_until` and
+    /// held until the condvar wait, so a wake blocks on it instead of
+    /// notifying nobody.
+    fn park_once(&self, until: Option<Instant>, seen: u64) {
+        let mut slot = Some(lock(&self.inner));
+        self.clock.wait_until(until, &mut |bound| {
+            let Some(guard) = slot.take() else {
+                return;
+            };
+            // An end, a cancel and a clock wake all bump `seq` under this
+            // lock before they notify. A change after `seen` was read is
+            // still visible, so the wait does not sleep through it. The
+            // loop reads why it woke.
+            if guard.seq != seen {
+                slot = Some(guard);
+                return;
+            }
+            slot = Some(match bound {
+                Some(timeout) => {
+                    self.cv
+                        .wait_timeout(guard, timeout)
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .0
+                }
+                None => self.cv.wait(guard).unwrap_or_else(PoisonError::into_inner),
+            });
+        });
+    }
+}
+
+impl Wake for Registry {
+    fn wake(&self) {
+        let mut inner = lock(&self.inner);
+        bump(&mut inner, &self.cv);
+    }
+}
+
+enum Parked {
+    Ended,
+    Timeout,
+    Cancelled,
+}
+
+// One shot on the waiter, after it has read `seq` and before it waits.
+// The registry lock is not held. `wait_until` cannot host this: the lock
+// is already taken there, so ending the job from the clock would deadlock.
+#[cfg(test)]
+thread_local! {
+    static BEFORE_PARK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+fn bump(inner: &mut Inner, cv: &Condvar) {
+    inner.seq = inner.seq.wrapping_add(1);
+    cv.notify_all();
+}
+
+fn ended(inner: &Inner, id: &str) -> bool {
+    inner
+        .jobs
+        .iter()
+        .any(|job| job.started.job_id.0 == id && matches!(job.phase, Phase::Ended(_)))
+}
+
+fn timed_out(clock: &dyn Clock, until: Option<Instant>) -> bool {
+    until.is_some_and(|until| clock.now() >= until)
+}
+
+/// `j_` and 16 lowercase hex digits, drawn once. 64 bits, the same scheme
+/// as the loop's ids.
+fn mint_id() -> String {
+    format!("j_{:016x}", RandomState::new().hash_one(()))
+}
+
+fn phase_word(phase: &Phase) -> &'static str {
+    match phase {
+        Phase::Running => "running",
+        Phase::Ended(completed) => status_word(completed.status),
+    }
+}
+
+/// The word for a job that has ended: `completed`, `failed` or `cancelled`.
+pub(crate) fn status_word(status: Outcome) -> &'static str {
+    match status {
+        Outcome::Completed => "completed",
+        Outcome::Failed => "failed",
+        Outcome::Cancelled => "cancelled",
+    }
+}
+
+fn running_text(id: &str, path: &Path) -> String {
+    format!("Job {id} is still running.\nOutput: {}\n", path.display())
+}
+
+fn final_text(path: &Path, completed: &JobCompleted) -> String {
+    let mut text = format!(
+        "Job {} {}.\n",
+        completed.job_id.0,
+        status_word(completed.status)
+    );
+    if let Some(code) = completed
+        .process
+        .as_ref()
+        .and_then(|process| process.exit_code)
+    {
+        text.push_str(&format!("Exit code {code}.\n"));
+    }
+    if let Some(signal) = completed
+        .process
+        .as_ref()
+        .and_then(|process| process.signal.as_deref())
+    {
+        text.push_str(&format!("Killed by {signal}.\n"));
+    }
+    if let Some(error) = &completed.error {
+        text.push_str(&error.message);
+        if !error.message.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    text.push_str(&format!("Output: {}\n", path.display()));
+    if let Some(tail) = &completed.output_tail {
+        text.push_str("Last output:\n");
+        text.push_str(tail);
+        if !tail.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+    text
+}
+
+fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
+    inner.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+#[cfg(test)]
+#[path = "registry_tests.rs"]
+mod tests;
