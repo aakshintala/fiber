@@ -6,15 +6,31 @@
 //! from every site, once, in order.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
+use std::process::Command;
+use std::sync::{Arc, Weak};
+use std::thread::{Builder, JoinHandle};
 
+use contract::emit::Emit;
 use contract::events::{
     ContextFill, Event, Git, InputItem, Interaction, SessionState, SessionStatus, Waiting,
     WaitingKind,
 };
 use contract::shapes::{ContentPart, Usage};
 use contract::{ActionId, Envelope, JobId, RequestId, SessionId};
+use log::{Injector, Log};
+
+use crate::Loop;
 
 use crate::usage::Ledger;
+
+/// The control line that ends history: every line before it is folded
+/// without emitting.
+const LIVE: &str = "status_live";
+
+/// The control line that ends the thread. Both control lines are internal:
+/// they go to this watcher alone, never to a client or the log.
+const STOP: &str = "status_stop";
 
 /// What a pending request is, in the order requested.
 struct Pending {
@@ -384,6 +400,114 @@ fn prompt_of(input: &[InputItem]) -> String {
 /// `text` on one line.
 fn one_line(text: &str) -> String {
     text.replace(['\n', '\r'], " ")
+}
+
+/// The running observer thread.
+pub(crate) struct Status {
+    injector: Injector,
+    thread: JoinHandle<()>,
+}
+
+impl Status {
+    /// Ends the thread after every line already written, and waits for it:
+    /// no `session_status` follows this call.
+    pub(crate) fn stop(self) {
+        self.injector.push_kept(control(STOP));
+        // A thread that panicked has nothing left to write.
+        match self.thread.join() {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+fn control(kind: &str) -> Envelope {
+    Envelope {
+        kind: kind.to_owned(),
+        session_id: SessionId(String::new()),
+        ts: 0,
+        schema_version: contract::SCHEMA_VERSION,
+        turn_id: None,
+        action_id: None,
+        seq: None,
+        payload: serde_json::Map::new(),
+    }
+}
+
+/// Starts the observer for `looped`'s session: it folds the log from the
+/// start, so a resumed session's history is one status, then follows it. A
+/// log that cannot be read, or a thread that cannot start, leaves the
+/// session with no status.
+pub(crate) fn spawn(looped: &Loop) -> Option<Status> {
+    let log = Arc::downgrade(&looped.log);
+    let mut watcher = looped.log.watch_all().ok()?;
+    let injector = watcher.injector();
+    injector.push_kept(control(LIVE));
+    let jobs = looped.ending.jobs.clone();
+    let workspace = looped.workspace.clone();
+    let mut fold = Fold::new(
+        looped.workspace_label.clone(),
+        looped.model.reference.clone(),
+        looped.prompt.context_window,
+        Box::new(move || jobs.as_ref().map(|jobs| jobs.running()).unwrap_or_default()),
+        Box::new(move || branch(&workspace)),
+    );
+    let thread = Builder::new()
+        .name("status".to_owned())
+        .spawn(move || {
+            let mut live = false;
+            let mut last: Option<SessionStatus> = None;
+            while let Ok(Some(line)) = watcher.recv() {
+                let changed = match line.kind.as_str() {
+                    STOP => return,
+                    LIVE => {
+                        live = true;
+                        fold.go_live();
+                        true
+                    }
+                    "session_status" => continue,
+                    _ => fold.observe(&line),
+                };
+                if live && changed && !emit(&log, &fold, &mut last) {
+                    return;
+                }
+            }
+        })
+        .ok()?;
+    Some(Status { injector, thread })
+}
+
+/// Emits the fold's status when it differs from the last one emitted. False
+/// once the log is gone.
+fn emit(log: &Weak<Log>, fold: &Fold, last: &mut Option<SessionStatus>) -> bool {
+    let status = fold.status();
+    if last.as_ref() == Some(&status) {
+        return true;
+    }
+    // The log is held only while the line is written.
+    let Some(log) = log.upgrade() else {
+        return false;
+    };
+    log.emit(&Event::SessionStatus(status.clone()));
+    *last = Some(status);
+    true
+}
+
+/// The workspace's branch: `HEAD` is a detached head, and a failed or
+/// absent `git`, or a directory outside a repository, is no repository.
+fn branch(workspace: &PathBuf) -> Option<Git> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(workspace)
+        .args(["rev-parse", "--abbrev-ref", "HEAD"])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let name = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    Some(Git {
+        branch: (name != "HEAD").then_some(name),
+    })
 }
 
 #[cfg(test)]

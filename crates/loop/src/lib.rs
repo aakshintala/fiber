@@ -369,8 +369,20 @@ impl Loop {
     /// gone, then, while jobs still run, the ending notice and their ends
     /// (`docs/invocation.md`, "Lifecycle"; `docs/tools.md`, "Background jobs").
     pub fn run(mut self) -> Result<(), Error> {
-        while self.turn()?.is_some() {}
-        Ok(())
+        let status = status::spawn(&self);
+        let result = loop {
+            match self.turn() {
+                Ok(Some(_)) => {}
+                Ok(None) => break Ok(()),
+                Err(e) => break Err(e),
+            }
+        };
+        // `fiber_exited` is the last line a process writes: no status
+        // follows it.
+        if let Some(status) = status {
+            status.stop();
+        }
+        result
     }
 
     /// Blocks until a prompt or a steer arrives, then runs one turn from

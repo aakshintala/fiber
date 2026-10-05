@@ -411,10 +411,21 @@ struct Run {
     stderr: String,
 }
 
+/// A `session_status` line: ephemeral, and written by an observer thread, so
+/// where it falls among the loop's own lines is not what these tests pin.
+/// `tests/socket.rs` reads it.
+fn is_status(line: &str) -> bool {
+    line.contains(r#""kind":"session_status""#)
+}
+
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
-        let raw: Vec<String> = stdout.lines().map(str::to_owned).collect();
+        let raw: Vec<String> = stdout
+            .lines()
+            .filter(|l| !is_status(l))
+            .map(str::to_owned)
+            .collect();
         let lines = raw
             .iter()
             // `fiber list` prints text; a `kind` lookup on it fails the test.

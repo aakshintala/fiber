@@ -846,7 +846,9 @@ impl Session {
         let (forward, lines) = mpsc::channel();
         thread::spawn(move || {
             while let Ok(Some(line)) = watcher.recv() {
-                if forward.send(line).is_err() {
+                // `run` starts the status observer, whose lines race the
+                // loop's own; `tests/status.rs` reads them.
+                if line.kind != "session_status" && forward.send(line).is_err() {
                     break;
                 }
             }
