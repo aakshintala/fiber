@@ -338,6 +338,90 @@ impl Config {
     }
 }
 
+/// An extension package a repository ships: one entry of
+/// `repository_extensions` (`docs/configuration.md`, "Keys").
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RepositoryExtension {
+    /// The package directory, as the repository wrote it.
+    pub path: String,
+    /// Whether the repository needs it.
+    pub required: bool,
+}
+
+/// Everything a repository declares as code (`docs/extensions.md`, "Code a
+/// repository ships"), read from the repository's own files alone.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Declared {
+    /// `repository_extensions`.
+    pub extensions: Vec<RepositoryExtension>,
+    /// The `hooks` extension's `hooks` setting, by name.
+    pub hooks: Map<String, Value>,
+    /// `mcp.servers`, by name, with the keys a repository may set.
+    pub mcp_servers: Map<String, Value>,
+}
+
+/// The `hooks` extension's name (`docs/extensions.md`, "Hooks declared in
+/// configuration").
+const HOOKS_EXTENSION: &str = "github.com/aakshintala/fiber/extensions/hooks";
+
+/// Reads what the workspace's `.fiber/` declares, under the same plain-file
+/// checks as [`Config::load`]. A repository with none gets an empty
+/// [`Declared`].
+pub fn declared(workspace: &Path) -> Result<Declared, ConfigError> {
+    let fiber = workspace.join(".fiber");
+    plain(&fiber, true)?;
+    let mut declared = Declared::default();
+    let file = fiber.join("config.json");
+    if plain(&file, false)?
+        && let Some(value) = read(&file)?
+    {
+        let Value::Object(layer) = value else {
+            return Err(top_level(&file.display().to_string()));
+        };
+        let checked = keys::check(layer, &Source::Repository(file), &mut Vec::new())?;
+        for item in checked
+            .get("repository_extensions")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(path) = item.get("path").and_then(Value::as_str) {
+                declared.extensions.push(RepositoryExtension {
+                    path: path.to_owned(),
+                    required: item
+                        .get("required")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(false),
+                });
+            }
+        }
+        if let Some(Value::Object(servers)) = checked.get("mcp").and_then(|m| m.get("servers")) {
+            declared.mcp_servers = servers.clone();
+        }
+    }
+    plain(&fiber.join("config"), true)?;
+    let hooks_file = write::settings_file(&fiber, HOOKS_EXTENSION);
+    if plain(&hooks_file, false)?
+        && let Some(bytes) = read_bytes(&hooks_file)?
+    {
+        let Value::Object(map) = parse(&hooks_file, &bytes)? else {
+            return Err(top_level(&hooks_file.display().to_string()));
+        };
+        match map.get("hooks") {
+            Some(Value::Object(hooks)) => declared.hooks = hooks.clone(),
+            Some(_) => {
+                return Err(ConfigError::WrongType {
+                    source_name: hooks_file.display().to_string(),
+                    key: "hooks".into(),
+                    expected: "an object of hooks, one entry per name".into(),
+                });
+            }
+            None => {}
+        }
+    }
+    Ok(declared)
+}
+
 /// Reads every `*.json` in a layer directory's `config/` into `into`. In a
 /// repository, the layer directory, `config/` and each file must be plain.
 fn snapshot_settings(

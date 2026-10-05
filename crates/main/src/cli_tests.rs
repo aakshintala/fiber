@@ -143,6 +143,38 @@ fn extension_update_parses_an_optional_name() {
 }
 
 #[test]
+fn approve_parses_an_optional_yes_and_nothing_else() {
+    let Invocation::Run(Some(Commands::Approve(args))) = parse_from(["fiber", "approve"]) else {
+        panic!("approve");
+    };
+    assert!(!args.yes);
+    let Invocation::Run(Some(Commands::Approve(args))) = parse_from(["fiber", "approve", "--yes"])
+    else {
+        panic!("approve --yes");
+    };
+    assert!(args.yes);
+    assert!(
+        sentence(&["fiber", "approve", "extra"]).starts_with("Unexpected argument 'extra'"),
+        "{}",
+        sentence(&["fiber", "approve", "extra"])
+    );
+}
+
+#[test]
+fn the_menu_and_approve_help_say_what_approve_does() {
+    let help = super::render_help(Some("approve")).unwrap();
+    assert!(help.contains("--yes"), "{help}");
+    assert!(help.contains("without asking"), "{help}");
+    assert!(
+        menu().contains(
+            "  approve [--yes]                   Show what this repository ships and approve it\n"
+        ),
+        "{}",
+        menu()
+    );
+}
+
+#[test]
 fn extension_alone_is_a_one_line_usage_sentence() {
     assert_eq!(
         sentence(&["fiber", "extension"]),
@@ -382,7 +414,10 @@ fn the_menu_and_ask_help_show_resume() {
 
 #[test]
 fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
-    assert_eq!(visible(), ["ask", "extension", "version", "help"]);
+    assert_eq!(
+        visible(),
+        ["ask", "extension", "approve", "version", "help"]
+    );
     let Invocation::Run(Some(Commands::Grep { args })) =
         parse_from(["fiber", "grep", "needle", "a.txt"])
     else {

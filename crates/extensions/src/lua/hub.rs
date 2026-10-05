@@ -509,6 +509,9 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::UnknownCallback { .. }
         | Error::BadReturn { .. }
         | Error::Credential(_)
+        | Error::BadRepositoryPath { .. }
+        | Error::Pin { .. }
+        | Error::ChangedWhileCopying { .. }
         | Error::NoModel => stopped(name),
     }
 }

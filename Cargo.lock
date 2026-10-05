@@ -321,6 +321,7 @@ dependencies = [
  "mlua",
  "ring",
  "serde_json",
+ "similar",
  "thiserror",
  "ureq",
 ]

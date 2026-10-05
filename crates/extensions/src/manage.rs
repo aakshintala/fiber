@@ -58,49 +58,54 @@ impl Item {
         &self.paths.fresh
     }
 
-    /// What it carries, one line each, such as `skills: a, b`: the
-    /// directories `skills`, `prompts`, `themes` and `tui`, its prompt file,
-    /// the platforms it has binaries for, and a Lua extension's raised memory
-    /// cap when its manifest sets `memory_mib` above 1. The directories are
-    /// `docs/extensions.md`, "What a package holds".
+    /// What it carries, one line each ([`carries`]).
     pub fn carries(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for (dir, label) in [
-            ("skills", "skills"),
-            ("prompts", "prompt templates"),
-            ("themes", "themes"),
-            ("tui", "TUI extension"),
-        ] {
-            let Ok(entries) = fs::read_dir(self.staged().join(dir)) else {
-                continue;
-            };
-            let mut names: Vec<String> = entries
-                .filter_map(Result::ok)
-                .map(|e| e.file_name().to_string_lossy().into_owned())
-                .collect();
-            names.sort();
-            if !names.is_empty() {
-                lines.push(format!("{label}: {}", names.join(", ")));
-            }
-        }
-        if let Some(prompt) = &self.manifest.prompt {
-            lines.push(format!("system prompt text: {prompt}"));
-        }
-        if !self.manifest.binaries.is_empty() {
-            let platforms: Vec<&str> = self.manifest.binaries.keys().map(String::as_str).collect();
-            lines.push(format!(
-                "binaries for {}, of which only this platform's is downloaded",
-                platforms.join(", ")
-            ));
-        }
-        if self.manifest.process.is_none()
-            && let Some(n) = self.manifest.memory_mib
-            && n > 1
-        {
-            lines.push(format!("memory cap: {n} MiB"));
-        }
-        lines
+        carries(self.staged(), &self.manifest)
     }
+}
+
+/// What the package in `dir` carries, one line each, such as `skills: a, b`:
+/// the directories `skills`, `prompts`, `themes` and `tui`, its prompt file,
+/// the platforms it has binaries for, and a Lua extension's raised memory
+/// cap when its manifest sets `memory_mib` above 1. The directories are
+/// `docs/extensions.md`, "What a package holds".
+pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
+    let mut lines = Vec::new();
+    for (name, label) in [
+        ("skills", "skills"),
+        ("prompts", "prompt templates"),
+        ("themes", "themes"),
+        ("tui", "TUI extension"),
+    ] {
+        let Ok(entries) = fs::read_dir(dir.join(name)) else {
+            continue;
+        };
+        let mut names: Vec<String> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        if !names.is_empty() {
+            lines.push(format!("{label}: {}", names.join(", ")));
+        }
+    }
+    if let Some(prompt) = &manifest.prompt {
+        lines.push(format!("system prompt text: {prompt}"));
+    }
+    if !manifest.binaries.is_empty() {
+        let platforms: Vec<&str> = manifest.binaries.keys().map(String::as_str).collect();
+        lines.push(format!(
+            "binaries for {}, of which only this platform's is downloaded",
+            platforms.join(", ")
+        ));
+    }
+    if manifest.process.is_none()
+        && let Some(n) = manifest.memory_mib
+        && n > 1
+    {
+        lines.push(format!("memory cap: {n} MiB"));
+    }
+    lines
 }
 
 /// Everything an install will put in place, fetched and checked, holding the

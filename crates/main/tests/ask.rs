@@ -791,6 +791,7 @@ Extensions:
   extension update [<name>]         Update one extension, or every installed extension, to its newest tag
   extension remove <name>           Remove an extension, the dependencies nothing else uses, and their data
   extension list                    List installed extensions: name, version and commit
+  approve [--yes]                   Show what this repository ships and approve it
 
 Flags:
   -h, --help     Print this menu
