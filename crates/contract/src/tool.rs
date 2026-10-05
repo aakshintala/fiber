@@ -10,6 +10,7 @@ use serde_json::{Map, Value};
 use crate::clock::Wake;
 use crate::emit::Emit;
 use crate::events::{Control, FileChange};
+use crate::jobs::JobRecord;
 use crate::provider::ToolDefinition;
 use crate::shapes::{ContentPart, DeclaredEffects, Failure, Process};
 
@@ -106,6 +107,9 @@ pub struct Output {
     pub changes: Option<Vec<FileChange>>,
     /// Instructions to the loop.
     pub control: Option<Control>,
+    /// Job lines the loop writes, in order, under this call's action, just
+    /// before its `tool_call_completed`.
+    pub jobs: Vec<JobRecord>,
 }
 
 /// How many bytes of a result's text the model is sent: the first `start`

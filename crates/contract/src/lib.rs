@@ -13,6 +13,7 @@ mod envelope;
 pub mod events;
 mod ids;
 pub mod inbox;
+pub mod jobs;
 mod pre_session;
 pub mod provider;
 pub mod rules;
