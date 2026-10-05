@@ -1,6 +1,6 @@
 //! Binary-level tests of `fiber sessions export` (`docs/invocation.md`,
 //! "Deleting and pruning"; `docs/testing.md`, "Levels"): the built `fiber`
-//! runs in a temporary git repository with its own `FIBER_HOME`, over
+//! runs in a temporary workspace with its own `FIBER_HOME`, over
 //! session directories built by hand. Every run carries a wall-clock
 //! deadline.
 
@@ -29,7 +29,7 @@ const FIRST: &str = "{\"seq\":0,\"kind\":\"a\"}\n";
 const SECOND: &str = "{\"seq\":1,\"kind\":\"b\"}\n";
 const TORN: &str = "{\"seq\":2,\"kin";
 
-/// Fiber home and a git repository in a temporary directory, removed on
+/// Fiber home and a workspace in a temporary directory, removed on
 /// drop.
 struct Setup {
     root: fakes::TempDir,
@@ -41,7 +41,7 @@ impl Setup {
             root: fakes::TempDir::new("fiber-export"),
         };
         fs::create_dir_all(setup.home()).unwrap();
-        setup.repository();
+        fs::create_dir_all(setup.workspace()).unwrap();
         setup
     }
 
@@ -53,18 +53,10 @@ impl Setup {
         self.root.path().join("w")
     }
 
-    fn repository(&self) {
-        let status = Command::new("git")
-            .args(["init", "-q"])
-            .arg(self.workspace())
-            .status()
-            .unwrap();
-        assert!(status.success());
-    }
-
-    /// The project's sessions directory, as the command derives it.
+    /// The project's sessions directory, as the command derives it: a
+    /// workspace outside any repository is its own project.
     fn sessions(&self) -> PathBuf {
-        log::sessions_dir(&self.home(), &doors::project(&self.workspace()))
+        log::sessions_dir(&self.home(), &fs::canonicalize(self.workspace()).unwrap())
     }
 
     /// A session directory with two complete lines, a torn tail, one

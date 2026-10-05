@@ -139,6 +139,29 @@ fn an_unreadable_artifact_fails_naming_it_and_removes_the_target() {
 }
 
 #[test]
+fn a_target_inside_artifacts_exports_without_itself() {
+    // Kills the mutant that replaces the excluded-directory skip with
+    // `false`: without the skip the export copies `out` into itself
+    // until the filesystem errors and the target is removed again.
+    let root = fakes::TempDir::new("log-export-nested-target");
+    let dir = session(root.path(), "s_1", FIRST.as_bytes());
+    fs::write(dir.join("artifacts/a_1.txt"), b"kept").unwrap();
+
+    let target = dir.join("artifacts/out");
+    export(&dir, &target).unwrap();
+
+    assert_eq!(
+        fs::read(target.join("events.jsonl")).unwrap(),
+        FIRST.as_bytes()
+    );
+    assert_eq!(fs::read(target.join("artifacts/a_1.txt")).unwrap(), b"kept");
+    assert!(
+        !target.join("artifacts/out").exists(),
+        "the export directory must not appear inside its own artifacts"
+    );
+}
+
+#[test]
 fn a_missing_log_is_not_found() {
     let root = fakes::TempDir::new("log-export-nolog");
     let dir = root.path().join("s_1");

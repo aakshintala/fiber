@@ -36,7 +36,13 @@ pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
         }
         return Err(io_at(target)(e));
     }
-    let copied = write_export(bytes.get(..complete).unwrap_or_default(), dir, target);
+    let excluded = fs::canonicalize(target).map_err(io_at(target))?;
+    let copied = write_export(
+        bytes.get(..complete).unwrap_or_default(),
+        dir,
+        target,
+        &excluded,
+    );
     if copied.is_err() {
         // Best effort: the original error is reported either way.
         fs::remove_dir_all(target).unwrap_or(());
@@ -47,16 +53,16 @@ pub fn export(dir: &Path, target: &Path) -> Result<(), Error> {
 /// Writes the complete log lines and the artifacts tree into `target`,
 /// which `export` just created. The log was read before the artifacts are
 /// copied, so every artifact a copied line names already exists.
-fn write_export(complete: &[u8], dir: &Path, target: &Path) -> Result<(), Error> {
+fn write_export(complete: &[u8], dir: &Path, target: &Path, excluded: &Path) -> Result<(), Error> {
     let events = target.join(EVENTS);
     fs::write(&events, complete).map_err(io_at(&events))?;
-    copy_artifacts(&dir.join(ARTIFACTS), &target.join(ARTIFACTS))
+    copy_artifacts(&dir.join(ARTIFACTS), &target.join(ARTIFACTS), excluded)
 }
 
 /// Copies the artifacts tree at `source` into `target`. A directory
 /// recurses; every other entry is copied as bytes, a symlink read through.
 /// A session with no `artifacts/` gets an empty one in the export.
-fn copy_artifacts(source: &Path, target: &Path) -> Result<(), Error> {
+fn copy_artifacts(source: &Path, target: &Path, excluded: &Path) -> Result<(), Error> {
     let entries = match fs::read_dir(source) {
         Ok(entries) => Some(entries),
         Err(e) if e.kind() == io::ErrorKind::NotFound => None,
@@ -71,7 +77,12 @@ fn copy_artifacts(source: &Path, target: &Path) -> Result<(), Error> {
         let from = entry.path();
         let to = target.join(entry.file_name());
         if entry.file_type().map_err(|e| io_at(&from)(e))?.is_dir() {
-            copy_artifacts(&from, &to)?;
+            // The export directory is never part of what it exports: a
+            // target inside the source tree would otherwise copy itself.
+            if fs::canonicalize(&from).map_err(io_at(&from))?.as_path() == excluded {
+                continue;
+            }
+            copy_artifacts(&from, &to, excluded)?;
         } else {
             fs::copy(&from, &to).map_err(|e| io_at(&from)(e))?;
         }
