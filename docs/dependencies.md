@@ -123,7 +123,7 @@ only that crate, in KiB; the empty program is 323 KiB.
 | base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
-| similar | an edit's diff in `details` (`docs/tools.md`, "edit") and an instruction file's diff (`docs/system-prompt.md`, "When something changes") | ~0 | 380 | ~0 | 1 | 389 |
+| similar | an edit's diff in `details` (`docs/tools.md`, "edit") and an instruction file's diff (`docs/system-prompt.md`, "When something changes"), and a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships") | ~0 | 380 | ~0 | 1 | 389 |
 | all of the above together | | 7,048 | 6,104 | 4,288 | 136 | 6,452 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
