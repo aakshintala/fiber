@@ -157,8 +157,10 @@ session from starting carries its fix, such as
 `` no key for openrouter: run `fiber login openrouter` ``. It exits non-zero
 when a session cannot start. It also prints where the diagnostic logs are, the
 newest line at `error` level among them, and the newest crash file, with its
-age (`docs/state.md`, "What each part holds"). It never touches the network, so
-it does not check that a key is valid.
+age (`docs/state.md`, "What each part holds"). When `docs/` is missing from
+Fiber home, it says `` user guide not installed: run `fiber update` ``
+(`docs/releasing.md`). It never touches the network, so it does not check that
+a key is valid.
 
 **Extensions.** `fiber extension` manages extensions (`docs/extensions.md`,
 "Installing").

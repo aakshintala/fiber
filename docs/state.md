@@ -22,6 +22,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     approvals/<content-hash>      one file per extension or hook approval or never
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
+  docs/                           Fiber's docs for the installed version (docs/releasing.md)
   pinned/<content-hash>/          approved copies of code a repository ships
   pinned.json                     size, modification time and hash of each declared path
   data/<extension>/               an extension's data for this machine
@@ -126,6 +127,13 @@ provider.
 directory each. The `<name>` is the extension's git-address name, slugged the
 same way as project keys. Installing or updating writes a fresh directory
 and renames it into place; a running session keeps what it already loaded.
+
+**Docs.** `docs/` holds Fiber's documentation for the installed version:
+`docs/user/` for a person using Fiber, and the rest for how Fiber works,
+including the extension API. `install.sh` and `fiber update` write it from
+the release's docs archive, so it always matches the binary
+(`docs/releasing.md`). Nothing else writes it. The system prompt names this
+path (`docs/system-prompt.md`).
 
 **Extension data.** Each extension has two data directories: `data/<name>/`
 at the top of Fiber home for what it keeps per machine, and
