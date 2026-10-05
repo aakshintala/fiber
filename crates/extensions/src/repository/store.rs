@@ -2,10 +2,11 @@
 //! part holds"): `projects/<key>/approvals/<hash>` for an extension or a
 //! hook, `approvals/<hash>` for an MCP server, and `pinned/<hash>/` for the
 //! copy. The approval file is the last thing an approval writes, so an
-//! approval never lacks its copy; a kill before it leaves a copy nothing
-//! refers to, which `fiber sessions prune` collects.
+//! approval never lacks its copy; a kill before it leaves an unfinished
+//! copy, which the next approval removes and builds again. A finished copy
+//! with no approval is what `fiber sessions prune` collects.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -92,15 +93,14 @@ impl Store {
     }
 
     /// Copies the item into `pinned/<hash>/`, runs an extension's install
-    /// step there, and records the approval, replacing a never. A copy
-    /// already there is kept. Nothing is recorded when a step fails: the
-    /// scratch copy is removed and an earlier approval stays.
+    /// step there, and records the approval, replacing a never. A finished
+    /// copy already there is kept; an unfinished one is removed and built
+    /// again. Nothing is recorded when a step fails: the copy is removed
+    /// and an earlier approval stays.
     pub fn approve(&self, item: &RepoItem, hash: &str) -> Result<(), Error> {
         check(item, hash)?;
         let copy = self.copy_dir(hash);
-        if !copy.is_dir() {
-            self.pin(item, hash, &copy)?;
-        }
+        self.pin(item, hash, &copy)?;
         self.record(item, hash, "approve")
     }
 
@@ -111,13 +111,50 @@ impl Store {
         self.record(item, hash, "never")
     }
 
+    /// Builds the copy at its final path, under the lock in
+    /// `pinned/.lock`, which serialises concurrent approvals. The path
+    /// `pinned/<hash>/` is known before the step runs, so the copy is
+    /// built in place there: a step such as creating a Python virtualenv
+    /// records its own location. The empty file `pinned/<hash>.ready` is
+    /// written last, so a copy with no `.ready` is an unfinished attempt
+    /// and is removed and built again, while a copy with one is kept. On
+    /// any error after the directory was made, the copy is removed, so a
+    /// failing step leaves no copy. A step failure is the step's own
+    /// error, unchanged.
     fn pin(&self, item: &RepoItem, hash: &str, copy: &Path) -> Result<(), Error> {
         let pinned = self.home.join("pinned");
         fs::create_dir_all(&pinned).map_err(io_error(&pinned))?;
-        let scratch = Scratch::new(&pinned)?;
+        let lock_path = pinned.join(".lock");
+        let lock = File::options()
+            .create(true)
+            .append(true)
+            .open(&lock_path)
+            .map_err(io_error(&lock_path))?;
+        lock.lock().map_err(io_error(&lock_path))?;
+        let ready = pinned.join(format!("{hash}.ready"));
+        if copy.is_dir() && ready.is_file() {
+            return Ok(());
+        }
+        // A missing copy can leave its marker behind. Remove it before
+        // rebuilding: a kill mid-rebuild would otherwise leave a partial
+        // directory beside the old marker, which the next approval accepts.
+        if let Err(e) = fs::remove_file(&ready)
+            && e.kind() != io::ErrorKind::NotFound
+        {
+            return Err(io_error(&ready)(e));
+        }
+        match fs::symlink_metadata(copy) {
+            // Nothing there, or unreadable: `create_dir` below fails naming
+            // the path when it is the second.
+            Err(_) => {}
+            Ok(meta) if meta.file_type().is_dir() => remove(copy)?,
+            Ok(_) => fs::remove_file(copy).map_err(io_error(copy))?,
+        }
+        fs::create_dir(copy).map_err(io_error(copy))?;
+        let unfinished = Unfinished(Some(copy.to_path_buf()));
         let mut copied = Vec::new();
         for file in &item.files {
-            let to = scratch.0.join(&file.rel);
+            let to = copy.join(&file.rel);
             if let Some(parent) = to.parent() {
                 fs::create_dir_all(parent).map_err(io_error(parent))?;
             }
@@ -141,10 +178,12 @@ impl Store {
             });
         }
         if item.kind == OfferedKind::Extension {
-            let manifest = config::read_manifest(&scratch.0)?;
-            prepare(&scratch.0, &manifest)?;
+            let manifest = config::read_manifest(copy)?;
+            prepare(copy, &manifest)?;
         }
-        settle(&scratch.0, copy)
+        File::create(&ready).map_err(io_error(&ready))?;
+        unfinished.done();
+        Ok(())
     }
 
     fn record(&self, item: &RepoItem, hash: &str, decision: &str) -> Result<(), Error> {
@@ -206,14 +245,22 @@ impl Store {
     }
 }
 
-/// Moves a finished scratch copy to its place. When another `fiber approve`
-/// put the same content there first, the copy already there stays: it is the
-/// same content, and the scratch is removed with its guard.
-pub(super) fn settle(scratch: &Path, copy: &Path) -> Result<(), Error> {
-    match fs::rename(scratch, copy) {
-        Ok(()) => Ok(()),
-        Err(_) if copy.is_dir() => Ok(()),
-        Err(e) => Err(io_error(copy)(e)),
+/// A copy being built: dropped unfinished, the directory goes with it, so
+/// a failing step leaves no copy. [`Option::take`] disarms it once the
+/// `.ready` marker is written.
+struct Unfinished(Option<PathBuf>);
+
+impl Unfinished {
+    fn done(mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Unfinished {
+    fn drop(&mut self) {
+        if let Some(dir) = self.0.take() {
+            remove(&dir).unwrap_or(());
+        }
     }
 }
 
@@ -236,23 +283,4 @@ fn is_hash(text: &str) -> bool {
 pub(super) fn next() -> usize {
     static NEXT: AtomicUsize = AtomicUsize::new(0);
     NEXT.fetch_add(1, Ordering::Relaxed)
-}
-
-/// `pinned/.tmp-<pid>-<n>/`, removed when dropped: after the rename there is
-/// nothing to remove, and on every error path the half-built copy goes.
-struct Scratch(PathBuf);
-
-impl Scratch {
-    fn new(pinned: &Path) -> Result<Self, Error> {
-        let dir = pinned.join(format!(".tmp-{}-{}", std::process::id(), next()));
-        remove(&dir)?;
-        fs::create_dir(&dir).map_err(|e: io::Error| io_error(&dir)(e))?;
-        Ok(Self(dir))
-    }
-}
-
-impl Drop for Scratch {
-    fn drop(&mut self) {
-        remove(&self.0).unwrap_or(());
-    }
 }

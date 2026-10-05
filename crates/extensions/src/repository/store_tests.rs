@@ -2,7 +2,7 @@
 //! failure leaves behind.
 
 use std::fs::{self, File};
-use std::os::unix::fs::PermissionsExt;
+use std::os::unix::fs::{PermissionsExt, symlink};
 use std::path::PathBuf;
 use std::time::{Duration, UNIX_EPOCH};
 
@@ -11,7 +11,6 @@ use contract::events::OfferedKind;
 use serde_json::{Value, json};
 
 use super::declared_tests::Repo;
-use super::store::settle;
 use super::{Decision, Index, RepoItem, Store, hash};
 use crate::Error;
 
@@ -48,7 +47,23 @@ fn extension(repo: &Repo, extra: &Value) -> RepoItem {
     repo.item(OfferedKind::Extension, "fiber.test/p")
 }
 
+/// The copy directories in `pinned/`, sorted; the lock file and the
+/// `.ready` markers are not copies.
 fn pinned_names(repo: &Repo) -> Vec<String> {
+    let Ok(entries) = fs::read_dir(repo.home().join("pinned")) else {
+        return Vec::new();
+    };
+    let mut names: Vec<String> = entries
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_dir())
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// Every entry in `pinned/`, files and directories, sorted.
+fn pinned_entries(repo: &Repo) -> Vec<String> {
     let Ok(entries) = fs::read_dir(repo.home().join("pinned")) else {
         return Vec::new();
     };
@@ -65,6 +80,11 @@ fn approvals_dir(repo: &Repo, project: bool) -> PathBuf {
     } else {
         repo.home().join("approvals")
     }
+}
+
+/// The `.ready` marker beside a copy in `pinned/`.
+fn ready(repo: &Repo, hash: &str) -> PathBuf {
+    repo.home().join("pinned").join(format!("{hash}.ready"))
 }
 
 #[test]
@@ -226,6 +246,7 @@ fn a_failing_install_step_records_nothing_and_leaves_no_copy() {
         Some(Decision::Approve)
     );
     assert_eq!(pinned_names(&repo), [good_hash]);
+    assert!(!ready(&repo, &bad_hash).exists());
 }
 
 #[test]
@@ -236,6 +257,7 @@ fn an_install_step_that_cannot_start_records_nothing() {
     let e = store(&repo).approve(&item, &hash).unwrap_err();
     assert!(matches!(e, Error::InstallStep { .. }), "{e}");
     assert!(pinned_names(&repo).is_empty());
+    assert!(!ready(&repo, &hash).exists());
     assert!(!approvals_dir(&repo, true).join(&hash).exists());
 }
 
@@ -314,6 +336,7 @@ fn a_file_changed_between_hashing_and_copying_fails_with_the_mismatch() {
         "{e}"
     );
     assert!(pinned_names(&repo).is_empty());
+    assert!(!ready(&repo, &hash).exists());
     assert!(!approvals_dir(&repo, false).join(&hash).exists());
 }
 
@@ -418,26 +441,112 @@ fn a_declaration_is_kept_with_the_previous_version() {
 }
 
 #[test]
-fn a_copy_that_another_approval_put_there_first_stays() {
+fn an_install_step_runs_at_the_pinned_path_and_leaves_a_ready_marker() {
     let repo = Repo::new();
-    let tmp = repo.home();
-    let (scratch, place) = (tmp.join("scratch"), tmp.join("place"));
-    fs::create_dir_all(&scratch).unwrap();
-    fs::write(scratch.join("mine"), "mine").unwrap();
-    // Nothing there: the scratch moves into place.
-    settle(&scratch, &place).unwrap();
-    assert_eq!(fs::read_to_string(place.join("mine")).unwrap(), "mine");
-    assert!(!scratch.exists());
-    // Another copy there, with something in it: it stays, and no error.
-    fs::create_dir_all(&scratch).unwrap();
-    fs::write(scratch.join("late"), "late").unwrap();
-    settle(&scratch, &place).unwrap();
-    assert!(place.join("mine").is_file());
-    assert!(!place.join("late").exists());
-    // Something that is not a copy there is a failure.
-    let file = tmp.join("file");
-    fs::write(&file, "x").unwrap();
-    assert!(settle(&scratch, &file).is_err());
+    let item = extension(&repo, &json!({"install": ["sh", "-c", "pwd > where.txt"]}));
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap();
+    let copy = repo.home().join("pinned").join(&hash);
+    let canonical = fs::canonicalize(&copy).unwrap();
+    assert_eq!(
+        fs::read_to_string(copy.join("where.txt")).unwrap(),
+        format!("{}\n", canonical.display()),
+    );
+    assert!(ready(&repo, &hash).is_file());
+    // The step ran in no scratch directory: the copy, its marker and the
+    // lock are everything in `pinned/`.
+    assert_eq!(
+        pinned_entries(&repo),
+        [".lock", &hash, &format!("{hash}.ready")]
+    );
+}
+
+#[test]
+fn a_copy_without_a_ready_marker_is_cleared_and_built_again() {
+    let repo = Repo::new();
+    let item = extension(
+        &repo,
+        &json!({"install": ["sh", "-c", "echo x >> counter"]}),
+    );
+    let hash = hashed(&item);
+    let dir = repo.home().join("pinned").join(&hash);
+    store(&repo).approve(&item, &hash).unwrap();
+    // A kill before the marker was written: the copy is unfinished, with
+    // junk in it.
+    fs::remove_file(ready(&repo, &hash)).unwrap();
+    fs::write(dir.join("junk"), "junk").unwrap();
+    store(&repo).approve(&item, &hash).unwrap();
+    assert!(!dir.join("junk").exists());
+    assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "x\n");
+    assert!(ready(&repo, &hash).is_file());
+}
+
+#[test]
+fn a_copy_with_a_ready_marker_is_kept() {
+    let repo = Repo::new();
+    let item = extension(
+        &repo,
+        &json!({"install": ["sh", "-c", "echo x >> counter"]}),
+    );
+    let hash = hashed(&item);
+    let dir = repo.home().join("pinned").join(&hash);
+    store(&repo).approve(&item, &hash).unwrap();
+    fs::write(dir.join("junk"), "junk").unwrap();
+    store(&repo).approve(&item, &hash).unwrap();
+    // The copy was finished, so it stays untouched: the junk is still
+    // there and the step did not run again.
+    assert_eq!(fs::read_to_string(dir.join("junk")).unwrap(), "junk");
+    assert_eq!(fs::read_to_string(dir.join("counter")).unwrap(), "x\n");
+}
+
+#[test]
+fn a_failing_install_step_leaves_no_copy_and_no_ready_marker() {
+    let repo = Repo::new();
+    let item = extension(
+        &repo,
+        &json!({"install": ["sh", "-c", "mkdir built; exit 3"]}),
+    );
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap_err();
+    // The step built into the copy before it failed, and all of it went.
+    assert!(!repo.home().join("pinned").join(&hash).exists());
+    assert!(!ready(&repo, &hash).exists());
+    assert!(pinned_names(&repo).is_empty());
+}
+
+#[test]
+fn a_rebuild_that_fails_clears_the_stale_ready_marker() {
+    let repo = Repo::new();
+    let flag = repo.home().join("fail");
+    let step = format!(
+        "test ! -e '{}' || {{ echo broken >&2; exit 3; }}; echo x >> counter",
+        flag.display()
+    );
+    let item = extension(&repo, &json!({"install": ["sh", "-c", step]}));
+    let hash = hashed(&item);
+    store(&repo).approve(&item, &hash).unwrap();
+    // The copy is gone but its marker is left, as when a copy is deleted
+    // outside an approval.
+    fs::remove_dir_all(repo.home().join("pinned").join(&hash)).unwrap();
+    assert!(ready(&repo, &hash).is_file());
+    // The rebuild runs the step again and fails: the stale marker goes
+    // with it, so no partial directory is left beside a marker the next
+    // approval would accept.
+    fs::write(&flag, "fail").unwrap();
+    let e = store(&repo).approve(&item, &hash).unwrap_err();
+    assert!(
+        matches!(&e, Error::InstallExited { name, .. } if name == "fiber.test/p"),
+        "{e}"
+    );
+    assert!(!repo.home().join("pinned").join(&hash).exists());
+    assert!(!ready(&repo, &hash).exists());
+    assert!(pinned_names(&repo).is_empty());
+    // With the failure gone, the next approval builds the copy again.
+    fs::remove_file(&flag).unwrap();
+    store(&repo).approve(&item, &hash).unwrap();
+    let copy = repo.home().join("pinned").join(&hash);
+    assert_eq!(fs::read_to_string(copy.join("counter")).unwrap(), "x\n");
+    assert!(ready(&repo, &hash).is_file());
 }
 
 #[test]
@@ -447,4 +556,56 @@ fn scratch_and_temporary_names_never_repeat() {
     let c = super::store::next();
     assert_ne!(b, c);
     assert_ne!(a, c);
+}
+
+#[test]
+fn a_ready_marker_that_cannot_be_removed_fails_before_the_install_step_runs() {
+    let repo = Repo::new();
+    let item = extension(&repo, &json!({"install": ["sh", "-c", "touch ../ran"]}));
+    let hash = hashed(&item);
+    let marker = ready(&repo, &hash);
+    fs::create_dir_all(marker.parent().unwrap()).unwrap();
+    fs::create_dir(&marker).unwrap();
+    let e = store(&repo).approve(&item, &hash).unwrap_err();
+    assert!(
+        matches!(&e, Error::Io { path, .. } if path == &marker),
+        "{e}"
+    );
+    assert!(e.to_string().contains(&marker.display().to_string()), "{e}");
+    // The step never ran: its side effect outside the copy is absent. A
+    // build that ignored the removal failure would run the step before
+    // failing at the marker, leaving this behind.
+    assert!(!repo.home().join("pinned").join("ran").exists());
+}
+
+#[test]
+fn a_stray_file_where_the_copy_goes_is_replaced_by_the_copy() {
+    let repo = Repo::new();
+    let item = extension(&repo, &json!({}));
+    let hash = hashed(&item);
+    let copy = repo.home().join("pinned").join(&hash);
+    fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    fs::write(&copy, "stray").unwrap();
+    assert!(!ready(&repo, &hash).exists());
+    store(&repo).approve(&item, &hash).unwrap();
+    assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_dir());
+    assert!(copy.join("init.lua").is_file());
+    assert!(copy.join("extension.json").is_file());
+    assert!(ready(&repo, &hash).is_file());
+}
+
+#[test]
+fn a_stray_symlink_where_the_copy_goes_is_replaced_by_the_copy() {
+    let repo = Repo::new();
+    let item = extension(&repo, &json!({}));
+    let hash = hashed(&item);
+    let copy = repo.home().join("pinned").join(&hash);
+    fs::create_dir_all(copy.parent().unwrap()).unwrap();
+    symlink("nowhere-fiber-test", &copy).unwrap();
+    assert!(!ready(&repo, &hash).exists());
+    store(&repo).approve(&item, &hash).unwrap();
+    assert!(fs::symlink_metadata(&copy).unwrap().file_type().is_dir());
+    assert!(copy.join("init.lua").is_file());
+    assert!(copy.join("extension.json").is_file());
+    assert!(ready(&repo, &hash).is_file());
 }
