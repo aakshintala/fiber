@@ -14,6 +14,7 @@
 mod support;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -287,13 +288,19 @@ fn no_deadline_never_expires() {
 fn wait_parked_unbounded(clock: &Arc<fakes::clock::FakeClock>) -> bool {
     let clock = Arc::clone(clock);
     let (done, waiting) = mpsc::channel();
+    // Stops the poller once the wait below has returned, so it never
+    // outlives its deadline.
+    let stop = Arc::new(AtomicBool::new(false));
+    let polling = Arc::clone(&stop);
     thread::spawn(move || {
-        while !clock.parked().contains(&None) {
+        while !polling.load(Ordering::Relaxed) && !clock.parked().contains(&None) {
             thread::yield_now();
         }
         if let Ok(()) = done.send(()) {}
     });
-    waiting.recv_timeout(DEADLINE).is_ok()
+    let parked = waiting.recv_timeout(DEADLINE).is_ok();
+    stop.store(true, Ordering::Relaxed);
+    parked
 }
 
 fn shell(subject: &str) -> Arc<TestTool> {
