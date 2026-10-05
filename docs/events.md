@@ -68,7 +68,7 @@ verdict whatever happened.
 {"kind":"fiber_exited","schema_version":1,"payload":{"error":{"code":"no_model","message":"No model is configured. Set one in a configuration file or pass --model."},"exit_code":1}}
 ```
 
-The hub sends three lines of its own, only on a connection to the hub and
+The hub sends four lines of its own, only on a connection to the hub and
 never to a log (`docs/invocation.md`, "The hub"). Each carries `kind`, `ts`,
 `schema_version` and `payload`, and no `session_id` in the envelope, since it
 is about the hub or names its session in the payload:
@@ -83,6 +83,9 @@ is about the hub or names its session in the payload:
   `change` (`paired` or `revoked`, a closed set), `device` (string), the
   device paired or revoked, and `by` (string), the device whose client asked,
   or `local` for the hub's machine.
+- `session_left`, on the feed when a session's process ends: `payload` holds
+  `session_id` (string) and `how`, `exited` or `crashed`, a closed set
+  (`docs/invocation.md`, "The hub").
 
 ## Durable and ephemeral
 
@@ -426,6 +429,8 @@ sent the latest.
 | `tool` | string | no | with `tool`, the running tool's name |
 | `waiting` | object | no | with `waiting`: `request_id` (string), `kind` (`approval` or `question`) and `summary` (string, one line) |
 | `since` | integer | yes | when this state began, as `ts` |
+| `git` | object | no | present in a git repository: `branch`, a string, or `null` when HEAD is detached |
+| `context` | object | no | after the first request: `tokens`, the context's size in tokens at the latest request, and `window`, the model's context window (integers) |
 | `spend` | `usage` | yes | the session's spend so far, delegates included, from the `usage` fold |
 | `delegates` | integer | yes | delegates running |
 | `jobs` | integer | yes | jobs running, delegates excluded |

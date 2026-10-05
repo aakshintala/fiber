@@ -250,6 +250,18 @@ fn samples() -> Vec<(&'static str, Value)> {
         (
             "session_status",
             json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "idle", "since": 1, "git": {"branch": "main"},
+            "context": {"tokens": 3, "window": 4}, "spend": usage,
+            "delegates": 0, "jobs": 0}),
+        ),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
+            "state": "idle", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
+        ),
+        (
+            "session_status",
+            json!({"name": "n", "workspace": "/w", "model": "p/m",
             "state": "streaming", "since": 1, "spend": usage, "delegates": 0, "jobs": 0}),
         ),
         (

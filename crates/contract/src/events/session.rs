@@ -5,6 +5,8 @@ use serde::{Deserialize, Serialize};
 use crate::shapes::{ContentPart, Failure, Point, Process, Question, Sender, Usage};
 use crate::{ActionId, CommandId, JobId, RequestId, Seq, SessionId};
 
+use super::context::Git;
+
 /// `fiber_started`: the first line a process writes for a session.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FiberStarted {
@@ -322,12 +324,27 @@ pub struct SessionStatus {
     pub state: SessionState,
     /// When this state began, as `ts`.
     pub since: u64,
+    /// Present in a git repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub git: Option<Git>,
+    /// After the first request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub context: Option<ContextFill>,
     /// The session's spend so far, delegates included.
     pub spend: Usage,
     /// Delegates running.
     pub delegates: u32,
     /// Jobs running, delegates excluded.
     pub jobs: u32,
+}
+
+/// The context's size at the latest request, on `session_status`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContextFill {
+    /// The context's size in tokens at the latest request.
+    pub tokens: u64,
+    /// The model's context window.
+    pub window: u64,
 }
 
 /// `context_added`: text a hook added to the conversation.

@@ -141,6 +141,8 @@ set the key.
 | `providers."<name>".credential` | the first label `fiber login` stored | no | The credential label a new session uses (`docs/model-routing.md`, "Which credential a session uses"). |
 | `providers."<name>".credentials."<label>"` | none | no | Where that label's key comes from, when it is not stored in Fiber home ("Secrets"). |
 | `tui.panel.cards` | `["session", "changed_files", "delegates", "jobs", "quota"]` | no | The cards the terminal's panel shows, in order; an extension widget is listed as a card too (`docs/tui.md`, "The panel"). The status line of the narrow layout follows the same order. |
+| `tui.rail.width` | 15 | no | The rail's share of the screen's width, in percent, kept from 22 to 48 columns; dragging its edge writes it (`docs/tui.md`, "Layout"). |
+| `tui.panel.width` | 21 | no | The panel's share of the screen's width, in percent, kept from 30 to 60 columns; dragging its edge writes it. |
 | `tui.theme` | none | no | The theme's name: `dark`, `light` or a theme file in Fiber home. With none, the theme follows the terminal's light or dark appearance (`docs/tui.md`, "Themes"). |
 | `tui.reduced_motion` | false | no | Whether every animation takes its still form. On whenever a screen reader is detected (`docs/tui.md`, "Reduced motion"). |
 | `tui.screen_reader` | detected | no | Forces the flat screen-reader mode on or off; `--screen-reader` sets it true (`docs/tui.md`, "Screen readers"). |

@@ -209,6 +209,8 @@ fn status(name: &str) -> Event {
         model: "m".into(),
         state: SessionState::Idle,
         since: 0,
+        git: None,
+        context: None,
         spend: Usage {
             tokens: Tokens {
                 input: 0,

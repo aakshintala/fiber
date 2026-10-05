@@ -121,8 +121,8 @@ repository, and the offer says so.
 Home lists sessions, live ones first, then recently exited ones, one row
 each, growing with the number of live sessions and scrolling past the screen:
 
-- a glyph for the state: ● running, ◐ waiting on the person, ✗ stopped
-  without exiting, ○ exited
+- a glyph for the state, as on the rail ("State glyphs"), and ○ for an
+  exited session
 - the name, or the first prompt when it has none
 - what it waits on, such as "approval: shell cargo publish --dry-run" or
   "question: 2 of 3 answered", and its spend
@@ -131,10 +131,10 @@ each, growing with the number of live sessions and scrolling past the screen:
 
 Live sessions come from the hub's feed, across every project. Exited sessions
 come from `recent.jsonl`, then from the hub's paged query for older ones.
-When the terminal was launched inside a git repository, home and the rail
-show only that repository's project, every worktree of it, with a line saying
-"N waiting in other projects" and a toggle to show everything. Outside a git
-repository they show everything.
+When the terminal was launched inside a git repository, home shows only that
+repository's project, every worktree of it, with a line saying "N waiting in
+other projects" and a toggle to show everything. Outside a git repository it
+shows everything. The rail always shows every project ("The rail").
 
 Clicking a row, or Enter on it, opens the session: an exited one is resumed by
 the hub. A ✕ on a live row stops that session ("Quit"). Delete on a
@@ -155,13 +155,85 @@ live, a conversation column, and a side panel on the right. The panel is always 
 a footer and status line, and the input box spans only the conversation
 column.
 
+The rail and the panel each take a share of the screen's width, kept between
+a floor and a ceiling: the rail 15%, from 22 to 48 columns, and the panel 21%,
+from 30 to 60. Dragging the edge between either and the conversation resizes
+it, and saves the new share as `tui.rail.width` or `tui.panel.width`, so one
+setting suits a laptop and a 4K screen alike. A drag stops where the
+conversation would fall below its minimum width. Each draggable edge shows a
+dim grip, `⋮` on three rows at mid-height; under the pointer the edge column
+tints and the pointer becomes a resize arrow (OSC 22, where the terminal
+supports it). The numbers are starting values, to be tuned once the terminal
+is built.
+
 ### The rail
 
-The rail lists the live sessions, one or two rows each: the state glyph, the
-name, and what it waits on. Rows are numbered, and ⌥1 to ⌥9 jump to them.
-Clicking a row, or its key, switches the conversation and the panel to that
-session. The rail is drawn from each session's `session_status` and shows only
-while two or more sessions are live. Home never shows it.
+The rail lists every live session, across every project, as cards grouped
+under project headers. The launch project's group comes first, then the
+others in the order their first session started. The rail is drawn from the
+hub's feed (`docs/invocation.md`, "The hub") and shows while two or more
+sessions are live. Home never shows it.
+
+A project header holds the project's name, a "+" that starts a session in
+that project, the summed spend of its live sessions, and "N done", the count
+of its exited sessions, which opens home's session list for that project.
+
+Each card is four rows on its own tint, inside ▄ and ▀ edges, with a ▌ stripe
+on the left in the state's colour:
+
+```
+▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄▄
+▌1 ! NEEDS INPUT         16s
+▌  fix flaky lock test
+▌  approval: shell cargo mu…
+▌  $1.35 ▆▆▆▆▆▆░░░░░░░░  12%
+▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀
+```
+
+1. the card's number, the state glyph and its word, and how long the session
+   has been in that state, in one unit (`16s`, `9m`, `2h`, `3d`)
+2. the name, or the first prompt when it has none
+3. what it waits on, in the attention colour, while it waits; otherwise its
+   git branch
+4. its spend, a bar of how full its context is, and the percentage. The bar
+   turns the warning colour from 60% and the error colour from 85%.
+
+Text on each side keeps the same margin from the card's edge. Below a 30-column
+rail the bar goes and the spend and percentage stay. The session on screen
+has a brighter tint than the others. Hover brightens a card and shows one
+line at the rail's foot with the full name, workspace and model.
+
+Cards keep the order their sessions started, and a card keeps its number
+for its whole life: numbers never move when a session starts or stops waiting,
+and a dismissed card leaves a gap. ⌥1 to ⌥9, or a click, switch the
+conversation and the panel to that session, and the rail scrolls the card
+into view; the mouse wheel scrolls the rail. ⌥A goes to the oldest request
+waiting anywhere ("Bindings").
+
+Delegates are not on the rail; the parent's panel shows them. A delegate
+waiting on the person puts its wait on its parent's card. Exited sessions are
+not on the rail either; their project header counts them.
+
+A session whose process died stays on the rail as a ✗ CRASHED card until the
+person resumes it, by clicking the card, or dismisses it, with the ✕ that
+replaces its time. Both go through the hub, so every client agrees (`docs/invocation.md`, "The hub").
+
+#### State glyphs
+
+The rail, home's session list and the terminal title use one set:
+
+| `session_status` | Glyph | Word | Colour |
+|---|---|---|---|
+| `streaming`, `tool` | a braille spinner, `●` under reduced motion | WORKING | the accent |
+| `retrying` | the spinner | RETRYING | warning |
+| `waiting` | `!` | NEEDS INPUT | attention |
+| `idle` | `✓` | READY | dim |
+| the process died | `✗` | CRASHED | error |
+
+The spinners step on the working line's timer. A card that starts waiting
+pulses its glyph and stripe for its first 10 seconds, then holds still, so a
+screen with nothing working draws no frames; under reduced motion it never
+pulses.
 
 ### The panel
 
@@ -210,7 +282,9 @@ the panel.
 The branch and status come from the person's shell command
 (`docs/invocation.md`, `shell`): `git --no-optional-locks status` when the
 person clicks for it, and `git rev-parse --abbrev-ref HEAD` on attach and
-after each turn. Nothing polls.
+after each turn. Nothing polls. A rail card's branch comes instead from that
+session's `session_status` (`docs/events.md`), which the session updates when
+it starts and after each turn.
 
 ### Swapped views
 
@@ -302,8 +376,13 @@ area. Clicking any other segment opens its card's view.
 
 ### Shedding
 
-The rail sheds before the panel: first to a one-column strip of glyphs, then
-gone, with "N waiting" joining the status line. Below the narrow layout, the
+The rail sheds before the panel. When the screen is too narrow for the rail's
+floor, the conversation's minimum and the panel, the rail hides, and "N
+waiting" joins the Session card, or the status line in the narrow layout; a
+click on it shows the rail. A hidden rail leaves its grip at the screen's left
+edge, and dragging the grip out shows the rail again, as does ⌥R. A rail hidden
+for width returns when the screen grows; one the person hid, by ⌥R or by
+dragging it below its floor, stays hidden until shown. Below the narrow layout, the
 screen sheds in this order: the panel, then the status rows, then the working
 line's detail. Below a floor of about 40 by 10
 cells it shows one centred line, "Fiber needs 40×10 · now 32×8". The session
@@ -660,7 +739,7 @@ keyboard's reach.
 | Clear the draft, then quit | `clear_then_quit` | Ctrl+C, twice within about a second on an empty box | `/quit` |
 | Go home | `go_home` | ⌥0 | `/home` |
 | Start a new session | `new_session` | Ctrl+N | `/new` |
-| Switch to rail row N | `rail_row_n` | ⌥1 to ⌥9 | click the row |
+| Switch to the session of rail card N | `rail_row_n` | ⌥1 to ⌥9 | click the card |
 | Delete the selected exited session in the session list | `delete_session` | Delete, or Backspace, on the row | |
 | Recall an earlier prompt from the project of the session on screen | `recall_prompt` | ↑ in an empty box | |
 | Search those prompts | `search_prompts` | Ctrl+R | |
@@ -676,13 +755,14 @@ keyboard's reach.
 | Copy the focused item | `copy_focused` | y | select it |
 | Move focus to the panel, the rail, then the conversation | `focus_area` | Tab | click the area |
 | Show or hide the panel | `toggle_panel` | ⌥P | |
+| Show or hide the rail | `toggle_rail` | ⌥R | drag its edge |
 | Search | `search` | Ctrl+F; Cmd+F where forwarded | |
 | Open the search results | `search_results` | Ctrl+F with search open | click the match count |
 | Jump to the end | `jump_to_end` | End | click "↓ New messages below" |
 | Select a queued steering message | `select_steering` | ⌥↑ ⌥↓ | its mouse target |
 | Amend it | `amend_steering` | Enter | |
 | Drop it | `drop_steering` | ⌥X | its mouse target |
-| Reopen a request put aside, or move to the next | `next_request` | ⌥A | `/approvals`; click the badge |
+| Reopen a request put aside, or move to the next, the oldest first, switching to its session | `next_request` | ⌥A | `/approvals`; click the badge or a waiting card |
 | Open the model picker | `model_picker` | Ctrl+L | `/model` |
 | Open the key map | `key_map` | F1 | `/?` or `/help` |
 
@@ -767,7 +847,7 @@ question or a finished turn, whether or not it is on screen, the terminal:
 
 - sends an OSC 9 desktop notification where the terminal supports one
   (Ghostty, iTerm2, kitty, WezTerm), and a bell elsewhere
-- shows the state in the terminal title, such as "◐ fiber · approval"
+- shows the state in the terminal title, such as "! fiber · approval"
 
 Each can be turned off: `tui.attention.notification`, `tui.attention.bell` and
 `tui.attention.title`.
@@ -1174,6 +1254,9 @@ server's or an extension's `tools.enabled` and `tools.disabled`.
   and the span shape that kept selection, copy and search working.
 - [research/tui-prototype/CHECK.md](../research/tui-prototype/CHECK.md): the
   checks run by eye in Ghostty.
+- Branch `prototype-692-rail`: the rail's prototype, never merged. The owner
+  compared a list, cards and tabs, then card heights, in Ghostty, and chose
+  the cards above (#692).
 
 ## Related
 

@@ -266,7 +266,9 @@ other file in `credentials/` (`docs/permissions.md`, "Credentials").
 
 **Recently exited sessions.** `recent.jsonl` at the top of Fiber home: one
 JSON line per session that exited, appended by the session itself as it
-exits, with its id, workspace, name and what it stopped on. A session
+exits, with its id, workspace, name and what it stopped on. A session whose
+process died cannot append, so the hub appends its row when it sees the
+crash (`docs/invocation.md`, "The hub"). A session
 appends whether or not a hub is running, and nothing rewrites it, so an
 append is never lost to a rewrite. Deleting a session leaves its row, and
 every reader skips a row whose session directory is gone. The hub reads its tail at start and keeps

@@ -38,10 +38,10 @@ pub use offer::{
     OfferDecision, OfferedItem, OfferedKind, RepositoryCodeOffered, RepositoryCodeResolved,
 };
 pub use session::{
-    Clients, ContextAdded, FiberExited, FiberStarted, FinalMessage, InputItem, NamedBy, Parent,
-    QueuedMessage, Rewind, Rewound, SessionNamed, SessionStarted, SessionState, SessionStatus,
-    ShellCommand, SteeringApplied, SteeringQueue, TurnCompleted, TurnOutcome, TurnStarted,
-    Variables, VariablesSource, Waiting, WaitingKind,
+    Clients, ContextAdded, ContextFill, FiberExited, FiberStarted, FinalMessage, InputItem,
+    NamedBy, Parent, QueuedMessage, Rewind, Rewound, SessionNamed, SessionStarted, SessionState,
+    SessionStatus, ShellCommand, SteeringApplied, SteeringQueue, TurnCompleted, TurnOutcome,
+    TurnStarted, Variables, VariablesSource, Waiting, WaitingKind,
 };
 
 use crate::Envelope;
