@@ -2,13 +2,15 @@
 //! names"): `mcp__<server>__<tool>`, cut short with a hash suffix when a
 //! protocol's length limit would refuse it.
 
-/// The longest qualified name Fiber declares. A live probe of each vendor
-/// sets the final value (`#588`'s probe hold); 64 is the placeholder every
-/// protocol is known to accept.
+/// The longest qualified name Fiber declares. `research/mcp-tool-names/`
+/// measured 128 on Codex Responses and OpenAI Responses and at least 1024
+/// on a completions relay; Anthropic Messages and Google Generative AI are
+/// not measured, so 64 stays as the conservative floor.
 pub(crate) const MAX_NAME_LEN: usize = 64;
 
 /// Hex chars of SHA-256 carried by a cut name, so two long names sharing a
-/// prefix stay distinct. Sized by the same probe as [`MAX_NAME_LEN`].
+/// prefix stay distinct. 8 is 32 bits of the hash, leaving 55 characters of
+/// the name at [`MAX_NAME_LEN`].
 pub(crate) const HASH_LEN: usize = 8;
 
 /// `mcp__<server>__<tool>`, or the cut form when that runs over

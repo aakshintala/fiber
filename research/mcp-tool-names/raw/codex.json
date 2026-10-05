@@ -1,0 +1,56 @@
+{
+ "protocol": "codex",
+ "max_accepted": 128,
+ "requests": [
+  {
+   "length": 64,
+   "status": 200,
+   "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_0f9faca334f19357016ac3d8c8f65c87d094d050ed6a160248\",\"object\":\"response\",\"created_at\":1791219913,\"status\":\"in_progress\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"background\":false,\"completed_at\":null,\"error\":null,\"frequency_penalty\":0.0,\"incomplete_details\":null,\"instructions\":\"Reply briefly.\",\"max_output_tokens\":null,\"max_tool_calls\":null,\"model\":\"gpt-6-luna\",\"moderation\":null,\"output\":[],\"parallel_tool_calls\":tru"
+  },
+  {
+   "length": 128,
+   "status": 200,
+   "body": "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_07acfc36d0e640a8016ac3d8cbbaf887d09d7a53cfd88e28ca\",\"object\":\"response\",\"created_at\":1791219915,\"status\":\"in_progress\",\"access_programs\":{\"cyber\":\"daybreak_blue\"},\"background\":false,\"completed_at\":null,\"error\":null,\"frequency_penalty\":0.0,\"incomplete_details\":null,\"instructions\":\"Reply briefly.\",\"max_output_tokens\":null,\"max_tool_calls\":null,\"model\":\"gpt-6-luna\",\"moderation\":null,\"output\":[],\"parallel_tool_calls\":tru"
+  },
+  {
+   "length": 256,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 256 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 192,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 192 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 160,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 160 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 144,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 144 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 136,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 136 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 132,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 132 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 130,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 130 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  },
+  {
+   "length": 129,
+   "status": 400,
+   "body": "{\n  \"error\": {\n    \"message\": \"Invalid 'tools[0].name': string too long. Expected a string with maximum length 128, but got a string with length 129 instead.\",\n    \"type\": \"invalid_request_error\",\n    \"param\": \"tools[0].name\",\n    \"code\": \"string_above_max_length\"\n  }\n}"
+  }
+ ]
+}
