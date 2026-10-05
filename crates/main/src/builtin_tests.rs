@@ -215,7 +215,8 @@ fn the_model_shell_is_non_interactive() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) = super::builtin(root.path(), &clock, &jobs).unwrap();
+    let (tools, _infos, _driver, _forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
     let shell = tools
         .iter()
         .map(|(_, tool)| tool)
