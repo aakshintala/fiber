@@ -370,14 +370,15 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `credential` | Switches the session's credential label at the next turn boundary (`docs/model-routing.md`, "Which credential a session uses"). The switch rebuilds the prompt cache, as a model switch does. It changes this session only; the terminal's `/credential` also saves the label. Rejected `invalid_arguments` for a label the provider does not have. |
 | `name` | Sets the session's name, which pins it against the model's `name_session`. Takes the text; empty text clears the person's name and unpins it. Written as `session_named`. |
 | `handoff` | Starts a handoff: the model's context restarts from a note the model writes (`docs/handoff.md`). Takes optional instructions saying what the next stretch of work focuses on. During a turn it applies at the next step boundary, as a steering message does; between turns it is a turn of its own whose input is the command. |
-| `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, and `delegate_session` if it is a delegate. |
+| `rewind` | Starts a new session process that continues a session from an earlier point (`docs/events.md`, "Rewind"), and answers with the new session's id. Takes an optional `from_session_id`, default this session; an optional `seq`, default the start of the latest turn; whether to summarise; and `adopt`, the `job_id`s of the jobs started after the point that the new session keeps, default none, so every other such job stops. Rejected `busy` if a turn is running, `stale_request` if `adopt` names a job that is not running, `not_step_boundary` if `seq` is not a step boundary, `session_held` if another process holds the session, `delegate_session` if it is a delegate, and `summary_failed` if it asked for a summary that could not be made. |
 | `shell` | Runs a shell command the person typed, as `!` does in the terminal. Takes the command and `send`, default false. Answered when the command ends. Accepted during a turn. |
 | `command` | Runs an extension's command by name, with the text after it as arguments, as a person typing `/name args` does (`docs/extensions.md`, "Commands and screens"). Rejected `unknown_command` for a name no extension registered. |
 | `close` | Accept no more prompts; finish the turn in flight, then any running jobs (`docs/tools.md`, "Background jobs"), and exit. |
 
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `closing`, `duplicate_command`.
+`session_held`, `delegate_session`, `summary_failed`, `closing`,
+`duplicate_command`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set
@@ -738,6 +739,10 @@ Every client reaches sessions through the hub, the local terminal included.
   running when its socket accepts a connection; anything else is a log to
   resume. Its crash or its restart drops client connections and ends no
   session. Clients reconnect.
+- **It finds every running session by its socket.** Each running session has
+  a socket at `run/<session_id>`, whoever started it, a `fiber ask` run
+  included. The hub reads `run/` when it starts and watches it for new
+  sockets, so it also finds sessions that were running before it restarted.
 - **It serves one feed.** The hub holds a `summary` connection to every
   running session and serves each client the latest `session_status` of every
   running or waiting top-level session, across all projects. Exited sessions
@@ -745,9 +750,12 @@ Every client reaches sessions through the hub, the local terminal included.
   first (`docs/state.md`). Delegates are never in the feed; a client shows a
   delegate when the person opens its parent.
 - **It starts sessions with the internal session command**, in the workspace
-  the client names.
+  the client names. Whoever starts a session generates its id and passes it
+  on that command's line, so the starter knows the id before the process
+  runs and nothing is read back.
 - **A client starts it** when none is running. That hub listens on its local
-  socket only, and exits once no client has been connected for a while.
+  socket only, and exits once no client has been connected for
+  `hub.idle_exit_ms` (`docs/configuration.md`).
 - **`fiber hub install` registers it as a login service** (launchd on macOS,
   systemd on Linux) that never exits for being idle. With `--port`, it also
   listens on that port of `127.0.0.1`, and on no other address. `fiber update`
@@ -983,7 +991,8 @@ session:
 
 **Exporting a session.** `fiber sessions export <id> [<path>]` copies the
 session's `events.jsonl` and `artifacts/` into a directory, `./<id>/` by
-default. A running session's export holds the lines written so far. The
+default. A path that already exists is refused, naming it; nothing is merged
+or overwritten. A running session's export holds the lines written so far. The
 export is the log as recorded: text a hook redacted before it was logged is
 redacted, and nothing else is (`docs/extensions.md`, "Hooks"). What the person
 does with it is theirs. Another format, such as Markdown or HTML, or further
@@ -1005,6 +1014,12 @@ that hold nothing to lose:
   worktree is skipped, and its line names what removing it would lose:
   uncommitted files, commits found nowhere else, or both. `--force` removes
   it anyway. A worktree a running session works in is never removed.
+- **Pinned copies.** It removes each copy in `pinned/` of this repository's
+  code that no worktree's files match any more (`docs/extensions.md`, "Code a
+  repository ships"). The worktrees that count are the repository's
+  `git worktree list`. The copy's approval record stays, so the same version
+  checked out again is not offered again; its copy is made again from the
+  worktree.
 - **Diagnostic logs and crash files.** It deletes the old ones, as the hub
   does when it starts (`docs/state.md`, "What each part holds").
 - **What it frees.** `--dry-run` prints what prune would delete and the space

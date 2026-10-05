@@ -104,6 +104,7 @@ set the key.
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"`, or an object with `model`, the reference, and `credential`, the credential label the delegate uses (`docs/delegates.md`). A repository's role cannot name a credential: its `credential` is ignored with a `notice`. |
 | `hub.port` | none | no | The port of `127.0.0.1` an installed hub listens on, as well as its local socket; unset, it listens on its local socket only. `fiber hub install --port` writes it (`docs/invocation.md`, "The hub"). |
 | `hub.allowed_origins` | `[]` | no | The web page origins, such as `"https://fiber.example.ts.net"`, whose websockets the hub accepts (`docs/invocation.md`, "Remote clients"). |
+| `hub.idle_exit_ms` | 1800000 (30 minutes) | no | How long a hub a client started stays running with no client connected, the same default as `session.idle_exit_ms`; an installed hub never exits for being idle (`docs/invocation.md`, "The hub"). |
 | `hub.default` | none | no | On a client, the name of the hub in `hubs` it uses without `--hub`; unset, it uses the local hub. |
 | `hubs."<name>".address` | none | no | On a client, a hub's address: `ws://`, `wss://`, or `unix:` and a socket path (`docs/invocation.md`, "Several hubs"). The device token is in `credentials/hubs/<name>`, never here. |
 | `session.idle_exit_ms` | 1800000 (30 minutes) | no | How long a session stays running with no turn and no jobs, whoever is connected (`docs/invocation.md`, "Lifecycle"). |

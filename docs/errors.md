@@ -268,6 +268,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `stale_request` | driver command | the command names a request, steering message, job or turn that is no longer pending, queued or running (`docs/invocation.md`) |
 | `state_too_large` | extension call | a state value over 64 KiB |
 | `stream_incomplete` | model call, turn | the stream ended early or carried an unmatched error |
+| `summary_failed` | driver command | a `rewind` that asked for a summary could not get one, so no new session was created (`docs/events.md`, "Rewind") |
 | `timeout` | tool call, job | a deadline passed |
 | `too_large` | tool call, hub command | a `web_fetch` download, or a file `read_file` names, larger than 10 MiB |
 | `tool_error` | tool call | the tool itself failed, or its effects function errored |
@@ -302,8 +303,8 @@ Notices, for a failure outside any action:
 | `web_search_unavailable` | `web_search` is not declared: several search backends are installed and `web_search.backend` is unset, or it names a backend that is not installed; the message names which (`docs/tools.md`, "Web fetch and web search") |
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
-`session_held`, `delegate_session`, `invalid_arguments`, `unknown_command`,
-`closing`, `duplicate_command`)
+`session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
+`unknown_command`, `closing`, `duplicate_command`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here
