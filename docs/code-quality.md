@@ -135,7 +135,9 @@ works when the log's own thread is the one that failed. It takes no lock.
 
 A crash file describes a bug in Fiber, not the session. Nothing reads it to
 decide anything: a session's log with no `fiber_exited` is what records that
-its process died (`docs/events.md`). A second panic inside the hook, running
+its process died (`docs/events.md`). `fiber doctor` names the newest one, and
+old ones are pruned with the diagnostic logs (`docs/state.md`, "What each part
+holds"). A second panic inside the hook, running
 out of memory, or a full disk leaves no file.
 
 ## Errors

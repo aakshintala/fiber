@@ -36,6 +36,8 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
   cache/models/<provider>.json    discovered model list
   cache/mcp/<server>.json         an MCP server's last tool list
   crashes/<session_id>-<ms>.txt   one report per panic (docs/code-quality.md)
+  logs/hub.log, logs/hub.log.1    the hub's diagnostic log and its previous file
+  logs/<kind>-<id>.log            one other process's diagnostic log
 ```
 
 ## Override
@@ -174,7 +176,52 @@ a file by rename, so two sessions refreshing one list leave one whole file.
 message, thread name and backtrace, written by the panic hook before the
 process aborts (`docs/code-quality.md`, "Panics"). A report describes a bug
 in Fiber, not a session, so nothing reads one to decide anything, and
-deleting them is always safe. Nothing prunes them.
+deleting them is always safe. They are pruned with the diagnostic logs.
+
+**Diagnostic logs.** `logs/` records what happens outside any session, where
+no session log could hold it. It is always on, because the failures it exists
+for, such as a startup error, happen before anyone would think to turn a log
+on. Each process writes its own file, so every file has one writer, as a
+session log does: the hub writes `logs/hub.log`, and any other process that
+has something to record writes `logs/<kind>-<id>.log`, where `<kind>` is
+`session`, `ask` or `tui` and `<id>` its session id, or its process id when it
+has none.
+
+Each line is one JSON object: `ts`, `level` (`error`, `warn` or `info`),
+`process` (`hub`, `session`, `ask` or `tui`), `session_id` when one is known,
+`code` and `message`, one sentence. For a failure, `code` is its code from
+`docs/errors.md`. For one of the hub's operations it is the operation's name.
+This shape is a contract: a program that forwards these lines elsewhere reads
+these fields.
+
+What is recorded:
+
+- **Failures with no session to hold them:** a startup error such as
+  `config_invalid`, a signal that arrives before `fiber_started`, a shutdown
+  that passes its bound (`docs/invocation.md`, "Shutdown"), and a background
+  refresh, such as a quota or model list, that fails while no session is
+  running.
+- **The hub's operations:** `hub_started` and `hub_stopped`;
+  `client_connected`, `client_disconnected` and `client_unauthenticated`;
+  `device_paired` and `device_revoked`, naming the device and the client that
+  acted; `session_started` and `session_resumed`, naming the session and the
+  device that asked.
+
+An event inside a running session is recorded in that session's log and
+nowhere else; a hook that fails in a session, for example, is a `notice` or
+`hook_failed` there (`docs/extensions.md`, "When a hook fails"). Nothing in
+`logs/` holds a credential or token, prompt or model text, a tool's arguments
+or a configuration value. A failed hook is named with its code, never its
+content. There is one level of detail; a level that records requests, their
+paths, statuses and timings, is not built.
+
+**Bounds.** `logs/hub.log` is renamed to `logs/hub.log.1` when it passes
+10 MiB, replacing any older one; its single writer makes the rename safe.
+Files in `logs/` and `crashes/` older than 30 days, and all but the newest 100
+in each, are deleted by `fiber sessions prune` and when the hub starts. These
+numbers were chosen, not measured. Fiber sends nothing from `logs/` anywhere
+([ADR 0010](adr/0010-fiber-never-phones-home.md));
+`fiber doctor` reads it (`docs/invocation.md`, "Commands and flags").
 
 **Worktrees.** Per project, `worktrees/<id>/`: the git worktree of a delegate
 started with `isolation: worktree`, of `fiber ask --worktree` or of the
@@ -241,8 +288,3 @@ it never touches sessions, config, rules, approvals, pinned copies, credentials
 or extension data. It replaces the binary by renaming a new file over it, so a running
 session keeps the file it launched from. How the binary is fetched and
 replaced is `docs/releasing.md`.
-
-## Not settled here
-
-- Fiber's own debug and crash logs:
-  [Observability: what Fiber records about itself outside a session](https://github.com/aakshintala/fiber/issues/60)
