@@ -17,7 +17,7 @@ proptest = "1"
 proc-macro2 = "1"
 pulldown-cmark = { version = "0.13", default-features = false }
 mlua = { version = "0.12", features = ["lua54", "vendored"] }
-rustix = { version = "1", features = ["event", "process", "pty"] }
+rustix = { version = "1", features = ["event", "process", "pty", "termios"] }
 similar = { version = "2", default-features = false, features = ["text"] }
 ignore = "0.4"
 grep-searcher = "0.1"

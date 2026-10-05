@@ -15,6 +15,7 @@ mod clock;
 mod credential;
 mod handoff;
 mod late_emit;
+mod login;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
@@ -128,6 +129,8 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => approve::approve(args.yes),
+        cli::Invocation::Run(Some(cli::Commands::Login(args))) => login::run_login(args),
+        cli::Invocation::Run(Some(cli::Commands::Logout(args))) => login::run_logout(args),
         // The hidden search subcommands hold no feature logic: they only
         // call into `tools` (`docs/architecture.md`, "The call rules").
         cli::Invocation::Run(Some(cli::Commands::Grep { args })) => tools::grep_main(args),
