@@ -729,3 +729,30 @@ fn an_ended_job_drops_its_input() {
         Err(super::WriteError::Ended(Outcome::Completed))
     ));
 }
+
+#[test]
+fn since_text_ends_in_one_newline_and_is_empty_for_no_bytes() {
+    let dir = TempDir::new("fiber-jobs-since");
+    let path = dir.path().join("out.log");
+    std::fs::write(&path, b"").unwrap();
+    assert_eq!(super::since_text(&path, 0), "");
+    std::fs::write(&path, b"a").unwrap();
+    assert_eq!(super::since_text(&path, 0), "a\n");
+    std::fs::write(&path, b"a\n").unwrap();
+    assert_eq!(super::since_text(&path, 0), "a\n");
+    assert_eq!(super::since_text(&dir.path().join("missing.log"), 0), "");
+}
+
+#[test]
+fn since_text_from_the_start_keeps_every_byte_and_from_inside_drops_continuations() {
+    let dir = TempDir::new("fiber-jobs-since-bytes");
+    let path = dir.path().join("out.log");
+    // A continuation byte at the very start is invalid, not half of an
+    // earlier character, so nothing is dropped.
+    std::fs::write(&path, b"\xA9ok").unwrap();
+    assert_eq!(super::since_text(&path, 0), "\u{fffd}ok\n");
+    // From one byte in, the same byte is the end of a split character.
+    assert_eq!(super::since_text(&path, 1), "ok\n");
+    std::fs::write(&path, b"ab").unwrap();
+    assert_eq!(super::since_text(&path, 1), "b\n");
+}

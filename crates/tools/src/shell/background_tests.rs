@@ -23,7 +23,7 @@ use fakes::kill_pid;
 use super::super::command::{Finished, MoveReason, StopKind};
 use super::{
     JobCancel, MoveAsk, PS_BOUND, align_char_boundary, description_of, format_rows, group_members,
-    output_tail, parse_ps, receipt, shell_sentence, to_completed,
+    output_tail, parse_ps, receipt, shell_sentence, terminal_receipt, to_completed,
 };
 
 fn finished(
@@ -493,4 +493,37 @@ fn a_capped_job_ends_failed_with_output_cap_whatever_else_ended_it() {
         true,
     ));
     assert_eq!(exited.process.unwrap().exit_code, Some(3));
+}
+
+#[test]
+fn a_terminal_receipt_says_how_to_type_and_carries_the_output_so_far() {
+    let started = JobStarted {
+        job_id: JobId("j_1".into()),
+        tool: Some("shell".into()),
+        extension: None,
+        description: "python3".into(),
+        output_path: "j_1.log".into(),
+    };
+    let path = Path::new("/tmp/j_1.log");
+    let reason = MoveReason::StartedInBackground;
+    let text_of = |first: &str| {
+        let output = terminal_receipt(&started, path, &reason, None, first);
+        assert_eq!(
+            output.jobs,
+            vec![contract::jobs::JobRecord::Started(started.clone())]
+        );
+        let ContentPart::Text { text } = &output.content[0] else {
+            panic!("receipt text");
+        };
+        text.clone()
+    };
+    let head = "Started in a terminal and moved to the background.\nJob j_1. Output: /tmp/j_1.log. Type into it with `jobs write`; `jobs wait` waits for it.\n";
+    assert_eq!(text_of(""), head);
+    assert_eq!(text_of(">>> "), format!("{head}Output so far:\n>>> \n"));
+    assert_eq!(text_of("a\n"), format!("{head}Output so far:\na\n"));
+    let other = terminal_receipt(&started, path, &MoveReason::AfterThirtySeconds, None, "");
+    let ContentPart::Text { text } = &other.content[0] else {
+        panic!("receipt text");
+    };
+    assert!(text.starts_with("Still running after 30 seconds"), "{text}");
 }

@@ -61,19 +61,19 @@ impl Read for Primary {
 /// Opens a terminal. The primary is close-on-exec, so no command inherits
 /// it, and not a controlling terminal of this process.
 pub(super) fn open() -> std::io::Result<Terminal> {
-    let primary = openpt(OpenptFlags::RDWR | OpenptFlags::NOCTTY)?;
+    let primary = openpt(OpenptFlags::RDWR.union(OpenptFlags::NOCTTY))?;
     // `openpt` has no close-on-exec flag on macOS, so it is set after, on
     // every platform.
     fcntl_setfd(&primary, FdFlags::CLOEXEC)?;
     // The reader and the writer share the description, so both are
     // nonblocking.
-    fcntl_setfl(&primary, fcntl_getfl(&primary)? | OFlags::NONBLOCK)?;
+    fcntl_setfl(&primary, fcntl_getfl(&primary)?.union(OFlags::NONBLOCK))?;
     grantpt(&primary)?;
     unlockpt(&primary)?;
     let name = ptsname(&primary, Vec::new())?;
     let secondary = rustix::fs::open(
         name.as_c_str(),
-        OFlags::RDWR | OFlags::NOCTTY | OFlags::CLOEXEC,
+        OFlags::RDWR.union(OFlags::NOCTTY).union(OFlags::CLOEXEC),
         Mode::empty(),
     )?;
     let writer = Mutex::new(File::from(primary.try_clone()?));
@@ -81,7 +81,7 @@ pub(super) fn open() -> std::io::Result<Terminal> {
         let mut file = writer
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        write_chunks(&mut file, bytes, clock, cancel)
+        write_chunks(&mut *file, bytes, clock, cancel)
     }));
     Ok(Terminal {
         reader: Primary(File::from(primary)),
@@ -153,7 +153,7 @@ impl Nudge {
 /// cancel is checked before every write. Returns how many bytes went in:
 /// fewer than given means the cancel fired.
 fn write_chunks(
-    file: &mut File,
+    file: &mut impl Write,
     bytes: &[u8],
     clock: &dyn Clock,
     cancel: &dyn Cancel,

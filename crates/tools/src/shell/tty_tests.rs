@@ -12,7 +12,7 @@ use contract::clock::Wake;
 use fakes::clock::FakeClock;
 use fakes::{CancelToken, TempDir};
 
-use super::{open, output_so_far, wait_first_output};
+use super::{Nudge, open, output_so_far, wait_first_output, write_chunks};
 use crate::shell::output::{Shared, lock, note_eof};
 
 const DEADLINE: Duration = Duration::from_secs(5);
@@ -149,4 +149,137 @@ fn output_arriving_does_not_end_the_wait() {
     clock.advance(Duration::from_millis(250));
     done.recv_timeout(DEADLINE)
         .expect("the wait to end at 250 ms");
+}
+
+#[test]
+fn a_nudge_counts_its_wakes() {
+    let nudge = Nudge::default();
+    assert_eq!(nudge.seen(), 0);
+    nudge.wake();
+    assert_eq!(nudge.seen(), 1);
+    nudge.wake();
+    assert_eq!(nudge.seen(), 2);
+}
+
+/// A writer that answers each write from a script. Once the script is
+/// spent it writes nothing, which ends `write_chunks` with an error, so a
+/// mutant that loops on a step ends too.
+struct Script(std::collections::VecDeque<std::io::Result<usize>>);
+
+impl Write for Script {
+    fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+        self.0.pop_front().unwrap_or(Ok(0))
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn script(steps: Vec<std::io::Result<usize>>) -> Script {
+    Script(steps.into())
+}
+
+/// Runs `write_chunks` on its own thread, so a step that parks for good
+/// fails at `DEADLINE` and does not hang the run.
+fn chunked(
+    mut writer: Script,
+    bytes: &'static [u8],
+    clock: Arc<FakeClock>,
+    cancel: CancelToken,
+) -> mpsc::Receiver<std::io::Result<usize>> {
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(write_chunks(&mut writer, bytes, clock.as_ref(), &cancel));
+    });
+    rx
+}
+
+#[test]
+fn chunks_add_up_to_the_whole_input() {
+    let rx = chunked(
+        script(vec![Ok(2), Ok(3)]),
+        b"hello",
+        FakeClock::new(),
+        CancelToken::new(),
+    );
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 5);
+}
+
+#[test]
+fn a_full_queue_parks_for_ten_ms_on_the_clock_and_tries_again() {
+    let clock = FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(10);
+    let rx = chunked(
+        script(vec![Err(std::io::ErrorKind::WouldBlock.into()), Ok(5)]),
+        b"hello",
+        Arc::clone(&clock),
+        CancelToken::new(),
+    );
+    assert!(
+        clock.await_parked(due, DEADLINE),
+        "the write did not wait for room"
+    );
+    assert!(rx.try_recv().is_err());
+    clock.advance(Duration::from_millis(10));
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 5);
+}
+
+#[test]
+fn an_interrupted_write_is_tried_again_at_once() {
+    let rx = chunked(
+        script(vec![Err(std::io::ErrorKind::Interrupted.into()), Ok(2)]),
+        b"hi",
+        FakeClock::new(),
+        CancelToken::new(),
+    );
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 2);
+}
+
+#[test]
+fn any_other_error_ends_the_write_with_that_error() {
+    let rx = chunked(
+        script(vec![Err(std::io::ErrorKind::BrokenPipe.into()), Ok(2)]),
+        b"hi",
+        FakeClock::new(),
+        CancelToken::new(),
+    );
+    let err = rx.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::BrokenPipe);
+}
+
+#[test]
+fn a_write_of_nothing_is_an_error() {
+    let rx = chunked(
+        script(vec![Ok(0)]),
+        b"hi",
+        FakeClock::new(),
+        CancelToken::new(),
+    );
+    let err = rx.recv_timeout(DEADLINE).unwrap().unwrap_err();
+    assert_eq!(err.kind(), std::io::ErrorKind::WriteZero);
+}
+
+#[test]
+fn a_cancel_before_the_first_write_writes_nothing() {
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    let rx = chunked(script(vec![Ok(2)]), b"hi", FakeClock::new(), cancel);
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 0);
+}
+
+#[test]
+fn a_cancel_while_waiting_for_room_returns_what_was_written() {
+    let clock = FakeClock::new();
+    let due = clock.origin() + Duration::from_millis(10);
+    let cancel = CancelToken::new();
+    let rx = chunked(
+        script(vec![Ok(2), Err(std::io::ErrorKind::WouldBlock.into())]),
+        b"hello",
+        Arc::clone(&clock),
+        cancel.clone(),
+    );
+    assert!(clock.await_parked(due, DEADLINE));
+    cancel.cancel();
+    assert_eq!(rx.recv_timeout(DEADLINE).unwrap().unwrap(), 2);
 }

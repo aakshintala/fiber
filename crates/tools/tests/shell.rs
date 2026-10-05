@@ -1740,3 +1740,28 @@ fn a_cancel_stops_a_write_to_a_terminal_whose_program_never_reads() {
     assert_eq!(ended.status, Outcome::Cancelled);
     watchdog.stand_down(DEADLINE);
 }
+
+#[test]
+fn a_tty_command_is_not_a_bare_wait() {
+    let dir = fakes::TempDir::new("fiber-shell-tty-sleep");
+    let ready = Ready::new(dir.path());
+    let jobs = FakeJobs::new(dir.path());
+    // The first part is `sleep 30`, which a call that waits is refused for.
+    let command = format!("sleep 30 & echo $$ > {}; wait", quote(ready.path()));
+    let running = start_tty(dir.path().to_path_buf(), command, None, Arc::clone(&jobs));
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = Watchdog::group(pgid);
+    assert!(
+        running
+            .clock
+            .await_parked(running.start + Duration::from_millis(250), DEADLINE)
+    );
+    running.clock.advance(Duration::from_millis(250));
+    let output = running.output.recv_timeout(DEADLINE).expect("the receipt");
+    assert!(output.error.is_none(), "{}", text(&output));
+    let job = started(&output);
+    jobs.stop(&job.job_id);
+    let ended = jobs.ended(DEADLINE).expect("the stop to end the job");
+    assert_eq!(ended.status, Outcome::Cancelled);
+    watchdog.stand_down(DEADLINE);
+}
