@@ -336,6 +336,10 @@ fn two_clients_see_the_log_while_ask_is_held() {
         &first,
         r#"{"id":"c_steer","command":"steer","args":{"content":[{"type":"text","text":"more"}]}}"#,
     );
+    // A missing `args` is read as `{}`: `rewind` takes it and is refused only
+    // as unbuilt, while `shell` has a required key.
+    send(&first, r#"{"id":"c_rewind","command":"rewind"}"#);
+    send(&first, r#"{"id":"c_shell","command":"shell"}"#);
     // The reader hands a line to the inbox before it reads the next, so the
     // answer to `tools` proves the prompt and the steer are queued. Released
     // earlier, the turn can end and drop them: "The session ended before
@@ -360,6 +364,12 @@ fn two_clients_see_the_log_while_ask_is_held() {
         "The session is closing and takes no new turn."
     );
     assert_eq!(answered(&own, "c_steer")["kind"], "command_accepted");
+    let rewind = answered(&own, "c_rewind");
+    assert_eq!(rewind["kind"], "command_rejected");
+    assert_eq!(rewind["payload"]["code"], "unknown_command");
+    let shell = answered(&own, "c_shell");
+    assert_eq!(shell["kind"], "command_rejected");
+    assert_eq!(shell["payload"]["code"], "invalid_arguments");
     let leaked: Vec<_> = other
         .iter()
         .filter(|line| line["kind"] == "command_accepted" || line["kind"] == "command_rejected")
