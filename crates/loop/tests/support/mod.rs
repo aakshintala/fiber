@@ -830,7 +830,16 @@ impl Session {
             Arc::clone(&log),
             Arc::new(seam),
             model,
-            r#loop::PromptInputs::new(home.0.clone(), "/bin/sh".into(), session_log, prompt_clock),
+            {
+                let mut prompt = r#loop::PromptInputs::new(
+                    home.0.clone(),
+                    "/bin/sh".into(),
+                    session_log,
+                    prompt_clock,
+                );
+                prompt.credential = Some("work".into());
+                prompt
+            },
             rx,
             tools
                 .into_iter()

@@ -40,7 +40,7 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     assert_eq!(built.payload["cache_lifetime"], "1h");
     assert!(built.payload.get("effort").is_none());
     assert!(built.payload.get("thinking").is_none());
-    assert!(built.payload.get("credential").is_none());
+    assert_eq!(built.payload["credential"], "work");
     assert_eq!(built.payload["trigger_at"], 400_000);
     // The event's system prompt is the first request's, and its tool
     // choice and cache lifetime are what the request sends.

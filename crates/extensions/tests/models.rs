@@ -166,7 +166,7 @@ fn an_installed_provider_is_reached_with_its_credential() {
     let model = providers.choose(None, &config).unwrap();
     assert_eq!(model.provider.headers["x-client"], "fiber");
     assert_eq!(model.model.base_url, "http://127.0.0.1:1/v1");
-    let key = config.credential(model.provider).unwrap();
+    let key = config.credential(model.provider, "default").unwrap();
     assert_eq!(key.expose(), "key-from-command");
 }
 
@@ -176,7 +176,7 @@ fn a_run_whose_provider_has_no_credential_is_credential_missing() {
     let providers = installed(&setup, &[("acme", provider("acme", &["m1"]))]);
     let config = config(&setup, &["model=acme/m1"]);
     let model = providers.choose(None, &config).unwrap();
-    let err = config.credential(model.provider).unwrap_err();
+    let err = config.credential(model.provider, "default").unwrap_err();
     assert_eq!(err.code(), ErrorCode::CredentialMissing);
 }
 
