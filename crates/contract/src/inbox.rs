@@ -62,11 +62,35 @@ pub enum Delivery {
     /// Accept no more prompts. The turn in flight finishes, then the loop
     /// exits.
     Close(Ack),
+    /// A background job ended (`docs/tools.md`, "Background jobs"). The
+    /// loop takes it as news for the model only when its claim holds.
+    Job(JobNotice),
     /// Wakes a loop blocked on its inbox after an accepted `cancel` or a
     /// clock move. It carries no ack and no meaning: every drain discards
     /// it, and an approval wait reads the cancel signal after it wakes
     /// (`docs/architecture.md`, "Cancellation").
     Cancelled,
+}
+
+/// News that a background job ended, sent by the session's jobs registry.
+#[derive(Debug)]
+pub struct JobNotice {
+    /// How the job ended: the `job_completed` the loop writes when it
+    /// admits the notice.
+    pub completed: crate::events::JobCompleted,
+    /// Whether this notice is still the model's news to receive.
+    pub claim: Claim,
+}
+
+/// True for exactly one caller across this notice and the job's `wait` and
+/// `stop`: false once a `jobs wait` or `stop` already returned the job's
+/// final state to the model.
+pub struct Claim(pub Box<dyn FnOnce() -> bool + Send>);
+
+impl fmt::Debug for Claim {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Claim(..)")
+    }
 }
 
 #[cfg(test)]

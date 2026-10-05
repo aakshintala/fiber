@@ -13,11 +13,10 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
 use contract::events::{
-    AssistantMessageCompleted, CacheLifetime, Empty, Event, Grant, InputItem, MessageOutcome,
-    PreambleReason, SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted,
-    UsageRecorded,
+    AssistantMessageCompleted, CacheLifetime, Empty, Event, Grant, MessageOutcome, PreambleReason,
+    SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
-use contract::inbox::{Delivery, Message};
+use contract::inbox::Delivery;
 use contract::provider::{
     CallError, Cost, Delta, Finish, Input, ModelRequest, Provider, Reply, ReplyAction,
     ToolDefinition,
@@ -34,6 +33,7 @@ mod changes;
 mod completion;
 mod conversation;
 mod inbox;
+mod jobs;
 mod opening;
 mod permission;
 mod process;
@@ -124,10 +124,11 @@ pub struct Loop {
     pub(crate) cancel: Arc<TurnCancel>,
     /// The root session's id, for providers that route by key.
     cache_key: String,
-    /// Steering messages taken and not yet applied, in arrival order: held
-    /// while the loop waited on an approval, taken by the end-of-turn
-    /// check, or taken in the drain that is about to apply them.
-    queued: VecDeque<Message>,
+    /// Steering messages and job notices taken and not yet written, in
+    /// arrival order: held while the loop waited on an approval, taken by
+    /// the end-of-turn check, or taken in the drain that is about to apply
+    /// them.
+    queued: VecDeque<jobs::Queued>,
     /// `close` has been taken. No further turn starts
     /// (`docs/invocation.md`, "Lifecycle").
     closing: bool,
@@ -137,6 +138,9 @@ pub struct Loop {
     /// Deliveries held aside across the finishing turn, in arrival order:
     /// `wait_for_turn` takes them first, ahead of the channel.
     pub(crate) deferred: VecDeque<Delivery>,
+    /// Job notices a resume logged behind a suspended turn's open batch:
+    /// they join the conversation after that batch's results.
+    pub(crate) held: Vec<Input>,
     /// The conversation, built from the durable events as they are written
     /// and never by re-reading the log (`docs/loop.md`, "What the model is
     /// sent").
@@ -272,6 +276,7 @@ impl Loop {
             closing: false,
             suspended: None,
             deferred: VecDeque::new(),
+            held: Vec::new(),
             conversation: Vec::new(),
             sent: None,
             tools,
@@ -377,21 +382,8 @@ impl Loop {
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
         self.cancel.arm();
-        self.append(
-            &Event::TurnStarted(TurnStarted {
-                input: started
-                    .messages
-                    .into_iter()
-                    .map(|message| InputItem::Message {
-                        content: message.content,
-                        sender: message.sender,
-                        changed_by: None,
-                    })
-                    .collect(),
-            }),
-            &turn,
-            None,
-        )?;
+        let input = self.turn_input(started.pieces);
+        self.append(&Event::TurnStarted(TurnStarted { input }), &turn, None)?;
         // A prompt is accepted once its `turn_started` is written. A log
         // error above drops it uncalled.
         if let Some(ack) = started.prompt {

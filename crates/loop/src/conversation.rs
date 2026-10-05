@@ -17,7 +17,7 @@ use contract::{ActionId, Envelope};
 use crate::Error;
 use crate::prompt::{body, fill};
 
-const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
+pub(crate) const MESSAGES_MD: &str = include_str!("../prompt/messages.md");
 
 /// A call with no `tool_call_completed`, which only a crash can leave
 /// (`docs/events.md`, "Resume"), is sent with a fixed result: it never
@@ -32,7 +32,9 @@ const OUTCOME_UNKNOWN: &str = "Its outcome is unknown: it may have run.";
 /// The conversation `lines` render, for a session whose model reference is
 /// `model`. Lines of kinds this build does not know are skipped.
 pub fn rebuild(lines: &[Envelope], model: &str) -> Result<Vec<Input>, Error> {
-    Ok(rebuild_and_sent(lines, model, &HashSet::new())?.0)
+    let (mut conversation, _, mut held) = rebuild_and_sent(lines, model, &HashSet::new())?;
+    conversation.append(&mut held);
+    Ok(conversation)
 }
 
 /// The actions with a `tool_call_completed` in `lines`.
@@ -49,16 +51,22 @@ pub(crate) fn completed_actions(lines: &[Envelope]) -> Result<HashSet<ActionId>,
     Ok(completed)
 }
 
+/// What [`rebuild_and_sent`] returns: the conversation, the previous
+/// request's end, and the notices held behind the open batch.
+pub(crate) type Rebuilt = (Vec<Input>, Option<usize>, Vec<Input>);
+
 /// The conversation `lines` render, with its length at the last
 /// `assistant_message_started`: the previous request's end, for the cache
 /// markers (`docs/prompt-cache.md`). `None` when the log holds none. The
 /// length is read after the line renders, so the fixed results its flush
-/// just added count.
+/// just added count. The third part is the job notices still waiting
+/// behind calls whose results the log does not hold yet: the `open` batch
+/// a resume finishes, which releases them after its results.
 pub(crate) fn rebuild_and_sent(
     lines: &[Envelope],
     model: &str,
     open: &HashSet<ActionId>,
-) -> Result<(Vec<Input>, Option<usize>), Error> {
+) -> Result<Rebuilt, Error> {
     let completed = completed_actions(lines)?;
     let mut rendered = Rendered::default();
     let mut sent = None;
@@ -70,7 +78,8 @@ pub(crate) fn rebuild_and_sent(
             }
         }
     }
-    Ok((rendered.finish(), sent))
+    let (conversation, held) = rendered.finish();
+    Ok((conversation, sent, held))
 }
 
 /// `rebuild`'s state: the conversation so far, and the calls requested but
@@ -78,12 +87,20 @@ pub(crate) fn rebuild_and_sent(
 /// gets its fixed result after the whole batch of calls it belongs to: the
 /// whole reply plus its result lines. The next round, a `TurnStarted`,
 /// `SteeringApplied` or `AssistantMessageStarted`, or the end of the log,
-/// flushes them, so a `tool_call_started` written after the request is
-/// always seen before the flush decides.
+/// flushes them, as does a `job_completed` with no action, so a
+/// `tool_call_started` written after the request is always seen before the
+/// flush decides.
 #[derive(Default)]
 struct Rendered {
     conversation: Vec<Input>,
     pending: Vec<Pending>,
+    /// Calls requested whose result is still to come: later in the log,
+    /// or from the turn a resume finishes.
+    outstanding: Vec<ActionId>,
+    /// Job notices logged while calls were outstanding: they render after
+    /// the last of those calls' results, so no message separates a call
+    /// from its result.
+    held: Vec<Input>,
     /// The content the model last had per instruction file path: a diff
     /// renders from this and the line's content, both in the log.
     had: BTreeMap<String, String>,
@@ -117,6 +134,8 @@ impl Rendered {
                             action_id: action.clone(),
                             started: false,
                         });
+                    } else {
+                        self.outstanding.push(action.clone());
                     }
                 }
             }
@@ -135,6 +154,10 @@ impl Rendered {
                         is_error: completed.status == CallStatus::Failed,
                     });
                     self.pending.retain(|p| &p.action_id != action);
+                    self.outstanding.retain(|id| id != action);
+                    if self.outstanding.is_empty() {
+                        self.conversation.append(&mut self.held);
+                    }
                 }
             }
             // The next round starts a new batch: every call of the last
@@ -204,11 +227,27 @@ impl Rendered {
             | Event::JobDelta(_)
             | Event::JobLine(_)
             | Event::DelegateFinished(_)
-            | Event::JobCompleted(_)
             | Event::JobsPendingNotified(_)
             | Event::CommandAccepted(_)
             | Event::CommandRejected(_) => {
                 render(&mut self.conversation, event, action, model, &mut self.had);
+            }
+            // A job notice joins at a step boundary, as a steer does: it
+            // starts a new batch. A `wait` or `stop` record, under its
+            // call's action, continues the batch.
+            // A notice a resume logged while a suspended batch was open
+            // waits for that batch's results.
+            Event::JobCompleted(job) => {
+                if action.is_none() {
+                    self.flush();
+                }
+                if action.is_none() && !self.outstanding.is_empty() {
+                    self.held.push(Input::User {
+                        text: crate::jobs::notice_text(job),
+                    });
+                } else {
+                    render(&mut self.conversation, event, action, model, &mut self.had);
+                }
             }
         }
     }
@@ -228,9 +267,11 @@ impl Rendered {
         }
     }
 
-    fn finish(mut self) -> Vec<Input> {
+    /// The conversation, and the notices still held behind calls with no
+    /// result yet.
+    fn finish(mut self) -> (Vec<Input>, Vec<Input>) {
         self.flush();
-        self.conversation
+        (self.conversation, self.held)
     }
 }
 
@@ -251,16 +292,24 @@ pub(crate) fn render(
             for item in &started.input {
                 match item {
                     InputItem::Message { content, .. } => conversation.push(user(content)),
-                    // debt: these start a turn only once shell commands, jobs
-                    // and handoff exist (#296, #299, #305); each renders then.
+                    // The jobs' own `job_completed` lines follow at the first
+                    // step boundary and render there.
+                    InputItem::Jobs { .. } => {}
+                    // debt: these start a turn only once shell commands and
+                    // handoff exist (#296, #305); each renders then.
                     InputItem::ShellCommand { .. }
-                    | InputItem::Jobs { .. }
                     | InputItem::Handoff { .. }
                     | InputItem::Unknown => {}
                 }
             }
         }
         Event::SteeringApplied(steering) => conversation.push(user(&steering.content)),
+        // A job's end the model was not already given: one message. A
+        // `wait` or `stop` record carries its call's action and renders
+        // nothing; that call's result already said it.
+        Event::JobCompleted(completed) if action.is_none() => conversation.push(Input::User {
+            text: crate::jobs::notice_text(completed),
+        }),
         // The opening message is rendered from its logged fields only, so
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").

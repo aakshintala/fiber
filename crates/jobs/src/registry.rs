@@ -5,12 +5,14 @@ use std::collections::hash_map::RandomState;
 use std::fs::File;
 use std::hash::BuildHasher;
 use std::path::{Path, PathBuf};
+use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
 use std::time::{Duration, Instant};
 
 use contract::JobId;
 use contract::clock::{Clock, Wake};
 use contract::events::{JobCompleted, JobStarted, Outcome};
+use contract::inbox::{Claim, Delivery, JobNotice};
 use contract::jobs::{End, JobRecord, OpenError, Opened, Opening};
 use contract::tool::Cancel;
 
@@ -31,6 +33,9 @@ struct Inner {
     /// Bumped under this mutex on every end, cancel wake and clock wake, so
     /// a wake that lands before the condvar wait is still visible.
     seq: u64,
+    /// The loop's inbox, which a job's end is sent to. `None` until
+    /// [`Registry::deliver_to`].
+    inbox: Option<Sender<Delivery>>,
 }
 
 struct Job {
@@ -75,6 +80,7 @@ impl Registry {
             inner: Mutex::new(Inner {
                 jobs: Vec::new(),
                 seq: 0,
+                inbox: None,
             }),
             cv: Condvar::new(),
             me: Weak::clone(me),
@@ -82,6 +88,13 @@ impl Registry {
         let wake: Arc<dyn Wake> = registry.clone();
         clock.subscribe(Arc::downgrade(&wake));
         registry
+    }
+
+    /// Sends each later job end to `inbox` as a [`Delivery::Job`], so the
+    /// loop can wake the model with it (`docs/tools.md`, "Background
+    /// jobs"). Before this, an end sends nothing.
+    pub fn deliver_to(&self, inbox: Sender<Delivery>) {
+        lock(&self.inner).inbox = Some(inbox);
     }
 
     /// Mints the id, creates the empty output file, and records the job
@@ -267,7 +280,8 @@ impl Registry {
     }
 
     fn finish(&self, completed: JobCompleted) {
-        let mut inner = lock(&self.inner);
+        let mut guard = lock(&self.inner);
+        let inner = &mut *guard;
         if let Some(job) = inner
             .jobs
             .iter_mut()
@@ -277,10 +291,32 @@ impl Registry {
             // assignment below can replace `phase`.
             let running = matches!(job.phase, Phase::Running);
             if running {
-                job.phase = Phase::Ended(Box::new(completed));
+                job.phase = Phase::Ended(Box::new(completed.clone()));
+                if let Some(inbox) = &inner.inbox {
+                    let registry = Weak::clone(&self.me);
+                    let id = completed.job_id.0.clone();
+                    let claim = Claim(Box::new(move || {
+                        registry
+                            .upgrade()
+                            .is_some_and(|registry| registry.claim(&id))
+                    }));
+                    // A loop that is gone takes no news; the end stays
+                    // recorded for `list`.
+                    let _sent = inbox.send(Delivery::Job(JobNotice { completed, claim }));
+                }
             }
         }
-        bump(&mut inner, &self.cv);
+        bump(inner, &self.cv);
+    }
+
+    /// Claims `id`'s final state for one caller: true the first time, false
+    /// once a notice, a `wait` or a `stop` claimed it.
+    fn claim(&self, id: &str) -> bool {
+        let mut inner = lock(&self.inner);
+        let Some(job) = inner.jobs.iter_mut().find(|job| job.started.job_id.0 == id) else {
+            return false;
+        };
+        !std::mem::replace(&mut job.claimed, true)
     }
 
     /// Parks until `id` ends, `until` passes, or `cancel` fires. `until`

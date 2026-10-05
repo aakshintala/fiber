@@ -167,8 +167,9 @@ impl Loop {
     /// Resumes the session `lines` describe on `log`, which already holds
     /// the lock: the conversation is rebuilt with the fixed results for the
     /// calls a crash left without one, and the folds a new loop builds from
-    /// nothing are restored. Nothing is written: `session_started` is the
-    /// first line's, and `seq` carries on. Every other argument is
+    /// nothing are restored. The only lines written are one `job_completed`
+    /// per job a crash left running, marked `orphaned`; `session_started` is
+    /// the first line's, and `seq` carries on. Every other argument is
     /// [`Loop::start`]'s. `lines` is the whole log, read under the lock
     /// `Log::open` took.
     #[allow(
@@ -196,8 +197,9 @@ impl Loop {
             .unwrap_or_default();
         // The conversation, with the fixed results, and its length at the
         // last `assistant_message_started`: the previous request's end, for
-        // the cache markers.
-        let (conversation, sent) =
+        // the cache markers. Notices the log holds behind the open batch
+        // are released after its results, as the finishing turn writes them.
+        let (conversation, sent, held) =
             crate::conversation::rebuild_and_sent(lines, &model.reference, &open)?;
         let mut reviewed = Vec::new();
         let mut grants = Vec::new();
@@ -249,7 +251,7 @@ impl Loop {
         };
         // debt: copies `Loop::start`'s literal apart from five fields; a
         // shared constructor once a third constructor needs the same fields.
-        Ok(Self {
+        let mut resumed = Self {
             log,
             provider,
             model,
@@ -267,6 +269,7 @@ impl Loop {
             closing: false,
             suspended: halted,
             deferred: VecDeque::new(),
+            held,
             conversation,
             sent,
             tools,
@@ -298,7 +301,9 @@ impl Loop {
             retry: Retry::default(),
             idle_exit: None,
             idle_left: false,
-        })
+        };
+        resumed.mark_orphans(lines)?;
+        Ok(resumed)
     }
 }
 
@@ -344,6 +349,8 @@ impl Loop {
             };
             self.append(&Event::ToolCallCompleted(*completed), &turn, Some(id))?;
         }
+        // Orphan notices the resume logged behind the open batch.
+        self.conversation.append(&mut self.held);
         self.run_steps(&turn)
     }
 

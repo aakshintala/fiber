@@ -7,10 +7,11 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{QueuedMessage, SteeringApplied, SteeringQueue};
-use contract::inbox::{Ack, Delivery, Message, Rejection};
+use contract::events::{QueuedMessage, SteeringQueue};
+use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
+use crate::jobs::Queued;
 use crate::{Error, Loop};
 
 /// A turn is running.
@@ -28,11 +29,12 @@ const STALE_REPLY: &str = "That request is no longer pending.";
 /// A `reply`'s keys do not fit the pending request.
 pub(crate) const UNFIT_REPLY: &str = "That answer does not fit the pending request.";
 
-/// What the idle drain collected. A prompt is accepted only while `messages`
-/// is empty, so when `prompt` is set the prompt is the first message.
+/// What the idle drain collected. A prompt is accepted only while `pieces`
+/// holds no message, so when `prompt` is set the prompt is the first
+/// message.
 pub(crate) struct TurnInput {
-    /// The turn's input, in arrival order.
-    pub(crate) messages: Vec<Message>,
+    /// The turn's input, in arrival order: messages and job notices.
+    pub(crate) pieces: Vec<Queued>,
     /// Set when the first message is a prompt, accepted once `turn_started`
     /// is written. A steer was already accepted when taken.
     pub(crate) prompt: Option<Ack>,
@@ -53,6 +55,10 @@ pub(crate) enum Waited {
 }
 
 /// What [`Loop::recv_until`] took from the inbox.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a short-lived return value; boxing would allocate on every delivery"
+)]
 pub(crate) enum InboxRecv {
     /// A delivery was waiting, or arrived before the deadline.
     Delivery(Delivery),
@@ -128,7 +134,7 @@ impl Loop {
         let deadline = self.idle_deadline();
         loop {
             let mut input = TurnInput {
-                messages: Vec::new(),
+                pieces: Vec::new(),
                 prompt: None,
             };
             // Deliveries held aside across the finishing turn go first, in
@@ -145,14 +151,19 @@ impl Loop {
             // outcome, not only `interrupted`. While `closing` nothing
             // starts, so steers still queued are not run.
             let kept = self.queued.len();
-            input.messages.extend(self.queued.drain(..));
-            if kept > 0 {
-                // The queue moved into `turn_started`.
+            let kept_steer = self
+                .queued
+                .iter()
+                .any(|piece| matches!(piece, Queued::Steer(_)));
+            input.pieces.extend(self.queued.drain(..));
+            if kept_steer {
+                // The queue moved into `turn_started`. Only steers are
+                // listed on `steering_queue`.
                 self.emit_queue(None)?;
             }
             if kept > 0 || held {
-                // Kept steers moved into `turn_started`, and held
-                // deliveries are already admitted above: what arrived
+                // Kept steers and notices moved into `turn_started`, and
+                // held deliveries are already admitted above: what arrived
                 // since is drained without blocking or re-announcing the
                 // queue, which did not move again.
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
@@ -169,7 +180,7 @@ impl Loop {
                     self.admit_idle(delivery, &mut input);
                 }
             }
-            if !input.messages.is_empty() {
+            if !input.pieces.is_empty() {
                 return Ok(Some(input));
             }
             if self.closing {
@@ -188,23 +199,11 @@ impl Loop {
         Ok(())
     }
 
-    /// Logs every queued steer as `steering_applied`, in arrival order, and
-    /// clears the queue (`docs/loop.md`, "One step").
+    /// Logs everything queued, in arrival order: each steer as
+    /// `steering_applied`, each job notice as `job_completed`. Clears the
+    /// queue (`docs/loop.md`, "One step").
     pub(crate) fn apply_steering(&mut self, turn: &TurnId) -> Result<(), Error> {
-        let mut applied = false;
-        while let Some(message) = self.queued.pop_front() {
-            applied = true;
-            self.append(
-                &contract::events::Event::SteeringApplied(SteeringApplied {
-                    content: message.content,
-                    sender: message.sender,
-                    changed_by: None,
-                }),
-                turn,
-                None,
-            )?;
-        }
-        if applied {
+        if self.write_queued(turn)? {
             self.emit_queue(Some(turn))?;
         }
         Ok(())
@@ -218,9 +217,12 @@ impl Loop {
             messages: self
                 .queued
                 .iter()
-                .map(|message| QueuedMessage {
-                    content: message.content.clone(),
-                    sender: message.sender.clone(),
+                .filter_map(|piece| match piece {
+                    Queued::Steer(message) => Some(QueuedMessage {
+                        content: message.content.clone(),
+                        sender: message.sender.clone(),
+                    }),
+                    Queued::Job(_) => None,
                 })
                 .collect(),
         });
@@ -267,6 +269,7 @@ impl Loop {
             | Delivery::Steer(..)
             | Delivery::SteerDrop(..)
             | Delivery::Reply(..)
+            | Delivery::Job(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -280,19 +283,19 @@ impl Loop {
             Delivery::Prompt(message, ack) => {
                 if self.closing {
                     reject(ack, ErrorCode::Closing, CLOSING);
-                } else if !input.messages.is_empty() {
+                } else if has_message(input) {
                     reject(ack, ErrorCode::Busy, BUSY);
                 } else {
-                    input.messages.push(message);
+                    input.pieces.push(Queued::Steer(message));
                     input.prompt = Some(ack);
                 }
             }
             Delivery::Steer(message, ack) => {
-                if self.closing && input.messages.is_empty() {
+                if self.closing && input.pieces.is_empty() {
                     reject(ack, ErrorCode::Closing, CLOSING);
                 } else {
                     accept(ack);
-                    input.messages.push(message);
+                    input.pieces.push(Queued::Steer(message));
                 }
             }
             Delivery::SteerDrop(id, ack) => {
@@ -307,6 +310,15 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning while idle.
             Delivery::Cancelled => {}
+            // After `close`, news does not start a turn, as a steer does
+            // not; the claim is left untaken.
+            Delivery::Job(notice) => {
+                if !(self.closing && input.pieces.is_empty())
+                    && let Some(completed) = crate::jobs::claimed(notice)
+                {
+                    input.pieces.push(Queued::Job(completed));
+                }
+            }
         }
     }
 
@@ -322,7 +334,7 @@ impl Loop {
             }
             Delivery::Steer(message, ack) => {
                 accept(ack);
-                self.queued.push_back(message);
+                self.queued.push_back(Queued::Steer(message));
                 self.emit_queue(Some(turn))?;
             }
             Delivery::SteerDrop(id, ack) => {
@@ -338,6 +350,7 @@ impl Loop {
             // A stale wake from an earlier turn's cancel: it carries no
             // meaning at a drain.
             Delivery::Cancelled => {}
+            Delivery::Job(notice) => self.admit_job(notice),
         }
         Ok(())
     }
@@ -365,24 +378,38 @@ pub(crate) fn reject(ack: Ack, code: ErrorCode, message: &str) {
     }));
 }
 
-/// Removes the unapplied steer `id` names. The prompt, when present, is the
-/// first message and is not a steer, so that index is skipped.
-fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
-    let skip = usize::from(input.prompt.is_some());
+/// Whether `input` holds a message, not only job notices.
+fn has_message(input: &TurnInput) -> bool {
     input
-        .messages
+        .pieces
         .iter()
-        .skip(skip)
-        .position(|message| message.sender.command_id == *id)
-        .map(|index| input.messages.remove(skip + index))
+        .any(|piece| matches!(piece, Queued::Steer(_)))
+}
+
+/// Removes the unapplied steer `id` names. The prompt, when present, is the
+/// first message and is not a steer, so it is skipped.
+fn drop_piece(input: &mut TurnInput, id: &CommandId) -> bool {
+    let mut prompt = input.prompt.is_some();
+    input
+        .pieces
+        .iter()
+        .position(|piece| match piece {
+            Queued::Steer(message) => {
+                !std::mem::take(&mut prompt) && message.sender.command_id == *id
+            }
+            Queued::Job(_) => false,
+        })
+        .map(|index| input.pieces.remove(index))
         .is_some()
 }
 
 /// Removes the unapplied steer `id` names from `queued`.
-fn drop_queued(queued: &mut std::collections::VecDeque<Message>, id: &CommandId) -> bool {
+fn drop_queued(queued: &mut std::collections::VecDeque<Queued>, id: &CommandId) -> bool {
     queued
         .iter()
-        .position(|message| message.sender.command_id == *id)
+        .position(
+            |piece| matches!(piece, Queued::Steer(message) if message.sender.command_id == *id),
+        )
         .map(|index| queued.remove(index))
         .is_some()
 }

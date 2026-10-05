@@ -70,6 +70,10 @@ Fiber: {path} was deleted. Its instructions no longer apply.
 
 Fiber: the date is now {date}.
 
+## job-completed
+
+Fiber: background job {job_id} ended: {status}.
+
 ## extension
 
 # Instructions from the {extension} extension
