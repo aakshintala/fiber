@@ -70,6 +70,7 @@ fn changed_with_diff_renders_the_recomputed_diff() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -96,6 +97,7 @@ fn changed_with_full_text_renders_the_replacement() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -119,6 +121,7 @@ fn created_renders_the_new_file() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -149,6 +152,7 @@ fn subdirectory_renders_the_reached_file() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -181,6 +185,7 @@ fn deleted_renders_one_line_and_forgets_the_path() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     let text = user_text(&conversation[0]);
@@ -203,6 +208,7 @@ fn own_edit_and_sent_none_render_nothing_but_move_what_the_model_had() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     render(
         &mut conversation,
@@ -215,6 +221,7 @@ fn own_edit_and_sent_none_render_nothing_but_move_what_the_model_had() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert!(conversation.is_empty());
     assert_eq!(
@@ -235,6 +242,7 @@ fn date_changed_renders_the_new_date() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     assert!(user_text(&conversation[0]).contains("2023-11-15"));
@@ -285,7 +293,14 @@ fn live_rendering_equals_rebuild() {
     let mut live = Vec::new();
     let mut had = BTreeMap::new();
     for event in &events {
-        render(&mut live, event, None, "fake/model-1", &mut had);
+        render(
+            &mut live,
+            event,
+            None,
+            "fake/model-1",
+            &mut had,
+            &mut crate::handoff::Carry::default(),
+        );
     }
     let lines: Vec<Envelope> = events
         .iter()
@@ -357,6 +372,7 @@ fn dir_of_falls_back_to_empty_without_a_parent() {
         None,
         "fake/model-1",
         &mut had,
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(conversation.len(), 1);
     assert!(user_text(&conversation[0]).contains("Leaf.\n"));
@@ -418,6 +434,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
         None,
         "fake/model-1",
         &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
     );
     let mut whole = cut.clone();
     whole.push(line("job_completed", &orphaned("j_1"), None));
@@ -467,6 +484,7 @@ fn a_job_completed_renders_a_notice_only_without_an_action() {
             action.as_ref(),
             "fake/model-1",
             &mut BTreeMap::new(),
+            &mut crate::handoff::Carry::default(),
         );
     }
     assert_eq!(live, rebuilt);
@@ -586,7 +604,7 @@ fn a_notice_behind_an_open_batch_renders_at_the_end() {
         ["result a_1", "call a_1", "user"]
     );
     let open = std::collections::HashSet::from([ActionId("a_1".into())]);
-    let (rebuilt, _, held) = super::rebuild_and_sent(&lines, "fake/model-1", &open).unwrap();
+    let (rebuilt, _, held, _) = super::rebuild_and_sent(&lines, "fake/model-1", &open).unwrap();
     // Held apart for the finishing turn to release after the results.
     assert_eq!(shape(&rebuilt), ["call a_1"]);
     assert_eq!(shape(&held), ["user"]);
@@ -651,6 +669,7 @@ fn the_free_renderer_carries_image_refs_too() {
         Some(&ActionId("a_1".into())),
         "fake/model-1",
         &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
     );
     assert_eq!(out, vec![expected_image_result()]);
 }

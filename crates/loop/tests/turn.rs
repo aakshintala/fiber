@@ -801,7 +801,13 @@ fn budgeted(
         .into_iter()
         .map(|message| contract::inbox::Delivery::Steer(message, support::ignore()))
         .collect();
-    let mut session = Session::open(script, during, vec![weather()], model);
+    // The scripted spend is far past the default handoff trigger; these
+    // tests are about the budget alone.
+    let mut session =
+        Session::open(script, during, vec![weather()], model).handoff(r#loop::HandoffSettings {
+            enabled: false,
+            ..r#loop::HandoffSettings::default()
+        });
     if let Some(usd) = usd {
         session = session.budget(Some(usd));
     }

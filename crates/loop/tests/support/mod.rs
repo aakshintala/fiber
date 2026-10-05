@@ -599,6 +599,35 @@ impl ModelCall for FireAfterReply {
     }
 }
 
+/// A provider that cancels the session's turn when its `at`-th call (1-based)
+/// is made, then answers from its scripted provider: the call ends
+/// `cancelled` at once, deterministically, on the loop's own thread.
+struct CancelAtCall {
+    inner: Arc<ScriptedProvider>,
+    cancel: Arc<TurnCancel>,
+    at: usize,
+    calls: AtomicUsize,
+}
+
+impl Provider for CancelAtCall {
+    fn call(&self, request: &ModelRequest) -> Box<dyn ModelCall> {
+        let call = self.inner.call(request);
+        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == self.at {
+            self.cancel.cancel();
+        }
+        call
+    }
+}
+
+/// `scripted` with its reply's `input` and `output` tokens set.
+pub(crate) fn with_tokens(mut scripted: Scripted, input: u64, output: u64) -> Scripted {
+    if let Ok(reply) = &mut scripted.end {
+        reply.tokens.input = input;
+        reply.tokens.output = output;
+    }
+    scripted
+}
+
 /// A session on a fresh log, its loop wired to a scripted provider.
 pub(crate) struct Session {
     pub(crate) provider: Arc<ScriptedProvider>,
@@ -682,6 +711,24 @@ impl Session {
             calls: AtomicUsize::new(0),
         });
         Self::assemble(hook, Vec::new(), Vec::new(), unpriced(), scripted, cancel)
+    }
+
+    /// A session whose `at`-th model call (1-based) is cancelled as it is
+    /// made, then answers from `script`.
+    pub(crate) fn cancelling_at_call(
+        script: Vec<Scripted>,
+        at: usize,
+        tools: Vec<Arc<dyn Tool>>,
+    ) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        let cancel = Arc::new(TurnCancel::default());
+        let hook = Arc::new(CancelAtCall {
+            inner: Arc::clone(&scripted),
+            cancel: Arc::clone(&cancel),
+            at,
+            calls: AtomicUsize::new(0),
+        });
+        Self::assemble(hook, Vec::new(), tools, unpriced(), scripted, cancel)
     }
 
     /// A session whose first model call blocks until cancelled, sending
@@ -866,6 +913,18 @@ impl Session {
     /// Caps the session's billed spend at `usd` US dollars.
     pub(crate) fn budget(mut self, usd: Option<f64>) -> Self {
         self.looped = self.looped.take().map(|looped| looped.budget(usd));
+        self
+    }
+
+    /// Sets automatic handoff's triggers.
+    pub(crate) fn handoff(mut self, settings: r#loop::HandoffSettings) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.handoff(settings));
+        self
+    }
+
+    /// Runs `forget` on every completed handoff.
+    pub(crate) fn on_handoff(mut self, forget: Arc<dyn Fn() + Send + Sync>) -> Self {
+        self.looped = self.looped.take().map(|looped| looped.on_handoff(forget));
         self
     }
 

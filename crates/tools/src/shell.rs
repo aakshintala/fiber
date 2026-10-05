@@ -23,6 +23,9 @@ mod background;
 #[path = "shell/command.rs"]
 mod command;
 
+#[path = "shell/output.rs"]
+mod output;
+
 #[path = "shell/prelude.rs"]
 mod prelude;
 
@@ -173,6 +176,7 @@ impl Tool for Shell {
             cancel,
             emit,
             policy,
+            self.jobs.as_deref(),
         ) {
             Ok(command::Ran::Finished(finished)) => from_spawn(Ok(finished), parsed.timeout_ms),
             Ok(command::Ran::Moved(moved)) => match &self.jobs {

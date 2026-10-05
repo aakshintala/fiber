@@ -2,20 +2,23 @@
 //! it (`docs/tools.md`, "Running a command", "Stopping a command").
 
 use std::fs::File;
-use std::io::{Read, Write};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, ExitStatus, Stdio};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::sync::{Arc, PoisonError, Weak};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::emit::Emit;
-use contract::events::{Event, Progress};
+use contract::events::Event;
+use contract::jobs::Jobs;
 use contract::tool::Cancel;
 
-use super::background::{Step, running_step, wait_deadline};
+use super::background::{MoveAsk, Step, running_step, wait_deadline};
+use super::output::{
+    JobStream, OUTPUT_CAP, Shared, bump, lock, read_output, stream_output, stream_tail,
+};
 use rustix::process::{Pid, Signal};
 
 /// How often a group is re-checked while the shell has exited and members
@@ -56,6 +59,8 @@ pub(crate) struct Finished {
     pub held_open: bool,
     /// Fiber sent SIGTERM or SIGKILL.
     pub sent_signal: bool,
+    /// The job's output passed the cap, so Fiber stopped it.
+    pub capped: bool,
 }
 
 /// Whether the drive loop may hand the command to a job.
@@ -77,6 +82,8 @@ pub(crate) enum MoveReason {
     AfterThirtySeconds,
     /// It was started with `run_in_background`.
     StartedInBackground,
+    /// The `background` driver command asked for it.
+    BackgroundCommand,
     /// The shell exited and left processes in the group.
     ShellExited {
         /// The shell's exit code.
@@ -110,6 +117,7 @@ pub(crate) fn execute(
     cancel: &dyn Cancel,
     emit: &dyn Emit,
     policy: MovePolicy,
+    jobs: Option<&dyn Jobs>,
 ) -> Result<Ran, std::io::Error> {
     let (read, write) = std::io::pipe()?;
     let write_err = write.try_clone()?;
@@ -139,8 +147,19 @@ pub(crate) fn execute(
     clock.subscribe(Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)));
     cancel.subscribe(Arc::downgrade(&(Arc::clone(&bridge) as Arc<dyn Wake>)));
 
+    // Registered before the drive loop parks and held until it returns, so
+    // `background` finds the call for as long as it waits in the foreground.
+    let registered = jobs
+        .filter(|_| policy == MovePolicy::Foreground)
+        .map(|jobs| {
+            MoveAsk::register(
+                jobs,
+                Arc::downgrade(&(Arc::clone(&shared) as Arc<dyn Wake>)),
+            )
+        });
     let start = clock.now();
     let mut progress = Run {
+        ask: registered.as_ref().map(|(ask, _)| Arc::clone(ask)),
         phase: Phase::Running,
         stop: None,
         sent_signal: false,
@@ -153,8 +172,15 @@ pub(crate) fn execute(
         },
         pgid,
         shared,
+        job: None,
     };
-    match pump(&mut progress, policy, clock, cancel, emit) {
+    let ended = pump(&mut progress, policy, clock, cancel, emit);
+    // A call that left the foreground wait is no longer counted, whether it
+    // finished or moved: `background` must not find it during the open.
+    if let Some((ask, _)) = &registered {
+        ask.end();
+    }
+    match ended {
         LoopEnd::Finished(finished) => {
             drop(bridge);
             Ok(Ran::Finished(finished))
@@ -163,6 +189,7 @@ pub(crate) fn execute(
             reason,
             bridge: Some(bridge),
             progress,
+            cap: OUTPUT_CAP,
         })),
     }
 }
@@ -195,80 +222,6 @@ fn detach(cmd: &mut Command) {
     }
 }
 
-#[derive(Default)]
-struct Inner {
-    reaped: bool,
-    status: Option<ExitStatus>,
-    eof: bool,
-    /// Foreground bytes. Cleared when a move hands the command to its file.
-    output: Vec<u8>,
-    /// The job's output file, after a move.
-    file: Option<File>,
-    discard: bool,
-    seq: u64,
-}
-
-#[derive(Default)]
-struct Shared {
-    inner: Mutex<Inner>,
-    cv: Condvar,
-}
-
-impl Wake for Shared {
-    fn wake(&self) {
-        // The sequence moves under the same lock as the wait, so a cancel
-        // or a clock advance that lands before `cv.wait` is still visible
-        // when the waiter checks.
-        let mut guard = lock(&self.inner);
-        bump(&mut guard);
-        self.cv.notify_all();
-    }
-}
-
-fn read_output(mut read: impl Read, shared: &Shared) {
-    let mut buf = [0_u8; 8192];
-    loop {
-        match read.read(&mut buf) {
-            Ok(0) => {
-                note_eof(shared);
-                return;
-            }
-            Ok(n) => {
-                let bytes = buf.get(..n).unwrap_or(&[]);
-                let mut inner = lock(&shared.inner);
-                // Past the drain bound the bytes are dropped and the read
-                // continues, so the program never blocks on the pipe.
-                if !inner.discard {
-                    if let Some(file) = inner.file.as_mut() {
-                        write_or_drop(file, bytes);
-                    } else {
-                        inner.output.extend_from_slice(bytes);
-                    }
-                }
-                // The drive loop streams every chunk: it wakes on this.
-                bump(&mut inner);
-                drop(inner);
-                shared.cv.notify_all();
-            }
-            Err(err) if err.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => {
-                note_eof(shared);
-                return;
-            }
-        }
-    }
-}
-
-fn note_eof(shared: &Shared) {
-    let mut inner = lock(&shared.inner);
-    if inner.eof {
-        return;
-    }
-    inner.eof = true;
-    bump(&mut inner);
-    shared.cv.notify_all();
-}
-
 fn wait_child(mut child: std::process::Child, shared: &Shared) {
     let status = child.wait().ok();
     let mut inner = lock(&shared.inner);
@@ -276,63 +229,6 @@ fn wait_child(mut child: std::process::Child, shared: &Shared) {
     inner.status = status;
     bump(&mut inner);
     shared.cv.notify_all();
-}
-
-fn bump(inner: &mut Inner) {
-    inner.seq = inner.seq.wrapping_add(1);
-}
-
-/// The longest prefix of `chunk` that ends on a complete UTF-8 sequence:
-/// an incomplete sequence at the end waits for the next chunk, while an
-/// invalid one is consumed, decoding as U+FFFD as `String::from_utf8_lossy`
-/// does. The held tail is the last chunk's invalid bytes when they are an
-/// incomplete sequence, else nothing; splits fall where the decoder is
-/// clean, so the emitted texts concatenate to the lossy whole.
-fn complete_prefix(chunk: &[u8]) -> usize {
-    let tail = match chunk.utf8_chunks().last() {
-        Some(last) => match str::from_utf8(last.invalid()) {
-            Err(err) if err.error_len().is_none() => last.invalid().len(),
-            Ok(_) | Err(_) => 0,
-        },
-        None => 0,
-    };
-    chunk.len() - tail
-}
-
-/// Emits `text` as one text-only `tool_call_delta`. Empty texts carry
-/// nothing and are not written.
-fn emit_delta(emit: &dyn Emit, text: String) {
-    if !text.is_empty() {
-        emit.emit(&Event::ToolCallDelta(Progress {
-            text: Some(text),
-            details: None,
-        }));
-    }
-}
-
-/// Emits the output past `streamed`, holding back an incomplete UTF-8 tail
-/// for the next chunk, and returns the new streamed offset. Output only
-/// grows, so bytes read between the copy and the return stay past it.
-fn stream_output(shared: &Shared, emit: &dyn Emit, streamed: usize) -> usize {
-    let chunk = {
-        lock(&shared.inner)
-            .output
-            .get(streamed..)
-            .unwrap_or_default()
-            .to_vec()
-    };
-    let complete = complete_prefix(&chunk);
-    if let Some(prefix) = chunk.get(..complete) {
-        emit_delta(emit, String::from_utf8_lossy(prefix).into_owned());
-    }
-    streamed.saturating_add(complete)
-}
-
-/// Emits `output` past `streamed`, lossily: an incomplete tail goes out as
-/// U+FFFD, so the concatenated delta texts equal the lossy whole output.
-fn stream_tail(output: &[u8], emit: &dyn Emit, streamed: usize) {
-    let rest = output.get(streamed..).unwrap_or_default();
-    emit_delta(emit, String::from_utf8_lossy(rest).into_owned());
 }
 
 struct View {
@@ -363,6 +259,10 @@ struct Run {
     move_at: Option<Instant>,
     pgid: u32,
     shared: Arc<Shared>,
+    /// A job's `job_delta` lines. Set only on a job's drive.
+    job: Option<JobStream>,
+    /// Set when `background` can reach this foreground call.
+    ask: Option<Arc<MoveAsk>>,
 }
 
 /// The call's cancel reaches the command through this bridge. The cancel
@@ -390,6 +290,8 @@ pub(crate) struct Moved {
     pub reason: MoveReason,
     bridge: Option<Arc<CancelBridge>>,
     progress: Run,
+    /// The job's output file stops at this many bytes. Tests set a small one.
+    cap: u64,
 }
 
 impl Moved {
@@ -399,11 +301,8 @@ impl Moved {
 
     /// Copies bytes already read into `file`, then points the reader at it.
     /// Both happen under the reader lock, so a chunk is not kept twice or lost.
-    pub(crate) fn attach_output(&self, mut file: File) {
-        let mut inner = lock(&self.progress.shared.inner);
-        let bytes = std::mem::take(&mut inner.output);
-        write_or_drop(&mut file, &bytes);
-        inner.file = Some(file);
+    pub(crate) fn attach_output(&self, file: File) {
+        lock(&self.progress.shared.inner).attach(file, self.cap);
     }
 
     /// Wakes this command when `cancel` fires. The job's stop uses it.
@@ -419,8 +318,13 @@ impl Moved {
 
     /// Runs the command to the end with no further move, on the job's
     /// cancel, which [`Moved::arm`] has subscribed.
-    pub(crate) fn drive_job(self, clock: &dyn Clock, cancel: &dyn Cancel) -> Finished {
-        // debt: no job_delta while a job runs, part 4 of #299 adds it
+    pub(crate) fn drive_job(
+        mut self,
+        clock: &dyn Clock,
+        cancel: &dyn Cancel,
+        stream: JobStream,
+    ) -> Finished {
+        self.progress.job = Some(stream);
         self.run(MovePolicy::Stay, clock, cancel, &Silent)
     }
 
@@ -494,10 +398,21 @@ fn pump(
         if view.reaped && !group_alive(progress.pgid) {
             progress.seen_empty = true;
         }
+        // Stopping or draining: a later `background` moves nothing.
+        if !matches!(progress.phase, Phase::Running)
+            && let Some(ask) = &progress.ask
+        {
+            ask.end();
+        }
         // The drive loop holds the emitter and streams every pass, woken by
         // the reader on every chunk; the reader never holds it, so nothing
         // emits after this returns.
         progress.streamed = stream_output(&progress.shared, emit, progress.streamed);
+        if let Some(job) = progress.job.as_mut() {
+            job.pass(&progress.shared, clock);
+        }
+        // A held `job_delta` wakes the park when it falls due.
+        let held_until = progress.job.as_ref().and_then(JobStream::deadline);
         match progress.phase {
             Phase::Running => match running_step(
                 policy,
@@ -506,6 +421,7 @@ fn pump(
                 progress.seen_empty,
                 view.shell_exit,
                 timeout_due(clock, progress.move_at),
+                progress.ask.as_ref().is_some_and(|ask| ask.asked()),
             ) {
                 Step::Stop(kind) => {
                     progress.stop = Some(kind);
@@ -525,7 +441,10 @@ fn pump(
                     clock,
                     &progress.shared,
                     cancel,
-                    wait_deadline(policy, progress.timeout_at, progress.move_at),
+                    sooner(
+                        wait_deadline(policy, progress.timeout_at, progress.move_at),
+                        held_until,
+                    ),
                     view.reaped,
                     true,
                     view.seq,
@@ -548,7 +467,7 @@ fn pump(
                         clock,
                         &progress.shared,
                         cancel,
-                        Some(kill_at),
+                        sooner(Some(kill_at), held_until),
                         true,
                         false,
                         view.seq,
@@ -561,7 +480,7 @@ fn pump(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && progress.seen_empty;
                 if settled || clock.now() >= until {
-                    return LoopEnd::Finished(finish(
+                    let finished = finish(
                         &progress.shared,
                         progress.stop,
                         progress.sent_signal,
@@ -569,13 +488,19 @@ fn pump(
                         view.eof,
                         emit,
                         progress.streamed,
-                    ));
+                    );
+                    // After `finish` the reader queues nothing more, so this
+                    // is every byte the file holds, before the end is reported.
+                    if let Some(job) = progress.job.as_mut() {
+                        job.flush(&progress.shared);
+                    }
+                    return LoopEnd::Finished(finished);
                 }
                 park(
                     clock,
                     &progress.shared,
                     cancel,
-                    Some(until),
+                    sooner(Some(until), held_until),
                     poll_while_occupied(progress.seen_empty),
                     false,
                     view.seq,
@@ -594,7 +519,8 @@ fn view(shared: &Shared, cancel: &dyn Cancel) -> View {
         shell_exit: inner.reaped.then(|| exit_code_of(inner.status)),
         eof: inner.eof,
         seq: inner.seq,
-        cancelled: cancel.is_cancelled(),
+        // The cap stops a job as a stop does; the end reads `capped`.
+        cancelled: cancel.is_cancelled() || inner.cap_fired,
     }
 }
 
@@ -607,7 +533,7 @@ fn finish(
     emit: &dyn Emit,
     streamed: usize,
 ) -> Finished {
-    let (output, status) = {
+    let (output, status, capped) = {
         let mut inner = lock(&shared.inner);
         if !eof {
             // The reader blocks in its read until the last holder closes
@@ -615,7 +541,11 @@ fn finish(
             // of the result.
             inner.discard = true;
         }
-        (std::mem::take(&mut inner.output), inner.status)
+        (
+            std::mem::take(&mut inner.output),
+            inner.status,
+            inner.cap_fired,
+        )
     };
     // Tailed from this exact snapshot: the reader appends from here into a
     // fresh buffer the result never sees (discarded above while open), so
@@ -629,6 +559,7 @@ fn finish(
         indeterminate: stopped && (!eof || !seen_empty),
         held_open: !stopped && !eof && seen_empty,
         sent_signal,
+        capped,
     }
 }
 
@@ -707,6 +638,14 @@ fn timeout_due(clock: &dyn Clock, at: Option<Instant>) -> bool {
     at.is_some_and(|at| clock.now() >= at)
 }
 
+/// The earlier of two optional instants.
+fn sooner(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
+    match (a, b) {
+        (Some(a), Some(b)) => Some(a.min(b)),
+        (one, other) => one.or(other),
+    }
+}
+
 fn after(clock: &dyn Clock, delay: Duration) -> Instant {
     let now = clock.now();
     now.checked_add(delay).unwrap_or(now)
@@ -742,17 +681,6 @@ fn refused_group(pgid: u32) -> bool {
 
 fn pid(raw: u32) -> Option<Pid> {
     Pid::from_raw(i32::try_from(raw).ok()?)
-}
-
-fn write_or_drop(file: &mut File, bytes: &[u8]) {
-    // debt: output lost to a failed write is not reported to the model, until docs/errors.md has a code for it
-    if let Err(err) = file.write_all(bytes) {
-        let _lost = err;
-    }
-}
-
-fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
-    inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 #[cfg(test)]

@@ -11,6 +11,7 @@
 mod builtin;
 mod cli;
 mod clock;
+mod handoff;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
@@ -66,6 +67,8 @@ struct Parts {
     /// How a failed model call is retried (`docs/model-routing.md`, "When
     /// a model call fails").
     retry: r#loop::Retry,
+    /// `handoff.*` for the session's model.
+    handoff: r#loop::HandoffSettings,
     /// How long an idle session waits before it exits.
     idle: Option<Duration>,
     /// The installed extensions, started, and their hooks.
@@ -364,6 +367,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         limits,
         budget,
         retry,
+        handoff,
         idle,
         home,
         project,
@@ -379,6 +383,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
             Ok(built) => built,
             Err(e) => return ask_failed(e),
         };
+    let forget = Arc::clone(&session_servers.forget);
     let permissions = ask_permissions(
         &home,
         &project,
@@ -418,7 +423,8 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
                 r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), false)?;
                 session_extensions::written(&log, &extensions)?;
                 r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices)?;
-                Ok(session_extensions::hooked(looped, &extensions))
+                let looped = session_extensions::hooked(looped, &extensions);
+                Ok(looped.handoff(handoff).on_handoff(forget))
             }),
             budget,
             idle,
@@ -557,6 +563,7 @@ fn parts_with(
     let reviewer = choose_reviewer(&providers, &config, &model);
     let limits = block_limits(&config);
     let retry = retry_policy(&config);
+    let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = idle_exit(&config);
     let extensions = extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock));
     // debt: extension prompt texts and the model's addendum arrive empty;
@@ -588,6 +595,7 @@ fn parts_with(
         limits,
         budget,
         retry,
+        handoff,
         idle,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),

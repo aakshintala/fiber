@@ -28,7 +28,7 @@ impl Emit for Quiet {
 fn the_driver_shell_runs_echo() {
     let root = fakes::TempDir::new("fiber-driver-shell");
     let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
-    let (_tools, _infos, driver) =
+    let (_tools, _infos, driver, _forget) =
         super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
     let mut arguments = serde_json::Map::new();
     arguments.insert(
@@ -61,7 +61,7 @@ fn read_is_wired_to_the_image_child() {
     )
     .unwrap();
     std::fs::set_permissions(&fiber, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
-    let (tools, _infos, _driver) =
+    let (tools, _infos, _driver, _forget) =
         super::with_binary(fiber, root.path(), &root.path().join("artifacts"), &clock).unwrap();
     let (_, read) = tools
         .iter()
@@ -81,5 +81,72 @@ fn read_is_wired_to_the_image_child() {
         ),
         "{:?}",
         output.content
+    );
+}
+
+#[test]
+fn the_forget_callback_clears_what_the_file_tools_have_seen() {
+    let root = fakes::TempDir::new("fiber-forget");
+    std::fs::write(root.path().join("a.txt"), "old\n").unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (tools, _infos, _driver, forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|(_, tool)| tool.definition().name == name)
+            .map(|(_, tool)| Arc::clone(tool))
+            .unwrap()
+    };
+    let arguments = |value: serde_json::Value| value.as_object().unwrap().clone();
+    let read = arguments(serde_json::json!({"path": "a.txt"}));
+    let write = arguments(serde_json::json!({"path": "a.txt", "content": "new\n"}));
+    tool("read").run(&read, &Never, &Quiet);
+
+    forget();
+
+    // What was read is forgotten, so the write is stale.
+    let output = tool("write").run(&write, &Never, &Quiet);
+    assert_eq!(
+        output.error.map(|error| error.code),
+        Some(contract::ErrorCode::StaleFile)
+    );
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("a.txt")).unwrap(),
+        "old\n"
+    );
+}
+
+#[test]
+fn without_the_forget_callback_the_same_write_goes_through() {
+    let root = fakes::TempDir::new("fiber-no-forget");
+    std::fs::write(root.path().join("a.txt"), "old\n").unwrap();
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let (tools, _infos, _driver, _forget) =
+        super::builtin(root.path(), &root.path().join("artifacts"), &clock).unwrap();
+    let tool = |name: &str| {
+        tools
+            .iter()
+            .find(|(_, tool)| tool.definition().name == name)
+            .map(|(_, tool)| Arc::clone(tool))
+            .unwrap()
+    };
+    let arguments = |value: serde_json::Value| value.as_object().unwrap().clone();
+    tool("read").run(
+        &arguments(serde_json::json!({"path": "a.txt"})),
+        &Never,
+        &Quiet,
+    );
+
+    let output = tool("write").run(
+        &arguments(serde_json::json!({"path": "a.txt", "content": "new\n"})),
+        &Never,
+        &Quiet,
+    );
+
+    assert!(output.error.is_none(), "{:?}", output.error);
+    assert_eq!(
+        std::fs::read_to_string(root.path().join("a.txt")).unwrap(),
+        "new\n"
     );
 }

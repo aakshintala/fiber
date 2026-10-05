@@ -32,6 +32,7 @@ mod cancel;
 mod changes;
 mod completion;
 mod conversation;
+mod handoff;
 mod hooks;
 mod inbox;
 mod jobs;
@@ -49,6 +50,7 @@ mod util;
 
 pub use cancel::TurnCancel;
 pub use conversation::rebuild;
+pub use handoff::HandoffSettings;
 pub use process::{extensions_loaded, fiber_exited, fiber_started, mcp_servers_started};
 pub use prompt::PromptInputs;
 pub use resume::{Resumed, resumed};
@@ -212,6 +214,9 @@ pub struct Loop {
     idle_left: bool,
     /// The session's hooks; `None` runs none.
     hooks: Option<Arc<dyn contract::hook::Hooks>>,
+    /// Handoff: the settings, the context's measure and what its render
+    /// carries (`docs/handoff.md`).
+    handoff: handoff::State,
 }
 
 /// The one built preamble: what every request sends and what
@@ -312,6 +317,7 @@ impl Loop {
             idle_exit: None,
             idle_left: false,
             hooks: None,
+            handoff: handoff::State::new(handoff::Carry::default()),
         })
     }
 
@@ -385,6 +391,7 @@ impl Loop {
         }
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
+        self.handoff.new_turn();
         self.cancel.arm();
         let input = self.turn_input(started.pieces);
         self.append(&Event::TurnStarted(TurnStarted { input }), &turn, None)?;
@@ -406,6 +413,7 @@ impl Loop {
             return Ok(false);
         }
         let unattended = !self.answerable;
+        self.set_trigger();
         let (system_prompt, tools, event) = prompt::build(
             &self.prompt,
             &self.model.reference,
@@ -414,6 +422,7 @@ impl Loop {
             self.provider.as_ref(),
             self.preamble_reason,
             self.replaced.clone(),
+            self.handoff.trigger_at,
         );
         self.log
             .append(&Event::PreambleBuilt(event.clone()), None, None)?;
@@ -437,23 +446,7 @@ impl Loop {
             return Ok(false);
         }
         self.opened = true;
-        let collected = opening::collect(&self.prompt, &self.workspace);
-        self.changes =
-            changes::State::initial(&collected.message, &self.workspace, &self.prompt.home);
-        for event in std::iter::once(Event::OpeningMessage(collected.message))
-            .chain(collected.notices.into_iter().map(Event::Notice))
-        {
-            util::write(
-                &self.log,
-                &mut self.conversation,
-                &mut self.reviewed,
-                &self.model.reference,
-                &event,
-                None,
-                None,
-                &mut self.changes.had,
-            )?;
-        }
+        self.write_opening(None)?;
         Ok(true)
     }
 
@@ -488,6 +481,7 @@ impl Loop {
             None,
             None,
             &mut self.changes.had,
+            &mut self.handoff.carry,
         )
     }
 
@@ -514,7 +508,10 @@ impl Loop {
         self.drain(turn)?;
         self.apply_steering(turn)?;
         self.flush_queued(turn)?;
-        let Some(built) = self.preamble.as_ref() else {
+        if let Some(completed) = self.check_context(turn)? {
+            return Ok(Step::Ended(completed));
+        }
+        let Some(request) = self.request_for(self.conversation.clone()) else {
             // `turn` builds the preamble before its `turn_started`; reaching
             // a step without one is a bug, so the turn fails closed.
             return Ok(Step::Ended(ended(
@@ -526,18 +523,6 @@ impl Loop {
                     provider: None,
                 }),
             )));
-        };
-        let request = ModelRequest {
-            system_prompt: built.system_prompt.clone(),
-            tools: built.tools.clone(),
-            effort: None,
-            tool_choice: built.tool_choice.clone(),
-            cache_lifetime: built.cache_lifetime,
-            cache_key: self.cache_key.clone(),
-            conversation: self.conversation.clone(),
-            previous_end: self.sent,
-            max_output_tokens: None,
-            session_dir: self.log.dir().to_path_buf(),
         };
         if let Some(completed) = self.over_budget() {
             return Ok(Step::Ended(completed));
@@ -587,6 +572,7 @@ impl Loop {
             conversation,
             reviewed,
             changes,
+            handoff,
             ..
         } = self;
         let mut emit = |event: &Event, action: &ActionId| {
@@ -599,6 +585,7 @@ impl Loop {
                 Some(turn),
                 Some(action),
                 &mut changes.had,
+                &mut handoff.carry,
             )
         };
         // debt: a reasoning fragment does not say which reasoning item it
@@ -643,17 +630,17 @@ impl Loop {
         }
     }
 
-    /// Writes a reply's actions, its usage and its completion. A reasoning
-    /// action with readable text takes the next action `opened` while it
-    /// streamed; any other opens now. A tool call ends the step with a next
-    /// one, once every call has completed.
-    fn record(
+    /// Writes a reply's actions, its usage and its completion, and returns
+    /// its tool calls and how it finished. A reasoning action with readable
+    /// text takes the next action `opened` while it streamed; any other opens
+    /// now.
+    pub(crate) fn write_reply(
         &mut self,
         reply: Reply,
         mut opened: VecDeque<ActionId>,
         turn: &TurnId,
         message: &ActionId,
-    ) -> Result<Step, Error> {
+    ) -> Result<(handoff::Calls, Finish), Error> {
         let mut calls = Vec::new();
         for action in reply.actions {
             match action {
@@ -710,7 +697,22 @@ impl Loop {
             turn,
             Some(message),
         )?;
-        if reply.finish == Finish::OutputLimit {
+        Ok((calls, reply.finish))
+    }
+
+    /// Writes a reply and ends the step: a tool call ends it with a next
+    /// one, once every call has completed.
+    fn record(
+        &mut self,
+        reply: Reply,
+        opened: VecDeque<ActionId>,
+        turn: &TurnId,
+        message: &ActionId,
+    ) -> Result<Step, Error> {
+        let tokens = reply.tokens.clone();
+        let (calls, finish) = self.write_reply(reply, opened, turn, message)?;
+        self.measure(&tokens);
+        if finish == Finish::OutputLimit {
             // None of a cut-off reply's calls runs (`docs/loop.md`, "A reply
             // cut off by the output limit"). One with no call ends the step
             // as any reply with no call does ("Ending a turn").
@@ -769,6 +771,7 @@ impl Loop {
             Some(turn),
             action,
             &mut self.changes.had,
+            &mut self.handoff.carry,
         )
     }
 }

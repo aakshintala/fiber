@@ -45,6 +45,8 @@ pub struct Opened {
     pub file: std::fs::File,
     /// Reports how the job ended, once.
     pub end: End,
+    /// Where the job's `job_delta` lines go (`docs/events.md`, `job_delta`).
+    pub emit: std::sync::Arc<dyn crate::emit::Emit>,
 }
 
 /// Reports how the job ended, once. Dropped uncalled, the job is recorded
@@ -106,6 +108,35 @@ impl fmt::Debug for End {
 pub trait Jobs: Send + Sync {
     /// Opens a running job; see `jobs::Registry::open`.
     fn open(&self, opening: Opening) -> Result<Opened, OpenError>;
+
+    /// Sends the job's [`Stop`] unless it was already sent. True when the
+    /// job is running, false when it is unknown or has ended. Returns at
+    /// once; the job ends on its own thread.
+    fn stop(&self, job_id: &crate::JobId) -> bool;
+
+    /// Asks every registered foreground call to move to the background
+    /// (`docs/tools.md`, "Moving to the background"). Returns how many will.
+    /// Returns at once.
+    fn background(&self) -> usize;
+
+    /// Registers a running foreground call. Held weakly: the call holds the
+    /// strong reference while it runs in the foreground.
+    fn foreground(&self, call: Foreground);
+}
+
+/// A running foreground call, as the `background` command reaches it. The
+/// call holds the `Arc` while it runs in the foreground and drops it when it
+/// finishes or moves. The closure asks the call to move and returns true
+/// when it was still in the foreground and will now move.
+pub struct Foreground(
+    /// The call's move request, held weakly.
+    pub std::sync::Weak<dyn Fn() -> bool + Send + Sync>,
+);
+
+impl fmt::Debug for Foreground {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Foreground(..)")
+    }
 }
 
 /// The output file could not be created. Nothing was recorded.
