@@ -26,8 +26,10 @@ pub struct Opening {
 /// It returns once the bytes are written.
 pub struct Input(
     /// The opener's write to the terminal.
-    pub Box<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>,
+    pub Box<Writes>,
 );
+
+type Writes = dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync;
 
 impl fmt::Debug for Input {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
