@@ -191,6 +191,8 @@ impl Loop {
             ledger,
             budget: None,
             retry: Retry::default(),
+            idle_exit: None,
+            idle_left: false,
         })
     }
 }

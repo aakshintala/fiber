@@ -78,6 +78,34 @@ fn an_artifact_lands_in_the_session_artifacts_and_a_path_is_refused() {
     drop(log);
 }
 
+#[test]
+fn cut_output_splits_on_char_boundaries_and_keeps_the_whole_text() {
+    let sessions = fakes::TempDir::new("log-unit-cut");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    // Each é is two bytes. A bound of 3 lands inside the second character.
+    let full = "ééééé";
+    let (kept, artifact) =
+        log.cut_output(full, contract::tool::Bound { start: 3, end: 3 }, "out.txt");
+    let artifact = artifact.unwrap();
+    assert_eq!(artifact, "artifacts/out.txt");
+    let path = sessions.path().join("s_1").join(&artifact);
+    assert_eq!(fs::read_to_string(&path).unwrap(), full);
+    let mut lines = kept.lines();
+    let head = lines.next().unwrap();
+    let notice = lines.next().unwrap();
+    let tail = lines.next().unwrap();
+    assert_eq!(head, "é");
+    assert!(notice.contains("bytes cut"), "{notice}");
+    assert!(notice.contains(&path.display().to_string()), "{notice}");
+    assert_eq!(tail, "é");
+    assert!(lines.next().is_none());
+}
+
 fn started() -> Event {
     Event::FiberStarted(FiberStarted {
         version: "0".into(),

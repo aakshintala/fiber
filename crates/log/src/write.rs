@@ -13,6 +13,7 @@ use std::time::{Duration, UNIX_EPOCH};
 use contract::clock::Clock;
 use contract::emit::Emit;
 use contract::events::{Class, Event};
+use contract::tool::Bound;
 use contract::{ActionId, Envelope, SCHEMA_VERSION, Seq, SessionId, TurnId};
 
 use crate::read::{Queue, Watcher, complete_len};
@@ -216,6 +217,38 @@ impl Log {
     fn finish(&self, armed: Armed) -> Result<Watcher, Error> {
         let lines = crate::read(&armed.dir)?;
         Ok(Watcher::starting(armed.queue, armed.dir, lines))
+    }
+
+    /// `full` cut to `bound`, with a notice of how many bytes were cut and
+    /// where the whole text is, and the artifact's path relative to the
+    /// session directory. `name` is the artifact's file name. Doors cuts a
+    /// driver `shell` the same way the loop cuts a tool call, and doors
+    /// cannot depend on the loop (`docs/architecture.md`, "The call rules").
+    pub fn cut_output(&self, full: &str, bound: Bound, name: &str) -> (String, Option<String>) {
+        let head = full.floor_char_boundary(bound.start);
+        let tail = full.ceil_char_boundary(full.len().saturating_sub(bound.end).max(head));
+        let removed = tail.saturating_sub(head);
+        let (notice, artifact) = match self.write_artifact(name, full.as_bytes()) {
+            Ok((relative, path)) => (
+                format!(
+                    "[{removed} bytes cut. The full output is in {}; read it with `read`.]",
+                    path.display()
+                ),
+                Some(relative),
+            ),
+            Err(e) => (
+                format!("[{removed} bytes cut. The full output could not be saved: {e}.]"),
+                None,
+            ),
+        };
+        let mut kept = full.get(..head).unwrap_or_default().to_owned();
+        kept.push('\n');
+        kept.push_str(&notice);
+        if tail < full.len() {
+            kept.push('\n');
+            kept.push_str(full.get(tail..).unwrap_or_default());
+        }
+        (kept, artifact)
     }
 
     /// Writes `bytes` to the file `name` in the session's `artifacts/`,

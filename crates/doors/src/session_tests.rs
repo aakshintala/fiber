@@ -22,6 +22,7 @@ use contract::events::{
     CommandAccepted, Empty, Event, ExtensionsLoaded, FiberExited, LoadedExtension, Notice,
     SessionState, SessionStatus,
 };
+use contract::inbox::Delivery;
 use contract::shapes::{Tokens, Usage};
 use contract::{CommandId, ErrorCode};
 use fakes::Client;
@@ -987,4 +988,33 @@ fn close_after_resume_keeps_a_session_that_has_turns() {
         lines.iter().map(|l| l.kind.as_str()).collect::<Vec<_>>(),
         ["turn_started"]
     );
+}
+
+#[test]
+fn a_clock_move_delivers_cancelled_and_nothing_before() {
+    let opened = open();
+    let clock = Arc::clone(&opened.clock);
+    let (entered, entered_rx) = mpsc::channel();
+    thread::spawn(move || {
+        entered_rx
+            .recv_timeout(DEADLINE)
+            .expect("the receiver is blocked");
+        clock.advance(Duration::from_millis(1));
+    });
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            assert!(
+                matches!(inbox.try_recv(), Err(mpsc::TryRecvError::Empty)),
+                "nothing arrives before the clock moves"
+            );
+            entered.send(()).unwrap();
+            let delivery = inbox
+                .recv_timeout(DEADLINE)
+                .expect("a clock move wakes the inbox");
+            assert!(matches!(delivery, Delivery::Cancelled));
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
 }

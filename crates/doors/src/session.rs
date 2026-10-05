@@ -19,6 +19,7 @@ use contract::emit::Emit;
 use contract::events::{Clients, Event, ToolInfo};
 use contract::inbox::{Ack, Delivery, Message};
 use contract::shapes::{ContentPart, Failure, Origin, Sender as CommandSender};
+use contract::tool::Tool;
 use contract::{CommandId, ErrorCode, SCHEMA_VERSION, SessionId};
 use log::{Log, Watcher};
 use serde_json::Map;
@@ -58,6 +59,11 @@ pub(crate) struct Gate {
     /// What the `cancel` command asks: whether a turn is running. Stored
     /// by [`Session::run`], so a missing closure is no turn.
     cancel: Mutex<Option<Arc<dyn Fn() -> bool + Send + Sync>>>,
+    /// The tool a driver `shell` runs. None leaves `shell` unknown.
+    driver_shell: Mutex<Option<Arc<dyn Tool>>>,
+    /// Driver shells running now. `cancel` stops each, then the entry
+    /// leaves on the command's way out.
+    shells: Mutex<Vec<Arc<crate::shell::ShellCancel>>>,
     stop: AtomicBool,
     clients: Mutex<u32>,
     /// Paired with [`Gate::conns`].
@@ -162,6 +168,12 @@ impl Session {
         )
     }
 
+    /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
+    /// With none set, `shell` stays an unknown command.
+    pub fn shell(&self, tool: Arc<dyn Tool>) {
+        *lock(&self.gate.driver_shell) = Some(tool);
+    }
+
     /// Ends the door side: stops accepting, unlinks the socket, drops `log`
     /// (the last handle, which releases the lock), waits up to [`GRACE`] for
     /// each writer, then shuts down whatever is still open.
@@ -259,11 +271,31 @@ impl Gate {
         log.emit(&Event::Clients(Clients { count }));
     }
 
-    /// Whether a turn is running, for the `cancel` command: what the
-    /// closure [`Session::run`] stored says. Answered on the command's
-    /// reader thread, never through the loop.
-    pub(crate) fn cancel_turn(&self) -> bool {
-        lock(&self.cancel).as_ref().is_some_and(|cancel| cancel())
+    /// Stops a running turn and every driver shell. The shells are
+    /// cancelled after the registry lock is released, so a shell's return
+    /// can remove its entry without waiting on this call.
+    pub(crate) fn stop_running(&self) -> Stopped {
+        let turn = lock(&self.cancel).as_ref().is_some_and(|cancel| cancel());
+        let shells = lock(&self.shells).clone();
+        for shell in &shells {
+            shell.cancel();
+        }
+        Stopped {
+            turn,
+            shell: !shells.is_empty(),
+        }
+    }
+
+    pub(crate) fn driver_shell(&self) -> Option<Arc<dyn Tool>> {
+        lock(&self.driver_shell).clone()
+    }
+
+    pub(crate) fn track_shell(&self, cancel: Arc<crate::shell::ShellCancel>) {
+        lock(&self.shells).push(cancel);
+    }
+
+    pub(crate) fn untrack_shell(&self, cancel: &Arc<crate::shell::ShellCancel>) {
+        lock(&self.shells).retain(|tracked| !Arc::ptr_eq(tracked, cancel));
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -362,9 +394,20 @@ impl Wake for Gate {
     fn wake(&self) {
         // The lock is taken before the notify, so a waiter that has judged
         // and not yet parked cannot miss this wake.
-        let _held = lock(&self.conns);
-        self.writers.notify_all();
+        {
+            let _held = lock(&self.conns);
+            self.writers.notify_all();
+        }
+        // A clock move wakes the loop the way an accepted cancel does.
+        // The delivery means only that the loop should look again.
+        self.deliver(Delivery::Cancelled);
     }
+}
+
+/// What [`Gate::stop_running`] found running.
+pub(crate) struct Stopped {
+    pub(crate) turn: bool,
+    pub(crate) shell: bool,
 }
 
 fn open_in(
@@ -391,6 +434,8 @@ fn open_in(
         tools,
         inbox: Mutex::new(None),
         cancel: Mutex::new(None),
+        driver_shell: Mutex::new(None),
+        shells: Mutex::new(Vec::new()),
         stop: AtomicBool::new(false),
         clients: Mutex::new(0),
         writers: Condvar::new(),

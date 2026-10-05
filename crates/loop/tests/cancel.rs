@@ -869,3 +869,62 @@ fn kept_steering_starts_the_next_turn_without_waiting() {
         0
     );
 }
+
+#[test]
+fn a_reply_after_turn_completed_is_stale_and_logs_nothing() {
+    let ask = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![support::calls_reply("", &[("shell", paris())])],
+        None,
+        vec![ask as Arc<dyn contract::tool::Tool>],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.inbox.send(delivery("hi")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let (request, request_rx) = std::sync::mpsc::channel();
+    let answered = support::on_request(&session, move |request_id| {
+        request.send(request_id).unwrap();
+        assert!(cancel.cancel());
+        inbox.send(Delivery::Cancelled).unwrap();
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    answered.join().unwrap();
+    let request_id = request_rx.recv_timeout(DEADLINE).expect("the request id");
+    let before = log::read(&session.dir).unwrap().len();
+    let (rejected, waiting) = std::sync::mpsc::channel();
+    session
+        .inbox
+        .send(Delivery::Reply(
+            Reply {
+                request_id,
+                answer: ReplyAnswer::Approval {
+                    decision: Decision::Allow,
+                    feedback: None,
+                    remember: None,
+                },
+            },
+            Ack(Box::new(move |answer| {
+                rejected
+                    .send(answer.err().map(|rejection| rejection.code))
+                    .unwrap();
+            })),
+        ))
+        .unwrap();
+    session
+        .inbox
+        .send(Delivery::Close(support::ignore()))
+        .unwrap();
+    assert_eq!(session.turn(), None);
+    assert_eq!(
+        waiting
+            .recv_timeout(DEADLINE)
+            .expect("the reply was answered"),
+        Some(ErrorCode::StaleRequest)
+    );
+    let after = log::read(&session.dir).unwrap();
+    assert_eq!(after.len(), before, "a stale reply logs nothing");
+    assert_eq!(after.last().unwrap().kind, "turn_completed");
+}

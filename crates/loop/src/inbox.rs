@@ -2,6 +2,9 @@
 //! The idle wait, a step boundary, the end-of-turn check and an approval
 //! wait all admit a delivery through the same rules.
 
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
 use contract::commands::Reply;
 use contract::events::{QueuedMessage, SteeringApplied, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Message, Rejection};
@@ -43,19 +46,78 @@ pub(crate) enum Waited {
     /// `close` was taken. The pending approval is now unanswerable.
     Closed,
     /// The wake after an accepted cancel, with the signal set. The pending
-    /// approval ends denied by the cancel.
+    /// approval ends denied by the cancel. A clock move uses the same
+    /// delivery and does not end the wait unless the signal is set.
     Cancelled,
 }
 
+/// What [`Loop::recv_until`] took from the inbox.
+pub(crate) enum InboxRecv {
+    /// A delivery was waiting, or arrived before the deadline.
+    Delivery(Delivery),
+    /// Every sender is gone.
+    Closed,
+    /// The idle deadline passed on an empty inbox.
+    Idle,
+}
+
 impl Loop {
+    /// `run` returns once the loop has been idle for `after`. `None` never
+    /// expires, which is the default (`docs/invocation.md`, "Lifecycle").
+    pub fn idle_exit(mut self, after: Option<Duration>) -> Self {
+        self.idle_exit = after;
+        self
+    }
+
+    /// `clock.now()` when this idle wait began, plus the idle delay. `None`
+    /// when the loop does not expire, or the instant cannot be represented.
+    pub(crate) fn idle_deadline(&self) -> Option<Instant> {
+        let after = self.idle_exit?;
+        self.log.clock().now().checked_add(after)
+    }
+
+    /// The next delivery, or why the wait ended. Anything already queued is
+    /// taken before the deadline is checked, so a prompt queued as the
+    /// deadline passes still starts its turn. The deadline is not moved
+    /// here: the caller keeps the one from the start of the idle wait.
+    pub(crate) fn recv_until(&mut self, deadline: Option<Instant>) -> InboxRecv {
+        loop {
+            match self.inbox.try_recv() {
+                Ok(delivery) => return InboxRecv::Delivery(delivery),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+            let clock = Arc::clone(self.log.clock());
+            if deadline.is_some_and(|until| clock.now() >= until) {
+                match self.inbox.try_recv() {
+                    Ok(delivery) => return InboxRecv::Delivery(delivery),
+                    Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
+                    Err(std::sync::mpsc::TryRecvError::Empty) => return InboxRecv::Idle,
+                }
+            }
+            let mut slot = None;
+            clock.wait_until(deadline, &mut |bound| {
+                slot = Some(take(&self.inbox, bound));
+            });
+            match slot {
+                Some(Wait::Got(delivery)) => return InboxRecv::Delivery(delivery),
+                Some(Wait::Closed) => return InboxRecv::Closed,
+                Some(Wait::Empty) | None => {}
+            }
+        }
+    }
+
     /// Blocks until a prompt or a steer is waiting to start a turn, and
     /// drains everything else already queued. `None` once `close` was taken
-    /// with nothing to start, or every sender is gone
-    /// (`docs/loop.md`, "Starting a turn").
+    /// with nothing to start, the idle delay has passed on an empty inbox,
+    /// or every sender is gone (`docs/loop.md`, "Starting a turn").
     pub(crate) fn wait_for_turn(&mut self) -> Result<Option<TurnInput>, Error> {
         if self.closing {
             return Ok(None);
         }
+        // Idle starts as the wait begins. A rejected command, a dropped
+        // steer and a wake do not move it (`docs/invocation.md`, "Lifecycle").
+        let deadline = self.idle_deadline();
         loop {
             let mut input = TurnInput {
                 messages: Vec::new(),
@@ -74,9 +136,9 @@ impl Loop {
                     self.admit_idle(delivery, &mut input);
                 }
             } else {
-                let first = match self.inbox.recv() {
-                    Ok(first) => first,
-                    Err(_) => return Ok(None),
+                let first = match self.recv_until(deadline) {
+                    InboxRecv::Delivery(first) => first,
+                    InboxRecv::Closed | InboxRecv::Idle => return Ok(None),
                 };
                 let mut batch = vec![first];
                 batch.extend(self.inbox.try_iter());
@@ -263,6 +325,34 @@ impl Loop {
         accept(ack);
         self.closing = true;
         self.answerable = false;
+    }
+}
+
+/// What blocking on the inbox returned.
+enum Wait {
+    Got(Delivery),
+    Closed,
+    Empty,
+}
+
+/// Blocks in `inbox` for `bound` of real time. `None` blocks until a
+/// delivery or the channel closes. `Some(ZERO)` does not block.
+fn take(inbox: &std::sync::mpsc::Receiver<Delivery>, bound: Option<Duration>) -> Wait {
+    match bound {
+        None => match inbox.recv() {
+            Ok(delivery) => Wait::Got(delivery),
+            Err(_) => Wait::Closed,
+        },
+        Some(limit) if limit.is_zero() => match inbox.try_recv() {
+            Ok(delivery) => Wait::Got(delivery),
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => Wait::Closed,
+            Err(std::sync::mpsc::TryRecvError::Empty) => Wait::Empty,
+        },
+        Some(limit) => match inbox.recv_timeout(limit) {
+            Ok(delivery) => Wait::Got(delivery),
+            Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => Wait::Closed,
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) => Wait::Empty,
+        },
     }
 }
 

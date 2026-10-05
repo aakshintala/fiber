@@ -195,6 +195,10 @@ pub struct Loop {
     /// How a failed model call is retried (`docs/model-routing.md`, "When
     /// a model call fails").
     retry: Retry,
+    /// How long an idle wait lasts. `None` never exits.
+    idle_exit: Option<std::time::Duration>,
+    /// Set when an idle deadline ended an approval wait.
+    idle_left: bool,
 }
 
 /// The one built preamble: what every request sends and what
@@ -289,6 +293,8 @@ impl Loop {
             ledger: usage::Ledger::default(),
             budget: None,
             retry: Retry::default(),
+            idle_exit: None,
+            idle_left: false,
         })
     }
 
@@ -395,6 +401,10 @@ impl Loop {
                 Step::Ended(completed) => break completed,
             }
         };
+        if self.idle_left {
+            self.cancel.disarm();
+            return Ok(None);
+        }
         self.disarm_cancel(&mut completed);
         let outcome = completed.outcome;
         self.append(&Event::TurnCompleted(completed), &turn, None)?;
@@ -743,9 +753,9 @@ impl Loop {
         if calls.is_empty() {
             return Ok(Step::Replied);
         }
-        if self.run_calls(calls, turn)? {
+        if self.run_calls(calls, turn)? || self.idle_left {
             // A cancel ended the step: the turn ends `interrupted` instead
-            // of taking a next step.
+            // of taking a next step. An idle approval writes nothing more.
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
         }
         if let Some(error) = self.turn_blocked.take() {

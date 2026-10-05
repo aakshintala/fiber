@@ -11,11 +11,12 @@ use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use contract::events::{
-    AssistantMessageCompleted, Empty, Event, InputItem, MessageOutcome, TextCompleted,
-    TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
+    AskStep, AssistantMessageCompleted, DecidedBy, Decision, Empty, Event, InputItem, Interaction,
+    InteractionRequested, MessageOutcome, PermissionRequested, PermissionResolved, RuleScope,
+    StandingRule, TextCompleted, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
 };
-use contract::shapes::{ContentPart, Failure, Origin, Sender, Tokens};
-use contract::{ActionId, CommandId, ErrorCode, GenerationId, SessionId, TurnId};
+use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure, Origin, Sender, Tokens};
+use contract::{ActionId, CommandId, ErrorCode, GenerationId, RequestId, SessionId, TurnId};
 use log::Log;
 use r#loop::{fiber_exited, fiber_started};
 use serde_json::Value;
@@ -315,4 +316,83 @@ fn fiber_exited_after_a_resume_reports_only_the_resumed_process_lines() {
     // Only the resumed process's usage: g2, not g1.
     assert_eq!(exited["usage"]["tokens"]["output"], 5);
     assert_eq!(exited["usage"]["cost"], 0.25);
+}
+
+fn permission(id: &str) -> Event {
+    Event::PermissionRequested(PermissionRequested {
+        request_id: RequestId(id.into()),
+        declared: DeclaredEffects {
+            effects: vec![Effect::Executes],
+            reversible: false,
+            paths: None,
+        },
+        step: AskStep::StandingAsk {
+            standing_rule: StandingRule {
+                scope: RuleScope::Project,
+                prefix: "npm".into(),
+            },
+        },
+    })
+}
+
+fn resolved(id: &str) -> Event {
+    Event::PermissionResolved(PermissionResolved {
+        request_id: Some(RequestId(id.into())),
+        decision: Decision::Deny,
+        decided_by: DecidedBy::Cancel,
+        reason: None,
+        feedback: None,
+        grant: None,
+        rule: None,
+        reviewer: None,
+    })
+}
+
+#[test]
+fn fiber_exited_names_the_unresolved_request() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    session.append(&resolved("r_old"), Some("a_1"));
+    session.append(&permission("r_ask"), Some("a_2"));
+    session.append(
+        &Event::InteractionRequested(InteractionRequested {
+            request_id: RequestId("r_question".into()),
+            interaction: Interaction::Confirm {
+                prompt: "go?".into(),
+            },
+            action_ids: None,
+            extension: None,
+        }),
+        None,
+    );
+
+    let (code, exited) = session.exit(Ok(()));
+
+    assert_eq!(code, 0);
+    assert_eq!(exited["suspended_on"], "r_question");
+}
+
+#[test]
+fn fiber_exited_has_no_suspended_on_once_the_request_is_resolved() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_ask"), Some("a_1"));
+    session.append(&resolved("r_ask"), Some("a_1"));
+
+    let (_, exited) = session.exit(Ok(()));
+
+    assert_eq!(exited.get("suspended_on"), None);
+}
+
+#[test]
+fn fiber_exited_ignores_a_request_from_the_previous_process() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+
+    let (_, exited) = session.exit(Ok(()));
+
+    assert_eq!(exited.get("suspended_on"), None);
 }

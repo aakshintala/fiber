@@ -359,7 +359,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 | `steer` | Sends a steering message, which joins the running turn at its next step boundary. |
 | `steer_drop` | Removes a queued steering message, so nothing is applied. Names the message by the id of the `steer` command that sent it, as `steering_queue` lists it (`docs/events.md`). |
 | `message` | Delivers a session message from another session (`docs/tools.md`, "Messaging other sessions"). During a turn it is a steering message; between turns it starts a turn. Rejected `closing` after `close`. |
-| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"). Rejected `stale_request` if no turn is running. |
+| `cancel` | Ends the running turn (`docs/architecture.md`, "Cancellation"), and stops a running `shell` command. Rejected `stale_request` if no turn is running and no `shell` command is. |
 | `reply` | Answers an interaction the loop raised: approval, confirm, select, multi-select, text input or form ("Replying"). |
 | `job_stop` | Stops a running job by `job_id`, at once, even while a model response streams (`docs/architecture.md`, "One inbox"). Rejected `stale_request` if the job is not running. |
 | `background` | Moves every shell call running in the current turn to the background (`docs/tools.md`, "Shell"). Rejected `stale_request` if none is running. |
