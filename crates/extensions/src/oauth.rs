@@ -280,23 +280,11 @@ pub(crate) fn install(
 /// endpoint was reached, so the host can tell a rejection from a network
 /// failure. `reached` is false when the last `host.http` call the function
 /// made before it raised got no reply.
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub(crate) struct RefreshFailed {
     pub(crate) reached: bool,
     pub(crate) message: String,
-}
-
-impl std::fmt::Display for RefreshFailed {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.message)
-    }
-}
-
-impl std::error::Error for RefreshFailed {}
-
-/// The refresh failure `e` carries, if it is one.
-pub(crate) fn refresh_failure(e: &mlua::Error) -> Option<&RefreshFailed> {
-    e.downcast_ref()
 }
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,
