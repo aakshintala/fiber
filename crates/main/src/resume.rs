@@ -79,6 +79,7 @@ pub(crate) fn ask_resume(
         reviewer,
         limits,
         budget,
+        retry,
         home,
         project,
         ..
@@ -108,6 +109,7 @@ pub(crate) fn ask_resume(
             budget,
             reviewer,
             limits,
+            retry,
             cancel,
         )
     });

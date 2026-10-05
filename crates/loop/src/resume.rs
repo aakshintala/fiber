@@ -18,6 +18,7 @@ use contract::{Envelope, ErrorCode};
 use log::Log;
 
 use crate::calls;
+use crate::retry::Retry;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, render_reviewed};
 use crate::{Error, Loop, Model, Permissions};
 
@@ -173,6 +174,7 @@ impl Loop {
             cut_off: false,
             ledger,
             budget: None,
+            retry: Retry::default(),
         })
     }
 }

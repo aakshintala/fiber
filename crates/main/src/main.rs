@@ -25,6 +25,7 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
+use std::time::Duration;
 
 use config::{Config, Protocol, Sources};
 use contract::inbox::Delivery;
@@ -57,6 +58,9 @@ struct Parts {
     limits: r#loop::BlockLimits,
     /// `budget.usd`, or none when the key is absent or not a number.
     budget: Option<f64>,
+    /// How a failed model call is retried (`docs/model-routing.md`, "When
+    /// a model call fails").
+    retry: r#loop::Retry,
 }
 
 fn main() -> ExitCode {
@@ -336,6 +340,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         reviewer,
         limits,
         budget,
+        retry,
         home,
         project,
         workspace,
@@ -384,6 +389,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
             budget,
             reviewer,
             limits,
+            retry,
             cancel,
         )
     });
@@ -423,6 +429,7 @@ fn finish(
     budget: Option<f64>,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
+    retry: r#loop::Retry,
     cancel: Arc<r#loop::TurnCancel>,
 ) -> Result<(), Failure> {
     looped
@@ -431,6 +438,7 @@ fn finish(
                 .budget(budget)
                 .answerable(false)
                 .reviewer(reviewer, limits)
+                .retry(retry)
                 .cancelled_by(cancel)
         })
         .and_then(Loop::run)
@@ -507,6 +515,7 @@ fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Fa
     let provider = connect(model, key.expose().to_owned())?;
     let reviewer = choose_reviewer(&providers, &config, &model);
     let limits = block_limits(&config);
+    let retry = retry_policy(&config);
     Ok(Parts {
         sessions,
         home,
@@ -521,6 +530,7 @@ fn parts_with(model: Option<String>, recorded: Option<&str>) -> Result<Parts, Fa
         reviewer,
         limits,
         budget,
+        retry,
     })
 }
 
@@ -639,6 +649,23 @@ fn block_limits(config: &Config) -> r#loop::BlockLimits {
     }
 }
 
+/// How a failed model call is retried, from configuration with the
+/// documented defaults (`docs/configuration.md`). `attempts` is clamped
+/// to `u32`, so a huge configured count never overflows the loop.
+fn retry_policy(config: &Config) -> r#loop::Retry {
+    let count = |key: &str, default: u64| {
+        config
+            .get(key, None)
+            .and_then(|(value, _)| value.as_u64())
+            .unwrap_or(default)
+    };
+    r#loop::Retry {
+        attempts: u32::try_from(count("retry.attempts", 3)).unwrap_or(u32::MAX),
+        initial: Duration::from_millis(count("retry.initial_delay_ms", 2000)),
+        max: Duration::from_millis(count("retry.max_delay_ms", 60000)),
+    }
+}
+
 /// Field-by-field copy of a model's declared prices. `loop` cannot depend on
 /// `config`, so the prices it prices with live in `contract`.
 fn declared_cost(cost: config::Cost) -> contract::provider::Cost {
@@ -671,4 +698,55 @@ fn failed(code: ErrorCode, e: impl Display) -> Failure {
 
 fn ask_failed(e: Failure) -> i32 {
     doors::exit_before_session(e, &mut io::stdout(), &mut io::stderr())
+}
+
+#[cfg(test)]
+mod retry_policy_tests {
+    //! `retry.attempts` from configuration reaches the loop's retry policy.
+
+    use super::retry_policy;
+
+    fn config(overrides: Vec<String>) -> config::Config {
+        let root = fakes::TempDir::new("fiber-retry-policy");
+        let home = root.path().join("home");
+        let workspace = root.path().join("workspace");
+        std::fs::create_dir_all(&home).unwrap();
+        std::fs::create_dir_all(&workspace).unwrap();
+        let project = config::ProjectKey::new("test").unwrap();
+        let config = config::Config::load(config::Sources {
+            home,
+            workspace,
+            project,
+            overrides,
+        })
+        .unwrap();
+        // `root` is dropped here; the configuration was already read.
+        config
+    }
+
+    #[test]
+    fn retry_policy_defaults_without_configuration() {
+        let retry = retry_policy(&config(Vec::new()));
+        assert_eq!(retry.attempts, 3);
+        assert_eq!(retry.initial, std::time::Duration::from_millis(2000));
+        assert_eq!(retry.max, std::time::Duration::from_millis(60000));
+    }
+
+    #[test]
+    fn retry_policy_reads_configuration() {
+        let retry = retry_policy(&config(vec![
+            "retry.attempts=1".into(),
+            "retry.initial_delay_ms=0".into(),
+            "retry.max_delay_ms=0".into(),
+        ]));
+        assert_eq!(retry.attempts, 1);
+        assert_eq!(retry.initial, std::time::Duration::ZERO);
+        assert_eq!(retry.max, std::time::Duration::ZERO);
+    }
+
+    #[test]
+    fn retry_policy_clamps_huge_attempts() {
+        let retry = retry_policy(&config(vec!["retry.attempts=18446744073709551615".into()]));
+        assert_eq!(retry.attempts, u32::MAX);
+    }
 }

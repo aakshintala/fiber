@@ -37,6 +37,7 @@ mod permission;
 mod process;
 mod progress;
 mod resume;
+mod retry;
 mod reviewer;
 mod schema;
 mod usage;
@@ -45,6 +46,7 @@ pub use cancel::TurnCancel;
 pub use conversation::rebuild;
 pub use process::{fiber_exited, fiber_started};
 pub use resume::{Resumed, resumed};
+pub use retry::{Decision, Retry};
 pub use reviewer::{BlockLimits, NO_MODEL_MESSAGE, Reviewer};
 
 /// What stops the loop.
@@ -170,6 +172,9 @@ pub struct Loop {
     ledger: usage::Ledger,
     /// `budget.usd` for this session. `None` is no limit.
     budget: Option<f64>,
+    /// How a failed model call is retried (`docs/model-routing.md`, "When
+    /// a model call fails").
+    retry: Retry,
 }
 
 impl Loop {
@@ -242,6 +247,7 @@ impl Loop {
             cut_off: false,
             ledger: usage::Ledger::default(),
             budget: None,
+            retry: Retry::default(),
         })
     }
 
@@ -257,6 +263,13 @@ impl Loop {
     /// (`docs/loop.md`, "Spending budget").
     pub fn budget(mut self, usd: Option<f64>) -> Self {
         self.budget = usd;
+        self
+    }
+
+    /// Retries a failed model call with `retry` (`docs/model-routing.md`,
+    /// "When a model call fails"). Default [`Retry::default`].
+    pub fn retry(mut self, retry: Retry) -> Self {
+        self.retry = retry;
         self
     }
 
@@ -369,31 +382,7 @@ impl Loop {
         // A refused request leaves the previous request's end in place, so a
         // later request still marks the cache where that request ended.
         self.sent = Some(self.conversation.len());
-        let message = ActionId(mint("a_"));
-        self.append(
-            &Event::AssistantMessageStarted(Empty {}),
-            turn,
-            Some(&message),
-        )?;
-        let (reply, reasoning) = self.stream(&request, turn, &message)?;
-        match reply {
-            Ok(reply) => self.record(reply, reasoning, turn, &message),
-            Err(CallError::Failed { failure, .. }) => {
-                self.append(
-                    &Event::AssistantMessageCompleted(AssistantMessageCompleted {
-                        outcome: MessageOutcome::Failed,
-                        error: Some(failure.clone()),
-                        attempt: Some(1),
-                    }),
-                    turn,
-                    Some(&message),
-                )?;
-                Ok(Step::Ended(ended(TurnOutcome::Failed, Some(failure))))
-            }
-            // An interrupted reply has no `assistant_message_completed`
-            // (`docs/architecture.md`, "Cancellation").
-            Err(CallError::Cancelled) => Ok(Step::Ended(ended(TurnOutcome::Interrupted, None))),
-        }
+        self.attempt(&request, turn)
     }
 
     /// When billed spend has reached `budget.usd`, the turn fails and the

@@ -1,0 +1,248 @@
+//! Retrying a failed model call (`docs/model-routing.md`, "When a model call
+//! fails"): whether the failure gets another attempt, and how long the wait
+//! before it is. The policy lives here, in `loop`, which is the only module
+//! that decides what happens next (`docs/architecture.md`, "The call
+//! rules"); `provider` keeps the classification (`x-should-retry`,
+//! `retry-after`).
+
+use std::sync::Arc;
+use std::time::{Duration, Instant};
+
+use contract::clock::Wake;
+use contract::events::{
+    AssistantMessageCompleted, Empty, Event, MessageOutcome, RetryScheduled, TurnOutcome,
+};
+use contract::provider::{CallError, ModelRequest};
+use contract::shapes::Failure;
+use contract::tool::Cancel as _;
+use contract::{ActionId, ErrorCode, TurnId};
+
+use crate::progress::SharedWake;
+use crate::{Error, Step};
+
+/// How a failed model call is retried (`docs/configuration.md`): `attempts`
+/// retries after the first call, so up to `attempts + 1` calls, with the
+/// wait before retry `n` (from 1) at `min(initial * 2^(n-1), max)`.
+pub struct Retry {
+    /// Retries after the first call. `0` means no retries.
+    pub attempts: u32,
+    /// The first backoff.
+    pub initial: Duration,
+    /// The cap on one backoff, and on a wait a server asks for.
+    pub max: Duration,
+}
+
+impl Default for Retry {
+    fn default() -> Self {
+        Self {
+            attempts: 3,
+            initial: Duration::from_millis(2000),
+            max: Duration::from_millis(60000),
+        }
+    }
+}
+
+/// What `decide` says about a failure.
+pub enum Decision {
+    /// Make another attempt after the wait.
+    Retry(Duration),
+    /// Record this failure; no further attempt.
+    Fail(Failure),
+}
+
+impl Retry {
+    /// Whether `failure` gets another attempt. `should_retry` is the
+    /// response's `x-should-retry` header, as the provider crate sets it;
+    /// `retries` is the retries already made.
+    ///
+    /// `Fail` carries the failure to record: the input unchanged, except an
+    /// over-cap wait, which sets `code` to `rate_limited`
+    /// (`docs/errors.md`, "A failed model call").
+    pub fn decide(&self, failure: &Failure, should_retry: Option<bool>, retries: u32) -> Decision {
+        if matches!(
+            failure.code,
+            ErrorCode::QuotaExceeded | ErrorCode::UnknownStopReason
+        ) {
+            return Decision::Fail(failure.clone());
+        }
+        let retryable = match should_retry {
+            Some(false) => false,
+            Some(true) => true,
+            None => matches!(
+                failure.code,
+                ErrorCode::RateLimited
+                    | ErrorCode::ProviderUnavailable
+                    | ErrorCode::ConnectionFailed
+                    | ErrorCode::StreamIncomplete
+            ),
+        };
+        if !retryable {
+            return Decision::Fail(failure.clone());
+        }
+        if retries >= self.attempts {
+            return Decision::Fail(failure.clone());
+        }
+        if let Some(asked) = asked_wait(failure.retry_after)
+            && asked > self.max.as_secs_f64()
+        {
+            // A wait longer than the cap fails at once as `rate_limited`,
+            // so a person or a caller can decide. Whatever the original
+            // code was; the asked wait is already on the error.
+            let mut over = failure.clone();
+            over.code = ErrorCode::RateLimited;
+            return Decision::Fail(over);
+        }
+        let backoff = self.backoff(retries);
+        match asked_wait(failure.retry_after) {
+            Some(asked) => Decision::Retry(backoff.max(wait_duration(asked))),
+            None => Decision::Retry(backoff),
+        }
+    }
+
+    /// The wait before retry `retries + 1`: `min(initial * 2^retries, max)`,
+    /// saturating, so huge values never overflow.
+    fn backoff(&self, retries: u32) -> Duration {
+        let max_ms = self.max.as_millis();
+        let mut grown = self.initial.as_millis();
+        for _ in 0..retries {
+            grown = grown.saturating_mul(2);
+            if grown >= max_ms {
+                break;
+            }
+        }
+        Duration::from_millis(u64::try_from(grown.min(max_ms)).unwrap_or(u64::MAX))
+    }
+}
+
+/// The asked wait in seconds, when it parses to a finite, non-negative
+/// number; anything else is absent.
+fn asked_wait(retry_after: Option<f64>) -> Option<f64> {
+    retry_after.filter(|asked| asked.is_finite() && *asked >= 0.0)
+}
+
+/// An asked wait in seconds as a `Duration`, rounded up to whole
+/// milliseconds.
+#[allow(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "asked is finite and non-negative, clamped to u64::MAX milliseconds"
+)]
+fn wait_duration(asked: f64) -> Duration {
+    Duration::from_millis((asked * 1000.0).ceil().clamp(0.0, u64::MAX as f64) as u64)
+}
+
+impl crate::Loop {
+    /// One step's model calls with retries (`docs/model-routing.md`, "When
+    /// a model call fails"). Each attempt is a new action with its attempt
+    /// number; each wait is on the log's clock; the step fails with the
+    /// last error once the retries run out. The request, the budget check
+    /// and `sent` are the step's, not per retry: a retry resends the same
+    /// request (`docs/loop.md`, "What the model is sent").
+    pub(crate) fn attempt(&mut self, request: &ModelRequest, turn: &TurnId) -> Result<Step, Error> {
+        let mut retries = 0u32;
+        loop {
+            let message = ActionId(crate::mint("a_"));
+            // The backoff is anchored at the attempt's start, so the spacing
+            // between attempts is the delay: a clock advance past it during
+            // the failing call retries at once.
+            let started = self.log.clock().now();
+            self.append(
+                &Event::AssistantMessageStarted(Empty {}),
+                turn,
+                Some(&message),
+            )?;
+            let (reply, reasoning) = self.stream(request, turn, &message)?;
+            match reply {
+                Ok(reply) => return self.record(reply, reasoning, turn, &message),
+                Err(CallError::Failed {
+                    failure,
+                    should_retry,
+                }) => match self.retry.decide(&failure, should_retry, retries) {
+                    Decision::Retry(delay) => {
+                        let attempt = retries.saturating_add(1);
+                        self.append(
+                            &Event::AssistantMessageCompleted(AssistantMessageCompleted {
+                                outcome: MessageOutcome::Failed,
+                                error: Some(failure.clone()),
+                                attempt: Some(attempt),
+                            }),
+                            turn,
+                            Some(&message),
+                        )?;
+                        // A cancel that landed during the failing call ends
+                        // the turn before any wait: no `retry_scheduled`
+                        // follows a retry that never starts.
+                        if self.turn_cancelled() {
+                            return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                        }
+                        let until = started.checked_add(delay).unwrap_or(started);
+                        self.append(
+                            &Event::RetryScheduled(RetryScheduled {
+                                code: failure.code.clone(),
+                                attempt: attempt.saturating_add(1),
+                                delay_ms: delay_ms(delay),
+                            }),
+                            turn,
+                            Some(&message),
+                        )?;
+                        if self.wait_retry(until) {
+                            return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                        }
+                        retries = retries.saturating_add(1);
+                    }
+                    Decision::Fail(final_failure) => {
+                        self.append(
+                            &Event::AssistantMessageCompleted(AssistantMessageCompleted {
+                                outcome: MessageOutcome::Failed,
+                                error: Some(final_failure.clone()),
+                                attempt: Some(retries.saturating_add(1)),
+                            }),
+                            turn,
+                            Some(&message),
+                        )?;
+                        return Ok(Step::Ended(crate::ended(
+                            TurnOutcome::Failed,
+                            Some(final_failure),
+                        )));
+                    }
+                },
+                // An interrupted reply has no `assistant_message_completed`
+                // (`docs/architecture.md`, "Cancellation").
+                Err(CallError::Cancelled) => {
+                    return Ok(Step::Ended(crate::ended(TurnOutcome::Interrupted, None)));
+                }
+            }
+        }
+    }
+
+    /// Parks the loop thread until `until` on the log's clock, woken by a
+    /// clock move and by the turn's cancel. True when the turn was
+    /// cancelled. The wake is subscribed to the clock and the cancel first,
+    /// then the deadline and the cancel are checked, and re-checked after
+    /// every wake, so a bump that lands before the park is still seen.
+    fn wait_retry(&self, until: Instant) -> bool {
+        let wake = Arc::new(SharedWake::default());
+        let keeper: Arc<dyn Wake> = wake.clone();
+        let clock = self.log.clock().clone();
+        clock.subscribe(Arc::downgrade(&keeper));
+        self.cancel.subscribe(Arc::downgrade(&keeper));
+        loop {
+            if self.turn_cancelled() {
+                return true;
+            }
+            if clock.now() >= until {
+                return false;
+            }
+            wake.park(clock.as_ref(), Some(until));
+        }
+    }
+}
+
+/// A delay as whole milliseconds for `retry_scheduled.delay_ms`, saturating.
+fn delay_ms(delay: Duration) -> u64 {
+    u64::try_from(delay.as_millis()).unwrap_or(u64::MAX)
+}
+
+#[cfg(test)]
+#[path = "retry_tests.rs"]
+mod tests;
