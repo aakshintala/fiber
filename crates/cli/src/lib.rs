@@ -14,7 +14,7 @@ mod approve;
 mod login;
 
 pub use approve::approve;
-pub use login::{run_login, run_logout};
+pub use login::{LogoutTarget, run_login, run_logout};
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

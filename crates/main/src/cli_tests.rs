@@ -208,6 +208,41 @@ fn login_and_logout_take_an_optional_provider() {
 }
 
 #[test]
+fn login_and_logout_take_as_and_logout_takes_all() {
+    let Invocation::Run(Some(Commands::Login(login))) =
+        parse_from(["fiber", "login", "acme", "--as", "work"])
+    else {
+        panic!("login --as");
+    };
+    assert_eq!(login.label.as_deref(), Some("work"));
+    let Invocation::Run(Some(Commands::Login(login))) = parse_from(["fiber", "login", "acme"])
+    else {
+        panic!("login");
+    };
+    assert_eq!(login.label, None);
+    for (args, label, all) in [
+        (
+            &["fiber", "logout", "acme", "--as", "work"][..],
+            Some("work"),
+            false,
+        ),
+        (&["fiber", "logout", "acme", "--all"], None, true),
+        (&["fiber", "logout", "acme"], None, false),
+    ] {
+        let Invocation::Run(Some(Commands::Logout(logout))) = parse_from(args.iter().copied())
+        else {
+            panic!("{args:?}");
+        };
+        assert_eq!(logout.label.as_deref(), label, "{args:?}");
+        assert_eq!(logout.all, all, "{args:?}");
+    }
+    let said = sentence(&["fiber", "logout", "acme", "--as", "w", "--all"]);
+    assert!(said.contains("cannot be used with"), "{said}");
+    assert!(said.ends_with("Run `fiber --help` for usage."), "{said}");
+    assert_eq!(said.lines().count(), 1, "{said}");
+}
+
+#[test]
 fn the_menu_lists_login_and_logout_under_fiber_itself() {
     let menu = menu();
     let itself = menu
@@ -215,8 +250,8 @@ fn the_menu_lists_login_and_logout_under_fiber_itself() {
         .find(|group| group.starts_with("Fiber itself:"))
         .unwrap();
     for line in [
-        "  login [<provider>]  Store a provider's key",
-        "  logout <provider>   Delete a provider's stored key",
+        "  login [<provider>] [--as <label>]         Store a provider's key",
+        "  logout <provider> [--as <label> | --all]  Delete a provider's stored key",
     ] {
         assert!(itself.lines().any(|l| l == line), "{line}\n{itself}");
     }

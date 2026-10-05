@@ -17,10 +17,10 @@ Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
 
 Fiber itself:
-  login [<provider>]  Store a provider's key
-  logout <provider>   Delete a provider's stored key
-  help [<command>]    Print this menu, or a command's help
-  version             Print the version
+  login [<provider>] [--as <label>]         Store a provider's key
+  logout <provider> [--as <label> | --all]  Delete a provider's stored key
+  help [<command>]                          Print this menu, or a command's help
+  version                                   Print the version
 
 Extensions:
   extension install <name or path>  Install an extension and its dependencies
@@ -167,6 +167,10 @@ pub(crate) struct LoginArgs {
     /// offers the installed providers.
     #[arg(value_name = "provider")]
     pub(crate) provider: Option<String>,
+    /// The credential label to store the key under. Without it the label is
+    /// the account's email when the login reveals one, otherwise `default`.
+    #[arg(long = "as", value_name = "label")]
+    pub(crate) label: Option<String>,
 }
 
 #[derive(Debug, clap::Args)]
@@ -175,6 +179,12 @@ pub(crate) struct LogoutArgs {
     /// usage error `fiber` words itself, so it matches the other sentences.
     #[arg(value_name = "provider")]
     pub(crate) provider: Option<String>,
+    /// Delete this credential label alone.
+    #[arg(long = "as", value_name = "label", conflicts_with = "all")]
+    pub(crate) label: Option<String>,
+    /// Delete every stored label.
+    #[arg(long)]
+    pub(crate) all: bool,
 }
 
 #[derive(Debug, clap::Args)]

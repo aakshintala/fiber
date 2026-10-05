@@ -1,7 +1,8 @@
 //! `fiber login` and `fiber logout` (`docs/invocation.md`, "Fiber itself";
 //! `docs/configuration.md`, "Secrets"; `docs/model-routing.md`, "Logging
-//! in"): a provider's key is stored in `credentials/<stored>/default`, where
-//! `<stored>` is the credential the provider reads, and deleted again. No
+//! in"): a provider's key is stored in `credentials/<stored>/<label>`, where
+//! `<stored>` is the credential the provider reads and `<label>` is the
+//! `--as` label (`default` without one), and deleted again. No
 //! key reaches stdout, stderr, `Debug` or a log: it is a [`Secret`] from the
 //! moment it is read.
 
@@ -25,8 +26,26 @@ use signal_hook::iterator::{Handle, Signals};
 
 use crate::{LOGOUT_SHAPE, fail, project_of};
 
-/// The label `fiber login` stores a key under until labels arrive.
-const LABEL: &str = "default";
+/// The label a login stores under when `--as` is absent and the login
+/// revealed no email.
+const DEFAULT_LABEL: &str = "default";
+
+/// What `fiber logout` deletes (`docs/invocation.md`, "Commands and flags").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LogoutTarget<'a> {
+    /// No flag: the provider's one stored label.
+    Only,
+    /// `--as <label>`: that label.
+    Label(&'a str),
+    /// `--all`: every stored label.
+    All,
+}
+
+/// The label a login stores under: `--as`, else the email the login
+/// revealed, else `default` (`docs/model-routing.md`, "Logging in").
+fn chosen_label<'a>(as_label: Option<&'a str>, email: Option<&'a str>) -> &'a str {
+    as_label.or(email).unwrap_or(DEFAULT_LABEL)
+}
 
 /// Reads the key. The seam is the terminal: a terminal turns echo off, a
 /// pipe reads a line as it is.
@@ -242,17 +261,23 @@ fn credential_key(name: &str) -> String {
     }
 }
 
-/// Stores a provider's key as `credentials/<stored>/default`, and names the
+/// Stores a provider's key as `credentials/<stored>/<label>`, and names the
 /// label in `providers."<name>".credential` when that is unset
 /// (`docs/model-routing.md`, "Logging in").
-pub(crate) fn login(provider: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), Failure> {
+pub(crate) fn login(
+    provider: Option<&str>,
+    label: Option<&str>,
+    io: &mut LoginIo<'_>,
+) -> Result<(), Failure> {
     let name = match provider {
         Some(name) => name.to_owned(),
         None => choose(io)?,
     };
     let data = installed(io.providers, &name)?;
     let stored = stored_name(data);
-    let file = CredentialFile::new(io.home, stored, LABEL).map_err(config_failure)?;
+    // A key login reveals no email; the OAuth login of #311 passes its own.
+    let label = chosen_label(label, None);
+    let file = CredentialFile::new(io.home, stored, label).map_err(config_failure)?;
     // Held until the login ends, so two logins never both pass the check.
     let Some(lock) = file.try_lock().map_err(config_failure)? else {
         return Err(failure(
@@ -260,12 +285,12 @@ pub(crate) fn login(provider: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), 
             format!("another login for {name} is running"),
         ));
     };
-    if read_credential(io.home, stored, LABEL)
+    if read_credential(io.home, stored, label)
         .map_err(config_failure)?
         .is_some()
     {
         return Err(usage(format!(
-            "credentials/{stored}/{LABEL} is already stored; run `fiber logout {name}` first."
+            "credentials/{stored}/{label} is already stored; log in under another label with --as <label>, or run `fiber logout {name} --as {label}` first."
         )));
     }
     let prompt = if io.terminal {
@@ -280,14 +305,14 @@ pub(crate) fn login(provider: Option<&str>, io: &mut LoginIo<'_>) -> Result<(), 
     if key.expose().is_empty() {
         return Err(usage("No key was given; nothing was stored."));
     }
-    store_credential(io.home, stored, LABEL, &key).map_err(config_failure)?;
-    let first = set_global_if_unset(io.home, &credential_key(&name), LABEL.into());
+    store_credential(io.home, stored, label, &key).map_err(config_failure)?;
+    let first = set_global_if_unset(io.home, &credential_key(&name), label.into());
     if let Err(e) = first {
         // A retry must start clean: no key stored without its label.
-        delete_credential_held(io.home, stored, LABEL, &lock).unwrap_or(false);
+        delete_credential_held(io.home, stored, label, &lock).unwrap_or(false);
         return Err(config_failure(e));
     }
-    writeln!(io.err, "fiber: stored credentials/{stored}/{LABEL}").map_err(terminal_failure)
+    writeln!(io.err, "fiber: stored credentials/{stored}/{label}").map_err(terminal_failure)
 }
 
 /// Where a provider's key comes from when nothing is stored: the first
@@ -319,10 +344,12 @@ fn declared_source(config: &Config, provider: &ProviderData) -> Option<String> {
     })
 }
 
-/// Deletes a provider's stored key. A key that comes from an environment
-/// variable, a file or a command is named, never removed.
+/// Deletes a provider's stored key, one label or every label. A key that
+/// comes from an environment variable, a file or a command is named, never
+/// removed.
 pub(crate) fn logout(
     provider: Option<&str>,
+    target: LogoutTarget<'_>,
     home: &Path,
     providers: &Providers,
     config: &Config,
@@ -334,32 +361,39 @@ pub(crate) fn logout(
     let data = installed(providers, name)?;
     let stored = stored_name(data);
     let labels = credential_labels(home, stored).map_err(config_failure)?;
-    let label = match labels.as_slice() {
-        [one] => one,
-        [] => {
-            return Err(failure(
-                ErrorCode::CredentialMissing,
-                match declared_source(config, data) {
-                    Some(source) => {
-                        format!("{name}'s key comes from {source}; fiber logout cannot remove it")
-                    }
-                    None => format!("no stored credential for {name}"),
-                },
-            ));
-        }
-        [..] => {
-            return Err(usage(format!(
-                "`{name}` has several stored credentials: {}.",
-                labels.join(", ")
-            )));
-        }
-    };
-    if !delete_credential(home, stored, label).map_err(config_failure)? {
+    if labels.is_empty() {
         return Err(failure(
             ErrorCode::CredentialMissing,
-            format!("no stored credential for {name}"),
+            match declared_source(config, data) {
+                Some(source) => {
+                    format!("{name}'s key comes from {source}; fiber logout cannot remove it")
+                }
+                None => format!("no stored credential for {name}"),
+            },
         ));
     }
+    let doomed: Vec<&str> = match target {
+        LogoutTarget::All => labels.iter().map(String::as_str).collect(),
+        LogoutTarget::Label(label) if labels.iter().any(|l| l == label) => vec![label],
+        LogoutTarget::Label(label) => {
+            return Err(failure(
+                ErrorCode::CredentialMissing,
+                format!(
+                    "no stored credential {label} for {name}; the stored labels are {}",
+                    labels.join(", ")
+                ),
+            ));
+        }
+        LogoutTarget::Only => match labels.as_slice() {
+            [one] => vec![one.as_str()],
+            _ => {
+                return Err(usage(format!(
+                    "`{name}` has several stored credentials: {}; name one with --as <label>, or use --all.",
+                    labels.join(", ")
+                )));
+            }
+        },
+    };
     let siblings: Vec<&str> = providers
         .names()
         .filter(|other| *other != name)
@@ -374,7 +408,17 @@ pub(crate) fn logout(
     } else {
         format!(", which {} also reads", siblings.join(", "))
     };
-    writeln!(err, "fiber: removed credentials/{stored}/{label}{also}").map_err(terminal_failure)
+    for label in doomed {
+        if !delete_credential(home, stored, label).map_err(config_failure)? {
+            return Err(failure(
+                ErrorCode::CredentialMissing,
+                format!("no stored credential {label} for {name}"),
+            ));
+        }
+        writeln!(err, "fiber: removed credentials/{stored}/{label}{also}")
+            .map_err(terminal_failure)?;
+    }
+    Ok(())
 }
 
 /// Prints a failure the way every command does, and gives its exit code.
@@ -394,8 +438,8 @@ fn home_and_providers() -> Result<(std::path::PathBuf, Providers), Failure> {
     Ok((home, providers))
 }
 
-/// `fiber login [<provider>]`.
-pub fn run_login(provider: Option<&str>) -> i32 {
+/// `fiber login [<provider>] [--as <label>]`.
+pub fn run_login(provider: Option<&str>, label: Option<&str>) -> i32 {
     let ran = home_and_providers().and_then(|(home, providers)| {
         let stdin = io::stdin();
         let on_terminal = stdin.is_terminal();
@@ -408,6 +452,7 @@ pub fn run_login(provider: Option<&str>) -> i32 {
         };
         login(
             provider,
+            label,
             &mut LoginIo {
                 home: &home,
                 providers: &providers,
@@ -421,8 +466,8 @@ pub fn run_login(provider: Option<&str>) -> i32 {
     finish(ran)
 }
 
-/// `fiber logout <provider>`.
-pub fn run_logout(provider: Option<&str>) -> i32 {
+/// `fiber logout <provider> [--as <label> | --all]`.
+pub fn run_logout(provider: Option<&str>, target: LogoutTarget<'_>) -> i32 {
     if provider.is_none() {
         return finish(Err(failure(ErrorCode::Usage, LOGOUT_SHAPE)));
     }
@@ -437,7 +482,14 @@ pub fn run_logout(provider: Option<&str>) -> i32 {
             overrides: Vec::new(),
         })
         .map_err(config_failure)?;
-        logout(provider, &home, &providers, &config, &mut io::stderr())
+        logout(
+            provider,
+            target,
+            &home,
+            &providers,
+            &config,
+            &mut io::stderr(),
+        )
     });
     finish(ran)
 }
