@@ -15,14 +15,21 @@ use contract::tool::Tool;
 use crate::failed;
 
 /// The loop's `(who, tool)` pairs, the infos the `tools` command answers
-/// with, and the driver shell [`doors::Session::shell`] runs.
-type SessionTools = (Vec<(String, Arc<dyn Tool>)>, Vec<ToolInfo>, Arc<dyn Tool>);
+/// with, the driver shell [`doors::Session::shell`] runs, and what a handoff
+/// runs to clear what the file tools have seen.
+type SessionTools = (
+    Vec<(String, Arc<dyn Tool>)>,
+    Vec<ToolInfo>,
+    Arc<dyn Tool>,
+    Arc<dyn Fn() + Send + Sync>,
+);
 
 /// `edit`, `read`, `shell` and `write`, each registered by `builtin`.
-/// `read`, `write` and `edit` share one session's file state. A failure to
+/// `read`, `write` and `edit` share one session's file state, which a
+/// handoff forgets. A failure to
 /// find the running binary is `io_failed`, before any session line.
 pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<SessionTools, Failure> {
-    let files = tools::Files::new(workspace.to_path_buf());
+    let files = Arc::new(tools::Files::new(workspace.to_path_buf()));
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
     let shell =
@@ -41,7 +48,8 @@ pub(crate) fn builtin(workspace: &Path, clock: &Arc<dyn Clock>) -> Result<Sessio
         pairs.push((String::from("builtin"), tool));
         infos.push(info);
     }
-    Ok((pairs, infos, driver))
+    let forget: Arc<dyn Fn() + Send + Sync> = Arc::new(move || files.forget());
+    Ok((pairs, infos, driver, forget))
 }
 
 /// One tool and what the `tools` command answers for it.

@@ -61,6 +61,8 @@ pub(crate) struct SessionServers {
     pub failed: Vec<McpServerFailed>,
     /// The running servers, stopped when the session ends.
     pub servers: mcp::Servers,
+    /// Run on every completed handoff: clears what the file tools have seen.
+    pub forget: Arc<dyn Fn() + Send + Sync>,
 }
 
 /// The tools one session registers: the built-ins, every MCP server's
@@ -83,7 +85,7 @@ pub(crate) fn session_tools(
     ),
     Failure,
 > {
-    let (mut tools, mut infos, driver) = crate::builtin::builtin(workspace, clock)?;
+    let (mut tools, mut infos, driver, forget) = crate::builtin::builtin(workspace, clock)?;
     // Every spec starts with the session; a server that fails is left out
     // and its failure is returned for the log, written after `fiber_started`.
     let started = mcp::start(specs, workspace, clock, env!("CARGO_PKG_VERSION"));
@@ -93,6 +95,7 @@ pub(crate) fn session_tools(
     let servers = SessionServers {
         failed: started.failed,
         servers: started.servers,
+        forget,
     };
     Ok((tools, infos, driver, servers))
 }

@@ -41,7 +41,7 @@ fn a_new_session_builds_the_preamble_before_its_first_turn() {
     assert!(built.payload.get("effort").is_none());
     assert!(built.payload.get("thinking").is_none());
     assert!(built.payload.get("credential").is_none());
-    assert!(built.payload.get("trigger_at").is_none());
+    assert_eq!(built.payload["trigger_at"], 400_000);
     // The event's system prompt is the first request's, and its tool
     // choice and cache lifetime are what the request sends.
     let requests = session.requests();
@@ -184,4 +184,32 @@ fn the_preamble_is_built_once_per_loop_not_per_turn() {
         assert_eq!(request.tool_choice, "auto");
         assert_eq!(request.cache_lifetime, CacheLifetime::OneHour);
     }
+}
+
+#[test]
+fn trigger_at_is_absent_when_automatic_handoff_is_off() {
+    let mut session =
+        Session::new(vec![Scripted::text("Done.")], None).handoff(r#loop::HandoffSettings {
+            enabled: false,
+            ..r#loop::HandoffSettings::default()
+        });
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    assert!(built.payload.get("trigger_at").is_none());
+}
+
+#[test]
+fn trigger_at_follows_the_configured_tokens() {
+    let mut session =
+        Session::new(vec![Scripted::text("Done.")], None).handoff(r#loop::HandoffSettings {
+            tokens: 1_234,
+            ..r#loop::HandoffSettings::default()
+        });
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    assert_eq!(built.payload["trigger_at"], 1_234);
 }

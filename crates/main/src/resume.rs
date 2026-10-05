@@ -87,6 +87,7 @@ pub(crate) fn ask_resume(
         limits,
         budget,
         retry,
+        handoff,
         idle,
         home,
         project,
@@ -102,6 +103,7 @@ pub(crate) fn ask_resume(
             Ok(built) => built,
             Err(e) => return ask_failed(e),
         };
+    let forget = Arc::clone(&session_servers.forget);
     let permissions = crate::ask_permissions(&home, &project, folded.workspace, &clock);
     let session = match Session::resume(&home, &dir, &log, clock, infos, Box::new(io::stdout())) {
         Ok(session) => session,
@@ -131,7 +133,10 @@ pub(crate) fn ask_resume(
                 tools,
                 permissions,
             )
-            .map(|looped| crate::session_extensions::hooked(looped, &extensions)),
+            .map(|looped| {
+                let looped = crate::session_extensions::hooked(looped, &extensions);
+                looped.handoff(handoff).on_handoff(forget)
+            }),
             budget,
             idle,
             reviewer,

@@ -106,8 +106,9 @@ impl Loop {
     pub(crate) fn mark_orphans(&mut self, lines: &[Envelope]) -> Result<(), Error> {
         for completed in orphans(lines)? {
             if self.suspended.is_some() {
-                self.log
-                    .append(&Event::JobCompleted(completed.clone()), None, None)?;
+                let event = Event::JobCompleted(completed.clone());
+                self.log.append(&event, None, None)?;
+                self.handoff.carry.fold_jobs(&event);
                 self.held.push(Input::User {
                     text: notice_text(&completed),
                 });
@@ -122,6 +123,7 @@ impl Loop {
                 None,
                 None,
                 &mut self.changes.had,
+                &mut self.handoff.carry,
             )?;
         }
         Ok(())

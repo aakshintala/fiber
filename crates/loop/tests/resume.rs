@@ -747,20 +747,20 @@ fn the_first_request_after_resume_carries_the_earlier_turn_the_fixed_result_and_
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
     assert_eq!(conversation.len(), 5);
-    assert!(matches!(&conversation[0], Input::User { text } if text == "one"));
-    let Input::ToolCall { action_id, .. } = &conversation[1] else {
+    // The log holds no opening message, so the resume writes one at its
+    // first turn, at the front of the context.
+    assert!(
+        matches!(&conversation[0], Input::User { text } if text.starts_with("This message is from Fiber"))
+    );
+    assert!(matches!(&conversation[1], Input::User { text } if text == "one"));
+    let Input::ToolCall { action_id, .. } = &conversation[2] else {
         panic!("{conversation:?}");
     };
     assert_eq!(action_id.0, "a_1");
-    let (id, text, is_error) = result_of(&conversation[2]);
+    let (id, text, is_error) = result_of(&conversation[3]);
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
     assert!(is_error);
-    // The log holds no opening message, so the resume writes one at its
-    // first turn, after the rebuilt history.
-    assert!(
-        matches!(&conversation[3], Input::User { text } if text.starts_with("This message is from Fiber"))
-    );
     assert!(matches!(&conversation[4], Input::User { text } if text == "two"));
     // `sent` is the conversation's length at the dead process's last
     // `assistant_message_started`: the previous request ended after "one".
@@ -1277,7 +1277,7 @@ fn sent_counts_the_fixed_results_flushed_at_the_last_request() {
     assert_eq!(requests.len(), 1);
     let conversation = &requests[0].conversation;
     assert_eq!(conversation.len(), 5);
-    let (id, text, _) = result_of(&conversation[2]);
+    let (id, text, _) = result_of(&conversation[3]);
     assert_eq!(id.0, "a_1");
     assert_eq!(text, "It never ran.");
     assert_eq!(requests[0].previous_end, Some(3));
@@ -2254,7 +2254,7 @@ fn a_suspended_turn_is_refused_then_the_prompt_runs_next() {
     assert_eq!(requests.len(), 2);
     // The first request holds the call and the denial, and no prompt.
     let first = &requests[0].conversation;
-    assert!(matches!(&first[1], Input::ToolCall { .. }), "{first:?}");
+    assert!(matches!(&first[2], Input::ToolCall { .. }), "{first:?}");
     assert!(
         matches!(&first[3], Input::ToolResult { text, .. } if text.contains("No person can answer")),
         "{first:?}"
@@ -2619,8 +2619,8 @@ fn a_job_with_no_completion_is_marked_orphaned_on_resume() {
         })
         .collect();
     let notice = |id: &str| format!("Fiber: background job {id} ended: failed.\n{ORPHANED}");
-    assert_eq!(users[1], notice("j_a"));
-    assert_eq!(users[2], notice("j_c"));
+    assert_eq!(users[2], notice("j_a"));
+    assert_eq!(users[3], notice("j_c"));
     assert_eq!(*users.last().unwrap(), "two");
     assert_eq!(
         history.new_kinds(),
@@ -2794,4 +2794,409 @@ fn a_second_resume_over_a_logged_orphan_keeps_it_after_the_results() {
             text: format!("Fiber: background job j_a ended: failed.\n{ORPHANED}")
         })
     );
+}
+
+// Handoff windows (`docs/handoff.md`, "Resume"): the rebuild renders what a
+// handoff leaves in force.
+
+fn opening_of(os: &str) -> Event {
+    Event::OpeningMessage(OpeningMessage {
+        environment: Environment {
+            date: "2023-11-14".into(),
+            os: os.into(),
+            arch: "test-arch".into(),
+            shell: "/bin/sh".into(),
+            workspace: "/w".into(),
+            git: None,
+            session_log: "/log/events.jsonl".into(),
+        },
+        instruction_files: Vec::new(),
+        skills: Vec::new(),
+    })
+}
+
+fn handoff_started() -> Event {
+    Event::HandoffStarted(contract::events::HandoffStarted {
+        trigger: contract::events::HandoffTrigger::Auto,
+    })
+}
+
+fn handoff_done(outcome: contract::events::Outcome, note: &[&str]) -> Event {
+    let failed = outcome == contract::events::Outcome::Failed;
+    Event::HandoffCompleted(contract::events::HandoffCompleted {
+        outcome,
+        error: failed.then(|| contract::shapes::Failure {
+            code: contract::ErrorCode::RateLimited,
+            message: "slow down".into(),
+            retry_after: None,
+            provider: None,
+        }),
+        note: (!note.is_empty()).then(|| contract::events::Note::Actions {
+            note: note.iter().map(|id| ActionId((*id).into())).collect(),
+        }),
+        tokens_before: 400_120,
+        instructions: None,
+    })
+}
+
+fn text_of(input: &Input) -> &str {
+    match input {
+        Input::User { text } | Input::Assistant { text, .. } => text,
+        other @ (Input::Reasoning { .. } | Input::ToolCall { .. } | Input::ToolResult { .. }) => {
+            panic!("not a message: {other:?}")
+        }
+    }
+}
+
+fn texts(conversation: &[Input]) -> Vec<&str> {
+    conversation.iter().map(text_of).collect()
+}
+
+/// A log: an opening message, the turn's input and a steer, then (when
+/// `jobs`) a job still running and one that ended.
+fn before_handoff(log: &LogLines, jobs: bool) {
+    log.append(opening_of("old-os"), None);
+    if jobs {
+        log.append(job_started("j_1"), None);
+        log.append(job_started("j_2"), None);
+        log.append(job_completed("j_2"), None);
+    }
+    log.append(user_turn("one"), None);
+    log.append(steering("steer"), None);
+}
+
+/// The note request's lines under the message action `a_note`.
+fn note_lines(log: &LogLines) {
+    log.append(handoff_started(), None);
+    log.append(message_started(), Some("a_note"));
+    log.append(assistant("the note"), Some("a_note"));
+}
+
+const JOBS_LINE: &str = "Fiber: these background jobs are still running. Each one's end is reported when it happens.\n\n- j_1: npm test";
+
+#[test]
+fn a_completed_handoff_is_the_opening_the_turn_input_the_note_and_the_jobs_line() {
+    let log = LogLines::new();
+    before_handoff(&log, true);
+    note_lines(&log);
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    let seen = texts(&conversation);
+    assert_eq!(seen.len(), 5, "{seen:?}");
+    assert!(seen[0].contains("new-os"), "{seen:?}");
+    assert_eq!(seen[1..], ["one", "steer", "the note", JOBS_LINE]);
+}
+
+#[test]
+fn a_completed_handoff_with_no_job_running_has_no_jobs_line() {
+    let log = LogLines::new();
+    before_handoff(&log, false);
+    log.append(job_started("j_3"), None);
+    log.append(job_completed("j_3"), None);
+    note_lines(&log);
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    assert_eq!(texts(&conversation)[1..], ["one", "steer", "the note"]);
+}
+
+#[test]
+fn a_handoff_carries_only_the_latest_turns_input() {
+    let log = LogLines::new();
+    before_handoff(&log, false);
+    log.append(assistant("answer"), Some("a_1"));
+    log.append(user_turn("two"), None);
+    note_lines(&log);
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    // The first turn's "one" and its steer stay behind in the log.
+    assert_eq!(texts(&conversation)[1..], ["two", "the note"]);
+}
+
+/// The conversation before `handoff_started`.
+fn before(jobs: bool) -> Vec<Input> {
+    let log = LogLines::new();
+    before_handoff(&log, jobs);
+    r#loop::rebuild(&log.lines(), MODEL).unwrap()
+}
+
+#[test]
+fn a_failed_handoff_leaves_the_conversation_as_it_was() {
+    let log = LogLines::new();
+    before_handoff(&log, true);
+    note_lines(&log);
+    log.append(handoff_done(contract::events::Outcome::Failed, &[]), None);
+
+    assert_eq!(r#loop::rebuild(&log.lines(), MODEL).unwrap(), before(true));
+}
+
+#[test]
+fn a_cancelled_handoff_leaves_the_conversation_as_it_was() {
+    let log = LogLines::new();
+    before_handoff(&log, true);
+    note_lines(&log);
+    log.append(
+        handoff_done(contract::events::Outcome::Cancelled, &[]),
+        None,
+    );
+
+    assert_eq!(r#loop::rebuild(&log.lines(), MODEL).unwrap(), before(true));
+}
+
+#[test]
+fn a_handoff_that_never_completed_leaves_the_conversation_as_it_was() {
+    let log = LogLines::new();
+    before_handoff(&log, true);
+    note_lines(&log);
+
+    assert_eq!(r#loop::rebuild(&log.lines(), MODEL).unwrap(), before(true));
+}
+
+#[test]
+fn a_turn_resumed_after_an_unfinished_handoff_is_never_discarded() {
+    let log = LogLines::new();
+    before_handoff(&log, false);
+    note_lines(&log);
+    log.append(fiber_started(), None);
+    log.append(user_turn("three"), None);
+    log.append(assistant("answer"), Some("a_9"));
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    let mut expected = before(false);
+    expected.push(Input::User {
+        text: "three".into(),
+    });
+    expected.push(Input::Assistant {
+        model: MODEL.into(),
+        text: "answer".into(),
+        provider_item: None,
+    });
+    assert_eq!(conversation, expected);
+}
+
+#[test]
+fn a_handoff_window_closes_at_each_completion_even_in_a_later_window() {
+    let log = LogLines::new();
+    before_handoff(&log, false);
+    note_lines(&log);
+    log.append(handoff_done(contract::events::Outcome::Failed, &[]), None);
+    log.append(user_turn("two"), None);
+    log.append(handoff_started(), None);
+    log.append(message_started(), Some("a_note2"));
+    log.append(assistant("second note"), Some("a_note2"));
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note2"]),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    // The first note's text never reaches the second window's note.
+    assert_eq!(texts(&conversation)[1..], ["two", "second note"]);
+}
+
+#[test]
+fn the_nudge_renders_with_the_openings_session_log_path() {
+    let log = LogLines::new();
+    log.append(opening_of("old-os"), None);
+    log.append(user_turn("one"), None);
+    log.append(
+        Event::ContextNudged(contract::events::ContextNudged {
+            tokens: 266_700,
+            trigger_at: 400_000,
+        }),
+        None,
+    );
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    assert_eq!(
+        text_of(conversation.last().unwrap()),
+        "Fiber: your context holds 266700 tokens. At 400000 tokens Fiber will ask you for a handoff note and continue this work from it in a fresh context, so carry on as normal. The whole session stays in the session log at /log/events.jsonl."
+    );
+}
+
+#[test]
+fn a_second_opening_message_sits_at_the_front() {
+    let log = LogLines::new();
+    before_handoff(&log, false);
+    note_lines(&log);
+    log.append(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    log.append(opening_of("new-os"), None);
+    log.append(user_turn("two"), None);
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    let seen = texts(&conversation);
+    assert!(seen[0].contains("new-os"), "{seen:?}");
+    assert_eq!(seen[1..], ["one", "steer", "the note", "two"]);
+    assert_eq!(
+        seen.iter().filter(|text| text.contains("old-os")).count(),
+        0
+    );
+}
+
+// Resuming over handoffs (`docs/handoff.md`, "Resume").
+
+/// A history holding an opening, one turn, and the note request's lines.
+fn handoff_history(script: Vec<Scripted>) -> History {
+    let history = History::new(script);
+    history.write(opening_of("old-os"), None);
+    history.write(user_turn("one"), None);
+    history.write(handoff_started(), None);
+    history.write(message_started(), Some("a_note"));
+    history.write(assistant("the note"), Some("a_note"));
+    history
+}
+
+fn resume_conversation(history: &mut History, prompt: &str) -> Vec<Input> {
+    let looped = history.resume(Vec::new());
+    history.run(looped, prompt);
+    history
+        .provider
+        .requests()
+        .last()
+        .unwrap()
+        .conversation
+        .clone()
+}
+
+#[test]
+fn a_resume_after_a_completed_handoff_sends_from_the_last_handoff() {
+    let mut history = handoff_history(vec![Scripted::text("Hello.")]);
+    history.write(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    history.write(opening_of("new-os"), None);
+    history.freeze();
+
+    let conversation = resume_conversation(&mut history, "two");
+
+    let seen = texts(&conversation);
+    assert!(seen[0].contains("new-os"), "{seen:?}");
+    assert_eq!(seen[1..], ["one", "the note", "two"]);
+    // The new context has had no request, and its opening is written once.
+    assert_eq!(history.provider.requests()[0].previous_end, None);
+    assert!(
+        history
+            .new_lines()
+            .iter()
+            .all(|line| line.kind != "opening_message")
+    );
+}
+
+#[test]
+fn a_resume_after_a_crash_mid_handoff_sends_the_context_as_it_was() {
+    let mut history = handoff_history(vec![Scripted::text("Two."), Scripted::text("Three.")]);
+    // The process that resumes writes `fiber_started`.
+    history.write(fiber_started(), None);
+    history.freeze();
+
+    let conversation = resume_conversation(&mut history, "two");
+
+    let seen = texts(&conversation);
+    assert!(seen[0].contains("old-os"), "{seen:?}");
+    assert_eq!(seen[1..], ["one", "two"]);
+
+    // A second resume, after that further turn, still holds it.
+    let (tx, rx) = mpsc::channel();
+    history.inbox_tx = tx;
+    history.inbox_rx = Some(rx);
+    history.write(fiber_started(), None);
+    history.freeze();
+    let conversation = resume_conversation(&mut history, "three");
+
+    let seen = texts(&conversation);
+    assert!(seen[0].contains("old-os"), "{seen:?}");
+    assert_eq!(seen[1..4], ["one", "two", "Two."]);
+    assert_eq!(seen.last().copied(), Some("three"));
+}
+
+#[test]
+fn a_crash_between_the_completion_and_the_new_opening_writes_it_at_the_next_turn() {
+    let mut history = handoff_history(vec![Scripted::text("Hello.")]);
+    history.write(
+        handoff_done(contract::events::Outcome::Completed, &["a_note"]),
+        None,
+    );
+    history.freeze();
+
+    let conversation = resume_conversation(&mut history, "two");
+
+    let seen = texts(&conversation);
+    assert!(
+        seen[0].starts_with("This message is from Fiber"),
+        "{seen:?}"
+    );
+    assert!(seen[0].contains("Session log:"), "{seen:?}");
+    assert!(!seen[0].contains("old-os"));
+    assert_eq!(seen[1..], ["one", "the note", "two"]);
+    assert_eq!(
+        history.new_kinds()[..3],
+        ["preamble_built", "opening_message", "turn_started"]
+    );
+}
+
+/// A resumed turn whose first reply calls a tool with `tokens` in its
+/// prompt: the context is past two thirds of the default trigger.
+fn nudge_after_resume(nudged_before: bool) -> usize {
+    let mut history = History::new(vec![
+        support::with_tokens(support::tool_call_reply("", &["get_weather"]), 270_000, 0),
+        Scripted::text("Done."),
+    ]);
+    history.write(opening_of("old-os"), None);
+    history.write(user_turn("one"), None);
+    if nudged_before {
+        history.write(
+            Event::ContextNudged(contract::events::ContextNudged {
+                tokens: 270_000,
+                trigger_at: 400_000,
+            }),
+            None,
+        );
+    }
+    history.freeze();
+    let looped = history.resume(vec![(
+        "builtin".to_owned(),
+        Arc::new(support::TestTool::reads("get_weather", "abcd")) as Arc<dyn Tool>,
+    )]);
+    history.run(looped, "two");
+    history
+        .new_lines()
+        .iter()
+        .filter(|line| line.kind == "context_nudged")
+        .count()
+}
+
+#[test]
+fn a_context_nudged_before_the_crash_is_not_nudged_again() {
+    assert_eq!(nudge_after_resume(true), 0);
+}
+
+#[test]
+fn a_context_not_nudged_before_the_crash_is_nudged_once_a_reply_measures_it() {
+    assert_eq!(nudge_after_resume(false), 1);
 }
