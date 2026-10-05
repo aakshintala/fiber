@@ -2,7 +2,9 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc;
 use std::thread;
+use std::time::Duration;
 
 use fakes::TempDir;
 use serde_json::json;
@@ -63,6 +65,7 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
     lock.write(&json!({ "token": "first" })).unwrap();
     let dir = home.path().join("credentials/acme");
     let stop = AtomicBool::new(false);
+    let (started, running) = mpsc::channel();
 
     thread::scope(|scope| {
         scope.spawn(|| {
@@ -70,9 +73,21 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
             while !stop.load(Ordering::Relaxed) {
                 lock.write(&json!({ "token": format!("t{n}") })).unwrap();
                 n += 1;
+                // Once, after the first write: the observer starts scanning.
+                if n == 1 {
+                    started.send(()).unwrap();
+                }
             }
         });
-        for _ in 0..2000 {
+        running.recv_timeout(Duration::from_secs(5)).unwrap();
+        // The observer scans until it has seen a temporary file, or has made
+        // `MAX_SCANS` scans: the deadline, in scans rather than time.
+        const MAX_SCANS: usize = 200_000;
+        let mut temporaries = 0;
+        for _ in 0..MAX_SCANS {
+            if temporaries > 0 {
+                break;
+            }
             for entry in fs::read_dir(&dir).unwrap() {
                 let path = entry.unwrap().path();
                 // A temporary file is renamed away between the listing and
@@ -80,6 +95,9 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
                 let Ok(meta) = fs::metadata(&path) else {
                     continue;
                 };
+                if path.extension().is_some_and(|e| e == "tmp") {
+                    temporaries += 1;
+                }
                 assert_eq!(
                     meta.permissions().mode() & 0o777,
                     0o600,
@@ -89,6 +107,7 @@ fn a_writer_never_exposes_a_file_wider_than_0600() {
             }
         }
         stop.store(true, Ordering::Relaxed);
+        assert!(temporaries > 0, "no temporary file was observed");
     });
 }
 
@@ -137,6 +156,9 @@ fn a_name_that_is_not_one_file_name_is_refused() {
         ("acme", ".."),
         ("acme", "x/y"),
         ("acme", "nul\0"),
+        ("acme", "default.lock"),
+        ("acme", "x.lock"),
+        ("acme", "x.tmp"),
     ] {
         assert!(
             matches!(
@@ -201,4 +223,34 @@ fn a_stored_file_that_is_not_json_is_an_error() {
 
     let lock = open(home.path()).try_lock().unwrap().unwrap();
     assert!(matches!(lock.read(), Err(ConfigError::Json { .. })));
+}
+
+#[test]
+fn a_directory_replaced_by_a_link_under_a_live_guard_is_refused() {
+    let home = TempDir::new("cred-file");
+    let elsewhere = TempDir::new("cred-elsewhere");
+    let lock = open(home.path()).try_lock().unwrap().unwrap();
+    lock.write(&json!({ "token": "t" })).unwrap();
+    let provider = home.path().join("credentials/acme");
+    fs::rename(&provider, home.path().join("moved")).unwrap();
+    std::os::unix::fs::symlink(elsewhere.path(), &provider).unwrap();
+
+    assert!(matches!(lock.read(), Err(ConfigError::NotPlain { .. })));
+    assert!(matches!(
+        lock.write(&json!({ "token": "u" })),
+        Err(ConfigError::NotPlain { .. })
+    ));
+    assert_eq!(fs::read_dir(elsewhere.path()).unwrap().count(), 0);
+}
+
+#[test]
+fn a_credential_removed_under_the_guard_reads_as_nothing() {
+    let home = TempDir::new("cred-file");
+    let lock = open(home.path()).try_lock().unwrap().unwrap();
+    let value = json!({ "token": "t" });
+    lock.write(&value).unwrap();
+    assert_eq!(lock.read().unwrap(), Some(value));
+
+    fs::remove_file(home.path().join("credentials/acme/default")).unwrap();
+    assert_eq!(lock.read().unwrap(), None);
 }

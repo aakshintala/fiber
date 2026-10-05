@@ -88,6 +88,20 @@ fn a_request_past_the_script_gets_script_exhausted() {
 }
 
 #[test]
+fn the_first_and_the_thousandth_request_past_the_script_get_script_exhausted() {
+    let server = OauthServer::start(vec![OauthReply::pending()]);
+    post(&server, "/token", "");
+
+    let exhausted = (500, r#"{"error":"script_exhausted"}"#.to_owned());
+    assert_eq!(post(&server, "/token", ""), exhausted);
+    for _ in 0..998 {
+        post(&server, "/token", "");
+    }
+    assert_eq!(post(&server, "/token", ""), exhausted);
+    assert_eq!(server.request_count(), 1001);
+}
+
+#[test]
 fn an_empty_script_answers_script_exhausted_at_once() {
     let server = OauthServer::start(Vec::new());
 
@@ -147,6 +161,7 @@ fn a_body_with_no_fields_records_an_empty_form() {
 #[test]
 fn a_plus_after_a_percent_is_not_a_hex_digit() {
     assert_eq!(percent_decode("%+1"), "% 1");
+    assert_eq!(percent_decode("%1+"), "%1 ");
     assert_eq!(percent_decode("%e2%82%ac"), "\u{20ac}");
 }
 
@@ -185,4 +200,16 @@ fn url_is_a_loopback_base() {
     let server = OauthServer::start(Vec::new());
 
     assert!(server.url().starts_with("http://127.0.0.1:"));
+}
+
+#[test]
+fn percent_decode_handles_each_kind_of_byte() {
+    assert_eq!(percent_decode("a+b"), "a b");
+    assert_eq!(percent_decode("a%2Fb%2f"), "a/b/");
+    assert_eq!(percent_decode("abc"), "abc");
+    assert_eq!(percent_decode("100%"), "100%");
+    assert_eq!(percent_decode("%4"), "%4");
+    assert_eq!(percent_decode("%zz1"), "%zz1");
+    assert_eq!(percent_decode("%4z"), "%4z");
+    assert_eq!(percent_decode("%%41"), "%A");
 }

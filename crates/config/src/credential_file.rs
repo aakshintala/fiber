@@ -4,14 +4,13 @@
 //! refresh one token twice (`docs/model-routing.md`, "Keys, tokens and
 //! OAuth"; `docs/state.md`, "Concurrent access").
 
-use std::fs::{self, File, TryLockError};
-use std::io::ErrorKind;
+use std::fs::{File, TryLockError};
 use std::path::{Path, PathBuf};
 
 use serde_json::Value;
 
 use crate::error::ConfigError;
-use crate::home::{one_file_name, plain};
+use crate::home::{one_file_name, plain, read};
 use crate::write::{open_lock, write_atomic};
 
 /// The lock file's mode: it holds nothing, but it is created beside a secret.
@@ -26,7 +25,9 @@ pub struct CredentialFile {
 
 impl CredentialFile {
     /// `credentials/<provider>/<label>` in `home`. A name that is not one
-    /// file name, and a `credentials/` or provider directory that is a
+    /// file name, a label ending in `.lock` or `.tmp` (the suffixes the lock
+    /// and temporary files use, so `default.lock` would be `default`'s lock),
+    /// and a `credentials/` or provider directory that is a
     /// symbolic link, which a tool call or a repository could plant to
     /// redirect secrets, are refused.
     pub fn new(home: &Path, provider: &str, label: &str) -> Result<Self, ConfigError> {
@@ -35,17 +36,20 @@ impl CredentialFile {
                 return Err(ConfigError::SecretName { name: name.into() });
             }
         }
+        if label.ends_with(".lock") || label.ends_with(".tmp") {
+            return Err(ConfigError::SecretName { name: label.into() });
+        }
         let this = Self {
             path: home.join("credentials").join(provider).join(label),
         };
-        this.check_directories()?;
+        check_directories(&this.path)?;
         Ok(this)
     }
 
     /// Takes the lock without waiting. `None` when another holder has it.
     /// Creates `credentials/` and the provider's directory mode 0700.
     pub fn try_lock(&self) -> Result<Option<CredentialLock>, ConfigError> {
-        self.check_directories()?;
+        check_directories(&self.path)?;
         let file = open_lock(&self.path, LOCK_MODE)?;
         match file.try_lock() {
             Ok(()) => Ok(Some(CredentialLock {
@@ -59,17 +63,15 @@ impl CredentialFile {
             }),
         }
     }
+}
 
-    fn check_directories(&self) -> Result<(), ConfigError> {
-        let mut dir = self.path.parent();
-        // The provider's directory, then `credentials/`.
-        for _ in 0..2 {
-            let Some(here) = dir else { break };
-            plain(here, true)?;
-            dir = here.parent();
-        }
-        Ok(())
+/// The provider's directory, then `credentials/`, each a real directory or
+/// absent.
+fn check_directories(file: &Path) -> Result<(), ConfigError> {
+    for dir in file.ancestors().skip(1).take(2) {
+        plain(dir, true)?;
     }
+    Ok(())
 }
 
 /// The held lock on a stored credential; dropping it releases the lock.
@@ -83,26 +85,11 @@ impl CredentialLock {
     /// The stored object, or `None` when nothing is stored. A file that is a
     /// symbolic link is refused.
     pub fn read(&self) -> Result<Option<Value>, ConfigError> {
+        check_directories(&self.path)?;
         if !plain(&self.path, false)? {
             return Ok(None);
         }
-        let bytes = match fs::read(&self.path) {
-            Ok(bytes) => bytes,
-            Err(e) if e.kind() == ErrorKind::NotFound => return Ok(None),
-            Err(source) => {
-                return Err(ConfigError::Io {
-                    file: self.path.clone(),
-                    source,
-                });
-            }
-        };
-        serde_json::from_slice(&bytes)
-            .map(Some)
-            .map_err(|e| ConfigError::Json {
-                file: self.path.clone(),
-                line: e.line(),
-                column: e.column(),
-            })
+        read(&self.path)
     }
 
     /// Replaces the stored object: a temporary file created mode 0600 and
@@ -110,11 +97,8 @@ impl CredentialLock {
     /// never half, and never a wider mode. A failure before the rename leaves
     /// the old file.
     pub fn write(&self, value: &Value) -> Result<(), ConfigError> {
-        let bytes = serde_json::to_vec(value).map_err(|e| ConfigError::Io {
-            file: self.path.clone(),
-            source: e.into(),
-        })?;
-        write_atomic(&self.path, &bytes, 0o600)
+        check_directories(&self.path)?;
+        write_atomic(&self.path, value.to_string().as_bytes(), 0o600)
     }
 }
 

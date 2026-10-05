@@ -9,12 +9,6 @@ use serde_json::json;
 
 use crate::provider_server::{ProviderServer, Response};
 
-/// How many `script_exhausted` replies follow a script. Past them the
-/// provider server's own 500 answers.
-// debt: 256 requests past the script, a test that needs more takes its count
-// from the provider server's fallback or this constant is raised.
-const PAST_THE_END: usize = 256;
-
 /// One scripted reply of the token endpoint.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OauthReply(Response);
@@ -89,13 +83,11 @@ impl OauthServer {
         reason = "a fake that cannot bind a loopback port has nothing to run; a build aborts on panic"
     )]
     pub fn start(replies: Vec<OauthReply>) -> Self {
-        let exhausted = std::iter::repeat_with(|| {
-            OauthReply(Response::status(500, r#"{"error":"script_exhausted"}"#))
-        })
-        .take(PAST_THE_END);
-        let script = replies.into_iter().chain(exhausted).map(|reply| reply.0);
+        let script = replies.into_iter().map(|reply| reply.0);
+        let exhausted = Response::status(500, r#"{"error":"script_exhausted"}"#);
         Self {
-            inner: ProviderServer::start(script).expect("binding 127.0.0.1"),
+            inner: ProviderServer::start_with_fallback(script, exhausted)
+                .expect("binding 127.0.0.1"),
         }
     }
 
@@ -135,32 +127,33 @@ fn decode_form(body: &str) -> Vec<(String, String)> {
 }
 
 fn percent_decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while let Some(&byte) = bytes.get(i) {
-        let escaped = (byte == b'%')
-            .then(|| bytes.get(i + 1..i + 3))
-            .flatten()
-            .and_then(|hex| std::str::from_utf8(hex).ok())
-            .filter(|hex| hex.bytes().all(|b| b.is_ascii_hexdigit()))
-            .and_then(|hex| u8::from_str_radix(hex, 16).ok());
-        match (byte, escaped) {
-            (_, Some(decoded)) => {
-                out.push(decoded);
-                i += 3;
+    let mut bytes = text.bytes();
+    let mut out = Vec::with_capacity(text.len());
+    while let Some(byte) = bytes.next() {
+        match byte {
+            b'+' => out.push(b' '),
+            b'%' => {
+                // Two hex digits make a byte; anything else leaves the `%`
+                // as written and the next bytes to be read as themselves.
+                let mut ahead = bytes.clone();
+                match (ahead.next().and_then(hex), ahead.next().and_then(hex)) {
+                    (Some(high), Some(low)) => {
+                        out.push(high << 4 | low);
+                        bytes = ahead;
+                    }
+                    _ => out.push(b'%'),
+                }
             }
-            (b'+', None) => {
-                out.push(b' ');
-                i += 1;
-            }
-            (other, None) => {
-                out.push(other);
-                i += 1;
-            }
+            other => out.push(other),
         }
     }
     String::from_utf8_lossy(&out).into_owned()
+}
+
+fn hex(digit: u8) -> Option<u8> {
+    char::from(digit)
+        .to_digit(16)
+        .and_then(|value| u8::try_from(value).ok())
 }
 
 #[cfg(test)]
