@@ -16,6 +16,8 @@ struct Inner {
     next: u64,
     started: Vec<JobStarted>,
     stops: Vec<(JobId, Arc<dyn Fn() + Send + Sync>)>,
+    /// The terminal input of each job started with `tty`.
+    inputs: Vec<(JobId, Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>)>,
     /// Jobs whose end was reported.
     ended: Vec<JobId>,
     /// Jobs whose stop was sent.
@@ -108,6 +110,7 @@ impl FakeJobs {
                 next: 0,
                 started: Vec::new(),
                 stops: Vec::new(),
+                inputs: Vec::new(),
                 ended: Vec::new(),
                 stopped: Vec::new(),
                 foreground: Vec::new(),
@@ -126,6 +129,17 @@ impl FakeJobs {
     /// The `job_delta` lines the jobs emitted.
     pub fn deltas(&self) -> Arc<JobDeltas> {
         Arc::clone(&self.deltas)
+    }
+
+    /// Types `bytes` into `job_id`'s terminal, as `jobs write` does. `None`
+    /// when the job is unknown or was not started with `tty`.
+    pub fn type_into(&self, job_id: &JobId, bytes: &[u8]) -> Option<std::io::Result<()>> {
+        let input = lock(&self.inner)
+            .inputs
+            .iter()
+            .find(|(id, _)| id == job_id)
+            .map(|(_, input)| Arc::clone(input))?;
+        Some(input(bytes))
     }
 
     /// The next completion, or `None` when none arrives within `within`.
@@ -162,6 +176,9 @@ impl Jobs for FakeJobs {
         inner
             .stops
             .push((job_id.clone(), Arc::from(opening.stop.0)));
+        if let Some(input) = opening.input {
+            inner.inputs.push((job_id.clone(), Arc::from(input.0)));
+        }
         drop(inner);
         let tx = self.completed_tx.clone();
         let expected = job_id.clone();

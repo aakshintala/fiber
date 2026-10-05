@@ -21,6 +21,7 @@ fn opening(description: &str, stop: Stop) -> Opening {
         tool: "shell".into(),
         description: description.into(),
         stop,
+        input: None,
     }
 }
 
@@ -70,6 +71,31 @@ fn open_creates_a_file_under_the_directory_and_records_the_start() {
         dropped.error.as_ref().map(|error| error.code.clone()),
         Some(ErrorCode::ToolError)
     );
+}
+
+#[test]
+fn type_into_reaches_the_input_of_a_tty_job_only() {
+    let dir = fakes_temp();
+    let jobs = FakeJobs::new(dir.path());
+    let (typed_tx, typed_rx) = mpsc::channel();
+    let mut tty = opening("cat", Stop(Box::new(|| {})));
+    tty.input = Some(contract::jobs::Input(Box::new(move |bytes| {
+        typed_tx.send(bytes.to_vec()).unwrap();
+        Ok(())
+    })));
+    let tty = jobs.open(tty).unwrap();
+    let plain = jobs.open(opening("ls", Stop(Box::new(|| {})))).unwrap();
+    assert!(
+        jobs.type_into(&tty.started.job_id, b"hi\n")
+            .unwrap()
+            .is_ok()
+    );
+    assert_eq!(typed_rx.try_recv().unwrap(), b"hi\n");
+    assert!(jobs.type_into(&plain.started.job_id, b"x").is_none());
+    assert!(jobs.type_into(&JobId("j_missing".into()), b"x").is_none());
+    assert!(typed_rx.try_recv().is_err());
+    drop(tty.end);
+    drop(plain.end);
 }
 
 #[test]

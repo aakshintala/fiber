@@ -1,4 +1,4 @@
-//! The `jobs` tool: `list`, `wait` and `stop`
+//! The `jobs` tool: `list`, `wait`, `write` and `stop`
 //! (`docs/tools.md`, "Background jobs").
 
 use std::sync::Arc;
@@ -11,9 +11,9 @@ use contract::shapes::{ContentPart, DeclaredEffects, Effect, Failure};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use serde_json::{Map, Value, json};
 
-use crate::registry::{self, Registry, StopError};
+use crate::registry::{self, Registry, StopError, WriteError};
 
-/// Lists, waits on and stops the jobs the calling session started.
+/// Lists, waits on, writes to and stops the jobs the calling session started.
 pub struct JobsTool {
     registry: Arc<Registry>,
 }
@@ -29,26 +29,33 @@ impl Tool for JobsTool {
     fn definition(&self) -> ToolDefinition {
         ToolDefinition {
             name: "jobs".to_owned(),
-            description: "Lists, waits on and stops this session's background jobs. `list` shows \
-                 each job. `wait` blocks until a job ends or `timeout_ms` passes; cancelling the \
-                 wait leaves the job running. `stop` stops one job."
+            description: "Lists, waits on, writes to and stops this session's background jobs. \
+                 `list` shows each job. `wait` blocks until a job ends or `timeout_ms` passes; \
+                 cancelling the wait leaves the job running. `write` types `input` into a job \
+                 started with `tty` and returns the output that arrives within `timeout_ms`, 250 \
+                 by default and at most 30000; with empty `input` it waits at least 5000. `stop` \
+                 stops one job."
                 .to_owned(),
             input_schema: json!({
                 "type": "object",
                 "properties": {
                     "action": {
                         "type": "string",
-                        "enum": ["list", "wait", "stop"],
-                        "description": "`list` shows the session's jobs, `wait` blocks until a job ends or the timeout, and `stop` asks a job to stop."
+                        "enum": ["list", "wait", "write", "stop"],
+                        "description": "`list` shows the session's jobs, `wait` blocks until a job ends or the timeout, `write` types into a job started with `tty`, and `stop` asks a job to stop."
                     },
                     "job_id": {
                         "type": "string",
-                        "description": "The job. Required by `wait` and `stop`."
+                        "description": "The job. Required by `wait`, `write` and `stop`."
                     },
                     "timeout_ms": {
                         "type": "integer",
                         "minimum": 0,
-                        "description": "How long `wait` blocks, in milliseconds. Required by `wait`."
+                        "description": "How long `wait` blocks, in milliseconds. Required by `wait`. For `write`, how long to collect output: 250 by default, at most 30000."
+                    },
+                    "input": {
+                        "type": "string",
+                        "description": "What `write` types into the terminal. Required by `write`; it may be empty."
                     }
                 },
                 "required": ["action"],
@@ -71,6 +78,7 @@ impl Tool for JobsTool {
         match action {
             Action::List => self.list(arguments),
             Action::Wait => self.wait(arguments, cancel),
+            Action::Write => self.write(arguments, cancel),
             Action::Stop => self.stop(arguments, cancel),
         }
     }
@@ -79,6 +87,7 @@ impl Tool for JobsTool {
 enum Action {
     List,
     Wait,
+    Write,
     Stop,
 }
 
@@ -86,14 +95,17 @@ fn action(arguments: &Map<String, Value>) -> Result<Action, String> {
     match arguments.get("action").and_then(Value::as_str) {
         Some("list") => Ok(Action::List),
         Some("wait") => Ok(Action::Wait),
+        Some("write") => Ok(Action::Write),
         Some("stop") => Ok(Action::Stop),
-        Some(_) | None => Err("`action` must be `list`, `wait` or `stop`.".to_owned()),
+        Some(_) | None => Err("`action` must be `list`, `wait`, `write` or `stop`.".to_owned()),
     }
 }
 
 fn effects_of(action: Action) -> Effects {
     let (effects, reversible) = match action {
         Action::List | Action::Wait => (vec![Effect::Reads], true),
+        // Typed input can make the program do anything.
+        Action::Write => (vec![Effect::Executes], false),
         Action::Stop => (Vec::new(), false),
     };
     Effects {
@@ -127,6 +139,35 @@ impl JobsTool {
         match self.registry.wait(&id, timeout_ms, cancel) {
             Ok(answer) => answered(answer.text, answer.record),
             Err(()) => failed(unknown_message(&id)),
+        }
+    }
+
+    fn write(&self, arguments: &Map<String, Value>, cancel: &dyn Cancel) -> Output {
+        let id = match job_id(arguments) {
+            Ok(id) => id,
+            Err(message) => return failed(message),
+        };
+        let input = match arguments.get("input") {
+            Some(Value::String(input)) => input.as_str(),
+            Some(_) => return failed("`input` must be a string.".to_owned()),
+            None => return failed("Give what to type as `input`.".to_owned()),
+        };
+        let wait_ms = match write_wait(arguments, input.is_empty()) {
+            Ok(wait_ms) => wait_ms,
+            Err(message) => return failed(message),
+        };
+        match self.registry.write(&id, input, wait_ms, cancel) {
+            Ok(answer) => answered(answer.text, answer.record),
+            Err(WriteError::Unknown) => failed(unknown_message(&id)),
+            Err(WriteError::NotTty) => failed(format!("Job {id} was not started with `tty`.")),
+            Err(WriteError::Ended(status)) => failed(format!(
+                "Job `{id}` has ended: {}.",
+                registry::status_word(status)
+            )),
+            Err(WriteError::Io(err)) => failed_with(
+                ErrorCode::ToolError,
+                format!("Writing to job {id} failed: {err}."),
+            ),
         }
     }
 
@@ -175,6 +216,34 @@ fn timeout_ms(arguments: &Map<String, Value>) -> Result<u64, String> {
     }
 }
 
+/// The longest a `write` waits for output: 30 seconds.
+const WRITE_WAIT_MAX_MS: u64 = 30_000;
+
+/// What a `write` with no `timeout_ms` waits: 250 ms.
+const WRITE_WAIT_DEFAULT_MS: u64 = 250;
+
+/// What a `write` of no input waits at least (`docs/tools.md`, "Background
+/// jobs"): 5 seconds.
+const WRITE_WAIT_EMPTY_MS: u64 = 5_000;
+
+/// How long `write` waits for output. Empty `input` raises it to the floor.
+fn write_wait(arguments: &Map<String, Value>, empty: bool) -> Result<u64, String> {
+    let asked = match arguments.get("timeout_ms") {
+        None => WRITE_WAIT_DEFAULT_MS,
+        Some(_) => timeout_ms(arguments)?,
+    };
+    if asked > WRITE_WAIT_MAX_MS {
+        return Err(format!(
+            "`timeout_ms` for `write` is at most {WRITE_WAIT_MAX_MS}."
+        ));
+    }
+    Ok(if empty {
+        asked.max(WRITE_WAIT_EMPTY_MS)
+    } else {
+        asked
+    })
+}
+
 fn unknown_message(id: &str) -> String {
     format!("No job has id `{id}`.")
 }
@@ -195,12 +264,16 @@ fn answered(text: String, record: Option<JobRecord>) -> Output {
 }
 
 fn failed(message: String) -> Output {
+    failed_with(ErrorCode::InvalidArguments, message)
+}
+
+fn failed_with(code: ErrorCode, message: String) -> Output {
     Output {
         content: vec![ContentPart::Text {
             text: format!("{message}\n"),
         }],
         error: Some(Failure {
-            code: ErrorCode::InvalidArguments,
+            code,
             message,
             retry_after: None,
             provider: None,

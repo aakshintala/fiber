@@ -18,6 +18,21 @@ pub struct Opening {
     pub description: String,
     /// Asks the job to stop. The registry calls it at most once.
     pub stop: Stop,
+    /// Types into the job; `Some` only for a job started with `tty`.
+    pub input: Option<Input>,
+}
+
+/// Writes bytes to a job's terminal (`docs/tools.md`, "Terminal (`tty`)").
+/// It returns once the bytes are written.
+pub struct Input(
+    /// The opener's write to the terminal.
+    pub Box<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>,
+);
+
+impl fmt::Debug for Input {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("Input(..)")
+    }
 }
 
 /// Asks the job to stop. It returns at once. A second call is a no-op for

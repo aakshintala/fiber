@@ -8,6 +8,7 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::thread;
 use std::time::Duration;
 
+use contract::clock::Clock as _;
 use contract::events::{JobCompleted, Outcome};
 use contract::inbox::Delivery;
 use contract::jobs::{Foreground, JobRecord, Jobs, OpenError, Opening, Stop};
@@ -17,6 +18,8 @@ use fakes::clock::FakeClock;
 use fakes::{CancelToken, Recorder, TempDir};
 
 use super::Registry;
+
+const DEADLINE: Duration = Duration::from_secs(5);
 
 fn world() -> (TempDir, Arc<Registry>) {
     let dir = TempDir::new("fiber-jobs");
@@ -34,6 +37,7 @@ fn opening(description: &str) -> Opening {
         tool: "shell".into(),
         description: description.into(),
         stop: Stop(Box::new(|| {})),
+        input: None,
     }
 }
 
@@ -383,6 +387,7 @@ fn counted_stop(
             stop: Stop(Box::new(move || {
                 seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
             })),
+            input: None,
         })
         .unwrap();
     (opened.started.job_id.clone(), calls, opened)
@@ -476,4 +481,219 @@ fn an_opened_job_emits_through_the_registrys_emitter() {
     });
     opened.emit.emit(&event);
     assert_eq!(recorder.events(), vec![event]);
+}
+
+// `write`: typing into a job started with `tty` and collecting what arrives.
+
+type Typed = Arc<Mutex<Vec<u8>>>;
+
+fn clocked_world() -> (TempDir, Arc<FakeClock>, Arc<Registry>) {
+    let dir = TempDir::new("fiber-jobs-write");
+    let artifacts = dir.path().join("artifacts");
+    std::fs::create_dir(&artifacts).unwrap();
+    let clock = FakeClock::new();
+    let as_clock: Arc<dyn contract::clock::Clock> = clock.clone();
+    let registry = Registry::new(artifacts, as_clock, Arc::new(Recorder::default()));
+    (dir, clock, registry)
+}
+
+/// A `tty` job whose terminal answers every write by appending `reply` to
+/// the output file, as the reader does for a program's echo.
+fn open_tty(
+    registry: &Arc<Registry>,
+    reply: &'static [u8],
+) -> (String, contract::jobs::Opened, Typed) {
+    let typed: Typed = Arc::default();
+    let sink: Arc<Mutex<Option<std::fs::File>>> = Arc::default();
+    let (record, file) = (Arc::clone(&typed), Arc::clone(&sink));
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "python3".into(),
+            stop: Stop(Box::new(|| {})),
+            input: Some(contract::jobs::Input(Box::new(move |bytes| {
+                record.lock().unwrap().extend_from_slice(bytes);
+                file.lock().unwrap().as_mut().unwrap().write_all(reply)
+            }))),
+        })
+        .unwrap();
+    *sink.lock().unwrap() = Some(opened.file.try_clone().unwrap());
+    (opened.started.job_id.0.clone(), opened, typed)
+}
+
+/// Runs `write` on its own thread and returns the answer's channel.
+fn writing(
+    registry: &Arc<Registry>,
+    id: &str,
+    input: &'static str,
+    wait_ms: u64,
+    cancel: CancelToken,
+) -> mpsc::Receiver<Result<super::Answer, super::WriteError>> {
+    let registry = Arc::clone(registry);
+    let id = id.to_owned();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(registry.write(&id, input, wait_ms, &cancel));
+    });
+    rx
+}
+
+#[test]
+fn write_returns_the_output_after_the_write_when_the_wait_passes() {
+    let (_dir, clock, registry) = clocked_world();
+    let (id, opened, typed) = open_tty(&registry, b"got:hi\r\n");
+    // Output from before the write is not part of the answer.
+    writeln!(&opened.file, "earlier").unwrap();
+    let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
+    let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the write did not park at its wait"
+    );
+    assert!(rx.try_recv().is_err(), "the write returned before its wait");
+    clock.advance(Duration::from_millis(250));
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned")
+        .ok()
+        .unwrap();
+    assert_eq!(*typed.lock().unwrap(), b"hi\n");
+    assert!(answer.text.starts_with("got:hi\r\n"), "{}", answer.text);
+    assert!(!answer.text.contains("earlier"), "{}", answer.text);
+    assert!(answer.text.contains("still running"), "{}", answer.text);
+    assert!(answer.record.is_none());
+    drop(opened.end);
+}
+
+#[test]
+fn write_returns_at_once_with_the_final_state_when_the_job_ends_in_the_wait() {
+    let (_dir, clock, registry) = clocked_world();
+    let (id, opened, _typed) = open_tty(&registry, b"got:hi\n");
+    let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
+    let rx = writing(&registry, &id, "hi\n", 250, CancelToken::new());
+    assert!(clock.await_parked(deadline, DEADLINE));
+    opened.end.end(ended_ok(&id));
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .expect("the write returned")
+        .ok()
+        .unwrap();
+    assert!(answer.text.starts_with("got:hi\n"), "{}", answer.text);
+    assert!(answer.text.contains("completed"), "{}", answer.text);
+    assert!(!answer.text.contains("still running"), "{}", answer.text);
+    assert!(matches!(answer.record, Some(JobRecord::Completed(_))));
+    // The completion was claimed by the write.
+    let again = registry.wait(&id, 0, &CancelToken::new()).unwrap();
+    assert!(again.record.is_none());
+}
+
+#[test]
+fn a_cancel_returns_the_write_at_once_with_what_arrived() {
+    let (_dir, clock, registry) = clocked_world();
+    let (id, opened, _typed) = open_tty(&registry, b"partial\n");
+    let deadline = clock.now().checked_add(Duration::from_millis(250)).unwrap();
+    let cancel = CancelToken::new();
+    let rx = writing(&registry, &id, "x", 250, cancel.clone());
+    assert!(clock.await_parked(deadline, DEADLINE));
+    cancel.cancel();
+    let answer = rx
+        .recv_timeout(DEADLINE)
+        .expect("the cancelled write returned")
+        .ok()
+        .unwrap();
+    assert!(answer.text.starts_with("partial\n"), "{}", answer.text);
+    assert!(answer.text.contains("still running"), "{}", answer.text);
+    drop(opened.end);
+}
+
+#[test]
+fn write_does_not_reach_a_job_without_a_terminal_an_unknown_job_or_an_ended_one() {
+    let (_dir, _clock, registry) = clocked_world();
+    let plain = registry.open(opening("ls")).unwrap();
+    let plain_id = plain.started.job_id.0.clone();
+    let cancel = CancelToken::new();
+    assert!(matches!(
+        registry.write(&plain_id, "x", 0, &cancel),
+        Err(super::WriteError::NotTty)
+    ));
+    assert!(matches!(
+        registry.write("j_missing", "x", 0, &cancel),
+        Err(super::WriteError::Unknown)
+    ));
+    let (id, tty, typed) = open_tty(&registry, b"");
+    tty.end.end(ended_ok(&id));
+    assert!(matches!(
+        registry.write(&id, "x", 0, &cancel),
+        Err(super::WriteError::Ended(Outcome::Completed))
+    ));
+    assert!(
+        typed.lock().unwrap().is_empty(),
+        "a write reached an ended job"
+    );
+    drop(plain.end);
+}
+
+#[test]
+fn a_failed_write_to_the_terminal_is_an_io_error() {
+    let (_dir, _clock, registry) = clocked_world();
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: Stop(Box::new(|| {})),
+            input: Some(contract::jobs::Input(Box::new(|_| {
+                Err(std::io::Error::other("the terminal is closed"))
+            }))),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let result = registry.write(&id, "x", 0, &CancelToken::new());
+    assert!(
+        matches!(&result, Err(super::WriteError::Io(err)) if err.to_string().contains("closed"))
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn write_keeps_the_last_sixteen_kib_and_says_the_rest_is_omitted() {
+    const BIG: &[u8] = &[b'a'; 20 * 1024];
+    let (_dir, _clock, registry) = clocked_world();
+    let (id, opened, _typed) = open_tty(&registry, BIG);
+    let answer = registry
+        .write(&id, "x", 0, &CancelToken::new())
+        .ok()
+        .unwrap();
+    let kept = answer.text.lines().nth(1).unwrap().len();
+    assert_eq!(kept, 16 * 1024);
+    assert!(
+        answer
+            .text
+            .starts_with("Earlier output is omitted. Output: "),
+        "{}",
+        &answer.text[..80]
+    );
+    drop(opened.end);
+}
+
+#[test]
+fn write_cuts_a_multibyte_character_at_the_boundary_whole() {
+    static REPLY: [u8; 16 * 1024 + 2] = {
+        let mut bytes = [b'a'; 16 * 1024 + 2];
+        // U+00E9 is 0xC3 0xA9. The cut starts at index 2, on the second
+        // byte, which a decoder that is not aligned reads as U+FFFD.
+        bytes[1] = 0xC3;
+        bytes[2] = 0xA9;
+        bytes
+    };
+    let (_dir, _clock, registry) = clocked_world();
+    let (id, opened, _typed) = open_tty(&registry, &REPLY);
+    let answer = registry
+        .write(&id, "x", 0, &CancelToken::new())
+        .ok()
+        .unwrap();
+    assert!(
+        !answer.text.contains('\u{fffd}'),
+        "a half character was decoded"
+    );
+    drop(opened.end);
 }

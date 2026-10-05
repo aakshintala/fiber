@@ -4,6 +4,7 @@
 use std::collections::hash_map::RandomState;
 use std::fs::File;
 use std::hash::BuildHasher;
+use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
 use std::sync::mpsc::Sender;
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
@@ -48,9 +49,17 @@ struct Job {
     path: PathBuf,
     phase: Phase,
     stop: Arc<dyn Fn() + Send + Sync>,
+    /// Types into the job's terminal; `None` unless it started with `tty`.
+    input: Option<Typer>,
     stop_sent: bool,
     claimed: bool,
 }
+
+type Typer = Arc<dyn Fn(&[u8]) -> std::io::Result<()> + Send + Sync>;
+
+/// The most of a `write`'s output one answer carries: 16 KiB, the tool's
+/// default cut (`docs/tools.md`, "Result and output").
+const WRITE_CUT: u64 = 16 * 1024;
 
 enum Phase {
     Running,
@@ -65,6 +74,18 @@ pub(crate) struct Answer {
     pub(crate) text: String,
     /// The completion, the first time it is delivered.
     pub(crate) record: Option<JobRecord>,
+}
+
+/// `write` could not reach the job.
+pub(crate) enum WriteError {
+    /// No job has this id.
+    Unknown,
+    /// The job was not started with `tty`.
+    NotTty,
+    /// The job had already ended, with this status.
+    Ended(Outcome),
+    /// Writing to the terminal failed.
+    Io(std::io::Error),
 }
 
 /// `stop` could not ask the job to stop.
@@ -147,6 +168,7 @@ impl Registry {
             path: path.clone(),
             phase: Phase::Running,
             stop: Arc::from(opening.stop.0),
+            input: opening.input.map(|input| Arc::from(input.0)),
             stop_sent: false,
             claimed: false,
         });
@@ -231,6 +253,51 @@ impl Registry {
         match self.park_until(id, None, cancel) {
             Parked::Ended => Ok(self.answer_if_ended(id).unwrap_or_else(|| self.running(id))),
             Parked::Timeout | Parked::Cancelled => Ok(self.running(id)),
+        }
+    }
+
+    /// Types `input` into `id`'s terminal, then returns the output that
+    /// arrives until `wait_ms` passes on the clock, the job ends, or
+    /// `cancel` fires. The output is the file's bytes from its length
+    /// before the write. An ended job's final state follows the output and
+    /// is claimed as `wait` claims it.
+    pub(crate) fn write(
+        self: &Arc<Self>,
+        id: &str,
+        input: &str,
+        wait_ms: u64,
+        cancel: &dyn Cancel,
+    ) -> Result<Answer, WriteError> {
+        let (typer, path) = self.typer_of(id)?;
+        // Read before the write, so output the write causes is after it.
+        let from = std::fs::metadata(&path).map_or(0, |meta| meta.len());
+        typer(input.as_bytes()).map_err(WriteError::Io)?;
+        let until = self.clock.now().checked_add(Duration::from_millis(wait_ms));
+        let parked = self.park_until(id, until, cancel);
+        let mut text = since_text(&path, from);
+        let state = match parked {
+            Parked::Ended => self.answer_if_ended(id).unwrap_or_else(|| self.running(id)),
+            Parked::Timeout | Parked::Cancelled => self.running(id),
+        };
+        text.push_str(&state.text);
+        Ok(Answer {
+            text,
+            record: state.record,
+        })
+    }
+
+    /// The job's typing closure and output file.
+    fn typer_of(&self, id: &str) -> Result<(Typer, PathBuf), WriteError> {
+        let inner = lock(&self.inner);
+        let Some(job) = inner.jobs.iter().find(|job| job.started.job_id.0 == id) else {
+            return Err(WriteError::Unknown);
+        };
+        if let Phase::Ended(completed) = &job.phase {
+            return Err(WriteError::Ended(completed.status));
+        }
+        match &job.input {
+            Some(typer) => Ok((Arc::clone(typer), job.path.clone())),
+            None => Err(WriteError::NotTty),
         }
     }
 
@@ -458,6 +525,46 @@ pub(crate) fn status_word(status: Outcome) -> &'static str {
         Outcome::Failed => "failed",
         Outcome::Cancelled => "cancelled",
     }
+}
+
+/// The file's bytes from `from`, decoded lossily and ending in a newline
+/// when there are any. Past [`WRITE_CUT`] bytes only the last are kept, under
+/// a line that says so.
+fn since_text(path: &Path, from: u64) -> String {
+    let Ok(mut file) = File::open(path) else {
+        return String::new();
+    };
+    let len = file.metadata().map_or(0, |meta| meta.len());
+    let omitted = len.saturating_sub(from) > WRITE_CUT;
+    let start = if omitted {
+        len.saturating_sub(WRITE_CUT)
+    } else {
+        from.min(len)
+    };
+    let mut bytes = Vec::new();
+    if file.seek(SeekFrom::Start(start)).is_ok() {
+        // The file only grows. `take` bounds what a reader that kept
+        // appending adds after `len` was read.
+        let _read = file.take(len.saturating_sub(start)).read_to_end(&mut bytes);
+    }
+    let mut text = String::new();
+    if omitted {
+        text.push_str(&format!(
+            "Earlier output is omitted. Output: {}\n",
+            path.display()
+        ));
+        // A cut can land inside a character.
+        let begin = bytes
+            .iter()
+            .position(|byte| byte & 0b1100_0000 != 0b1000_0000)
+            .unwrap_or(bytes.len());
+        bytes.drain(..begin);
+    }
+    text.push_str(&String::from_utf8_lossy(&bytes));
+    if !text.is_empty() && !text.ends_with('\n') {
+        text.push('\n');
+    }
+    text
 }
 
 fn running_text(id: &str, path: &Path) -> String {

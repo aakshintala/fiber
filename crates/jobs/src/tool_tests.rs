@@ -57,6 +57,7 @@ fn open(registry: &Arc<Registry>, description: &str, stop: Stop) -> contract::jo
             tool: "shell".into(),
             description: description.into(),
             stop,
+            input: None,
         })
         .unwrap()
 }
@@ -141,7 +142,7 @@ impl Clock for RecordingClock {
 }
 
 #[test]
-fn the_definition_is_list_wait_and_stop() {
+fn the_definition_is_list_wait_write_and_stop() {
     let clock: Arc<dyn Clock> = FakeClock::new();
     let (_dir, _registry, tool) = setup(clock);
     let definition = tool.definition();
@@ -153,8 +154,9 @@ fn the_definition_is_list_wait_and_stop() {
     assert_eq!(schema["additionalProperties"], false);
     assert_eq!(
         schema["properties"]["action"]["enum"],
-        json!(["list", "wait", "stop"])
+        json!(["list", "wait", "write", "stop"])
     );
+    assert_eq!(schema["properties"]["input"]["type"], "string");
     assert_eq!(schema["properties"]["job_id"]["type"], "string");
     assert_eq!(schema["properties"]["timeout_ms"]["type"], "integer");
     assert_eq!(schema["properties"]["timeout_ms"]["minimum"], json!(0));
@@ -168,6 +170,11 @@ fn effects_follow_the_action() {
     let list = of("list");
     let wait = of("wait");
     let stop = of("stop");
+    let write = of("write");
+    assert_eq!(write.declared.effects, vec![Effect::Executes]);
+    assert!(!write.declared.reversible);
+    assert_eq!(write.declared.paths, None);
+    assert_eq!(write.subject, Some(String::new()));
     assert_eq!(list.declared.effects, vec![Effect::Reads]);
     assert!(list.declared.reversible);
     assert_eq!(list.declared.paths, None);
@@ -841,4 +848,178 @@ fn cancelling_stop_after_the_stop_was_sent_returns_at_once() {
     );
     assert!(text_of(&listed).contains("running"), "{}", text_of(&listed));
     drop(opened.end);
+}
+
+// `write` through the tool: arguments, the refusals, and the wait.
+
+fn tty_job(registry: &Arc<Registry>) -> (String, contract::jobs::Opened) {
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "python3".into(),
+            stop: idle_stop(),
+            input: Some(contract::jobs::Input(Box::new(|_| Ok(())))),
+        })
+        .unwrap();
+    (opened.started.job_id.0.clone(), opened)
+}
+
+fn invalid(output: &Output) -> bool {
+    output.error.as_ref().map(|error| error.code.clone()) == Some(ErrorCode::InvalidArguments)
+}
+
+#[test]
+fn write_refuses_what_it_cannot_reach_as_invalid_arguments() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let cancel = CancelToken::new();
+    let plain = open(&registry, "ls", idle_stop());
+    let plain_id = plain.started.job_id.0.clone();
+    let (ended_id, ended) = tty_job(&registry);
+    ended.end.end(completed(&ended_id, Outcome::Failed));
+    let (tty_id, tty) = tty_job(&registry);
+
+    let output = run(
+        &tool,
+        json!({"action": "write", "job_id": plain_id, "input": "x"}),
+        &cancel,
+    );
+    assert!(invalid(&output));
+    assert_eq!(
+        text_of(&output),
+        format!("Job {plain_id} was not started with `tty`.\n")
+    );
+    let output = run(
+        &tool,
+        json!({"action": "write", "job_id": "j_missing", "input": "x"}),
+        &cancel,
+    );
+    assert!(invalid(&output));
+    assert!(
+        text_of(&output).contains("j_missing"),
+        "{}",
+        text_of(&output)
+    );
+    let output = run(
+        &tool,
+        json!({"action": "write", "job_id": ended_id, "input": "x"}),
+        &cancel,
+    );
+    assert!(invalid(&output));
+    assert!(text_of(&output).contains("failed"), "{}", text_of(&output));
+    let output = run(
+        &tool,
+        json!({"action": "write", "job_id": tty_id, "input": "x", "timeout_ms": 30_001}),
+        &cancel,
+    );
+    assert!(invalid(&output));
+    assert!(text_of(&output).contains("30000"), "{}", text_of(&output));
+    for value in [
+        json!({"action": "write", "input": "x"}),
+        json!({"action": "write", "job_id": tty_id}),
+        json!({"action": "write", "job_id": tty_id, "input": 5}),
+        json!({"action": "write", "job_id": 5, "input": "x"}),
+        json!({"action": "write", "job_id": tty_id, "input": "x", "timeout_ms": -1}),
+        json!({"action": "write", "job_id": tty_id, "input": "x", "timeout_ms": "5"}),
+    ] {
+        let output = run(&tool, value.clone(), &cancel);
+        assert!(invalid(&output), "{value}: {}", text_of(&output));
+    }
+    drop((plain.end, tty.end));
+}
+
+#[test]
+fn a_failed_write_to_the_terminal_is_a_tool_error() {
+    let clock: Arc<dyn Clock> = FakeClock::new();
+    let (_dir, registry, tool) = setup(clock);
+    let opened = registry
+        .open(Opening {
+            tool: "shell".into(),
+            description: "cat".into(),
+            stop: idle_stop(),
+            input: Some(contract::jobs::Input(Box::new(|_| {
+                Err(std::io::Error::other("the terminal is closed"))
+            }))),
+        })
+        .unwrap();
+    let id = opened.started.job_id.0.clone();
+    let output = run(
+        &tool,
+        json!({"action": "write", "job_id": id, "input": "x"}),
+        &CancelToken::new(),
+    );
+    assert_eq!(
+        output.error.as_ref().map(|error| error.code.clone()),
+        Some(ErrorCode::ToolError)
+    );
+    assert!(text_of(&output).contains("closed"), "{}", text_of(&output));
+    drop(opened.end);
+}
+
+/// The instant a `write` call with these arguments parks at, and the answer
+/// it returns once the clock reaches it.
+fn write_parks_at(arguments: Value, wait: Duration) {
+    let clock = FakeClock::new();
+    let as_clock: Arc<dyn Clock> = clock.clone();
+    let (_dir, registry, tool) = setup(as_clock);
+    let (id, opened) = tty_job(&registry);
+    let mut arguments = arguments;
+    arguments["job_id"] = json!(id);
+    let deadline = clock.now().checked_add(wait).unwrap();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || {
+        let _sent = tx.send(run(&tool, arguments, &CancelToken::new()));
+    });
+    assert!(
+        clock.await_parked(deadline, DEADLINE),
+        "the write did not park {wait:?} out: {:?}",
+        clock.parked()
+    );
+    assert!(rx.try_recv().is_err(), "the write returned before its wait");
+    // One millisecond short is not the wait.
+    clock.advance(wait.checked_sub(Duration::from_millis(1)).unwrap());
+    assert!(
+        rx.recv_timeout(Duration::from_millis(50)).is_err(),
+        "the write returned a millisecond early"
+    );
+    clock.advance(Duration::from_millis(1));
+    let output = rx.recv_timeout(DEADLINE).expect("the write returned");
+    assert!(output.error.is_none(), "{}", text_of(&output));
+    drop(opened.end);
+}
+
+#[test]
+fn write_waits_250_ms_by_default() {
+    write_parks_at(
+        json!({"action": "write", "input": "x"}),
+        Duration::from_millis(250),
+    );
+}
+
+#[test]
+fn write_waits_as_long_as_timeout_ms_says_up_to_30_seconds() {
+    write_parks_at(
+        json!({"action": "write", "input": "x", "timeout_ms": 1_000}),
+        Duration::from_secs(1),
+    );
+    write_parks_at(
+        json!({"action": "write", "input": "x", "timeout_ms": 30_000}),
+        Duration::from_secs(30),
+    );
+}
+
+#[test]
+fn a_write_of_no_input_waits_at_least_five_seconds() {
+    write_parks_at(
+        json!({"action": "write", "input": ""}),
+        Duration::from_secs(5),
+    );
+    write_parks_at(
+        json!({"action": "write", "input": "", "timeout_ms": 100}),
+        Duration::from_secs(5),
+    );
+    write_parks_at(
+        json!({"action": "write", "input": "", "timeout_ms": 7_000}),
+        Duration::from_secs(7),
+    );
 }
