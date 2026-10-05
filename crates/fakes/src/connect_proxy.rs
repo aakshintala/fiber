@@ -176,22 +176,7 @@ fn serve(client: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
         client.flush()?;
         return Ok(());
     }
-    if !is_host_port(&target) {
-        let reply = "HTTP/1.1 400 Bad Request\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
-        client.write_all(reply.as_bytes())?;
-        client.flush()?;
-        return Ok(());
-    }
-    let origin = match TcpStream::connect(target.as_str()) {
-        Ok(origin) => origin,
-        Err(_) => {
-            let reply =
-                "HTTP/1.1 502 Bad Gateway\r\nconnection: close\r\ncontent-length: 0\r\n\r\n";
-            client.write_all(reply.as_bytes())?;
-            client.flush()?;
-            return Ok(());
-        }
-    };
+    let origin = TcpStream::connect(target.as_str())?;
     {
         lock(state).connects.push(target.to_owned());
         arrived.notify_all();
@@ -200,14 +185,6 @@ fn serve(client: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
     client.flush()?;
     tunnel(client, origin, state, arrived);
     Ok(())
-}
-
-/// Whether `target` is shaped like `host:port`, so no dial can turn into a
-/// DNS lookup.
-fn is_host_port(target: &str) -> bool {
-    target
-        .rsplit_once(':')
-        .is_some_and(|(_, port)| !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()))
 }
 
 fn invalid(what: &str) -> io::Error {

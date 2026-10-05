@@ -264,32 +264,3 @@ fn a_dropped_proxy_refuses_connections() {
         "the dropped proxy's port refuses connections"
     );
 }
-
-#[test]
-fn a_connect_target_without_a_numeric_port_gets_400_and_records_nothing() {
-    let proxy = ConnectProxy::start().unwrap();
-    for target in ["not-a-target", "127.0.0.1:", "127.0.0.1:http"] {
-        let client = connect(&proxy);
-        let mut reader = BufReader::new(client);
-        write!(
-            reader.get_mut(),
-            "CONNECT {target} HTTP/1.1\r\nHost: {target}\r\n\r\n"
-        )
-        .unwrap();
-        reader.get_mut().flush().unwrap();
-        let mut status = String::new();
-        reader
-            .read_line(&mut status)
-            .expect("the proxy's 400 reply");
-        assert!(
-            status.starts_with("HTTP/1.1 400"),
-            "target {target:?}: {status:?}"
-        );
-        let mut rest = Vec::new();
-        assert!(
-            reader.read_to_end(&mut rest).is_ok(),
-            "the proxy closes after a 400"
-        );
-    }
-    assert!(proxy.connects().is_empty());
-}
