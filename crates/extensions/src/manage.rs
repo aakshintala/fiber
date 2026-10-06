@@ -524,10 +524,9 @@ impl Ctx<'_> {
     }
 }
 
-/// Whether `name` is the damaged directory `hit`: its manifest's name,
-/// or its directory's slug.
+/// Whether `name` is the damaged directory `hit`: its directory's slug.
 fn is_damaged(hit: &Damaged, name: &str) -> bool {
-    hit.name == name || slug(name).is_ok_and(|mine| mine == hit.dir)
+    slug(name).is_ok_and(|mine| mine == hit.dir)
 }
 
 /// The names reachable from the request through the staged manifests,

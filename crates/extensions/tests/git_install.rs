@@ -1179,6 +1179,28 @@ fn a_damaged_extension_without_a_manifest_is_named_by_its_directory() {
 }
 
 #[test]
+fn hidden_directories_and_stray_files_are_not_damaged() {
+    let setup = Setup::new();
+    let healthy = setup.source("healthy", &manifest("example.com/acme/healthy"), &[]);
+    common::install(&setup.home(), &healthy, FIBER).unwrap();
+    write(
+        &setup.home().join("extensions/.acme.1.new/extension.json"),
+        "{}",
+    );
+    write(&setup.home().join("extensions/stray"), "x");
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(
+        listing
+            .installed
+            .iter()
+            .map(|i| i.name.as_str())
+            .collect::<Vec<_>>(),
+        ["example.com/acme/healthy"]
+    );
+    assert!(listing.damaged.is_empty());
+}
+
+#[test]
 fn a_damaged_messages_name_the_extension_and_the_fix() {
     let setup = Setup::new();
     let name = "github.com/aakshintala/fiber/providers/opencode";

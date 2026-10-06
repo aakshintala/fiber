@@ -220,6 +220,10 @@ mod tests {
             "opencode"
         );
         assert_eq!(short_name("github.com/acme/lint"), "github.com/acme/lint");
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/providers/notashort"),
+            "github.com/aakshintala/fiber/providers/notashort"
+        );
         assert_eq!(short_name("acme"), "acme");
     }
 

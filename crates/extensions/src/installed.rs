@@ -246,17 +246,17 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
             orphan(&left)
         }
         None => {
-            if !left.iter().any(|i| i.name == name) {
+            if left.iter().position(|i| i.name == name).is_none() {
                 return Err(Error::NotInstalled { name });
             }
-            Some(name)
+            left.iter().position(|i| i.name == name)
         }
     };
     // The orphan cascade runs unchanged over the healthy extensions,
     // whether the one asked for was damaged or healthy.
-    while let Some(name) = next {
-        left.retain(|i| i.name != name);
-        names.push(name);
+    while let Some(i) = next {
+        let taken = left.remove(i);
+        names.push(taken.name);
         next = orphan(&left);
     }
     let layers = layers(home)?;
@@ -286,10 +286,9 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
 /// The first healthy extension nothing left needs: non-requested and
 /// not named in any remaining dependency list. The orphan cascade calls
 /// this once per removal, shared by healthy and damaged removals.
-fn orphan(left: &[Installed]) -> Option<String> {
+fn orphan(left: &[Installed]) -> Option<usize> {
     left.iter()
-        .find(|i| !i.requested && !left.iter().any(|other| other.depends.contains_key(&i.name)))
-        .map(|i| i.name.clone())
+        .position(|i| !i.requested && !left.iter().any(|other| other.depends.contains_key(&i.name)))
 }
 
 /// Fiber home and each project in it: the layers a removal reads data
