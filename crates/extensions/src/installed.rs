@@ -245,15 +245,13 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
             damaged_dir = Some(hit.dir.clone());
             orphan(&left)
         }
-        None => {
-            if left.iter().position(|i| i.name == name).is_none() {
-                return Err(Error::NotInstalled { name });
-            }
-            left.iter().position(|i| i.name == name)
-        }
+        None => match left.iter().position(|i| i.name == name) {
+            Some(i) => Some(i),
+            None => return Err(Error::NotInstalled { name }),
+        },
     };
-    // The orphan cascade runs unchanged over the healthy extensions,
-    // whether the one asked for was damaged or healthy.
+    // One orphan cascade over the healthy extensions, whether the one
+    // asked for was damaged or healthy.
     while let Some(i) = next {
         let taken = left.remove(i);
         names.push(taken.name);
