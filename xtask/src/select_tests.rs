@@ -428,8 +428,11 @@ fn test_files_map_to_their_tests() {
 
 #[test]
 fn only_a_crate_root_file_is_a_crate_root() {
-    let (expression, _) =
-        test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members(), &[]);
+    let (expression, _) = test_filter(
+        &strings(&["crates/log/src/fold/lib_tests.rs"]),
+        &members(),
+        &[],
+    );
     assert_eq!(expression, "(package(log) & test(/^fold::lib::tests::/))");
 }
 
@@ -513,11 +516,51 @@ fn a_path_declaration_in_a_mod_rs_file_resolves_beside_it() {
         "#[path = \"fold_extra_tests.rs\"] mod extra;",
     )];
     let (expression, packages) = test_filter(&files, &members(), &sources);
-    assert_eq!(
-        expression,
-        "(package(log) & test(/^fold::extra::/))"
-    );
+    assert_eq!(expression, "(package(log) & test(/^fold::extra::/))");
     assert_eq!(packages, strings(&["log"]));
+}
+
+#[test]
+fn a_source_that_does_not_tokenise_keeps_the_conventional_filter() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "fn broken( {\n",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn two_declarations_for_one_file_fall_back_to_convention() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![
+        decl(
+            "main",
+            "crates/main/src/settings.rs",
+            "#[path = \"idle_tests.rs\"] pub mod idle_tests;",
+        ),
+        decl(
+            "main",
+            "crates/main/src/other.rs",
+            "#[path = \"idle_tests.rs\"] mod idle_tests;",
+        ),
+    ];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_path_attribute_on_a_non_mod_item_registers_nothing() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[path = \"idle_tests.rs\"] use crate::idle;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
 }
 
 #[test]

@@ -477,14 +477,182 @@ fn test_module(root: bool, stem: &str) -> Option<&str> {
     }
 }
 
+/// A top-level `#[path = "<lit>"] mod <ident>;` declaration: the file the
+/// literal resolves to (relative to the repository, `/` separators), the
+/// file that declares it, and the declared module name.
+struct PathDecl {
+    target: String,
+    declarer: String,
+    ident: String,
+}
+
+/// The `<lit>` of a `path = <lit>` item in an attribute's tokens, if it
+/// holds one. Other attributes, and items without a literal, give nothing.
+fn path_attr(stream: TokenStream) -> Option<String> {
+    let tokens: Vec<TokenTree> = stream.into_iter().collect();
+    for window in tokens.windows(3) {
+        if let [
+            TokenTree::Ident(name),
+            TokenTree::Punct(eq),
+            TokenTree::Literal(lit),
+        ] = window
+            && name == "path"
+            && eq.as_char() == '='
+        {
+            return string_literal(&lit.to_string());
+        }
+    }
+    None
+}
+
+/// Every top-level `#[path = "<lit>"] mod <ident>;` declaration in the
+/// Rust file at `path`, with `<lit>` resolved relative to its directory
+/// (the same join `compiled_in_mismatches` uses). Attributes may be
+/// interleaved with `#[cfg(test)]` and the like; a declaration inside an
+/// inline `mod x { ... }` block is ignored, so brace groups are never
+/// scanned. A file that does not tokenise declares nothing: its test
+/// files keep the conventional filter.
+fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
+    let stream: TokenStream = match source.parse() {
+        Ok(stream) => stream,
+        Err(_) => return Vec::new(),
+    };
+    let dir = Path::new(path).parent().unwrap_or(Path::new(""));
+    let tokens: Vec<TokenTree> = stream.into_iter().collect();
+    let mut decls = Vec::new();
+    let mut pending: Option<String> = None;
+    let mut i = 0;
+    while let Some(tree) = tokens.get(i) {
+        match tree {
+            TokenTree::Punct(hash) if hash.as_char() == '#' => match tokens.get(i + 1) {
+                Some(TokenTree::Group(group))
+                    if group.delimiter() == proc_macro2::Delimiter::Bracket =>
+                {
+                    if let Some(lit) = path_attr(group.stream()) {
+                        pending = Some(lit);
+                    }
+                    i += 2;
+                }
+                None | Some(_) => i += 1,
+            },
+            TokenTree::Ident(keyword) if keyword == "mod" => {
+                match (tokens.get(i + 1), tokens.get(i + 2)) {
+                    (Some(TokenTree::Ident(ident)), Some(TokenTree::Punct(semi)))
+                        if semi.as_char() == ';' =>
+                    {
+                        if let Some(lit) = pending.take() {
+                            decls.push(PathDecl {
+                                target: crate::docs::join(dir, &lit)
+                                    .to_string_lossy()
+                                    .replace('\\', "/"),
+                                declarer: path.to_owned(),
+                                ident: ident.to_string(),
+                            });
+                        }
+                        i += 3;
+                    }
+                    (None, _) | (Some(_), None) | (Some(_), Some(_)) => {
+                        pending = None;
+                        i += 1;
+                    }
+                }
+            }
+            // Any other item ends the attribute run a pending `#[path]`
+            // belonged to, so a `#[path]` on a non-`mod` item registers
+            // nothing. Only brace groups clear it: a paren group is
+            // `pub(crate)` between the attribute and its `mod`.
+            TokenTree::Punct(semi) if semi.as_char() == ';' => {
+                pending = None;
+                i += 1;
+            }
+            TokenTree::Group(body) if body.delimiter() == proc_macro2::Delimiter::Brace => {
+                pending = None;
+                i += 1;
+            }
+            TokenTree::Group(_)
+            | TokenTree::Ident(_)
+            | TokenTree::Punct(_)
+            | TokenTree::Literal(_) => i += 1,
+        }
+    }
+    decls
+}
+
+/// The module path a file's location under `src/` gives it: `lib.rs` and
+/// `main.rs` at the root are the crate root, `a/mod.rs` is `a`, `a/b.rs`
+/// is `a::b`. `None` when the file sits outside `src/`.
+fn conventional_module(path: &str, members: &Members) -> Option<String> {
+    let name = owner(path, members)?;
+    let member = members.get(name)?;
+    let modules = path.get(member.dir.len() + 1..)?.strip_prefix("src/")?;
+    let parts: Vec<&str> = modules.split('/').collect();
+    match parts.as_slice() {
+        [file] if *file == "lib.rs" || *file == "main.rs" => Some(String::new()),
+        [file] => Some(file.strip_suffix(".rs").unwrap_or(file).to_owned()),
+        [dirs @ .., file] if *file == "mod.rs" => Some(dirs.join("::")),
+        [dirs @ .., file] => {
+            let mut module = dirs.join("::");
+            if !module.is_empty() {
+                module.push_str("::");
+            }
+            module.push_str(file.strip_suffix(".rs").unwrap_or(file));
+            Some(module)
+        }
+        // `split` never yields no parts; the arm is only for the compiler.
+        [] => None,
+    }
+}
+
+/// The module path the file at `path` declares its items in: through the
+/// `#[path]` declaration naming it when exactly one does (resolved
+/// recursively, so a declared file declaring further files chains), else
+/// from its location. `None` on a declaration cycle or outside `src/`.
+fn module_path(
+    path: &str,
+    members: &Members,
+    by_target: &BTreeMap<String, Vec<(String, String)>>,
+    stack: &mut Vec<String>,
+) -> Option<String> {
+    if stack.iter().any(|seen| seen == path) {
+        return None;
+    }
+    stack.push(path.to_owned());
+    let result = match by_target.get(path).map(Vec::as_slice) {
+        Some([(declarer, ident)]) => {
+            let (declarer, ident) = (declarer.clone(), ident.clone());
+            module_path(declarer.as_str(), members, by_target, stack).map(|parent| {
+                if parent.is_empty() {
+                    ident
+                } else {
+                    format!("{parent}::{ident}")
+                }
+            })
+        }
+        // No declaration, or two naming one file: the file's location.
+        _ => conventional_module(path, members),
+    };
+    stack.pop();
+    result
+}
+
 /// The nextest filter selecting every test in the test files among
-/// `files`, and the packages that own them.
+/// `files`, and the packages that own them. `sources` is every Rust file
+/// in the workspace: a `src/` test file a top-level `#[path]`
+/// declaration names maps to the module path that declares it.
 pub(crate) fn test_filter(
     files: &[String],
     members: &Members,
     sources: &[RustFile],
 ) -> (String, Vec<String>) {
-    let _ = sources;
+    let mut by_target: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    for f in sources {
+        for decl in path_decls(&f.path, &f.source) {
+            by_target
+                .entry(decl.target)
+                .or_default()
+                .push((decl.declarer, decl.ident));
+        }
+    }
     let mut terms = Vec::new();
     let mut packages = BTreeSet::new();
     for path in files.iter().filter(|p| p.ends_with(".rs")) {
@@ -500,20 +668,41 @@ pub(crate) fn test_filter(
         }
         let parts: Vec<&str> = rel.split('/').collect();
         let term = match parts.as_slice() {
-            ["tests", binary, ..] => {
+            // Only a file directly in `tests/` is a binary; a file in a
+            // subdirectory of `tests/` is a module the binaries include,
+            // so it adds no term of its own.
+            ["tests", binary] => {
                 let binary = binary.strip_suffix(".rs").unwrap_or(binary);
                 format!("binary_id({name}::{binary})")
             }
             ["src", modules @ .., file] => {
-                let stem = file.strip_suffix(".rs").unwrap_or(file);
-                let module = test_module(modules.is_empty(), stem);
-                let prefix: String = modules
-                    .iter()
-                    .copied()
-                    .chain(module)
-                    .chain(["tests"])
-                    .map(|m| format!("{m}::"))
-                    .collect();
+                let declared = match by_target.get(path).map(Vec::as_slice) {
+                    Some([(declarer, ident)]) => {
+                        let (declarer, ident) = (declarer.clone(), ident.clone());
+                        let mut stack = Vec::new();
+                        module_path(declarer.as_str(), members, &by_target, &mut stack).map(
+                            |parent| {
+                                if parent.is_empty() {
+                                    format!("{ident}::")
+                                } else {
+                                    format!("{parent}::{ident}::")
+                                }
+                            },
+                        )
+                    }
+                    _ => None,
+                };
+                let prefix: String = declared.unwrap_or_else(|| {
+                    let stem = file.strip_suffix(".rs").unwrap_or(file);
+                    let module = test_module(modules.is_empty(), stem);
+                    modules
+                        .iter()
+                        .copied()
+                        .chain(module)
+                        .chain(["tests"])
+                        .map(|m| format!("{m}::"))
+                        .collect()
+                });
                 format!("(package({name}) & test(/^{prefix}/))")
             }
             _ => continue,

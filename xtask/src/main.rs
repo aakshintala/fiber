@@ -162,8 +162,7 @@ fn run(args: &[String]) -> Result<bool, String> {
         }
         "bug-filter" => {
             let members = workspace_members()?;
-            let (filter, packages) =
-                select::test_filter(rest, &members, &rust_files(&members)?);
+            let (filter, packages) = select::test_filter(rest, &members, &rust_files(&members)?);
             println!("filter\t{filter}");
             for package in packages {
                 println!("package\t{package}");
