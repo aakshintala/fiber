@@ -936,8 +936,9 @@ fn the_branch_is_read_from_git_and_a_detached_head_is_null() {
     assert_eq!(super::branch(&repo), Some(Git { branch: None }));
 }
 
-/// `Status::stop` returns only after the observer has folded every line
-/// already written: the stop line is queued and the thread joined.
+/// `Status::stop` returns only after the observer thread ended, having
+/// folded every line already written: the observer owns a sender, so
+/// `stop` returning means it was dropped.
 #[test]
 fn stop_returns_after_the_observer_folded_what_was_written() {
     use contract::events::{Event, InputItem, TurnCompleted, TurnOutcome, TurnStarted};
@@ -956,6 +957,7 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
     let (held, observer_held) = std::sync::mpsc::channel::<()>();
     let (release, released) = std::sync::mpsc::channel::<()>();
     let held_read = Mutex::new(Some((held, released)));
+    let (exit_tx, exit_rx) = std::sync::mpsc::channel::<()>();
     let status = super::start(
         &log,
         Fold::new(
@@ -963,6 +965,7 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
             "fake/m".to_owned(),
             None,
             Box::new(move || {
+                let _owned = &exit_tx;
                 if let Some((held, released)) = held_read.lock().unwrap().take() {
                     held.send(()).unwrap();
                     released.recv_timeout(DEADLINE).unwrap();
@@ -1002,29 +1005,19 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
         None,
     )
     .unwrap();
-    // `stop` runs on a worker so the test can prove it waited: the flag is
-    // set only after the worker is about to stop, and `stop` cannot return
-    // while the observer is still held.
-    let (about_to_stop_tx, about_to_stop) = std::sync::mpsc::channel::<()>();
-    let (done_tx, done) = std::sync::mpsc::channel::<bool>();
-    let released_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let released_flag_worker = Arc::clone(&released_flag);
+    // `stop` runs on a worker so the test can prove it joined the thread:
+    // the observer owns a sender, so `stop` returning means it was dropped.
+    let (done_tx, done) = std::sync::mpsc::channel::<Result<(), std::sync::mpsc::TryRecvError>>();
     let _stopper = std::thread::spawn(move || {
-        about_to_stop_tx.send(()).unwrap();
         status.stop();
-        done_tx
-            .send(released_flag_worker.load(std::sync::atomic::Ordering::SeqCst))
-            .unwrap();
+        done_tx.send(exit_rx.try_recv()).unwrap();
     });
-    about_to_stop
-        .recv_timeout(DEADLINE)
-        .expect("the worker is about to stop");
-    released_flag.store(true, std::sync::atomic::Ordering::SeqCst);
     release.send(()).unwrap();
-    let released_first = done.recv_timeout(DEADLINE).expect("stop returned");
-    assert!(
-        released_first,
-        "stop returned before the observer was released"
+    let that = done.recv_timeout(DEADLINE).expect("stop returned");
+    assert_eq!(
+        that,
+        Err(std::sync::mpsc::TryRecvError::Disconnected),
+        "stop returned before the observer thread ended"
     );
     let last = log.latest("session_status").expect("a session_status");
     assert_eq!(last.payload["state"], "idle");
