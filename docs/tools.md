@@ -749,9 +749,12 @@ backend.
 - Arguments: `url` only. There is no prompt and no second model over the
   page; the model reads the page itself.
 - The result begins with one line giving the final URL after redirects, the
-  HTTP status and the content type.
-- HTML is converted to markdown. Other text, JSON and XML come back as they
-  are.
+  HTTP status and the content type. For an HTML page it also gives the path
+  of the raw page.
+- HTML is converted to markdown ("HTML to markdown"). Other text, JSON and
+  XML come back as they are.
+- Every HTML page is saved as downloaded to the session's `artifacts/`, so
+  the model can check a conversion that looks wrong with `read` or `grep`.
 - A PDF, or a PNG, JPEG, GIF or WebP image, is saved to the session's
   `artifacts/` and the result gives its path. The model reads it with `read`,
   which already handles both ("File tools"). The saved file is the bytes as
@@ -777,6 +780,37 @@ backend.
   machine's cloud credentials; loopback and private addresses are allowed,
   because reaching them is why fetch runs locally.
 - Writing to `artifacts/` is part of the call. It is not a `writes` effect.
+
+#### HTML to markdown
+
+Fiber converts a page in one pass with its own converter, not with a parser
+that builds the page's document tree (`docs/dependencies.md`, "Written
+ourselves"). It handles a stated subset of HTML, not the WHATWG parsing
+algorithm:
+
+- Converted: headings, paragraphs, lists, links, images, emphasis, inline
+  code, `pre` blocks, block quotes and tables.
+- Dropped with everything inside them: `script`, `style`, `noscript`,
+  `template`, `svg`, and the `head` apart from its `title`, which becomes a
+  leading heading.
+- Everything else, including markup the converter does not know, passes its
+  text through.
+
+On any input, however malformed, the converter promises three things:
+
+- No text a reader would see is lost, except inside the dropped elements.
+- Its time grows in proportion to the page's size.
+- Its memory is bounded: deep nesting becomes neither recursion nor unbounded
+  indentation.
+
+Formatting may come out wrong, such as a complex table or a misnested list.
+That is accepted, because the raw page is in `artifacts/`.
+
+Before converting, Fiber decodes the page by its declared character set, from
+the `Content-Type` header or the page's `<meta charset>`, with `encoding_rs`
+(the WHATWG Encoding Standard). A page with no character set, or one Fiber
+does not know, is read as UTF-8, and bytes that are not valid UTF-8 become
+`�`.
 
 ### web_search
 
