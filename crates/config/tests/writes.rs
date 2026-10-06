@@ -507,6 +507,7 @@ fn set_with_a_person_only_key_at_the_repository_layer_is_refused_and_writes_noth
     .unwrap_err();
     assert_eq!(e.code(), ErrorCode::Usage);
     assert!(e.to_string().contains("`session.idle_exit_ms`"), "{e}");
+    assert!(e.to_string().contains("a repository may not set it"), "{e}");
     assert!(
         e.to_string()
             .contains(&setup.repository().display().to_string()),
@@ -534,29 +535,60 @@ fn set_of_a_repository_only_key_outside_the_repository_layer_is_refused() {
             e.to_string().contains("`repository_extensions`"),
             "{layer:?}: {e}"
         );
+        assert!(
+            e.to_string()
+                .contains("only a repository's own file may set it"),
+            "{layer:?}: {e}"
+        );
         assert!(!setup.global().exists(), "{layer:?}");
     }
 }
 
 #[test]
 fn set_of_an_unknown_key_is_refused_and_writes_nothing() {
+    for layer in [Layer::Global, Layer::Project, Layer::Repository] {
+        let setup = Setup::new();
+        setup.write(&setup.global(), r#"{"model": "a/b"}"#);
+        let e = set(
+            &setup.home(),
+            &setup.workspace(),
+            &key(),
+            layer,
+            "hub.port",
+            json!(8080),
+        )
+        .unwrap_err();
+        assert_eq!(e.code(), ErrorCode::Usage, "{layer:?}");
+        assert!(e.to_string().contains("`hub.port`"), "{layer:?}: {e}");
+        assert!(
+            e.to_string().contains("this Fiber does not know it"),
+            "{layer:?}: {e}"
+        );
+        assert_eq!(
+            fs::read_to_string(setup.global()).unwrap(),
+            r#"{"model": "a/b"}"#,
+            "{layer:?}"
+        );
+        assert!(!setup.project().exists(), "{layer:?}");
+        assert!(!setup.repository().exists(), "{layer:?}");
+    }
+}
+
+#[test]
+fn set_of_a_repo_settable_key_at_the_repository_layer_is_written() {
     let setup = Setup::new();
-    setup.write(&setup.global(), r#"{"model": "a/b"}"#);
-    let e = set(
+    set(
         &setup.home(),
         &setup.workspace(),
         &key(),
-        Layer::Global,
-        "hub.port",
-        json!(8080),
+        Layer::Repository,
+        "handoff.tokens",
+        json!(50),
     )
-    .unwrap_err();
-    assert_eq!(e.code(), ErrorCode::Usage);
-    assert!(e.to_string().contains("`hub.port`"), "{e}");
-    assert_eq!(
-        fs::read_to_string(setup.global()).unwrap(),
-        r#"{"model": "a/b"}"#
-    );
+    .unwrap();
+    let written: serde_json::Value =
+        serde_json::from_str(&fs::read_to_string(setup.repository()).unwrap()).unwrap();
+    assert_eq!(written, json!({"handoff": {"tokens": 50}}));
 }
 
 #[test]

@@ -70,17 +70,20 @@ fn run_set(
     config::set(home, workspace, &project, layer, key, parsed).map_err(|e| failed(e.code(), e))
 }
 
-/// The thinking levels a typed model may end in, after a `:`
-/// (`docs/model-routing.md`, "Naming a model"), mirroring the list
-/// `Providers::resolve` matches against.
-const THINKING: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
-
-/// A typed model reference without any `:<level>` suffix.
-fn strip_thinking(typed: &str) -> &str {
-    typed
-        .rsplit_once(':')
-        .and_then(|(rest, level)| THINKING.contains(&level).then_some(rest))
-        .unwrap_or(typed)
+/// Runs `run` with Fiber home and the current directory, mapping any failure
+/// to its exit code.
+fn with_dirs(run: impl FnOnce(&Path, &Path) -> Result<(), Failure>) -> i32 {
+    let ran = config::fiber_home_from_env()
+        .map_err(|e| failed(e.code(), e))
+        .and_then(|home| {
+            let workspace = std::env::current_dir()
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
+            run(&home, &workspace)
+        });
+    match ran {
+        Ok(()) => 0,
+        Err(e) => fail(e),
+    }
 }
 
 /// Checks a `model` value against the installed providers' cached model
@@ -95,7 +98,7 @@ fn check_model(home: &Path, typed: &str) -> Result<(), Failure> {
     // Without a cached list the reference is accepted unchecked: one
     // naming a provider that is not installed, or one installed with an
     // empty list, and a bare id when every installed list is empty.
-    let base = strip_thinking(typed);
+    let (base, _) = Providers::split_thinking(typed);
     let uncached = match base.split_once('/') {
         Some((name, _)) => providers
             .get(name)
@@ -142,7 +145,7 @@ fn no_model(providers: &Providers, typed: &str) -> Failure {
 /// with any `:<level>` suffix stripped, nearest first and ties in sorted
 /// reference order.
 fn closest(providers: &Providers, typed: &str) -> Vec<String> {
-    let base = strip_thinking(typed);
+    let (base, _) = Providers::split_thinking(typed);
     let mut refs: Vec<String> = providers
         .names()
         .flat_map(|name| {
@@ -183,33 +186,13 @@ fn distance(left: &str, right: &str) -> usize {
 /// `fiber config get <key>` in the current directory: prints the effective
 /// value and the layer it came from.
 pub fn config_get(key: &str) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run_get(&home, &workspace, key, &mut io::stdout(), &mut io::stderr())
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| run_get(home, workspace, key, &mut io::stdout(), &mut io::stderr()))
 }
 
 /// `fiber config set [--project | --repo] <key> <value>` in the current
 /// directory: writes one key in one layer's file.
 pub fn config_set(layer: Layer, key: &str, value: &str) -> i32 {
-    let ran = config::fiber_home_from_env()
-        .map_err(|e| failed(e.code(), e))
-        .and_then(|home| {
-            let workspace = std::env::current_dir()
-                .map_err(|e| failed(ErrorCode::IoFailed, format!("the current directory: {e}")))?;
-            run_set(&home, &workspace, layer, key, value)
-        });
-    match ran {
-        Ok(()) => 0,
-        Err(e) => fail(e),
-    }
+    with_dirs(|home, workspace| run_set(home, workspace, layer, key, value))
 }
 
 #[cfg(test)]

@@ -50,18 +50,25 @@ pub fn set(
     key: &str,
     value: Value,
 ) -> Result<(), ConfigError> {
-    let file = match layer {
-        Layer::Global => home.join("config.json"),
-        Layer::Project => home
-            .join("projects")
-            .join(project.as_str())
-            .join("config.json"),
-        Layer::Repository => workspace.join(".fiber/config.json"),
-    };
-    let source = match layer {
-        Layer::Global => Source::Global(file.clone()),
-        Layer::Project => Source::Project(file.clone()),
-        Layer::Repository => Source::Repository(file.clone()),
+    let (file, source) = match layer {
+        Layer::Global => {
+            let file = home.join("config.json");
+            let source = Source::Global(file.clone());
+            (file, source)
+        }
+        Layer::Project => {
+            let file = home
+                .join("projects")
+                .join(project.as_str())
+                .join("config.json");
+            let source = Source::Project(file.clone());
+            (file, source)
+        }
+        Layer::Repository => {
+            let file = workspace.join(".fiber/config.json");
+            let source = Source::Repository(file.clone());
+            (file, source)
+        }
     };
     if matches!(layer, Layer::Repository) {
         // Someone else's text: a link, or anything but a directory and a

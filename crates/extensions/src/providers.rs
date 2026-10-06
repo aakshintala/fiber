@@ -107,6 +107,21 @@ pub fn leave_out_invalid(
 }
 
 impl Providers {
+    /// A typed model reference without any `:<level>` suffix, and the level
+    /// the suffix named, if any: the single strip of a `:<level>` suffix both
+    /// `resolve` and the `config set` model check use.
+    pub fn split_thinking(typed: &str) -> (&str, Option<&'static str>) {
+        typed
+            .rsplit_once(':')
+            .and_then(|(rest, level)| {
+                THINKING
+                    .iter()
+                    .find(|known| **known == level)
+                    .map(|known| (rest, Some(*known)))
+            })
+            .unwrap_or((typed, None))
+    }
+
     /// Reads every extension in `extensions/` in Fiber home. One written for
     /// another extension API is left out, with a notice naming it and both
     /// numbers.
@@ -191,14 +206,11 @@ impl Providers {
     /// same with a `:<thinking level>` suffix taken off, then a bare id that
     /// exactly one installed provider has.
     pub fn resolve(&self, typed: &str) -> Result<Model<'_>, Error> {
-        let stripped = typed.rsplit_once(':').and_then(|(rest, level)| {
-            THINKING
-                .iter()
-                .find(|known| **known == level)
-                .map(|known| (rest, *known))
-        });
+        let (rest, thinking) = Self::split_thinking(typed);
         let mut tries = vec![(typed, None)];
-        tries.extend(stripped.map(|(rest, level)| (rest, Some(level))));
+        if thinking.is_some() {
+            tries.push((rest, thinking));
+        }
         for (text, thinking) in &tries {
             if let Some(found) = self.exact(text, *thinking) {
                 return Ok(found);
@@ -231,7 +243,7 @@ impl Providers {
                 }
             }
         }
-        let (text, _) = stripped.unwrap_or((typed, ""));
+        let text = rest;
         Err(match text.split_once('/') {
             Some((provider, model)) if self.by_name.contains_key(provider) => Error::UnknownModel {
                 provider: provider.into(),

@@ -615,6 +615,11 @@ fn set_refuses_a_key_at_the_wrong_layer_naming_the_key() {
     .unwrap_err();
     assert_eq!(e.code(), ErrorCode::Usage);
     assert!(e.to_string().contains("`repository_extensions`"), "{e}");
+    assert!(
+        e.to_string()
+            .contains("only a repository's own file may set it"),
+        "{e}"
+    );
     let e = config::set(
         &setup.home(),
         &setup.workspace(),
@@ -626,4 +631,5 @@ fn set_refuses_a_key_at_the_wrong_layer_naming_the_key() {
     .unwrap_err();
     assert_eq!(e.code(), ErrorCode::Usage);
     assert!(e.to_string().contains("`session.idle_exit_ms`"), "{e}");
+    assert!(e.to_string().contains("a repository may not set it"), "{e}");
 }
