@@ -468,21 +468,20 @@ fn tool_choice_and_effort_map_to_geminis_own_values() {
 }
 
 #[test]
-fn an_extra_body_field_replaces_fibers_own_except_generation_config() {
+fn an_extra_body_field_is_sent_as_given() {
     let server = ProviderServer::start([completed_reply()]).unwrap();
+    let safety = json!({"safetySettings": [{"category": "HARM_CATEGORY_HARASSMENT",
+        "threshold": "BLOCK_NONE"}]});
     let declared = Endpoint {
-        extra_body: json!({"toolConfig": {"retrievalConfig": {}}})
-            .as_object()
-            .unwrap()
-            .clone(),
+        extra_body: safety.as_object().unwrap().clone(),
         ..endpoint(&server)
     };
     run(Box::new(Gemini::new(declared).request(&request())))
         .0
         .unwrap();
     assert_eq!(
-        sent_body(&server, 0)["toolConfig"],
-        json!({"retrievalConfig": {}})
+        sent_body(&server, 0)["safetySettings"],
+        safety["safetySettings"]
     );
 }
 
