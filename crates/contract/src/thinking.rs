@@ -77,8 +77,7 @@ mod tests {
     #[test]
     fn round_trips_each_level_through_serde() {
         for name in ThinkingLevel::names() {
-            let level: ThinkingLevel =
-                serde_json::from_value(serde_json::json!(name)).expect(name);
+            let level: ThinkingLevel = serde_json::from_value(serde_json::json!(name)).expect(name);
             assert_eq!(level.as_str(), *name);
             assert_eq!(serde_json::json!(level), serde_json::json!(name));
             assert_eq!(name.parse::<ThinkingLevel>().expect(name), level);

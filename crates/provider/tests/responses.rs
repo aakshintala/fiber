@@ -1275,7 +1275,13 @@ fn thinking_levels_map_to_the_reasoning_effort() {
     }
     let none = sent_body(&server, 0);
     assert_eq!(none.get("reasoning"), None);
-    assert_eq!(sent_body(&server, 1)["reasoning"], json!({"effort": "none"}));
+    assert_eq!(
+        sent_body(&server, 1)["reasoning"],
+        json!({"effort": "none"})
+    );
     assert_eq!(sent_body(&server, 2)["reasoning"], json!({"effort": "low"}));
-    assert_eq!(sent_body(&server, 3)["reasoning"], json!({"effort": "xhigh"}));
+    assert_eq!(
+        sent_body(&server, 3)["reasoning"],
+        json!({"effort": "xhigh"})
+    );
 }

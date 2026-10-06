@@ -639,9 +639,14 @@ fn parts_with(
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
-    let thinking =
-        settings::thinking(model.thinking, None, &config, model.model, &model.reference())
-            .map_err(|e| failed(e.code, e.message))?;
+    let thinking = settings::thinking(
+        model.thinking,
+        None,
+        &config,
+        model.model,
+        &model.reference(),
+    )
+    .map_err(|e| failed(e.code, e.message))?;
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.
     // The session log's path is set by the caller, which mints the session

@@ -89,7 +89,14 @@ fn each_source_beats_every_later_one() {
     );
     // Top level beats the model default.
     assert_eq!(
-        thinking(None, None, &config(vec!["thinking=high".into()]), &model, reference).unwrap(),
+        thinking(
+            None,
+            None,
+            &config(vec!["thinking=high".into()]),
+            &model,
+            reference
+        )
+        .unwrap(),
         Some(High)
     );
     // Nothing configured falls back to the model default.

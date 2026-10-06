@@ -1190,8 +1190,7 @@ fn leave_out_invalid_drops_a_model_whose_default_is_not_among_its_levels() {
     assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
     assert_eq!(notices[0].extension.as_deref(), Some("acme"));
     assert!(
-        notices[0].message.contains("acme/bad")
-            && notices[0].message.contains("thinking_default"),
+        notices[0].message.contains("acme/bad") && notices[0].message.contains("thinking_default"),
         "{}",
         notices[0].message
     );
