@@ -137,7 +137,7 @@ pub struct Loop {
     /// arrival order: held while the loop waited on an approval, taken by
     /// the end-of-turn check, or taken in the drain that is about to apply
     /// them.
-    queued: VecDeque<jobs::Queued>,
+    pub(crate) queued: VecDeque<jobs::Queued>,
     /// `close` has been taken. No further turn starts
     /// (`docs/invocation.md`, "Lifecycle").
     closing: bool,

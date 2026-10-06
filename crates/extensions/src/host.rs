@@ -3,7 +3,7 @@
 //! `json`, and converting between Lua values and JSON.
 
 use std::cell::Cell;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
@@ -20,8 +20,10 @@ use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::oauth::{self, Browser};
 
+pub(crate) mod exec;
 mod fs;
 mod settings;
+pub(crate) mod timers;
 
 #[cfg(test)]
 pub(crate) use fs::FakeLock;
@@ -72,18 +74,57 @@ function host.http(opts)
 end
 "#;
 
+/// `host.exec` yields this tag, `"exec"` and the call's spec. The
+/// extension's thread runs the program off to the side and resumes the
+/// coroutine with the reply (`docs/extensions.md`, "A host call suspends the
+/// code that made it"). Refused in the entry script before it yields, like
+/// `host.oauth.callback`.
+const EXEC: &str = r#"
+local host, tag, in_entry = ...
+function host.exec(program, args, opts)
+  if in_entry() then
+    error("host.exec: not available while init.lua runs", 2)
+  end
+  if type(program) ~= "string" then
+    error("host.exec: `program` must be a string", 2)
+  end
+  if args == nil then args = {} end
+  if type(args) ~= "table" then
+    error("host.exec: every argument must be a string", 2)
+  end
+  for k, v in pairs(args) do
+    if math.type(k) ~= "integer" or k < 1 or type(v) ~= "string" then
+      error("host.exec: every argument must be a string", 2)
+    end
+  end
+  if opts == nil then opts = {} end
+  if type(opts) ~= "table" then
+    error("host.exec: `opts` must be a table", 2)
+  end
+  local cwd = opts.cwd
+  if cwd ~= nil and type(cwd) ~= "string" then
+    error("host.exec: `cwd` must be a string", 2)
+  end
+  local result, err = coroutine.yield(tag, "exec", { program = program, args = args, cwd = cwd })
+  if result == nil then error(err, 0) end
+  return result
+end
+"#;
+
 /// How deep a Lua table may nest to become JSON. Deeper, such as a table
 /// that holds itself, is an error rather than a stack overflow.
 const MAX_DEPTH: usize = 128;
 
-/// Sets the `host` and `json` globals. The returned tag is what `host.http`
-/// yields, so the scheduler can tell that yield from any other.
+/// Sets the `host` and `json` globals. The returned tag is what the host
+/// calls yield, so the scheduler can tell that yield from any other; the
+/// returned table holds the timers' functions by id, which each firing runs.
 pub(crate) fn install(
     lua: &Lua,
     ctx: HostContext,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
-) -> mlua::Result<LuaValue> {
+    hub: &Arc<crate::lua::Hub>,
+) -> mlua::Result<(LuaValue, Table)> {
     let HostContext {
         home,
         workspace,
@@ -115,7 +156,13 @@ pub(crate) fn install(
     lua.load(HTTP)
         .set_name("=host.http")
         .call::<()>((host.clone(), tag.clone()))?;
+    let exec_entry = Rc::clone(&entry);
+    let in_entry = lua.create_function(move |_, ()| Ok(exec_entry.get()))?;
+    lua.load(EXEC)
+        .set_name("=host.exec")
+        .call::<()>((host.clone(), tag.clone(), in_entry))?;
     oauth::install(lua, &host, &tag, browser, entry)?;
+    let timer_funcs = timers::install(lua, &host, hub)?;
     host.set(
         "sha256",
         lua.create_function(|_, bytes: LuaString| Ok(sha256_hex(&bytes.as_bytes())))?,
@@ -150,7 +197,7 @@ pub(crate) fn install(
     let globals = lua.globals();
     globals.set("host", host)?;
     globals.set("json", json)?;
-    Ok(LuaValue::Table(tag))
+    Ok((LuaValue::Table(tag), timer_funcs))
 }
 
 /// SHA-256 of `bytes`, as lowercase hex.
@@ -181,6 +228,8 @@ pub(crate) struct HttpRequest {
 pub(crate) enum Request {
     /// `host.http`.
     Http(HttpRequest),
+    /// `host.exec`: run a program in its own process group.
+    Exec(exec::ExecRequest),
     /// `host.oauth.callback`: serve one request on this localhost port.
     Callback { port: u16 },
     /// `host.oauth.refresh`: take the lock on the provider's credential.
@@ -192,6 +241,8 @@ pub(crate) enum Request {
 /// The answer to a [`Request`]. A failure is the text Lua raises.
 pub(crate) enum Reply {
     Http(Result<(u16, Vec<u8>), String>),
+    /// How a `host.exec` run ended, or the text `host.exec` raises.
+    Exec(Result<exec::Ran, String>),
     /// The query parameters of the one request the callback served.
     Query(Result<Vec<(String, String)>, String>),
     Lock(Result<CredentialLock, String>),
@@ -201,14 +252,19 @@ pub(crate) enum Reply {
 /// Reads a yield: its kind and argument. `timeout` is the real-time backstop
 /// of an `http` request ([`HttpRequest`]): the declared timeout plus the
 /// grace, fixed when the request is made, not the time still left on the
-/// clock. None when the kind or argument is not one the host yields.
+/// clock. `workspace` resolves an `exec` `cwd` as `host.fs` paths are, and
+/// `cap` bounds each of its streams. None when the kind or argument is not
+/// one the host yields.
 pub(crate) fn request_from(
     kind: &str,
     arg: Option<&LuaValue>,
     timeout: Option<Duration>,
+    workspace: &Path,
+    cap: usize,
 ) -> mlua::Result<Option<Request>> {
     Ok(Some(match (kind, arg) {
         ("http", Some(LuaValue::Table(opts))) => Request::Http(http_request(opts, timeout)?),
+        ("exec", Some(LuaValue::Table(spec))) => Request::Exec(exec_request(spec, workspace, cap)?),
         ("callback", Some(LuaValue::Table(opts))) => Request::Callback {
             port: opts.get("port")?,
         },
@@ -218,6 +274,41 @@ pub(crate) fn request_from(
         )),
         _ => return Ok(None),
     }))
+}
+
+/// Reads a `host.exec` spec: the program, its argument list and the working
+/// directory, resolved against `workspace` as `host.fs` paths are (part 1's
+/// `Fs::absolute`). Missing or `nil` arguments are none; any non-string
+/// element raises.
+fn exec_request(spec: &Table, workspace: &Path, cap: usize) -> mlua::Result<exec::ExecRequest> {
+    let program: String = spec
+        .get("program")
+        .map_err(|_| mlua::Error::RuntimeError("host.exec: `program` must be a string".into()))?;
+    let args_table: Table = spec.get("args").map_err(|_| {
+        mlua::Error::RuntimeError("host.exec: every argument must be a string".into())
+    })?;
+    let mut args = Vec::new();
+    for i in 1..=args_table.len().unwrap_or(0) {
+        let arg: LuaValue = args_table.get(i)?;
+        let LuaValue::String(s) = arg else {
+            return Err(mlua::Error::RuntimeError(
+                "host.exec: every argument must be a string".into(),
+            ));
+        };
+        args.push(s.to_str()?.to_owned());
+    }
+    let cwd: Option<String> = spec.get("cwd")?;
+    // `join` replaces the workspace when `cwd` is absolute.
+    let cwd = match cwd {
+        Some(cwd) => workspace.join(Path::new(&cwd)),
+        None => workspace.to_path_buf(),
+    };
+    Ok(exec::ExecRequest {
+        program,
+        args,
+        cwd,
+        cap,
+    })
 }
 
 fn http_request(opts: &Table, timeout: Option<Duration>) -> mlua::Result<HttpRequest> {
@@ -290,9 +381,10 @@ pub(crate) fn resume_values(
             LuaValue::Integer(i64::from(status)),
             LuaValue::String(lua.create_string(bytes)?),
         ])),
-        Reply::Http(Err(message)) | Reply::Query(Err(message)) | Reply::Lock(Err(message)) => {
-            failed(message)
-        }
+        Reply::Http(Err(message))
+        | Reply::Query(Err(message))
+        | Reply::Lock(Err(message))
+        | Reply::Exec(Err(message)) => failed(message),
         Reply::Query(Ok(pairs)) => {
             let table = lua.create_table()?;
             for (key, value) in pairs {
@@ -303,6 +395,18 @@ pub(crate) fn resume_values(
         Reply::Lock(Ok(lock)) => Ok(MultiValue::from_vec(vec![LuaValue::UserData(
             lua.create_userdata(oauth::Held::new(lock, Arc::clone(clock)))?,
         )])),
+        Reply::Exec(Ok(ran)) => {
+            let returned = lua.create_table()?;
+            if let Some(code) = ran.exit_code {
+                returned.set("exit_code", code)?;
+            }
+            if let Some(signal) = ran.signal {
+                returned.set("signal", signal)?;
+            }
+            returned.set("stdout", lua.create_string(&ran.stdout)?)?;
+            returned.set("stderr", lua.create_string(&ran.stderr)?)?;
+            Ok(MultiValue::from_vec(vec![LuaValue::Table(returned)]))
+        }
         Reply::Slept => Ok(MultiValue::from_vec(vec![LuaValue::Boolean(true)])),
     }
 }

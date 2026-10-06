@@ -17,6 +17,8 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
+use contract::events::ExtensionExec;
+use contract::inbox::Delivery;
 use mlua::Table;
 use serde_json::Value;
 
@@ -25,7 +27,7 @@ use crate::host::Reply;
 
 use super::{ENTRY, GRACE, Target, expired, timeout_ms};
 
-pub(super) struct Hub {
+pub(crate) struct Hub {
     shared: Mutex<Shared>,
     changed: Condvar,
     clock: Arc<dyn Clock>,
@@ -34,7 +36,7 @@ pub(super) struct Hub {
 impl Hub {
     /// The hub every waiter and the extension's thread share, subscribed to
     /// `clock` so a move of that clock wakes them.
-    pub(super) fn new(clock: Arc<dyn Clock>) -> Arc<Self> {
+    pub(crate) fn new(clock: Arc<dyn Clock>) -> Arc<Self> {
         let hub = Arc::new(Self {
             shared: Mutex::new(Shared::default()),
             changed: Condvar::new(),
@@ -46,7 +48,7 @@ impl Hub {
         hub
     }
 
-    pub(super) fn clock(&self) -> &dyn Clock {
+    pub(crate) fn clock(&self) -> &dyn Clock {
         self.clock.as_ref()
     }
 
@@ -54,7 +56,7 @@ impl Hub {
         Arc::clone(&self.clock)
     }
 
-    pub(super) fn lock(&self) -> MutexGuard<'_, Shared> {
+    pub(crate) fn lock(&self) -> MutexGuard<'_, Shared> {
         // A panic aborts the process (`docs/code-quality.md`, "Panics"), so
         // no holder can leave the lock poisoned.
         self.shared.lock().unwrap_or_else(PoisonError::into_inner)
@@ -131,10 +133,104 @@ impl Hub {
         drop(shared);
         self.notify();
     }
+
+    /// Hands the session loop's inbox to the extension's `host.exec` runs:
+    /// a run that ended before any sender is buffered in order and sent on
+    /// the first sender; a later sender replaces the last, and each later
+    /// run goes to the newest.
+    pub(crate) fn set_exec_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
+        let buffered = {
+            let mut shared = self.lock();
+            shared.exec_inbox = Some(inbox.clone());
+            std::mem::take(&mut shared.exec_buffer)
+        };
+        for exec in buffered {
+            match inbox.send(Delivery::ExtensionExec(exec)) {
+                Ok(()) => {}
+                Err(_) => return,
+            }
+        }
+    }
+
+    /// Registers a timer `host.after` or `host.every` set: `every` holds
+    /// its period for rescheduling, `None` for a one-shot `after`.
+    /// Returns its id, assigned in set order from 0.
+    pub(crate) fn add_timer(
+        &self,
+        every: Option<Duration>,
+        due: Instant,
+        timeout: Duration,
+    ) -> u64 {
+        let mut shared = self.lock();
+        let id = shared.next_timer;
+        shared.next_timer = shared.next_timer.wrapping_add(1);
+        shared.timers.insert(
+            id,
+            Timer {
+                id,
+                every,
+                due,
+                timeout,
+                cancelled: false,
+                firing: false,
+            },
+        );
+        drop(shared);
+        self.notify();
+        id
+    }
+
+    /// Stops a timer: a due firing never starts, and a mid-firing `every`
+    /// does not fire again. Unknown or finished ids are a no-op.
+    pub(crate) fn cancel_timer(&self, id: u64) {
+        let mut shared = self.lock();
+        let remove = match shared.timers.get_mut(&id) {
+            Some(timer) if !timer.cancelled => {
+                timer.cancelled = true;
+                !timer.firing
+            }
+            Some(_) | None => false,
+        };
+        if remove {
+            shared.timers.remove(&id);
+            shared.timer_cleanup.push(id);
+        }
+        drop(shared);
+        self.notify();
+    }
+
+    /// Ends a timer firing: an `every` that was not cancelled fires again
+    /// `ms` after its end; anything else is removed. The callback's result
+    /// goes nowhere, and a failure is silent.
+    pub(super) fn timer_call_done(&self, call_id: u64, timer_id: u64) {
+        let now = self.clock.now();
+        let mut shared = self.lock();
+        shared.calls.remove(&call_id);
+        shared.timer_end(timer_id, now);
+    }
+
+    /// The timer ids whose Lua functions the extension's thread frees.
+    pub(super) fn take_timer_cleanup(&self) -> Vec<u64> {
+        std::mem::take(&mut self.lock().timer_cleanup)
+    }
+
+    /// Logs a finished `host.exec` run: sent to the loop's inbox, or
+    /// buffered in end order when no sender arrived yet. A send that fails
+    /// means the session is over and nothing can log it, so the run is
+    /// dropped.
+    pub(super) fn send_exec(&self, exec: ExtensionExec) {
+        if let Some(inbox) = self.lock().exec_inbox.clone() {
+            match inbox.send(Delivery::ExtensionExec(exec)) {
+                Ok(()) | Err(_) => {}
+            }
+        } else {
+            self.lock().exec_buffer.push(exec);
+        }
+    }
 }
 
 #[derive(Default)]
-pub(super) struct Shared {
+pub(crate) struct Shared {
     pub(super) phase: Phase,
     /// Calls the thread has not started, in the order Fiber asked.
     pub(super) queue: VecDeque<Job>,
@@ -145,7 +241,35 @@ pub(super) struct Shared {
     /// Every hook's timeout once the entry script returns, when
     /// configuration overrides them.
     pub(super) hook_timeout: Option<Duration>,
+    /// The loop's inbox for finished `host.exec` runs, set by `deliver_to`.
+    pub(super) exec_inbox: Option<std::sync::mpsc::Sender<Delivery>>,
+    /// Runs that ended before any inbox, in end order, sent on the first one.
+    pub(super) exec_buffer: Vec<ExtensionExec>,
+    /// The timers `host.after` and `host.every` set, by id.
+    pub(crate) timers: HashMap<u64, Timer>,
+    /// Timer ids whose Lua functions the extension's thread still frees.
+    pub(crate) timer_cleanup: Vec<u64>,
     next_id: u64,
+    /// The next timer's id, assigned in set order from 0.
+    pub(crate) next_timer: u64,
+}
+
+/// A timer `host.after` or `host.every` set: when its callback fires next,
+/// on the extension's clock (`docs/extensions.md`, "Host calls").
+#[derive(Debug)]
+pub(crate) struct Timer {
+    /// Assigned in set order from 0.
+    pub(crate) id: u64,
+    /// The period an `every` reschedules with; `None` for an `after`.
+    pub(crate) every: Option<Duration>,
+    /// When the callback fires next.
+    pub(crate) due: Instant,
+    /// The firing's timeout, from its start.
+    pub(crate) timeout: Duration,
+    /// `:cancel()` stopped it; a mid-firing cancel finishes the firing.
+    pub(crate) cancelled: bool,
+    /// A firing is running; one firing at a time.
+    pub(crate) firing: bool,
 }
 
 #[derive(Default)]
@@ -207,6 +331,10 @@ impl CallbackTimeouts {
                 .get(point)
                 .and_then(|hooks| hooks.get(*index))
                 .map(|hook| hook.timeout),
+            // A timer firing carries its own timeout from its firing's
+            // start; it is never a queued call the timeout is looked up
+            // for.
+            Target::Timer { .. } => None,
         }
     }
 
@@ -303,6 +431,81 @@ impl Shared {
         });
         self.calls.insert(id, Progress::Queued);
         id
+    }
+
+    /// Queues a timer firing as `Target::Timer`, under its own `timeout`
+    /// from `now`: the firing, not a queued call. Returns the call's id,
+    /// its timeout and its deadline.
+    pub(super) fn push_timer(
+        &mut self,
+        timer_id: u64,
+        timeout: Duration,
+        now: Instant,
+    ) -> (Job, Duration, Option<Instant>) {
+        let id = self.next_id;
+        self.next_id = self.next_id.wrapping_add(1);
+        let deadline = now.checked_add(timeout);
+        self.calls.insert(
+            id,
+            Progress::Started {
+                deadline,
+                parked: false,
+            },
+        );
+        (
+            Job {
+                id,
+                target: Target::Timer { id: timer_id },
+                arg: Value::Null,
+                asked: now,
+            },
+            timeout,
+            deadline,
+        )
+    }
+
+    /// Starts the earliest due timer, when one waits: due, neither
+    /// cancelled nor firing. Marks it firing and returns its id and
+    /// timeout. One firing at a time.
+    pub(super) fn timer_fire(&mut self, now: Instant) -> Option<(u64, Duration)> {
+        let timer = self
+            .timers
+            .values_mut()
+            .filter(|timer| !timer.cancelled && !timer.firing && timer.due <= now)
+            .min_by_key(|timer| (timer.due, timer.id))?;
+        timer.firing = true;
+        Some((timer.id, timer.timeout))
+    }
+
+    /// Ends a timer firing at `now`: an `every` that was not cancelled
+    /// fires again `ms` after its end; anything else leaves, freeing its
+    /// Lua function on the extension's thread.
+    pub(super) fn timer_end(&mut self, id: u64, now: Instant) {
+        let reschedule = match self.timers.get_mut(&id) {
+            Some(timer) if !timer.cancelled => timer.every,
+            Some(_) | None => None,
+        };
+        match reschedule {
+            Some(every) => {
+                if let Some(timer) = self.timers.get_mut(&id) {
+                    timer.due = now.checked_add(every).unwrap_or(now);
+                    timer.firing = false;
+                }
+            }
+            None => {
+                self.timers.remove(&id);
+                self.timer_cleanup.push(id);
+            }
+        }
+    }
+
+    /// The earliest a waiting timer fires, for the thread's next wake.
+    pub(super) fn timer_wake(&self) -> Option<Instant> {
+        self.timers
+            .values()
+            .filter(|timer| !timer.cancelled && !timer.firing)
+            .map(|timer| timer.due)
+            .min()
     }
 
     /// Whether registration is done, still running, or has stopped the
@@ -442,10 +645,12 @@ pub(super) fn not_registered(name: &str, target: &Target) -> Error {
             extension: name.to_owned(),
             command: command.clone(),
         },
-        Target::Provider { .. } | Target::Hook { .. } => Error::UnknownCallback {
-            extension: name.to_owned(),
-            callback: target.to_string(),
-        },
+        Target::Provider { .. } | Target::Hook { .. } | Target::Timer { .. } => {
+            Error::UnknownCallback {
+                extension: name.to_owned(),
+                callback: target.to_string(),
+            }
+        }
     }
 }
 

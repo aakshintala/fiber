@@ -379,6 +379,7 @@ dependencies = [
  "fakes",
  "mlua",
  "ring",
+ "rustix",
  "serde_json",
  "similar",
  "thiserror",

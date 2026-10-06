@@ -15,6 +15,7 @@ thiserror.workspace = true
 mlua = { workspace = true, features = ["serde"] }
 # SHA-256 and HMAC-SHA256 for `host.sha256` and `host.hmac_sha256`.
 ring = "0.17"
+rustix.workspace = true
 ureq.workspace = true
 
 [dev-dependencies]

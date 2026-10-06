@@ -60,6 +60,9 @@ pub(crate) struct Gate {
     /// The session's jobs, which `job_stop` and `background` reach. None
     /// leaves both with nothing to act on.
     jobs: Mutex<Option<Arc<dyn contract::jobs::Jobs>>>,
+    /// The session's hooks, which receive the loop's inbox so an extension's
+    /// program run can be logged as `extension_exec`.
+    hooks: Mutex<Option<Arc<dyn contract::hook::Hooks>>>,
     /// Driver shells running now, and whether `close` has stopped new ones.
     /// Both sit under this lock, so a shell that registers after `close`
     /// cannot miss the snapshot.
@@ -145,6 +148,9 @@ impl Session {
         if let Some(jobs) = lock(&self.gate.jobs).as_ref() {
             jobs.deliver_to(inbox.clone());
         }
+        if let Some(hooks) = lock(&self.gate.hooks).as_ref() {
+            hooks.deliver_to(inbox.clone());
+        }
         *lock(&self.gate.inbox) = Some(inbox);
         *lock(&self.gate.cancel) = Some(cancel);
         self.start_accept()?;
@@ -194,6 +200,11 @@ impl Session {
     /// set, both are rejected `stale_request`: no job or call is running.
     pub fn jobs(&self, jobs: Arc<dyn contract::jobs::Jobs>) {
         *lock(&self.gate.jobs) = Some(jobs);
+    }
+
+    /// The session's hooks, which receive the loop's inbox beside the jobs.
+    pub fn hooks(&self, hooks: Arc<dyn contract::hook::Hooks>) {
+        *lock(&self.gate.hooks) = Some(hooks);
     }
 
     /// What a shutdown calls to stop the door side's work
@@ -537,6 +548,7 @@ fn open_in(
         cancel: Mutex::new(None),
         driver_shell: Mutex::new(None),
         jobs: Mutex::new(None),
+        hooks: Mutex::new(None),
         shells: Mutex::new(RunningShells {
             stopped: false,
             running: Vec::new(),

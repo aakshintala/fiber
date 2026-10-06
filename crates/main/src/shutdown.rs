@@ -17,6 +17,7 @@ pub(crate) fn arm(signals: &Signals) {
         Box::new(mcp::stop_every_start),
         Box::new(|| {
             tools::kill_every_group();
+            extensions::kill_every_group();
             mcp::kill_every_server();
         }),
     );
@@ -43,6 +44,9 @@ pub(crate) fn start(
                 jobs.stop(&id);
             }
         }),
-        Box::new(tools::kill_every_group),
+        Box::new(|| {
+            tools::kill_every_group();
+            extensions::kill_every_group();
+        }),
     )
 }

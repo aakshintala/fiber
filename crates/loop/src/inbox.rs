@@ -7,7 +7,7 @@ use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 use contract::commands::Reply;
-use contract::events::{QueuedMessage, SteeringQueue};
+use contract::events::{Event, QueuedMessage, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Message, Rejection};
 use contract::shapes::ContentPart;
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
@@ -152,7 +152,7 @@ impl Loop {
     /// "Starting a turn").
     pub(crate) fn wait_for_turn(&mut self) -> Result<Option<TurnInput>, Error> {
         if self.closing {
-            return Ok(self.ending());
+            return self.ending();
         }
         // Idle starts as the wait begins. A rejected command, a dropped
         // steer and a wake do not move it (`docs/invocation.md`, "Lifecycle").
@@ -170,7 +170,7 @@ impl Loop {
             // drained as when steers were kept.
             let held = !self.deferred.is_empty();
             for delivery in std::mem::take(&mut self.deferred) {
-                self.admit_idle(delivery, &mut input);
+                self.admit_idle(delivery, &mut input)?;
             }
             // Steers the previous turn kept start this one, in order,
             // ahead of whatever is already waiting. This holds after any
@@ -193,7 +193,7 @@ impl Loop {
                 // since is drained without blocking or re-announcing the
                 // queue, which did not move again.
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
-                    self.admit_idle(delivery, &mut input);
+                    self.admit_idle(delivery, &mut input)?;
                 }
             } else {
                 match self.recv_until(deadline, true) {
@@ -201,7 +201,7 @@ impl Loop {
                         let mut batch = vec![first];
                         batch.extend(self.inbox.try_iter());
                         for delivery in batch {
-                            self.admit_idle(delivery, &mut input);
+                            self.admit_idle(delivery, &mut input)?;
                         }
                     }
                     InboxRecv::Unattended => self.check_jobs(&mut input.pieces),
@@ -212,7 +212,7 @@ impl Loop {
                 return Ok(Some(input));
             }
             if self.closing {
-                return Ok(self.ending());
+                return self.ending();
             }
         }
     }
@@ -223,9 +223,9 @@ impl Loop {
     /// arrives. `None` once no job runs and nothing is waiting, or every
     /// sender is gone. Without jobs, `None` at once. Steers still queued
     /// are not run, and no prompt or steer starts a turn.
-    fn ending(&mut self) -> Option<TurnInput> {
+    fn ending(&mut self) -> Result<Option<TurnInput>, Error> {
         if !self.has_jobs() {
-            return None;
+            return Ok(None);
         }
         self.queued
             .retain(|piece| !matches!(piece, Queued::Steer(_)));
@@ -234,35 +234,35 @@ impl Loop {
             prompt: None,
         };
         for delivery in std::mem::take(&mut self.deferred) {
-            self.admit_idle(delivery, &mut input);
+            self.admit_idle(delivery, &mut input)?;
         }
         // Every turn from here on starts after `close`.
         self.ending.after_close = true;
         loop {
             if !input.pieces.is_empty() {
-                return Some(input);
+                return Ok(Some(input));
             }
             let running = self.running();
             if running.is_empty() {
                 // A job's end is sent before `running` stops listing it, so
                 // what is waiting now holds the last ends.
                 for delivery in self.inbox.try_iter().collect::<Vec<_>>() {
-                    self.admit_idle(delivery, &mut input);
+                    self.admit_idle(delivery, &mut input)?;
                 }
-                return (!input.pieces.is_empty()).then_some(input);
+                return Ok((!input.pieces.is_empty()).then_some(input));
             }
             if self.notify_pending(running, &mut input.pieces) {
-                return Some(input);
+                return Ok(Some(input));
             }
             match self.recv_until(None, false) {
                 InboxRecv::Delivery(first) => {
                     let mut batch = vec![first];
                     batch.extend(self.inbox.try_iter());
                     for delivery in batch {
-                        self.admit_idle(delivery, &mut input);
+                        self.admit_idle(delivery, &mut input)?;
                     }
                 }
-                InboxRecv::Closed | InboxRecv::Idle | InboxRecv::Unattended => return None,
+                InboxRecv::Closed | InboxRecv::Idle | InboxRecv::Unattended => return Ok(None),
             }
         }
     }
@@ -364,6 +364,7 @@ impl Loop {
             | Delivery::Reply(..)
             | Delivery::Job(_)
             | Delivery::JobLine(_)
+            | Delivery::ExtensionExec(_)
             | Delivery::Cancelled) => {
                 self.admit_running(other, turn)?;
                 Ok(Waited::Again)
@@ -372,7 +373,7 @@ impl Loop {
     }
 
     /// `delivery` while the loop is still collecting a turn's input.
-    fn admit_idle(&mut self, delivery: Delivery, input: &mut TurnInput) {
+    fn admit_idle(&mut self, delivery: Delivery, input: &mut TurnInput) -> Result<(), Error> {
         match delivery {
             Delivery::Prompt(message, ack) => {
                 if self.closing {
@@ -433,7 +434,13 @@ impl Loop {
                     input.pieces.push(Queued::Line(line));
                 }
             }
+            // Written at the drain that takes it, idle or not: it never
+            // starts a turn and never joins the model's input.
+            Delivery::ExtensionExec(exec) => {
+                self.log.append(&Event::ExtensionExec(exec), None, None)?;
+            }
         }
+        Ok(())
     }
 
     /// `delivery` while a turn is in flight and nothing is pending.
@@ -480,6 +487,11 @@ impl Loop {
             Delivery::Job(notice) => self.admit_job(notice),
             // Held until the next step boundary, as a job's end is.
             Delivery::JobLine(line) => self.queued.push_back(Queued::Line(line)),
+            // Written at the drain that takes it: it never starts a turn
+            // and never joins the model's input.
+            Delivery::ExtensionExec(exec) => {
+                self.log.append(&Event::ExtensionExec(exec), None, None)?;
+            }
         }
         Ok(())
     }
@@ -567,3 +579,7 @@ fn drop_queued(queued: &mut std::collections::VecDeque<Queued>, id: &CommandId) 
         .map(|index| queued.remove(index))
         .is_some()
 }
+
+#[cfg(test)]
+#[path = "inbox_tests.rs"]
+mod tests;

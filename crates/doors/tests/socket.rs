@@ -335,7 +335,9 @@ fn take(inbox: &Receiver<Delivery>) -> String {
             "close".to_owned()
         }
         Delivery::Cancelled => panic!("a wake arrives as a delivery"),
-        Delivery::Job(_) | Delivery::JobLine(_) => panic!("no job runs here"),
+        Delivery::Job(_) | Delivery::JobLine(_) | Delivery::ExtensionExec(_) => {
+            panic!("no job runs here")
+        }
     }
 }
 

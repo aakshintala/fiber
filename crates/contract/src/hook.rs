@@ -66,4 +66,7 @@ pub trait Hooks: Send + Sync {
     /// Runs every `after_tool` hook on `call`, in order, and returns what
     /// they decided.
     fn after_tool(&self, call: &AfterToolCall<'_>) -> AfterToolAnswer;
+    /// Hands the session loop's inbox to the hooks, so a program an
+    /// extension ran can be logged as `extension_exec`.
+    fn deliver_to(&self, inbox: std::sync::mpsc::Sender<crate::inbox::Delivery>);
 }

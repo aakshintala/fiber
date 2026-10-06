@@ -6,7 +6,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use config::Config;
@@ -15,6 +15,7 @@ use contract::clock::Clock;
 use contract::events::{LoadedExtension, Notice};
 use contract::files::PathLock;
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
+use contract::inbox::Delivery;
 use serde_json::{Map, Value};
 
 use crate::git::short_name;
@@ -53,6 +54,8 @@ pub struct SessionExtensions {
     after_tool: Vec<Entry>,
     /// Whether any hook registered at any point.
     any: bool,
+    /// The session loop's inbox, set by `deliver_to`.
+    inbox: Mutex<Option<std::sync::mpsc::Sender<Delivery>>>,
 }
 
 /// One hook in a chain.
@@ -416,6 +419,17 @@ impl Hooks for SessionExtensions {
             outcome,
             changed_by,
             notices,
+        }
+    }
+
+    fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
+        // A later `deliver_to` (a resume hands a new sender) replaces the
+        // sender; each extension flushes what ended before the first one.
+        if let Ok(mut held) = self.inbox.lock() {
+            *held = Some(inbox.clone());
+        }
+        for extension in &self.lua {
+            extension.deliver_to(inbox.clone());
         }
     }
 }

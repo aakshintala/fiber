@@ -74,6 +74,11 @@ impl Loop {
                         .append(&Event::JobCompleted(completed), None, None)?;
                 }
             }
+            // Written like any line still written; unlike a monitor batch,
+            // it is not dropped.
+            Delivery::ExtensionExec(exec) => {
+                self.log.append(&Event::ExtensionExec(exec), None, None)?;
+            }
             Delivery::Prompt(_, ack) | Delivery::Steer(_, ack) | Delivery::Handoff(_, _, ack) => {
                 reject(ack, ErrorCode::Closing, CLOSING);
             }
