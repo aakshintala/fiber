@@ -230,25 +230,15 @@ impl Watcher {
     /// dropped and every event written before that has been returned; an
     /// error, after those events, if the log stopped on a failed write.
     pub fn recv(&mut self) -> Result<Option<Envelope>, Error> {
-        // A wait without a deadline always resolves; a timeout would mean
-        // it gave up, which it never does, so the loop runs once.
-        loop {
-            if let Some(result) = self.next_line(Wait::Forever) {
-                return result;
-            }
-        }
+        // A wait without a deadline never gives up.
+        self.next_line(Wait::Forever).unwrap_or(Ok(None))
     }
 
     /// The next event if one is available now, without waiting: queued
     /// lines first, then, when the watcher fell behind, the durable lines
     /// it missed, re-read from the log. `None` when nothing is available.
     pub fn try_recv(&mut self) -> Result<Option<Envelope>, Error> {
-        // Waiting for nothing now always resolves, as above.
-        loop {
-            if let Some(result) = self.next_line(Wait::Now) {
-                return result;
-            }
-        }
+        self.next_line(Wait::Now).unwrap_or(Ok(None))
     }
 
     /// What [`Watcher::recv`] would return, if it returns before `timeout`
@@ -258,6 +248,8 @@ impl Watcher {
         self.next_line(Wait::For(timeout))
     }
 
+    /// What [`Watcher::recv`] returns, or `None` when nothing is available
+    /// within `wait`.
     fn next_line(&mut self, wait: Wait) -> Option<Result<Option<Envelope>, Error>> {
         loop {
             let line = match self.backlog.pop_front() {
@@ -269,13 +261,8 @@ impl Watcher {
                         Wait::For(timeout) => self.take_timeout(timeout),
                     };
                     match taken {
-                        None => {
-                            return match wait {
-                                // A timeout consumes nothing.
-                                Wait::For(_) => None,
-                                Wait::Forever | Wait::Now => Some(Ok(None)),
-                            };
-                        }
+                        // Nothing arrived in time; nothing was consumed.
+                        None => return None,
                         Some(Taken::Line(line)) => line,
                         Some(Taken::CatchUp) => {
                             // debt: re-reads the whole log to find the lines it
