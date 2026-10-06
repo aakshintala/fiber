@@ -142,8 +142,8 @@ its own, and is never sent to the model as one of its calls
 "send this to a model and stream back actions." A provider is an extension
 over a native wire protocol; see `docs/model-routing.md` and
 [ADR 0007](adr/0007-protocols-are-native-providers-are-extensions.md).
-A provider extension's Lua functions, `models()`, `quota()`, `credential()`
-and `sign()`, reach the `provider` module through this seam, wired by
+A provider extension's Lua functions, `models()`, `quota()`, `credential()`,
+`sign()` and `cost()`, reach the `provider` module through this seam, wired by
 `extensions`, so `provider` never depends on `extensions`. `sign()` is the one
 called on the request path, and `credential()` only when the cached token has
 already expired (`docs/model-routing.md`, "Keys, tokens and OAuth").

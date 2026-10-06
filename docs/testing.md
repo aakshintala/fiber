@@ -156,7 +156,7 @@ compatibility flags, headers) is tested as part of its protocol, against the
 vendor's recorded streams and against scripted streams on the fake server,
 because that is the native protocol's decoding and request shaping, which is
 Fiber's own Rust. Its Lua functions (`models()`, `quota()`, `credential()`,
-`sign()`) are tested as an extension, with `fiber extension test` and
+`sign()`, `cost()`) are tested as an extension, with `fiber extension test` and
 scripted host calls ("Testing an extension"). A protocol change that breaks a
 shipped provider fails the pull request that caused it.
 

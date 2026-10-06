@@ -809,9 +809,12 @@ Ephemeral. A failure outside any action.
 | `message` | string | yes | Fiber's own sentence |
 | `extension` | string | no | the extension it concerns |
 
-One `usage_recorded` per model call, whatever started it. A cost that settles
-late is a second `usage_recorded` with the same `generation_id`, replacing the
-first. A parent writes a copy of each `usage_recorded` it receives from a
+One `usage_recorded` per model call, whatever started it, however it ended. A
+call that is cancelled, fails or closes early, after the provider named its
+generation, writes its `usage_recorded` at once, with the tokens it saw and
+`cost` as for any call without the vendor's figure (`docs/model-routing.md`,
+"Cost"). A cost that settles late, from the provider's `cost()`, is a second
+`usage_recorded` with the same `generation_id`, replacing the first. A parent writes a copy of each `usage_recorded` it receives from a
 delegate, with the same payload and `origin_session_id` added, so a session's
 log holds its whole tree's spend. The fold counts one line per
 `generation_id`, the latest, so a copy of a copy is still one call. A late correction
