@@ -33,6 +33,12 @@ A binary-level test needs no test-only switch in the shipped binary. It sets
 definition whose base URL points at a local fake server, or it names the
 built-in `scripted` provider ("Testing an extension").
 
+A test inside a crate or across crates unwinds on a panic, because Cargo
+builds the test harness without `panic = "abort"` (`docs/ci.md`). A test of
+what a panic leaves (`docs/code-quality.md`, "Panics") panics in a child
+process that aborts, such as the `fiber` binary or the test binary re-run with
+the real panic hook, never in the test's own process.
+
 Fiber's own tests are Rust, run by cargo. The one exception is an extension's
 tests, Fiber's first-party extensions included: they are cases run by
 `fiber extension test` ("Testing an extension").
@@ -326,8 +332,9 @@ its completion event logged. A file existing is not that proof. A test never
 waits for a generic sign that things have settled, because "the screen stopped
 changing" is not "the server is listening".
 
-Every wait has a deadline. On expiry the test fails with an assertion naming
-what it waited for. Calling code that blocks is a wait too, so the test runs
+Every wait has a deadline on the wall clock, also in a test that drives a fake
+clock: fake time passes only when the test advances it. On expiry the test
+fails with an assertion naming what it waited for. Calling code that blocks is a wait too, so the test runs
 it on a thread and receives its result with a deadline. nextest's per-test timeout is at least twice the sum of the
 test's own deadlines, so a hang reports which wait expired, not a harness kill.
 
