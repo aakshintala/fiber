@@ -877,3 +877,257 @@ fn a_server_that_fails_to_start_leaves_the_session_running() {
     assert_eq!(failed["payload"]["will_restart"], false);
     assert_eq!(failed["payload"]["error"]["code"], "mcp_server_unavailable");
 }
+
+#[test]
+fn a_second_session_declares_cached_tools_without_starting() {
+    let setup = Setup::new();
+    let dir = setup.fixture(
+        &json!([echo_tool()]),
+        &[(
+            "call-echo.json",
+            r#"{"content":[{"type":"text","text":"hi"}]}"#,
+        )],
+    );
+    let server = ProviderServer::start([
+        hello(),
+        hello(),
+        stream(&[function_call(
+            "call_echo",
+            "mcp__fx__echo",
+            &json!({"text": "hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    // The first session misses the cache and starts the server.
+    let first = setup.run(&["ask", "hi"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert!(
+        dir.join("pid.txt").exists(),
+        "the first session starts the server"
+    );
+    fs::remove_file(dir.join("pid.txt")).unwrap();
+
+    // The second session declares the tools from the cache: the first
+    // model request already lists them, and nothing spawns.
+    let second = setup.run(&["ask", "hi"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.kinds(), hello_kinds(&[]));
+    let requests = server.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        tool_names(&requests[1].body).contains(&"mcp__fx__echo".to_owned()),
+        "the cached tools are declared on the first request"
+    );
+    assert!(
+        !dir.join("pid.txt").exists(),
+        "a session that never calls starts nothing"
+    );
+
+    // The third session calls the tool: the first call starts the server
+    // and answers with the fixture's result.
+    let third = setup.run(&["ask", "echo hi"]);
+    assert_eq!(third.code, Some(0), "stderr: {}", third.stderr);
+    assert!(
+        dir.join("pid.txt").exists(),
+        "the first call starts the server"
+    );
+    let completed = third
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(completed["payload"]["content"][0]["text"], "hi");
+}
+
+#[test]
+fn a_required_server_that_fails_to_start_exits_before_the_session() {
+    let setup = Setup::new();
+    let dir = setup.fixture(&json!([echo_tool()]), &[]);
+    let server = ProviderServer::start(Vec::<Response>::new()).unwrap();
+    setup.provider(&server);
+    // A healthy server beside the failing required one: the failure stops
+    // what started before failing the session.
+    setup.configure(&json!({
+        "fx": {
+            "command": "/bin/bash",
+            "args": [fakes::mcp_fixture().display().to_string(), dir.display().to_string()],
+        },
+        "bad": {"command": "/no/such/command", "required": true},
+    }));
+
+    let run = setup.run(&["ask", "hi"]);
+
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert!(
+        server.requests().is_empty(),
+        "the session never starts, so the model is never called"
+    );
+    let line = run.lines.first().unwrap();
+    assert_eq!(
+        line["payload"]["error"]["code"],
+        "mcp_required_server_failed"
+    );
+    assert!(
+        line["payload"]["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("The required MCP server `bad` failed to start"),
+        "message: {}",
+        line["payload"]["error"]["message"]
+    );
+    assert!(
+        run.stderr
+            .contains("The required MCP server `bad` failed to start"),
+        "stderr: {}",
+        run.stderr
+    );
+    let pid: u32 = fs::read_to_string(dir.join("pid.txt"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    // The healthy server started, then stopped with the failed session:
+    // poll, then fail naming the wait.
+    let (_held, tick) = mpsc::channel::<()>();
+    for _ in 0..100 {
+        if !fakes::kill_pid(pid, "0").unwrap() {
+            return;
+        }
+        match tick.recv_timeout(Duration::from_millis(50)) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+    panic!("waited 5s for pid {pid} to exit after the required failure");
+}
+
+#[test]
+fn a_cached_server_that_fails_on_the_call_fails_the_call() {
+    let setup = Setup::new();
+    let dir = setup.fixture(
+        &json!([echo_tool()]),
+        &[(
+            "call-echo.json",
+            r#"{"content":[{"type":"text","text":"hi"}]}"#,
+        )],
+    );
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call(
+            "call_echo",
+            "mcp__fx__echo",
+            &json!({"text": "hi"}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    // The first session populates the cache.
+    let first = setup.run(&["ask", "hi"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    // The server's tool list breaks under the same declaration, so the
+    // next session declares from the cache and fails on the call.
+    fs::write(dir.join("tools.json"), "null").unwrap();
+
+    let run = setup.run(&["ask", "echo hi"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let requests = server.requests();
+    assert_eq!(requests.len(), 3);
+    assert!(
+        tool_names(&requests[1].body).contains(&"mcp__fx__echo".to_owned()),
+        "the cached tools are declared on the first request"
+    );
+    // `read_kinds` with the failed start's record before the completion.
+    let mut kinds = read_kinds();
+    kinds.insert(
+        kinds
+            .iter()
+            .position(|kind| *kind == "tool_call_completed")
+            .unwrap(),
+        "mcp_server_failed",
+    );
+    assert_eq!(run.kinds(), kinds);
+    let failed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "mcp_server_failed")
+        .unwrap();
+    assert_eq!(failed["payload"]["server"], "fx");
+    assert_eq!(failed["payload"]["reason"], "start_failed");
+    assert_eq!(failed["payload"]["will_restart"], false);
+    assert_eq!(failed["payload"]["error"]["code"], "mcp_server_unavailable");
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(
+        completed["payload"]["error"]["code"],
+        "mcp_server_unavailable"
+    );
+}
+
+#[test]
+fn a_call_to_a_tool_the_server_removed_fails_with_mcp_tool_removed() {
+    let setup = Setup::new();
+    let gone =
+        json!({"name": "gone", "annotations": {"readOnlyHint": true, "openWorldHint": false}});
+    let dir = setup.fixture(
+        &json!([echo_tool(), gone]),
+        &[(
+            "call-echo.json",
+            r#"{"content":[{"type":"text","text":"hi"}]}"#,
+        )],
+    );
+    let server = ProviderServer::start([
+        hello(),
+        stream(&[function_call("call_gone", "mcp__fx__gone", &json!({}))]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    configure_fx(&setup, &dir, Value::Null);
+
+    // The first session caches both tools.
+    let first = setup.run(&["ask", "hi"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    // The server removes the tool under the same declaration.
+    fs::write(dir.join("tools.json"), json!([echo_tool()]).to_string()).unwrap();
+
+    let run = setup.run(&["ask", "call gone"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), read_kinds());
+    assert!(
+        run.lines
+            .iter()
+            .all(|line| line["kind"] != "mcp_server_failed"),
+        "a removed tool is no failed start"
+    );
+    let completed = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(completed["payload"]["status"], "failed");
+    assert_eq!(completed["payload"]["error"]["code"], "mcp_tool_removed");
+    // The cache now holds the live list, for the next session.
+    let cache: Value =
+        serde_json::from_str(&fs::read_to_string(setup.home().join("cache/mcp/fx.json")).unwrap())
+            .unwrap();
+    let names: Vec<&str> = cache["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|tool| tool["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["echo"]);
+}

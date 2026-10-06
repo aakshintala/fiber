@@ -31,7 +31,13 @@ fn empty_servers() -> crate::mcp_servers::SessionServers {
     let workspace = root.path().join("workspace");
     std::fs::create_dir_all(&workspace).unwrap();
     let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
-    let started = mcp::start(Vec::new(), &workspace, &clock, "0.0.0");
+    let started = mcp::start(
+        Vec::new(),
+        &workspace,
+        &workspace.join("cache"),
+        &clock,
+        "0.0.0",
+    );
     crate::mcp_servers::SessionServers {
         failed: Vec::new(),
         servers: started.servers,

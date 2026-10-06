@@ -618,7 +618,14 @@ impl Loop {
             changes,
             control,
             jobs,
+            server_failed,
         } = output;
+        // A call that started its server and failed to carries the
+        // `mcp_server_failed` the loop writes under the call's action,
+        // before its job lines and `tool_call_completed`.
+        if let Some(failed) = server_failed {
+            self.append(&Event::McpServerFailed(failed), turn, Some(id))?;
+        }
         for record in jobs {
             let event = match record {
                 contract::jobs::JobRecord::Started(started) => Event::JobStarted(started),

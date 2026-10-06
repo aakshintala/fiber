@@ -4,10 +4,12 @@
 //! (`docs/architecture.md`, "The call rules"): this crate depends on
 //! `contract` alone.
 
+mod cache;
 mod effects;
 mod name;
 mod rpc;
 mod server;
+mod slot;
 mod start;
 mod tool;
 

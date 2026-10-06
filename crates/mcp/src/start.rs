@@ -1,8 +1,11 @@
-//! Starting every configured stdio server with the session
-//! (`docs/mcp.md`, "Starting servers"): each starts in parallel under its
-//! own startup deadline, its tools declared through the tool seam, and a
-//! server that fails to start or misses its deadline left out and recorded
-//! as `mcp_server_failed`. The session still starts.
+//! Starting the configured stdio servers (`docs/mcp.md`, "Starting
+//! servers"): a server with a cached tool list for its current declaration
+//! is declared from the cache and spawned on the first call to one of its
+//! tools, while `required` servers and cache misses start with the session
+//! and write the cache. Each session-start server starts in parallel under
+//! its own startup deadline, and a server that fails to start or misses its
+//! deadline is left out and recorded as `mcp_server_failed`. The session
+//! still starts, unless a `required` server failed.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -16,8 +19,10 @@ use contract::events::{McpServerFailed, ServerFailure, ToolInfo, ToolSource, Too
 use contract::shapes::Failure;
 use contract::tool::Tool;
 
+use crate::cache;
 use crate::effects::Hints;
-use crate::server::{Server, StartError};
+use crate::server::{ListedTool, Server};
+use crate::slot::Slot;
 use crate::tool::McpTool;
 
 /// One configured stdio server: what [`start`] spawns.
@@ -41,10 +46,12 @@ pub struct ServerSpec {
     pub disabled: Vec<String>,
     /// The person's hint overrides, by server tool name.
     pub hints: BTreeMap<String, Hints>,
+    /// Whether failing to start ends the session.
+    pub required: bool,
 }
 
 /// What [`start`] started: the tools for the loop, their infos, the
-/// failures for the log, and the running servers for the session's end.
+/// failures for the log, and the servers for the session's end.
 pub struct Started {
     /// `(registered_by, tool)` pairs for the loop, sorted by qualified
     /// name. `registered_by` is the server's name.
@@ -55,22 +62,30 @@ pub struct Started {
     /// One per server that failed to start or missed its deadline, in spec
     /// order.
     pub failed: Vec<McpServerFailed>,
-    /// The running servers, stopped when the session ends.
+    /// The servers, started or waiting for their first call, stopped when
+    /// the session ends.
     pub servers: Servers,
+    /// The first `required` server that failed to start or missed its
+    /// deadline, in spec order. When set, the caller stops `servers` and
+    /// fails the session; `tools` and `infos` are meaningless, and no
+    /// `mcp_server_failed` is written: the session log does not exist yet.
+    pub required_failed: Option<McpServerFailed>,
 }
 
-/// The running servers.
+/// The servers: running ones and ones declared from the cache that start on
+/// their first call.
 pub struct Servers {
-    servers: Vec<Arc<Server>>,
+    slots: Vec<Arc<Slot>>,
 }
 
 impl Servers {
     /// Stops every server at once, each on its own thread: stdin closed,
-    /// SIGTERM, the grace, then kill and reap.
+    /// SIGTERM, the grace, then kill and reap. Never spawns: a slot locked
+    /// by an in-flight start is stopped after that start returns.
     pub fn stop(&self) {
         thread::scope(|scope| {
-            for server in &self.servers {
-                scope.spawn(|| server.stop());
+            for slot in &self.slots {
+                scope.spawn(|| slot.stop());
             }
         });
     }
@@ -82,23 +97,45 @@ pub const DEFAULT_STARTUP_TIMEOUT: Duration = Duration::from_millis(5000);
 /// The default call timeout: 10 minutes (`docs/mcp.md`, "Calls").
 pub const DEFAULT_CALL_TIMEOUT: Duration = Duration::from_millis(600_000);
 
-/// Starts every spec in parallel in `workspace` and declares the tools of
-/// the servers that answered. `version` is Fiber's own version, sent as
-/// `clientInfo`.
+/// Starts the session-start specs in parallel in `workspace` and declares
+/// the tools of the servers that answered, declaring the rest from their
+/// cached lists in `cache` (`<home>/cache/mcp`) without spawning them.
+/// `version` is Fiber's own version, sent as `clientInfo`.
 pub fn start(
     specs: Vec<ServerSpec>,
     workspace: &Path,
+    cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
 ) -> Started {
-    let (done, results) = mpsc::channel();
+    let mut lazy = Vec::new();
+    let mut session = Vec::new();
     for (index, spec) in specs.into_iter().enumerate() {
+        // A `required` server with a cached list still starts with the
+        // session and is declared from its live list.
+        let hit = if spec.required {
+            None
+        } else {
+            cache::read(
+                cache,
+                &spec.name,
+                &cache::key(&spec.command, &spec.args, &spec.env),
+            )
+        };
+        match hit {
+            Some(cached) => lazy.push((index, spec, cached)),
+            None => session.push((index, spec)),
+        }
+    }
+    let (done, results) = mpsc::channel();
+    for (index, spec) in session.into_iter() {
         let done = done.clone();
         let workspace = workspace.to_path_buf();
+        let cache = cache.to_path_buf();
         let clock = Arc::clone(clock);
         let version = version.to_owned();
         thread::spawn(move || {
-            done.send((index, open(spec, &workspace, &clock, &version)))
+            done.send((index, open(spec, &workspace, &cache, &clock, &version)))
                 .unwrap_or(());
         });
     }
@@ -107,11 +144,12 @@ pub fn start(
     opened.sort_by_key(|(index, _)| *index);
     let mut tools: Vec<(String, Arc<dyn Tool>, ToolInfo)> = Vec::new();
     let mut failed = Vec::new();
-    let mut servers = Vec::new();
+    let mut required_failed = None;
+    let mut slots = Vec::new();
     for (_, opened) in opened {
         match opened {
-            Opened::Up(server, declared) => {
-                servers.push(Arc::clone(&server));
+            Opened::Up(slot, declared) => {
+                slots.push(Arc::clone(&slot));
                 tools.extend(declared.into_iter().map(|tool| {
                     let info = info(&tool);
                     let registered_by = tool.registered_by.clone();
@@ -120,7 +158,32 @@ pub fn start(
                 }));
             }
             Opened::Down(failure) => failed.push(failure),
+            Opened::RequiredDown(failure) => {
+                if required_failed.is_none() {
+                    required_failed = Some(failure);
+                }
+            }
         }
+    }
+    // Lazy servers declare from the cache with no spawn: a session that
+    // never calls one never spawns it.
+    for (_, spec, cached) in lazy {
+        let slot = Slot::lazy(
+            spec.clone(),
+            workspace,
+            cache,
+            clock,
+            version,
+            cached.clone(),
+        );
+        let link: Weak<Slot> = Arc::downgrade(&slot);
+        slots.push(slot);
+        tools.extend(declare(&spec, &cached, &link).into_iter().map(|tool| {
+            let info = info(&tool);
+            let registered_by = tool.registered_by.clone();
+            let tool: Arc<dyn Tool> = Arc::new(tool.tool);
+            (registered_by, tool, info)
+        }));
     }
     tools.sort_by(|left, right| left.1.definition().name.cmp(&right.1.definition().name));
     let (pairs, infos): (Vec<_>, Vec<_>) = tools
@@ -131,7 +194,8 @@ pub fn start(
         tools: pairs,
         infos,
         failed,
-        servers: Servers { servers },
+        servers: Servers { slots },
+        required_failed,
     }
 }
 
@@ -141,51 +205,58 @@ pub(crate) struct Declared {
 }
 
 pub(crate) enum Opened {
-    Up(Arc<Server>, Vec<Declared>),
+    Up(Arc<Slot>, Vec<Declared>),
     Down(McpServerFailed),
+    RequiredDown(McpServerFailed),
 }
 
 pub(crate) fn open(
     spec: ServerSpec,
     workspace: &Path,
+    cache: &Path,
     clock: &Arc<dyn Clock>,
     version: &str,
 ) -> Opened {
     let name = spec.name.clone();
+    let required = spec.required;
+    let timeout = spec.startup_timeout;
     let open = match Server::start(
         &spec.command,
         &spec.args,
         &spec.env,
         workspace,
         clock,
-        spec.startup_timeout,
+        timeout,
         version,
     ) {
         Ok(open) => open,
-        Err(error) => return Opened::Down(failed(&name, error)),
-    };
-    let server = Arc::new(open.server);
-    let mut declared = Vec::new();
-    for tool in open.tools {
-        if !kept(&spec, &tool.name) {
-            continue;
+        Err(error) => {
+            return if required {
+                Opened::RequiredDown(required_failed(&name, &error, timeout))
+            } else {
+                Opened::Down(failed(&name, &error, timeout))
+            };
         }
-        let hints = spec.hints.get(&tool.name).unwrap_or(&tool.hints);
-        let link: Weak<Server> = Arc::downgrade(&server);
-        declared.push(Declared {
-            registered_by: name.clone(),
-            tool: McpTool::declare(
-                &name,
-                &tool.name,
-                tool.description,
-                tool.schema,
-                hints,
-                spec.call_timeout,
-                link,
-            ),
-        });
-    }
-    Opened::Up(server, declared)
+    };
+    let tools: Vec<ListedTool> = open.tools;
+    cache::write(
+        cache,
+        &name,
+        &cache::key(&spec.command, &spec.args, &spec.env),
+        &tools,
+    );
+    let slot = Slot::running(
+        spec.clone(),
+        workspace,
+        cache,
+        clock,
+        version,
+        open.server,
+        tools.clone(),
+    );
+    let link: Weak<Slot> = Arc::downgrade(&slot);
+    let declared = declare(&spec, &tools, &link);
+    Opened::Up(slot, declared)
 }
 
 /// `enabled` names only these, `disabled` removes those, both is enabled
@@ -214,17 +285,38 @@ pub(crate) fn info(declared: &Declared) -> ToolInfo {
     }
 }
 
-pub(crate) fn failed(server: &str, error: StartError) -> McpServerFailed {
-    let (reason, message) = match error {
-        StartError::StartFailed(detail) => (
-            ServerFailure::StartFailed,
-            format!("The MCP server `{server}` failed to start: {detail}"),
-        ),
-        StartError::Deadline => (
-            ServerFailure::Deadline,
-            format!("The MCP server `{server}` did not answer before its startup deadline."),
-        ),
-    };
+/// Declares `tools` (a live list or a cached one) through the tool seam:
+/// `enabled`/`disabled` filtering and the person's hint overrides apply to
+/// either, so changing those keys needs no cache miss.
+pub(crate) fn declare(spec: &ServerSpec, tools: &[ListedTool], link: &Weak<Slot>) -> Vec<Declared> {
+    let mut declared = Vec::new();
+    for tool in tools {
+        if !kept(spec, &tool.name) {
+            continue;
+        }
+        let hints = spec.hints.get(&tool.name).unwrap_or(&tool.hints);
+        declared.push(Declared {
+            registered_by: spec.name.clone(),
+            tool: McpTool::declare(
+                &spec.name,
+                &tool.name,
+                tool.description.clone(),
+                tool.schema.clone(),
+                hints,
+                spec.call_timeout,
+                link.clone(),
+            ),
+        });
+    }
+    declared
+}
+
+pub(crate) fn failed(
+    server: &str,
+    error: &crate::server::StartError,
+    startup: Duration,
+) -> McpServerFailed {
+    let (reason, message) = fail_parts(server, error, startup, false);
     McpServerFailed {
         server: server.to_owned(),
         reason,
@@ -235,6 +327,56 @@ pub(crate) fn failed(server: &str, error: StartError) -> McpServerFailed {
             retry_after: None,
             provider: None,
         },
+    }
+}
+
+/// The failure of a `required` server: the session stops before the log, so
+/// this is never written as `mcp_server_failed` but returned for the
+/// exit-before-session path instead.
+pub(crate) fn required_failed(
+    server: &str,
+    error: &crate::server::StartError,
+    startup: Duration,
+) -> McpServerFailed {
+    let (reason, message) = fail_parts(server, error, startup, true);
+    McpServerFailed {
+        server: server.to_owned(),
+        reason,
+        will_restart: false,
+        error: Failure {
+            code: ErrorCode::McpServerUnavailable,
+            message,
+            retry_after: None,
+            provider: None,
+        },
+    }
+}
+
+fn fail_parts(
+    server: &str,
+    error: &crate::server::StartError,
+    startup: Duration,
+    required: bool,
+) -> (ServerFailure, String) {
+    let subject = if required {
+        format!("The required MCP server `{server}`")
+    } else {
+        format!("The MCP server `{server}`")
+    };
+    match error {
+        crate::server::StartError::StartFailed(detail) => (
+            ServerFailure::StartFailed,
+            format!(
+                "{subject} failed to start: {detail} Check its `command` and `args` under `mcp.servers` in your configuration.",
+            ),
+        ),
+        crate::server::StartError::Deadline => (
+            ServerFailure::Deadline,
+            format!(
+                "{subject} did not answer before its startup deadline of {} ms. Raise `startup_timeout_ms` under `mcp.servers.{server}` if it needs longer.",
+                startup.as_millis(),
+            ),
+        ),
     }
 }
 

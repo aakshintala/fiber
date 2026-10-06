@@ -88,6 +88,7 @@ pub(crate) fn new_session(
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
+        &home,
         &workspace,
         &dir.join("artifacts"),
         &clock,

@@ -68,6 +68,7 @@ impl Setup {
             enabled: None,
             disabled: Vec::new(),
             hints: BTreeMap::new(),
+            required: false,
         }
     }
 
@@ -94,7 +95,8 @@ fn start_within(
     // hang the test instead of failing it.
     let (done, result) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let started = start(specs, &workspace, &clock, "0.0.0");
+        let cache = workspace.join("cache");
+        let started = start(specs, &workspace, &cache, &clock, "0.0.0");
         done.send(started).expect("collected");
     });
     result
@@ -266,11 +268,12 @@ fn a_server_that_misses_its_deadline_is_left_out() {
         .checked_add(DEFAULT_STARTUP_TIMEOUT)
         .expect("deadline");
     let workspace = setup.workspace();
+    let cache = workspace.join("cache");
     let clock = setup.clock();
     let (done, result) = std::sync::mpsc::channel();
     std::thread::scope(|scope| {
         scope.spawn(|| {
-            done.send(start(vec![spec], &workspace, &clock, "0.0.0"))
+            done.send(start(vec![spec], &workspace, &cache, &clock, "0.0.0"))
                 .expect("collected");
         });
         assert!(
@@ -354,10 +357,11 @@ fn servers_stop_at_once() {
         .collect();
     let clock = setups[0].clock();
     let workspace = setups[0].workspace();
+    let cache = workspace.join("cache");
     let (opened, started) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         opened
-            .send(start(specs, &workspace, &clock, "0.0.0"))
+            .send(start(specs, &workspace, &cache, &clock, "0.0.0"))
             .expect("collected");
     });
     let started = started
@@ -377,4 +381,198 @@ fn servers_stop_at_once() {
     );
     setups[0].fake.advance(Duration::from_millis(800));
     stopped.recv_timeout(WITHIN).expect("the stop returned");
+}
+
+#[test]
+fn a_cached_server_declares_without_spawning() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo", "description": "Echoes."}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    assert_eq!(names(&first), ["mcp__fx__echo"]);
+    assert!(first.failed.is_empty());
+    assert!(first.required_failed.is_none());
+    assert!(
+        setup.workspace().join("cache").join("fx.json").exists(),
+        "the first start writes the cache",
+    );
+    first.servers.stop();
+    std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
+    // The second start shares the workspace, so it shares the cache: it
+    // declares the same tools and infos and spawns nothing.
+    let second = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    assert_eq!(names(&second), names(&first));
+    assert_eq!(second.infos, first.infos);
+    assert!(second.failed.is_empty());
+    assert!(second.required_failed.is_none());
+    assert!(
+        !setup.dir.path().join("pid.txt").exists(),
+        "a cached server spawns nothing before its first call",
+    );
+    second.servers.stop();
+}
+
+#[test]
+fn a_changed_arg_misses_the_cache_and_spawns() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    assert_eq!(names(&first), ["mcp__fx__echo"]);
+    first.servers.stop();
+    std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
+    let mut changed = setup.spec("fx");
+    changed.args.push("changed".to_owned());
+    let second = start_within(vec![changed], setup.workspace(), setup.clock());
+    assert_eq!(names(&second), ["mcp__fx__echo"]);
+    assert!(
+        setup.dir.path().join("pid.txt").exists(),
+        "a changed declaration misses the cache and spawns",
+    );
+    second.servers.stop();
+}
+
+#[test]
+fn a_required_server_with_a_cache_starts_and_declares_live() {
+    let setup = Setup::new();
+    setup.tools(&json!([{"name": "echo"}]));
+    setup.result("echo", r#"{"content":[]}"#);
+    let first = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
+    assert_eq!(names(&first), ["mcp__fx__echo"]);
+    first.servers.stop();
+    std::fs::remove_file(setup.dir.path().join("pid.txt")).expect("pid.txt");
+    // The live list changed since the cache was written: a required
+    // server declares what the server lists now, not the cached list.
+    setup.tools(&json!([{"name": "other"}]));
+    setup.result("other", r#"{"content":[]}"#);
+    let mut required = setup.spec("fx");
+    required.required = true;
+    let second = start_within(vec![required], setup.workspace(), setup.clock());
+    assert_eq!(names(&second), ["mcp__fx__other"]);
+    assert!(
+        setup.dir.path().join("pid.txt").exists(),
+        "a required server starts with the session even with a cache",
+    );
+    second.servers.stop();
+}
+
+#[test]
+fn a_required_server_that_fails_to_start_yields_required_failed() {
+    let setup = Setup::new();
+    let mut failing = setup.spec("bad");
+    failing.command = "/no/such/command".to_owned();
+    failing.args = Vec::new();
+    failing.required = true;
+    let started = start_within(vec![failing], setup.workspace(), setup.clock());
+    assert!(started.tools.is_empty());
+    assert!(started.failed.is_empty());
+    let failure = started.required_failed.expect("required_failed");
+    assert_eq!(failure.server, "bad");
+    assert_eq!(failure.reason, ServerFailure::StartFailed);
+    assert!(!failure.will_restart);
+    assert_eq!(failure.error.code, ErrorCode::McpServerUnavailable);
+    assert!(
+        failure
+            .error
+            .message
+            .starts_with("The required MCP server `bad` failed to start: "),
+        "message: {}",
+        failure.error.message,
+    );
+    assert!(
+        failure
+            .error
+            .message
+            .contains("Check its `command` and `args` under `mcp.servers` in your configuration.",),
+        "message: {}",
+        failure.error.message,
+    );
+    started.servers.stop();
+}
+
+#[test]
+fn a_required_server_that_misses_its_deadline_yields_required_failed() {
+    let setup = Setup::new();
+    let mut spec = setup.spec("slow");
+    spec.command = "/bin/sleep".to_owned();
+    spec.args = vec!["30".to_owned()];
+    spec.required = true;
+    let deadline = setup
+        .fake
+        .now()
+        .checked_add(DEFAULT_STARTUP_TIMEOUT)
+        .expect("deadline");
+    let workspace = setup.workspace();
+    let cache = workspace.join("cache");
+    let clock = setup.clock();
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::scope(|scope| {
+        scope.spawn(|| {
+            done.send(start(vec![spec], &workspace, &cache, &clock, "0.0.0"))
+                .expect("collected");
+        });
+        assert!(
+            setup.fake.await_parked(deadline, WITHIN),
+            "the start waits on the startup deadline",
+        );
+        setup.fake.advance(DEFAULT_STARTUP_TIMEOUT);
+        let started = result.recv_timeout(WITHIN).expect("the start ends");
+        assert!(started.tools.is_empty());
+        assert!(started.failed.is_empty());
+        let failure = started.required_failed.expect("required_failed");
+        assert_eq!(failure.server, "slow");
+        assert_eq!(failure.reason, ServerFailure::Deadline);
+        assert_eq!(
+            failure.error.message,
+            "The required MCP server `slow` did not answer before its startup deadline of 5000 ms. \
+             Raise `startup_timeout_ms` under `mcp.servers.slow` if it needs longer.",
+        );
+        started.servers.stop();
+    });
+}
+
+#[test]
+fn a_session_start_failure_carries_what_to_do() {
+    let setup = Setup::new();
+    let mut failing = setup.spec("bad");
+    failing.command = "/no/such/command".to_owned();
+    failing.args = Vec::new();
+    let started = start_within(vec![failing], setup.workspace(), setup.clock());
+    assert_eq!(started.failed.len(), 1);
+    let failure = &started.failed[0];
+    assert!(
+        failure
+            .error
+            .message
+            .starts_with("The MCP server `bad` failed to start: "),
+        "message: {}",
+        failure.error.message,
+    );
+    assert!(
+        failure
+            .error
+            .message
+            .contains("Check its `command` and `args` under `mcp.servers` in your configuration.",),
+        "message: {}",
+        failure.error.message,
+    );
+    started.servers.stop();
+}
+
+#[test]
+fn the_first_failing_required_server_in_spec_order_wins() {
+    let setup = Setup::new();
+    let mut first = setup.spec("first");
+    first.command = "/no/such/command".to_owned();
+    first.args = Vec::new();
+    first.required = true;
+    let mut second = setup.spec("second");
+    second.command = "/no/such/command".to_owned();
+    second.args = Vec::new();
+    second.required = true;
+    let started = start_within(vec![first, second], setup.workspace(), setup.clock());
+    assert!(started.failed.is_empty());
+    let failure = started.required_failed.expect("required_failed");
+    assert_eq!(failure.server, "first");
+    started.servers.stop();
 }

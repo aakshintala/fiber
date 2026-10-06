@@ -19,8 +19,8 @@ use contract::clock::Wake;
 use contract::commands::{Remember, RememberScope, ReplyAnswer};
 use contract::emit::Emit;
 use contract::events::{
-    DecidedBy, Decision, Grant, JobCompleted, JobStarted, Outcome, RuleOffer, TextDelta,
-    ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
+    DecidedBy, Decision, Grant, JobCompleted, JobStarted, McpServerFailed, Outcome, RuleOffer,
+    ServerFailure, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, ToolReplaced, TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{Delta, Input, ModelRequest, Provider, ReplyAction, ToolDefinition};
@@ -1143,4 +1143,106 @@ fn a_cancelled_call_still_writes_its_job_lines() {
         ]
     );
     assert_job_triplet(&ran.lines, id, "cancelled");
+}
+
+/// A call whose server failed to start on this call: failed, carrying the
+/// `mcp_server_failed` the loop writes.
+struct Broken {
+    name: &'static str,
+    failed: McpServerFailed,
+}
+
+impl Tool for Broken {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.to_owned(),
+            description: "Starts a server that never answers.".to_owned(),
+            input_schema: json!({"type": "object", "additionalProperties": false}),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(reads())
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        Output {
+            content: vec![ContentPart::Text {
+                text: "unavailable\n".into(),
+            }],
+            error: Some(self.failed.error.clone()),
+            server_failed: Some(self.failed.clone()),
+            ..Output::default()
+        }
+    }
+}
+
+#[test]
+fn a_calls_server_failed_is_written_under_its_action_before_its_completion() {
+    let failed = McpServerFailed {
+        server: "fx".into(),
+        reason: ServerFailure::Deadline,
+        will_restart: false,
+        error: Failure {
+            code: ErrorCode::McpServerUnavailable,
+            message: "The MCP server `fx` did not answer before its startup deadline of 5000 ms. Raise `startup_timeout_ms` under `mcp.servers.fx` if it needs longer.".into(),
+            retry_after: None,
+            provider: None,
+        },
+    };
+    let ran = run_turn(
+        vec![Arc::new(Broken {
+            name: "breaker",
+            failed: failed.clone(),
+        })],
+        vec![
+            calls("Checking.", &["breaker"]),
+            fakes::Scripted::text("Done."),
+        ],
+        Arc::new(crate::TurnCancel::default()),
+    );
+    assert_eq!(ran.outcome, Some(TurnOutcome::Completed));
+    assert_eq!(
+        kinds(&ran.lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "tool_call_started",
+            "mcp_server_failed",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let lines = durable(&ran.lines);
+    let index = lines
+        .iter()
+        .position(|line| line.kind == "mcp_server_failed")
+        .unwrap_or_else(|| panic!("no mcp_server_failed"));
+    let pair = &lines[index..index + 2];
+    assert_eq!(pair[0].kind, "mcp_server_failed");
+    assert_eq!(pair[1].kind, "tool_call_completed");
+    let action = pair[0].action_id.clone().unwrap();
+    assert!(action.0.starts_with("a_"), "{}", action.0);
+    assert_eq!(pair[1].action_id.as_ref(), Some(&action));
+    assert_eq!(pair[0].payload["server"], "fx");
+    assert_eq!(pair[0].payload["reason"], "deadline");
+    assert_eq!(pair[0].payload["will_restart"], false);
+    assert_eq!(pair[0].payload["error"]["code"], "mcp_server_unavailable");
+    assert_eq!(pair[1].payload["status"], "failed");
+    assert_eq!(pair[1].payload["error"]["code"], "mcp_server_unavailable");
 }

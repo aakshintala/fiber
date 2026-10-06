@@ -497,7 +497,7 @@ impl Drop for Server {
 impl ListedTool {
     /// Reads one `tools/list` entry. A nameless entry becomes `""`, and a
     /// missing description or schema takes the default the tool declares.
-    fn read(entry: &Value) -> Self {
+    pub(crate) fn read(entry: &Value) -> Self {
         let name = entry
             .get("name")
             .and_then(Value::as_str)

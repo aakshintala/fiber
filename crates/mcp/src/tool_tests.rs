@@ -15,7 +15,9 @@ use serde_json::{Map, Value, json};
 
 use super::McpTool;
 use crate::effects::Hints;
-use crate::server::Server;
+use crate::server::{ListedTool, Server};
+use crate::slot::Slot;
+use crate::start::ServerSpec;
 
 /// How long a test waits for a thread or a child, in real time.
 ///
@@ -30,7 +32,7 @@ fn arguments() -> Map<String, Value> {
     Map::new()
 }
 
-fn declare(server: &str, tool: &str, hints: Hints, link: std::sync::Weak<Server>) -> McpTool {
+fn declare(server: &str, tool: &str, hints: Hints, slot: std::sync::Weak<Slot>) -> McpTool {
     McpTool::declare(
         server,
         tool,
@@ -38,7 +40,7 @@ fn declare(server: &str, tool: &str, hints: Hints, link: std::sync::Weak<Server>
         json!({"type": "object"}),
         &hints,
         Duration::from_secs(30),
-        link,
+        slot,
     )
 }
 
@@ -96,7 +98,7 @@ fn a_dead_link_is_unavailable() {
 struct Live {
     _dir: TempDir,
     fake: Arc<FakeClock>,
-    server: Arc<Server>,
+    slot: Arc<Slot>,
 }
 
 impl Live {
@@ -132,10 +134,36 @@ impl Live {
             .unwrap_or_else(|_| panic!("the server starts within {WITHIN:?}"))
             .expect("the fixture server starts")
             .server;
+        let listed: Vec<ListedTool> = tools
+            .as_array()
+            .map(|entries| entries.iter().map(ListedTool::read).collect())
+            .unwrap_or_default();
+        let clock: Arc<dyn Clock> = fake.clone();
+        let workspace = dir.path().to_path_buf();
+        let slot = Slot::running(
+            ServerSpec {
+                name: "fx".to_owned(),
+                command: String::new(),
+                args: Vec::new(),
+                env: BTreeMap::new(),
+                startup_timeout: Duration::from_secs(5),
+                call_timeout: Duration::from_secs(30),
+                enabled: None,
+                disabled: Vec::new(),
+                hints: BTreeMap::new(),
+                required: false,
+            },
+            &workspace,
+            &workspace.join("cache"),
+            &clock,
+            "0.0.0",
+            server,
+            listed,
+        );
         Self {
             _dir: dir,
             fake,
-            server: Arc::new(server),
+            slot,
         }
     }
 
@@ -147,7 +175,7 @@ impl Live {
             json!({"type": "object"}),
             &hints,
             timeout,
-            Arc::downgrade(&self.server),
+            Arc::downgrade(&self.slot),
         )
     }
 }
@@ -234,8 +262,8 @@ fn an_error_result_is_tool_error_with_the_text() {
 #[test]
 fn a_json_rpc_error_is_tool_error() {
     let live = Live::tools(&json!([{"name": "echo"}]), &[]);
-    // No `call-missing.json`: the fixture answers `-32602`.
-    let tool = live.tool("missing", Hints::default(), Duration::from_secs(30));
+    // No `call-echo.json`: the fixture answers `-32602`.
+    let tool = live.tool("echo", Hints::default(), Duration::from_secs(30));
     let output = tool.run(
         &arguments(),
         &fakes::CancelToken::new(),
