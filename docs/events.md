@@ -876,6 +876,7 @@ Durable.
 |---|---|---|---|
 | `environment` | object | yes | as below |
 | `instruction_files` | array | yes | each file sent, in order: `path` and `content` (strings) |
+| `extension_sections` | array | no | each extension section sent, in order, each entry as below; absent when empty |
 | `skills` | array | yes | the skills listing, each entry as below |
 
 | `environment` key | Type | Required | Meaning |
@@ -895,6 +896,12 @@ Durable.
 | `path` | string | yes | the path of its `SKILL.md` |
 | `source` | string | yes | `repository`, `personal`, `extension` or `builtin`; a closed set (`docs/system-prompt.md`, "Skills") |
 
+| `extension_sections` entry key | Type | Required | Meaning |
+|---|---|---|---|
+| `extension` | string | yes | the section's extension |
+| `files` | array | yes | each section file sent, in order: `path` and `content` (strings) |
+| `budget_bytes` | number | no | the section's byte budget, when the manifest gives one |
+
 #### `instruction_file`
 
 Durable.
@@ -903,6 +910,7 @@ Durable.
 |---|---|---|---|
 | `path` | string | yes | the file's path |
 | `reason` | string | yes | `subdirectory`, `created`, `changed`, `deleted` or `own_edit`; a closed set |
+| `extension` | string | no | the section's extension, when the file is a section file; absent for an instruction file |
 | `content` | string | no | the file's content now; absent when deleted |
 | `sent` | string | yes | what the model was sent: `full`, `diff`, `deleted` or `none`; a closed set |
 
@@ -934,10 +942,11 @@ loaded skills (`docs/handoff.md`, "What the model sees after a handoff").
 | `skills` | array | yes | each skill sent again, in the order it was first loaded: `name`, `path` and `content` (strings), the body read from disk at the handoff |
 
 `opening_message` is written at session start and after each completed
-handoff. `instruction_file` with `own_edit` records the content after the
-session's own call changed the file, and sends nothing. A diff is rendered from
-`content` and the content the model last had, both in the log. The texts are
-rendered from these payloads.
+handoff. Each `extension_sections` entry records one extension's section with
+its extension, files and budget. `instruction_file` with `own_edit` records the
+content after the session's own call changed the file, and sends nothing. A
+diff is rendered from `content` and the content the model last had, both in the
+log. The texts are rendered from these payloads.
 
 ### Handoff
 

@@ -213,6 +213,9 @@ pub struct OpeningMessage {
     pub environment: Environment,
     /// Each instruction file sent, in order.
     pub instruction_files: Vec<InstructionFileSent>,
+    /// Each extension section sent, in order; absent when empty.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub extension_sections: Vec<ExtensionSectionSent>,
     /// The skills listing, one entry per skill the model may load.
     pub skills: Vec<SkillListed>,
 }
@@ -281,6 +284,18 @@ pub struct InstructionFileSent {
     pub content: String,
 }
 
+/// One extension section an opening message sent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExtensionSectionSent {
+    /// The extension's name.
+    pub extension: String,
+    /// Each section file sent, in order.
+    pub files: Vec<InstructionFileSent>,
+    /// The section's byte budget, when the manifest gives one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_bytes: Option<u64>,
+}
+
 /// Why an instruction file line was written.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -318,6 +333,11 @@ pub struct InstructionFile {
     pub path: String,
     /// Why it was written.
     pub reason: InstructionReason,
+    /// The section's extension, when the file is a section file; absent
+    /// for an instruction file.
+    // debt: never set until section files are tracked at turn start; fixed by #784.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extension: Option<String>,
     /// The file's content now; absent when deleted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub content: Option<String>,

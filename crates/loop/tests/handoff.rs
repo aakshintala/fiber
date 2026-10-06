@@ -2397,3 +2397,82 @@ fn a_result_carried_past_a_tool_handoff_keeps_its_artifact_for_an_overflow() {
         LONG
     );
 }
+
+#[test]
+fn a_handoff_rebuilds_the_section_from_its_current_files() {
+    let held = fakes::TempDir::new("fiber-handoff-sections");
+    let file = held.path().join("index.md");
+    std::fs::write(&file, "Section v1.\n").unwrap();
+    let mut session = Session::open_sectioned(
+        vec![
+            called(100),
+            said("Done.", 100),
+            called(TRIGGER - 1),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        Vec::new(),
+        vec![weather()],
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+        vec![("fiber.test/notes".into(), vec![file.clone()], None)],
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    // The first turn stays below the trigger: its opening carries v1.
+    let (outcome, first) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(&first, &[OPENING, STEP, CALL_BODY, STEP, REPLY, ENDED]);
+    let first_openings = of_kind(&first, "opening_message");
+    assert_eq!(first_openings.len(), 1);
+    assert_eq!(
+        first_openings[0].payload["extension_sections"],
+        json!([{
+            "extension": "fiber.test/notes",
+            "files": [{"path": file.display().to_string(), "content": "Section v1.\n"}],
+        }])
+    );
+
+    // The file changes before the handoff.
+    std::fs::write(&file, "Section v2.\n").unwrap();
+
+    let (outcome, second) = run(&mut session, "again");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    assert_kinds(
+        &second,
+        &[
+            &["turn_started"],
+            STEP,
+            CALL_BODY,
+            STEP,
+            HANDED_OFF,
+            REPLY,
+            ENDED,
+        ],
+    );
+    // The handoff's rebuild carries the current content, v2.
+    let rebuilt = of_kind(&second, "opening_message");
+    assert_eq!(rebuilt.len(), 1);
+    assert_eq!(
+        rebuilt[0].payload["extension_sections"],
+        json!([{
+            "extension": "fiber.test/notes",
+            "files": [{"path": file.display().to_string(), "content": "Section v2.\n"}],
+        }])
+    );
+    // The request after the handoff sends the rebuilt section.
+    let requests = session.requests();
+    let next = &requests.last().unwrap().conversation;
+    assert!(is_opening(&next[0]));
+    let text = text_of(&next[0]);
+    assert!(
+        text.contains("# From the fiber.test/notes extension"),
+        "{text}"
+    );
+    assert!(text.contains("Section v2."), "{text}");
+    assert!(!text.contains("Section v1."), "{text}");
+}

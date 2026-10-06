@@ -43,6 +43,7 @@ fn file(
     Event::InstructionFile(InstructionFile {
         path: path.into(),
         reason,
+        extension: None,
         content: content.map(str::to_owned),
         sent,
     })

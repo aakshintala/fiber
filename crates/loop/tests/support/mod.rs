@@ -699,6 +699,18 @@ impl Session {
         tools: Vec<Arc<dyn Tool>>,
         model: Model,
     ) -> Self {
+        Self::open_sectioned(script, during, tools, model, Vec::new())
+    }
+
+    /// As [`Session::open`], with `sections` as the prompt's extension
+    /// sections: each extension's name, its files' paths, and its budget.
+    pub(crate) fn open_sectioned(
+        script: Vec<Scripted>,
+        during: Vec<Delivery>,
+        tools: Vec<Arc<dyn Tool>>,
+        model: Model,
+        sections: Vec<(String, Vec<std::path::PathBuf>, Option<u64>)>,
+    ) -> Self {
         let scripted = Arc::new(ScriptedProvider::new(script));
         Self::assemble(
             Arc::clone(&scripted) as Arc<dyn Provider>,
@@ -707,7 +719,17 @@ impl Session {
             model,
             scripted,
             Arc::new(TurnCancel::default()),
+            sections,
         )
+    }
+
+    /// As [`Session::new`], with `sections` as the prompt's extension
+    /// sections.
+    pub(crate) fn sectioned(
+        script: Vec<Scripted>,
+        sections: Vec<(String, Vec<std::path::PathBuf>, Option<u64>)>,
+    ) -> Self {
+        Self::open_sectioned(script, Vec::new(), Vec::new(), unpriced(), sections)
     }
 
     /// A session whose `fire_at`-th model call (1-based) fires the session's
@@ -723,7 +745,15 @@ impl Session {
             fire_at,
             calls: AtomicUsize::new(0),
         });
-        Self::assemble(hook, Vec::new(), Vec::new(), unpriced(), scripted, cancel)
+        Self::assemble(
+            hook,
+            Vec::new(),
+            Vec::new(),
+            unpriced(),
+            scripted,
+            cancel,
+            Vec::new(),
+        )
     }
 
     /// A session whose `at`-th model call (1-based) is cancelled as it is
@@ -741,7 +771,15 @@ impl Session {
             at,
             calls: AtomicUsize::new(0),
         });
-        Self::assemble(hook, Vec::new(), tools, unpriced(), scripted, cancel)
+        Self::assemble(
+            hook,
+            Vec::new(),
+            tools,
+            unpriced(),
+            scripted,
+            cancel,
+            Vec::new(),
+        )
     }
 
     /// A session whose first model call blocks until cancelled, sending
@@ -758,6 +796,7 @@ impl Session {
             // No scripted call is ever made; `requests` stays empty.
             Arc::new(ScriptedProvider::new(Vec::new())),
             Arc::new(TurnCancel::default()),
+            Vec::new(),
         );
         (session, blocking)
     }
@@ -769,6 +808,7 @@ impl Session {
         model: Model,
         scripted: Arc<ScriptedProvider>,
         cancel: Arc<TurnCancel>,
+        sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
     ) -> Self {
         Self::assemble_with(
             provider,
@@ -778,6 +818,7 @@ impl Session {
             scripted,
             cancel,
             (FakeClock::new(), 0),
+            sections,
         )
     }
 
@@ -801,6 +842,7 @@ impl Session {
             inner,
             Arc::new(TurnCancel::default()),
             (clock, 0),
+            Vec::new(),
         )
     }
 
@@ -816,9 +858,14 @@ impl Session {
             scripted,
             Arc::new(TurnCancel::default()),
             (FakeClock::new(), window),
+            Vec::new(),
         )
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the one assembly takes each session input; tests pass sections through it"
+    )]
     fn assemble_with(
         provider: Arc<dyn Provider>,
         during: Vec<Delivery>,
@@ -827,6 +874,7 @@ impl Session {
         scripted: Arc<ScriptedProvider>,
         cancel: Arc<TurnCancel>,
         (clock, window): (Arc<FakeClock>, u64),
+        sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -859,6 +907,7 @@ impl Session {
                 );
                 prompt.credential = Some("work".into());
                 prompt.context_window = (window != 0).then_some(window);
+                prompt.extension_sections = sections;
                 prompt
             },
             rx,

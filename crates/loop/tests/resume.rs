@@ -1337,6 +1337,7 @@ fn a_resume_over_a_log_with_an_opening_message_writes_none() {
                 session_log: "test-log".into(),
             },
             instruction_files: Vec::new(),
+            extension_sections: Vec::new(),
             skills: Vec::new(),
         }),
         None,
@@ -2849,6 +2850,7 @@ fn opening_of(os: &str) -> Event {
             session_log: "/log/events.jsonl".into(),
         },
         instruction_files: Vec::new(),
+        extension_sections: Vec::new(),
         skills: Vec::new(),
     })
 }
@@ -3597,4 +3599,83 @@ fn a_suspended_batch_leaves_a_hosted_call_out() {
     assert!(conversation.iter().all(
         |i| !matches!(i, Input::ToolCall { action_id, .. } | Input::ToolResult { action_id, .. } if action_id.0 == "a_2")
     ));
+}
+
+#[test]
+fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
+    let held = fakes::TempDir::new("fiber-resume-sections");
+    let file = held.path().join("index.md");
+    std::fs::write(&file, "- [[x]]").unwrap();
+    let mut live = support::Session::sectioned(
+        vec![Scripted::text("Done.")],
+        vec![("fiber.test/notes".into(), vec![file.clone()], Some(5))],
+    );
+    live.inbox.send(support::delivery("hi")).unwrap();
+    live.turn();
+    let live_lines = live.lines();
+    assert_eq!(
+        live_lines
+            .iter()
+            .map(|l| l.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let live_opening = live_lines
+        .iter()
+        .find(|line| line.kind == "opening_message")
+        .unwrap();
+    let Input::User { text: live_text } = &live.requests()[0].conversation[0] else {
+        panic!("not an opening message");
+    };
+    let live_text = live_text.clone();
+    assert!(live_text.contains("# From the fiber.test/notes extension"));
+    // The file is gone before the resume: identical bytes prove the
+    // opening is rendered from the log, never the disk.
+    std::fs::remove_file(&file).unwrap();
+    let message: OpeningMessage =
+        serde_json::from_value(serde_json::Value::Object(live_opening.payload.clone())).unwrap();
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(Event::OpeningMessage(message), None);
+    history.write(user_turn("one"), None);
+    history.freeze();
+
+    let looped = history.resume(Vec::new());
+    history.run(looped, "two");
+    assert_eq!(
+        history.history_kinds(),
+        ["session_started", "opening_message", "turn_started"]
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+
+    let requests = history.provider.requests();
+    assert_eq!(requests.len(), 1);
+    let Input::User { text } = &requests[0].conversation[0] else {
+        panic!("not an opening message");
+    };
+    assert_eq!(text, &live_text);
 }

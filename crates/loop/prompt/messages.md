@@ -130,3 +130,19 @@ Fiber: these background jobs are still running. Each one's end is reported when 
 ## moved-result
 
 Fiber: this result was moved out of your context. Its full text is at {path}.
+
+## extension-section
+
+# From the {extension} extension
+
+{files}
+
+## extension-file
+
+### {path}
+
+{content}
+
+## budget-line
+
+Fiber: these files are {size} bytes, over their budget of {budget} bytes. Prune them.

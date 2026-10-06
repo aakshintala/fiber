@@ -130,6 +130,7 @@ fn apply_instruction_sets_and_clears_one_path() {
     let set = Event::InstructionFile(contract::events::InstructionFile {
         path: "/w/AGENTS.md".into(),
         reason: InstructionReason::Changed,
+        extension: None,
         content: Some("new".into()),
         sent: InstructionSent::Diff,
     });
@@ -138,6 +139,7 @@ fn apply_instruction_sets_and_clears_one_path() {
     let clear = Event::InstructionFile(contract::events::InstructionFile {
         path: "/w/AGENTS.md".into(),
         reason: InstructionReason::Deleted,
+        extension: None,
         content: None,
         sent: InstructionSent::Deleted,
     });
@@ -764,12 +766,14 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
     let changed = Event::InstructionFile(contract::events::InstructionFile {
         path: canon(&kept).display().to_string(),
         reason: InstructionReason::Changed,
+        extension: None,
         content: Some("Kept v2.\n".into()),
         sent: InstructionSent::Diff,
     });
     let deleted = Event::InstructionFile(contract::events::InstructionFile {
         path: canon(&gone).display().to_string(),
         reason: InstructionReason::Deleted,
+        extension: None,
         content: None,
         sent: InstructionSent::Deleted,
     });

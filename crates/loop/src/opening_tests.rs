@@ -881,3 +881,311 @@ fn notices_come_in_the_documented_order() {
         ]
     );
 }
+
+fn section_inputs(
+    home: &Path,
+    clock: &Arc<FakeClock>,
+    sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
+) -> PromptInputs {
+    let mut with = inputs(home, clock);
+    with.extension_sections = sections;
+    with
+}
+
+#[test]
+fn sections_keep_the_given_send_order() {
+    let (home, _held) = dir();
+    write(&home.join("AGENTS.md"), "Global rules.\n");
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let machine_z = home.join("data/zeta/index.md");
+    let project_z = home.join("projects/p/data/zeta/notes.md");
+    let machine_a = home.join("data/alpha/index.md");
+    let project_a = home.join("projects/p/data/alpha/notes.md");
+    write(&machine_z, "Z machine.\n");
+    write(&project_z, "Z project.\n");
+    write(&machine_a, "A machine.\n");
+    write(&project_a, "A project.\n");
+    let fake = clock();
+    // Given out of name order, the build keeps send order: the loader
+    // already returns name order.
+    let with = section_inputs(
+        &home,
+        &fake,
+        vec![
+            (
+                "zeta".into(),
+                vec![machine_z.clone(), project_z.clone()],
+                Some(1_000),
+            ),
+            (
+                "alpha".into(),
+                vec![machine_a.clone(), project_a.clone()],
+                None,
+            ),
+        ],
+    );
+    let message = collect(&with, &workspace).message;
+    assert_eq!(message.instruction_files.len(), 1);
+    let names: Vec<&str> = message
+        .extension_sections
+        .iter()
+        .map(|section| section.extension.as_str())
+        .collect();
+    assert_eq!(names, ["zeta", "alpha"]);
+    // Each extension's files stay in the given order.
+    let zeta = &message.extension_sections[0];
+    let paths: Vec<&str> = zeta.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(
+        paths,
+        [
+            machine_z.display().to_string(),
+            project_z.display().to_string(),
+        ]
+    );
+    assert_eq!(zeta.files[0].content, "Z machine.\n");
+    assert_eq!(zeta.files[1].content, "Z project.\n");
+    assert_eq!(zeta.budget_bytes, Some(1_000));
+    assert_eq!(message.extension_sections[1].budget_bytes, None);
+}
+
+#[test]
+fn a_missing_section_file_sends_nothing_and_an_empty_section_has_no_entry() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let present = home.join("data/notes/present.md");
+    write(&present, "Here.\n");
+    let fake = clock();
+    let with = section_inputs(
+        &home,
+        &fake,
+        vec![
+            (
+                "fiber.test/gone".into(),
+                vec![home.join("data/notes/absent.md")],
+                None,
+            ),
+            (
+                "fiber.test/notes".into(),
+                vec![home.join("data/notes/absent.md"), present.clone()],
+                None,
+            ),
+        ],
+    );
+    let collected = collect(&with, &workspace);
+    assert!(collected.notices.is_empty());
+    assert_eq!(collected.message.extension_sections.len(), 1);
+    let section = &collected.message.extension_sections[0];
+    assert_eq!(section.extension, "fiber.test/notes");
+    assert_eq!(section.files.len(), 1);
+    assert_eq!(section.files[0].path, present.display().to_string());
+    assert_eq!(section.files[0].content, "Here.\n");
+}
+
+#[test]
+fn an_unreadable_section_file_is_an_io_failed_notice_naming_the_extension() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // A directory where the file should be cannot be read as one.
+    let blocked = home.join("data/notes/blocked.md");
+    std::fs::create_dir_all(&blocked).unwrap();
+    let fake = clock();
+    let with = section_inputs(
+        &home,
+        &fake,
+        vec![("fiber.test/notes".into(), vec![blocked.clone()], None)],
+    );
+    let collected = collect(&with, &workspace);
+    assert!(collected.message.extension_sections.is_empty());
+    assert_eq!(collected.notices.len(), 1);
+    assert_eq!(collected.notices[0].code, contract::ErrorCode::IoFailed);
+    assert_eq!(
+        collected.notices[0].extension.as_deref(),
+        Some("fiber.test/notes")
+    );
+    assert!(
+        collected.notices[0]
+            .message
+            .contains(&blocked.display().to_string()),
+        "{}",
+        collected.notices[0].message
+    );
+}
+
+#[test]
+fn size_notice_names_a_large_section_file() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let big = home.join("data/notes/big.md");
+    write(&big, &"a".repeat(500));
+    let fake = clock();
+    let mut with = section_inputs(
+        &home,
+        &fake,
+        vec![("fiber.test/notes".into(), vec![big.clone()], None)],
+    );
+    with.context_window = Some(1_000);
+    let collected = collect(&with, &workspace);
+    assert_eq!(collected.notices.len(), 1);
+    assert_eq!(
+        collected.notices[0].code,
+        contract::ErrorCode::InstructionsLarge
+    );
+    assert!(
+        collected.notices[0]
+            .message
+            .contains(&big.display().to_string()),
+        "{}",
+        collected.notices[0].message
+    );
+}
+
+fn sectioned(
+    home: &Path,
+    workspace: &Path,
+    clock: &Arc<FakeClock>,
+    sections: Vec<contract::events::ExtensionSectionSent>,
+) -> contract::events::OpeningMessage {
+    let mut message = collected(home, workspace, clock).message;
+    message.extension_sections = sections;
+    message
+}
+
+fn section(
+    extension: &str,
+    files: &[(&str, &str)],
+    budget_bytes: Option<u64>,
+) -> contract::events::ExtensionSectionSent {
+    contract::events::ExtensionSectionSent {
+        extension: extension.into(),
+        files: files
+            .iter()
+            .map(|(path, content)| contract::events::InstructionFileSent {
+                path: (*path).into(),
+                content: (*content).into(),
+            })
+            .collect(),
+        budget_bytes,
+    }
+}
+
+#[test]
+fn a_section_renders_its_heading_and_files_after_the_instruction_files() {
+    let (home, _held) = dir();
+    write(&home.join("AGENTS.md"), "Global rules.\n");
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let message = sectioned(
+        &home,
+        &workspace,
+        &fake,
+        vec![section(
+            "fiber.test/notes",
+            &[("/h/data/notes/index.md", "- [[x]]")],
+            None,
+        )],
+    );
+    let text = render(&message);
+    let heading = text.find("# From the fiber.test/notes extension").unwrap();
+    assert!(text.find("Global rules.").unwrap() < heading);
+    assert!(text.contains("### /h/data/notes/index.md"));
+    assert!(text.contains("- [[x]]"));
+    // Under budget there is no line.
+    assert!(!text.contains("Prune"), "{text}");
+}
+
+#[test]
+fn a_section_comes_before_the_skills_listing() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut message = sectioned(
+        &home,
+        &workspace,
+        &fake,
+        vec![section("fiber.test/notes", &[("/h/index.md", "x")], None)],
+    );
+    message.skills = vec![contract::events::SkillListed {
+        name: "review".into(),
+        description: "Reviews code.".into(),
+        path: "/skills/review/SKILL.md".into(),
+        source: contract::events::SkillSource::Builtin,
+    }];
+    let text = render(&message);
+    assert!(
+        text.find("# From the fiber.test/notes extension").unwrap()
+            < text.find("# Skills").unwrap()
+    );
+}
+
+#[test]
+fn over_budget_ends_the_section_with_the_prune_line() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    // Neither file alone is over the budget of 10: the line needs the sum.
+    let message = sectioned(
+        &home,
+        &workspace,
+        &fake,
+        vec![section(
+            "fiber.test/notes",
+            &[("/h/a.md", "123456"), ("/h/b.md", "123456")],
+            Some(10),
+        )],
+    );
+    let text = render(&message);
+    assert!(
+        text.contains(
+            "Fiber: these files are 12 bytes, over their budget of 10 bytes. Prune them."
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn at_budget_or_without_a_budget_there_is_no_line() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    for (files, budget) in [
+        (&[("/h/a.md", "123456")][..], Some(6)),
+        (&[("/h/a.md", "123456")][..], None),
+        (&[("/h/a.md", "")][..], Some(0)),
+    ] {
+        let message = sectioned(
+            &home,
+            &workspace,
+            &fake,
+            vec![section("fiber.test/notes", files, budget)],
+        );
+        let text = render(&message);
+        assert!(!text.contains("Prune"), "{text}");
+    }
+}
+
+#[test]
+fn a_zero_budget_with_a_non_empty_file_is_over() {
+    let (home, _held) = dir();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let message = sectioned(
+        &home,
+        &workspace,
+        &fake,
+        vec![section("fiber.test/notes", &[("/h/a.md", "x")], Some(0))],
+    );
+    let text = render(&message);
+    assert!(
+        text.contains("Fiber: these files are 1 bytes, over their budget of 0 bytes. Prune them."),
+        "{text}"
+    );
+}

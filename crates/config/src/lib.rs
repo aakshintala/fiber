@@ -31,8 +31,8 @@ pub use cache::{read_model_cache, write_model_cache};
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
-    Binary, Cost, Manifest, ModelData, Process, Protocol, ProviderData, Tier, read_manifest,
-    read_providers,
+    Binary, Cost, Manifest, ModelData, Opening, Process, Protocol, ProviderData, Tier,
+    read_manifest, read_providers,
 };
 pub use home::{ProjectKey, fiber_home, fiber_home_from_env};
 pub use rules::RulesFiles;
