@@ -80,7 +80,30 @@ impl Providers {
                 });
                 continue;
             }
-            for data in config::read_providers(&dir)? {
+            for mut data in config::read_providers(&dir)? {
+                let mut left_out = Vec::new();
+                data.models.retain(|model| {
+                    let keep = model
+                        .web_search
+                        .as_deref()
+                        .is_none_or(|kind| model.protocol.reads_web_search(kind));
+                    if !keep {
+                        left_out.push((model.id.clone(), model.web_search.clone()));
+                    }
+                    keep
+                });
+                for (id, web_search) in left_out {
+                    notices.push(Notice {
+                        code: ErrorCode::ModelInvalid,
+                        message: format!(
+                            "The model `{}/{id}` names `{}` as its `web_search` type, \
+                             which its protocol does not read.",
+                            data.name,
+                            web_search.as_deref().unwrap_or("")
+                        ),
+                        extension: Some(manifest.name.clone()),
+                    });
+                }
                 providers.by_name.insert(data.name.clone(), data);
             }
         }

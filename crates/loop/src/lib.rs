@@ -670,7 +670,7 @@ impl Loop {
             generation_id: reply.generation_id,
             model: self.model.reference.clone(),
             tokens: reply.tokens,
-            web_searches: None,
+            web_searches: reply.web_searches,
             cost,
             subscription: self.model.subscription.then_some(true),
             extension: None,

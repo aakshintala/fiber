@@ -208,6 +208,7 @@ fn live_reviewer() {
                     cache_write: BTreeMap::new(),
                     output: 3,
                 },
+                web_searches: None,
             }),
         },
         Scripted::text("Done."),

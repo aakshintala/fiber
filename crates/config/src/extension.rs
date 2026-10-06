@@ -127,6 +127,11 @@ pub struct ModelData {
     /// Whether a subscription login serves it; absent means false.
     #[serde(default)]
     pub subscription: bool,
+    /// The vendor's hosted-search tool type, exactly as it is sent, such as
+    /// `web_search_20250305`; absent when the model's provider hosts no
+    /// search for it.
+    #[serde(default)]
+    pub web_search: Option<String>,
 }
 
 /// A model's prices, in US dollars per million tokens.
@@ -177,6 +182,14 @@ pub enum Protocol {
     GoogleGenerativeAi,
     /// `bedrock-converse`.
     BedrockConverse,
+}
+
+impl Protocol {
+    /// Whether the protocol reads back this hosted-search tool type: only
+    /// `anthropic-messages` reads `web_search_20250305`.
+    pub fn reads_web_search(self, kind: &str) -> bool {
+        matches!(self, Self::AnthropicMessages) && kind == "web_search_20250305"
+    }
 }
 
 const MIB: u64 = 1 << 20;

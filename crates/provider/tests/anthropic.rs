@@ -1640,3 +1640,55 @@ fn a_text_only_model_gets_no_image_part_and_the_result_says_so() {
         "Image: 2x1 image/png.\n[Image artifacts/i_1.png left out: this model does not take images.]"
     );
 }
+
+#[test]
+fn web_search_requests_in_usage_become_the_reply_count() {
+    // Count on message_delta.
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        text_block(0, "hi")[0].clone(),
+        text_block(0, "hi")[1].clone(),
+        stopped(0),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 9,
+                "server_tool_use": {"web_search_requests": 2}}}),
+        json!({"type": "message_stop"}),
+    ]));
+    assert_eq!(reply.unwrap().web_searches, Some(2));
+
+    // Count only on message_start, untouched by the delta, is kept.
+    let (reply, _) = decoded(&stream(&[
+        json!({"type": "message_start", "message": {"id": "msg_1", "usage": {
+            "input_tokens": 3, "output_tokens": 1,
+            "server_tool_use": {"web_search_requests": 3}}}}),
+        text_block(0, "hi")[0].clone(),
+        text_block(0, "hi")[1].clone(),
+        stopped(0),
+        finished("end_turn")[0].clone(),
+        finished("end_turn")[1].clone(),
+    ]));
+    assert_eq!(reply.unwrap().web_searches, Some(3));
+
+    // Zero and absent give None.
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        text_block(0, "hi")[0].clone(),
+        text_block(0, "hi")[1].clone(),
+        stopped(0),
+        json!({"type": "message_delta", "delta": {"stop_reason": "end_turn"},
+            "usage": {"output_tokens": 9,
+                "server_tool_use": {"web_search_requests": 0}}}),
+        json!({"type": "message_stop"}),
+    ]));
+    assert_eq!(reply.unwrap().web_searches, None);
+
+    let (reply, _) = decoded(&stream(&[
+        started(),
+        text_block(0, "hi")[0].clone(),
+        text_block(0, "hi")[1].clone(),
+        stopped(0),
+        finished("end_turn")[0].clone(),
+        finished("end_turn")[1].clone(),
+    ]));
+    assert_eq!(reply.unwrap().web_searches, None);
+}

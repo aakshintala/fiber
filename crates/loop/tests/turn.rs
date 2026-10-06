@@ -1226,3 +1226,24 @@ fn a_dropped_steer_leaves_the_queue_listing() {
         .collect();
     assert_eq!(applied, ["keep"]);
 }
+
+#[test]
+fn a_reply_reporting_searches_records_their_count() {
+    let mut end = reply("Done.");
+    end.web_searches = Some(3);
+    let mut scripted = Scripted::text("Done.");
+    scripted.end = Ok(end);
+    let mut session = Session::new(vec![scripted], None);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    assert_eq!(usage.payload["web_searches"], 3);
+
+    let mut session = Session::new(vec![Scripted::text("Done.")], None);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
+    assert!(usage.payload.get("web_searches").is_none());
+}

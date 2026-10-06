@@ -1643,3 +1643,46 @@ fn an_unanswered_escalation_past_the_session_limit_ends_the_turn_blocked() {
     assert_eq!(reviewer.requests().len(), 2);
     assert!(tool.ran().is_empty());
 }
+
+#[test]
+fn a_reviewer_reply_reporting_searches_records_their_count() {
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    let mut end = fakes::reply("allow");
+    end.web_searches = Some(3);
+    let mut scripted = Scripted::text("allow");
+    scripted.end = Ok(end);
+    session.reviewer(vec![scripted]);
+    let lines = go(&mut session);
+    let recorded: Vec<&Envelope> = usages(&lines)
+        .into_iter()
+        .filter(|l| l.payload["model"] == REVIEWER_MODEL)
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0].payload["web_searches"], 3);
+
+    let tool = shell(None, None);
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("", &[("shell", paris())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![tool.clone() as Arc<dyn Tool>],
+    );
+    session.reviewer(vec![Scripted::text("allow")]);
+    let lines = go(&mut session);
+    let recorded: Vec<&Envelope> = usages(&lines)
+        .into_iter()
+        .filter(|l| l.payload["model"] == REVIEWER_MODEL)
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert!(recorded[0].payload.get("web_searches").is_none());
+}

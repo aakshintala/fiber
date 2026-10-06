@@ -232,3 +232,52 @@ fn the_installed_providers_are_listed_by_name_and_looked_up() {
     assert!(providers.get("nobody").is_none());
     assert_eq!(Providers::default().names().count(), 0);
 }
+
+#[test]
+fn a_model_whose_web_search_its_protocol_does_not_read_is_left_out() {
+    let setup = Setup::new();
+    let data = serde_json::json!({
+        "name": "acme",
+        "models": [
+            {"id": "good", "protocol": "anthropic-messages",
+             "base_url": "http://127.0.0.1:1/v1", "web_search": "web_search_20250305"},
+            {"id": "plain", "protocol": "anthropic-messages",
+             "base_url": "http://127.0.0.1:1/v1"},
+            {"id": "bad", "protocol": "anthropic-messages",
+             "base_url": "http://127.0.0.1:1/v1", "web_search": "web_search_20260209"},
+            {"id": "wrong", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1", "web_search": "web_search_20250305"},
+        ]
+    });
+    let source = setup.source("acme", &manifest("acme"), std::slice::from_ref(&data));
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/good").is_ok());
+    assert!(providers.resolve("acme/plain").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert!(matches!(
+        providers.resolve("acme/wrong").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(notices.len(), 2);
+    for notice in &notices {
+        assert_eq!(notice.code, ErrorCode::ModelInvalid);
+        assert_eq!(notice.extension.as_deref(), Some("acme"));
+    }
+    let messages: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("acme/bad") && m.contains("web_search_20260209")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("acme/wrong") && m.contains("web_search_20250305")),
+        "{messages:?}"
+    );
+}

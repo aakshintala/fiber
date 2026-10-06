@@ -563,6 +563,7 @@ impl Decoder {
             finish,
             generation_id: GenerationId(self.id),
             tokens: tokens(&self.usage, lifetime),
+            web_searches: None,
         })
     }
 }

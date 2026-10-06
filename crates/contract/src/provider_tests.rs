@@ -18,6 +18,7 @@ fn reply(actions: Vec<ReplyAction>) -> Reply {
             cache_write: BTreeMap::new(),
             output: 0,
         },
+        web_searches: None,
     }
 }
 
