@@ -125,8 +125,12 @@ reason `docs/model-routing.md` refuses project config that declares a
 provider.
 
 **Extensions.** Installed extensions live at `extensions/<name>/`, one
-directory each. The `<name>` is the extension's git-address name, slugged the
-same way as project keys. Installing or updating writes a fresh directory
+directory each. The `<name>` is the extension's short name when it has one
+(`docs/extensions.md`, "Names"), so the memory extension lives at
+`extensions/memory/`. Any other extension's `<name>` is its git address or
+local path, slugged the same way as project keys. The two never collide: a
+slugged git address keeps its host's dot (`github.com-…`), a slugged local
+path starts with `-`, and a short name has neither. Installing or updating writes a fresh directory
 and renames it into place; a running session keeps what it already loaded.
 
 **Docs.** `docs/` holds Fiber's documentation for the installed version:
@@ -140,7 +144,8 @@ path (`docs/system-prompt.md`).
 **Extension data.** Each extension has two data directories: `data/<name>/`
 at the top of Fiber home for what it keeps per machine, and
 `projects/<key>/data/<name>/` for what it keeps per project. `<name>` is
-slugged as for `extensions/`. Fiber hands both paths to the extension and
+the extension's directory name in `extensions/`, so the memory extension's
+store is `data/memory/`. Fiber hands both paths to the extension and
 creates each the first time the extension writes there. A memory system or
 an index lives here. A write of Markdown files here takes the permission
 fast path (`docs/permissions.md`, "Fast paths"). Nothing in them is session state, so a rewind or fork

@@ -27,10 +27,10 @@ The store lives in the extension's two data directories (`docs/state.md`,
 
 | Path in Fiber home | Holds |
 |---|---|
-| `data/github.com-aakshintala-fiber-extensions-memory/<name>.md` | one memory page; the file name is the page's name |
-| `data/github.com-aakshintala-fiber-extensions-memory/index.md` | the machine index |
-| `data/github.com-aakshintala-fiber-extensions-memory/sources/` | raw material that pages cite, such as a clipped web page |
-| `projects/<key>/data/github.com-aakshintala-fiber-extensions-memory/index.md` | the project's index |
+| `data/memory/<name>.md` | one memory page; the file name is the page's name |
+| `data/memory/index.md` | the machine index |
+| `data/memory/sources/` | raw material that pages cite, such as a clipped web page |
+| `projects/<key>/data/memory/index.md` | the project's index |
 
 Every page sits in one flat folder, whichever project wrote it, so a page
 written in one repository can be found from another. Only the indexes are

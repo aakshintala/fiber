@@ -214,7 +214,7 @@ An extension's own settings live in their own file in each layer, never in
 | per project | `projects/<key>/config/<extension>.json` in Fiber home |
 | per run | `-c extensions."<extension>".settings.<key>=value` |
 
-`<extension>` is slugged as for `extensions/` (`docs/state.md`, "What each part
+`<extension>` is named as in `extensions/` (`docs/state.md`, "What each part
 holds"). The layers merge exactly as Fiber's own keys do.
 
 - `host.config.get(key)` returns the merged value.
