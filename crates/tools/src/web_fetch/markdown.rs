@@ -43,19 +43,12 @@ fn convert(html: &str, slice: usize) -> String {
     while start < bytes.len() {
         let mut end = bytes.len().min(start.saturating_add(slice));
         if end < bytes.len() && !html.is_char_boundary(end) {
-            let mut down = end;
-            while !html.is_char_boundary(down) {
-                down = down.saturating_sub(1);
-            }
-            if down == start {
-                let mut up = end;
-                while !html.is_char_boundary(up) {
-                    up = up.saturating_add(1);
-                }
-                end = up;
+            let floor = html.floor_char_boundary(end);
+            end = if floor == start {
+                html.ceil_char_boundary(end)
             } else {
-                end = down;
-            }
+                floor
+            };
         }
         queue.push_back(html.get(start..end).unwrap_or_default().into());
         let _feed = tokenizer.feed(&queue);
@@ -96,15 +89,29 @@ impl TokenSink for Sink<'_> {
     }
 }
 
-/// What a raw-text element does with its text.
+/// The raw-text element whose text is arriving, if any. Each variant
+/// knows its end-tag name, so the element and its handling cannot disagree.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Raw {
-    /// `script` and `style`: dropped.
-    Drop,
+    /// `script`: dropped.
+    Script,
+    /// `style`: dropped.
+    Style,
     /// A `title` that counts: collected for the leading heading.
     Title,
     /// A `title` that does not count: read as raw text and dropped.
     TitleDrop,
+}
+
+impl Raw {
+    /// The end tag that closes the element.
+    fn name(self) -> &'static str {
+        match self {
+            Raw::Script => "script",
+            Raw::Style => "style",
+            Raw::Title | Raw::TitleDrop => "title",
+        }
+    }
 }
 
 /// What a list item is numbered by.
@@ -129,8 +136,6 @@ struct Converter {
     title_done: bool,
     /// The raw-text element whose text is arriving, if any.
     raw: Option<Raw>,
-    /// Which raw-text element `raw` is, to match its end tag.
-    raw_name: &'static str,
     /// Open `svg`, `noscript` and `template` elements, whose content is
     /// dropped.
     hidden: usize,
@@ -162,7 +167,6 @@ impl Default for Converter {
             title_text: String::new(),
             title_done: false,
             raw: None,
-            raw_name: "",
             hidden: 0,
             svg: 0,
             in_head: false,
@@ -183,12 +187,10 @@ impl Converter {
     /// start tag switches the tokenizer to raw text; anything else is
     /// handled and the tokenizer continues as usual.
     fn tag_token(&mut self, tag: &Tag) -> TokenSinkResult<()> {
-        let name = tag.name.to_string();
-        let name = name.as_str();
         match tag.kind {
-            TagKind::StartTag => self.start_tag(name, tag),
+            TagKind::StartTag => self.start_tag(&tag.name, tag),
             TagKind::EndTag => {
-                self.end_tag(name, tag);
+                self.end_tag(&tag.name, tag);
                 TokenSinkResult::Continue
             }
         }
@@ -199,38 +201,32 @@ impl Converter {
         // content is foreign content: tokenized as markup and dropped.
         // Inside `noscript` and `template` the switches apply.
         if self.svg == 0 {
-            if name.eq_ignore_ascii_case("script") {
-                self.raw = Some(Raw::Drop);
-                self.raw_name = "script";
+            if name == "script" {
+                self.raw = Some(Raw::Script);
                 return TokenSinkResult::RawData(RawKind::ScriptData);
             }
-            if name.eq_ignore_ascii_case("style") {
-                self.raw = Some(Raw::Drop);
-                self.raw_name = "style";
+            if name == "style" {
+                self.raw = Some(Raw::Style);
                 return TokenSinkResult::RawData(RawKind::Rawtext);
             }
-            if name.eq_ignore_ascii_case("title") {
+            if name == "title" {
                 if !self.title_done && self.hidden == 0 {
                     self.raw = Some(Raw::Title);
                     self.title_text.clear();
                 } else {
                     self.raw = Some(Raw::TitleDrop);
                 }
-                self.raw_name = "title";
                 return TokenSinkResult::RawData(RawKind::Rcdata);
             }
         }
-        if name.eq_ignore_ascii_case("head") {
+        if name == "head" {
             self.in_head = true;
-        } else if name.eq_ignore_ascii_case("body") {
+        } else if name == "body" {
             self.in_head = false;
-        } else if name.eq_ignore_ascii_case("svg")
-            || name.eq_ignore_ascii_case("noscript")
-            || name.eq_ignore_ascii_case("template")
-        {
+        } else if matches!(name, "svg" | "noscript" | "template") {
             if !tag.self_closing {
                 self.hidden += 1;
-                if name.eq_ignore_ascii_case("svg") {
+                if name == "svg" {
                     self.svg += 1;
                 }
             }
@@ -241,18 +237,15 @@ impl Converter {
     }
 
     fn end_tag(&mut self, name: &str, tag: &Tag) {
-        if self.raw.is_some() && name.eq_ignore_ascii_case(self.raw_name) {
+        if self.raw.is_some_and(|raw| name == raw.name()) {
             self.end_raw();
             return;
         }
-        if name.eq_ignore_ascii_case("head") {
+        if name == "head" {
             self.in_head = false;
-        } else if name.eq_ignore_ascii_case("svg")
-            || name.eq_ignore_ascii_case("noscript")
-            || name.eq_ignore_ascii_case("template")
-        {
+        } else if matches!(name, "svg" | "noscript" | "template") {
             self.hidden = self.hidden.saturating_sub(1);
-            if name.eq_ignore_ascii_case("svg") {
+            if name == "svg" {
                 self.svg = self.svg.saturating_sub(1);
             }
         } else if self.hidden == 0 && !self.in_head {
@@ -274,7 +267,6 @@ impl Converter {
             self.title_done = true;
         }
         self.raw = None;
-        self.raw_name = "";
     }
 
     /// The input ended: a title never closed swallows the rest of the page
@@ -285,21 +277,14 @@ impl Converter {
             self.end_raw();
         } else {
             self.raw = None;
-            self.raw_name = "";
         }
     }
 
     fn visible_tag(&mut self, name: &str, closing: bool, tag: &Tag) {
-        if self.pre > 0 && !(name.eq_ignore_ascii_case("pre") || name.eq_ignore_ascii_case("br")) {
+        if self.pre > 0 && !matches!(name, "pre" | "br") {
             return;
         }
-        if name.eq_ignore_ascii_case("h1")
-            || name.eq_ignore_ascii_case("h2")
-            || name.eq_ignore_ascii_case("h3")
-            || name.eq_ignore_ascii_case("h4")
-            || name.eq_ignore_ascii_case("h5")
-            || name.eq_ignore_ascii_case("h6")
-        {
+        if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
             self.block_break();
             if !closing {
                 let level = name.as_bytes().get(1).map_or(1, |digit| digit - b'0');
@@ -310,20 +295,14 @@ impl Converter {
             }
             return;
         }
-        if name.eq_ignore_ascii_case("p")
-            || name.eq_ignore_ascii_case("div")
-            || name.eq_ignore_ascii_case("section")
-            || name.eq_ignore_ascii_case("article")
-            || name.eq_ignore_ascii_case("main")
-            || name.eq_ignore_ascii_case("header")
-            || name.eq_ignore_ascii_case("footer")
-            || name.eq_ignore_ascii_case("nav")
-            || name.eq_ignore_ascii_case("aside")
-        {
+        if matches!(
+            name,
+            "p" | "div" | "section" | "article" | "main" | "header" | "footer" | "nav" | "aside"
+        ) {
             self.block_break();
             return;
         }
-        match name.to_ascii_lowercase().as_str() {
+        match name {
             "br" => self.soft_break(),
             "hr" => {
                 self.block_break();
@@ -338,7 +317,7 @@ impl Converter {
                     self.quote + 1
                 };
             }
-            "ul" | "ol" => self.list(closing, name.eq_ignore_ascii_case("ol")),
+            "ul" | "ol" => self.list(closing, name == "ol"),
             "li" => {
                 if !closing {
                     self.item();
@@ -372,7 +351,7 @@ impl Converter {
             }
             _ => {}
         }
-        if name.eq_ignore_ascii_case("table") && closing {
+        if name == "table" && closing {
             self.cells = 0;
         }
     }
@@ -623,9 +602,6 @@ impl Converter {
     }
 
     fn finish(mut self) -> String {
-        if self.raw == Some(Raw::Title) {
-            self.end_raw();
-        }
         if self.pre > 0 {
             self.pre = 0;
             self.close_fence();
@@ -653,7 +629,7 @@ impl Converter {
 fn attribute(tag: &Tag, wanted: &str) -> Option<String> {
     tag.attrs.iter().find_map(|attr| {
         let name: &str = &attr.name.local;
-        if name.eq_ignore_ascii_case(wanted) {
+        if name == wanted {
             Some(attr.value.to_string())
         } else {
             None

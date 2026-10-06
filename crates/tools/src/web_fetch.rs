@@ -272,14 +272,14 @@ impl WebFetch {
             head.content_type.as_deref().unwrap_or_default()
         );
         match kind {
-            Kind::Markdown => {
-                let page = charset::decode(head.content_type.as_deref(), bytes);
-                let markdown = markdown::to_markdown(&page);
-                match self.save(bytes, "html") {
-                    Ok(path) => text_output(format!("{first}; raw page at {path}\n\n{markdown}")),
-                    Err(message) => failed(ErrorCode::ToolError, message),
+            Kind::Markdown => match self.save(bytes, "html") {
+                Ok(path) => {
+                    let page = charset::decode(head.content_type.as_deref(), bytes);
+                    let markdown = markdown::to_markdown(&page);
+                    text_output(format!("{first}; raw page at {path}\n\n{markdown}"))
                 }
-            }
+                Err(message) => failed(ErrorCode::ToolError, message),
+            },
             Kind::Text => text_output(format!("{first}\n\n{}", String::from_utf8_lossy(bytes))),
             Kind::Saved(extension) => match self.save(bytes, extension) {
                 Ok(path) => text_output(format!(

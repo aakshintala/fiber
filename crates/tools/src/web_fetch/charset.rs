@@ -20,34 +20,11 @@ const PRESCAN: usize = 1024;
 /// removed. Borrows when UTF-8 is chosen and the bytes after any BOM are
 /// valid UTF-8.
 pub(crate) fn decode<'a>(content_type: Option<&str>, bytes: &'a [u8]) -> Cow<'a, str> {
-    if bytes.starts_with(b"\xef\xbb\xbf") {
-        return decode_utf8(bytes.get(3..).unwrap_or_default());
-    }
-    if bytes.starts_with(b"\xff\xfe") {
-        return encoding_rs::UTF_16LE
-            .decode(bytes.get(2..).unwrap_or_default())
-            .0;
-    }
-    if bytes.starts_with(b"\xfe\xff") {
-        return encoding_rs::UTF_16BE
-            .decode(bytes.get(2..).unwrap_or_default())
-            .0;
-    }
-    if let Some(header) = content_type.and_then(header_encoding) {
-        return header.decode(bytes).0;
-    }
-    if let Some(meta) = meta_encoding(bytes) {
-        return meta.decode(bytes).0;
-    }
-    decode_utf8(bytes)
-}
-
-/// UTF-8, lossy, borrowing when valid.
-fn decode_utf8(bytes: &[u8]) -> Cow<'_, str> {
-    match std::str::from_utf8(bytes) {
-        Ok(text) => Cow::Borrowed(text),
-        Err(_) => Cow::Owned(String::from_utf8_lossy(bytes).into_owned()),
-    }
+    let encoding = content_type
+        .and_then(header_encoding)
+        .or_else(|| meta_encoding(bytes))
+        .unwrap_or(encoding_rs::UTF_8);
+    encoding.decode(bytes).0
 }
 
 /// The `charset` parameter of a `Content-Type` value: split on `;`, the name
@@ -59,7 +36,9 @@ fn header_encoding(content_type: &str) -> Option<&'static Encoding> {
     // The media type itself carries no charset.
     params.next()?;
     for param in params {
-        let (name, value) = param.split_once('=')?;
+        let Some((name, value)) = param.split_once('=') else {
+            continue;
+        };
         if !name.trim().eq_ignore_ascii_case("charset") {
             continue;
         }
@@ -161,24 +140,19 @@ fn content_charset(content: &str) -> Option<String> {
             rest = after;
             continue;
         }
-        let mut value = after.trim_start();
-        value = value.strip_prefix('=').unwrap_or(value).trim_start();
+        let value = after.trim_start();
+        // The `=` is required: `charset shift_jis` names nothing.
+        let Some(value) = value.strip_prefix('=') else {
+            rest = after;
+            continue;
+        };
+        let value = value.trim_start();
         if value.is_empty() {
             return None;
         }
-        let quote = value.chars().next().unwrap_or_default();
-        if quote == '"' || quote == '\'' {
-            value = value.get(1..).unwrap_or_default();
-            let end = value
-                .find(|c: char| c == quote || c == ';' || c.is_ascii_whitespace())
-                .unwrap_or(value.len());
-            let label = value.get(..end).unwrap_or_default().trim();
-            if label.is_empty() {
-                return None;
-            }
-            // Map back to the original case: labels are ASCII.
-            return Some(label.to_owned());
-        }
+        // Strip one optional quote, then one end: `;`, a quote or
+        // whitespace ends the label either way.
+        let value = value.strip_prefix(['"', '\'']).unwrap_or(value);
         let end = value
             .find(|c: char| c == ';' || c == '"' || c == '\'' || c.is_ascii_whitespace())
             .unwrap_or(value.len());
@@ -186,6 +160,7 @@ fn content_charset(content: &str) -> Option<String> {
         if label.is_empty() {
             return None;
         }
+        // Map back to the original case: labels are ASCII.
         return Some(label.to_owned());
     }
 }

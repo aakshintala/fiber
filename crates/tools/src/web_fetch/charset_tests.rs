@@ -167,6 +167,20 @@ fn utf8_borrows_when_valid() {
 }
 
 #[test]
+fn a_header_charset_after_a_bare_parameter_still_decodes() {
+    let text = decode(Some("text/html; foo; charset=shift_jis"), SHIFT_JIS_A);
+    assert_eq!(text.as_ref(), "あ");
+}
+
+#[test]
+fn a_meta_content_without_an_equals_falls_back_to_utf8() {
+    let mut page =
+        b"<meta http-equiv=\"content-type\" content=\"text/html; charset shift_jis\">".to_vec();
+    page.extend_from_slice(SHIFT_JIS_A);
+    assert!(!decode(None, &page).as_ref().contains("あ"));
+}
+
+#[test]
 fn windows_1252_bytes_decode_to_their_text() {
     let mut page = b"<meta charset=\"windows-1252\">".to_vec();
     page.extend_from_slice(b"\x93quoted\x94");
