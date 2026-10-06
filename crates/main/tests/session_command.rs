@@ -528,8 +528,6 @@ const STDOUT_KINDS_ONE_TURN_AND_CLOSE: [&str; 16] = [
     "fiber_exited",
 ];
 
-/// Collects lines until `done`, waiting `DEADLINE` for each: expiry panics
-/// naming `what`, and the socket closing first panics too.
 /// Collects lines up to this connection's own `clients` line. The
 /// session writes it after the subscribe acknowledgement, with no order
 /// against lines the loop writes meanwhile (`docs/events.md`, `clients`).
@@ -537,6 +535,8 @@ fn until_clients(client: &Socket) -> Vec<Value> {
     until(client, "the clients line", |line| line["kind"] == "clients")
 }
 
+/// Collects lines until `done`, waiting `DEADLINE` for each: expiry panics
+/// naming `what`, and the socket closing first panics too.
 fn until(client: &Socket, what: &str, mut done: impl FnMut(&Value) -> bool) -> Vec<Value> {
     let mut lines = Vec::new();
     loop {
