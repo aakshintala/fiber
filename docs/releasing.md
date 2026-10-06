@@ -81,8 +81,10 @@ also carries `install.sh`.
 
 The release also carries `fiber-docs.tar.gz` and its checksum file: the
 repository's `docs/` tree at the release tag, without the documents about
-developing Fiber itself (`docs/agents/` and `docs/workflow.md`). It is the
-same for every target. Nothing in the binary embeds documentation.
+developing Fiber itself (`docs/agents/` and `docs/workflow.md`). The archive
+includes the built-in skills, `docs/skills/<name>/SKILL.md`
+(`docs/system-prompt.md`, "Skills"). It is the same for every target.
+Nothing in the binary embeds documentation.
 
 The release also carries `fiber-extensions.tar.gz` and its checksum file:
 every first-party extension at the release tag, the eleven directories under

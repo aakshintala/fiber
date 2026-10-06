@@ -609,39 +609,75 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
     assert!(String::from_utf8_lossy(&requests[0].body).contains("\"hi\""));
 }
 
-#[test]
-fn the_opening_message_lists_the_built_in_skills() {
-    let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
+/// Copies the repository's `docs/skills/` into Fiber home's `docs/skills/`,
+/// read at run time so the test checks what ships.
+fn install_docs_skills(home: &Path) {
+    let from = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/skills");
+    for entry in fs::read_dir(&from).unwrap() {
+        let entry = entry.unwrap();
+        let dir = home.join("docs/skills").join(entry.file_name());
+        fs::create_dir_all(&dir).unwrap();
+        fs::copy(entry.path().join("SKILL.md"), dir.join("SKILL.md")).unwrap();
+    }
+}
 
-    let run = setup.fiber(&["ask", "hi"], None);
-
-    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
-    assert_eq!(run.kinds(), HELLO_KINDS);
+fn opening_skills(run: &Run) -> Vec<(String, String, String)> {
     let opening = run
         .lines
         .iter()
         .find(|l| l["kind"] == "opening_message")
         .unwrap();
-    let skills = opening["payload"]["skills"].as_array().unwrap();
-    let listed: Vec<(&str, &str, &str)> = skills
+    opening["payload"]["skills"]
+        .as_array()
+        .unwrap()
         .iter()
         .map(|s| {
             (
-                s["name"].as_str().unwrap(),
-                s["path"].as_str().unwrap(),
-                s["source"].as_str().unwrap(),
+                s["name"].as_str().unwrap().to_owned(),
+                s["path"].as_str().unwrap().to_owned(),
+                s["source"].as_str().unwrap().to_owned(),
             )
         })
-        .collect();
+        .collect()
+}
+
+#[test]
+fn the_opening_message_lists_the_built_in_skills_from_home_docs() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), hello()]).unwrap();
+    setup.provider(&server);
+    install_docs_skills(&setup.home());
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    let home = setup.home();
+    // The listing names the canonical directory, past macOS's `/var`
+    // symlink.
+    let docs = home.join("docs/skills").canonicalize().unwrap();
     assert_eq!(
-        listed,
+        opening_skills(&run),
         [
-            ("cache-warming", "builtin:cache-warming", "builtin"),
-            ("using-fiber", "builtin:using-fiber", "builtin"),
+            (
+                "cache-warming".to_owned(),
+                docs.join("cache-warming/SKILL.md").display().to_string(),
+                "builtin".to_owned(),
+            ),
+            (
+                "using-fiber".to_owned(),
+                docs.join("using-fiber/SKILL.md").display().to_string(),
+                "builtin".to_owned(),
+            ),
         ]
     );
+
+    fs::remove_dir_all(home.join("docs")).unwrap();
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert!(opening_skills(&run).is_empty());
 }
 
 #[test]

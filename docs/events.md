@@ -892,7 +892,7 @@ Durable.
 |---|---|---|---|
 | `name` | string | yes | the skill's name |
 | `description` | string | yes | its description |
-| `path` | string | yes | the path of its `SKILL.md`, or `builtin:<name>` for a built-in skill |
+| `path` | string | yes | the path of its `SKILL.md` |
 | `source` | string | yes | `repository`, `personal`, `extension` or `builtin`; a closed set (`docs/system-prompt.md`, "Skills") |
 
 #### `instruction_file`

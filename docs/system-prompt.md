@@ -273,7 +273,7 @@ Fiber finds skills in these places, read once at session start:
 | Repository | `.fiber/skills/` and `.agents/skills/` at the top of the git repository, or in the workspace outside git |
 | Personal | `skills/` in Fiber home, and `~/.agents/skills/` |
 | Extension | each installed extension's `skills/` and `prompts/` directories (`docs/extensions.md`, "What a package holds") |
-| Built-in | skills compiled into the binary, such as the recipe that recommends `cache.warm_cap` from the person's own sessions (`docs/prompt-cache.md`) |
+| Built-in | `docs/skills/` in Fiber home, from the docs archive (`docs/releasing.md`), such as the recipe that recommends `cache.warm_cap` from the person's own sessions (`docs/prompt-cache.md`) |
 
 Each place holds one directory per skill, at a fixed depth. Fiber never walks
 the tree below it, so the cost does not grow with the repository.
@@ -284,9 +284,8 @@ When two skills share a name, the more specific source wins: the repository,
 then personal, then an extension, then built-in. A `notice` with code
 `skill_shadowed` names both paths.
 
-A built-in skill has no file, so its listed path is `builtin:` and its name,
-and wherever the model's text is read for one, the `skill` tool or the
-skills sent again after a handoff, it comes from the binary.
+With `docs/` missing from Fiber home, as for a binary copied without the
+installer, there are no built-in skills.
 
 A person can switch a skill off, for one project or everywhere, from the
 terminal's `/skills` view. The view writes the skill's name to
@@ -408,8 +407,6 @@ compiled into the binary:
 | `crates/loop/prompt/opening.md` | the opening message |
 | `crates/loop/prompt/messages.md` | everything else, one `##` section each: the tools heading, the session section, docs line and unattended line, instruction file headers, the extension section heading and budget line, the diff, deleted and date lines, the added and removed skill lines, the session message framing, the extension heading, the nudge, the handoff note request, the handoff jobs line and the moved-result line |
 | `crates/loop/prompt/reviewer.md` | the reviewer's instructions: a `shared` section, then one `##` section per stage, `first-pass` and `second-pass` (`docs/permissions.md`, "The reviewer") |
-| `crates/loop/skills/using-fiber/SKILL.md` | the built-in skill that points the model at the installed docs ("Skills") |
-| `crates/loop/skills/cache-warming/SKILL.md` | the built-in recipe that recommends `cache.warm_cap` from the person's own sessions (`docs/prompt-cache.md`, "Warming while idle") |
 
 In `messages.md`, a section's text runs from its `## name` line to the next
 line starting `## `, with blank lines at either end removed. Placeholders are

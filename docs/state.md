@@ -23,6 +23,7 @@ Default `~/.fiber` on macOS and Linux; `FIBER_HOME` relocates all of it.
     data/<extension>/             an extension's data for this project
   extensions/<name>/              installed extensions, one directory each
   docs/                           Fiber's docs for the installed version (docs/releasing.md)
+  docs/skills/<name>/             a built-in skill (docs/system-prompt.md)
   pinned/<content-hash>/          approved copies of code a repository ships
   pinned.json                     size, modification time and hash of each declared path
   data/<extension>/               an extension's data for this machine
@@ -130,7 +131,8 @@ and renames it into place; a running session keeps what it already loaded.
 
 **Docs.** `docs/` holds Fiber's documentation for the installed version:
 `docs/user/` for a person using Fiber, and the rest for how Fiber works,
-including the extension API. `install.sh` and `fiber update` write it from
+including the extension API and the built-in skills in `docs/skills/`
+(`docs/system-prompt.md`, "Skills"). `install.sh` and `fiber update` write it from
 the release's docs archive, so it always matches the binary
 (`docs/releasing.md`). Nothing else writes it. The system prompt names this
 path (`docs/system-prompt.md`).

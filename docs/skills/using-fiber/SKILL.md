@@ -5,7 +5,7 @@ description: Answer a question about Fiber itself, such as how to configure it, 
 
 # Using Fiber
 
-Fiber's documentation is installed with the binary, in `docs/` under Fiber home. Fiber home is `~/.fiber` unless the person has moved it (`docs/state.md`). The installed docs match the installed version, so they are the authority on what this Fiber does. Read them with your file tools; do not answer a question about Fiber from memory.
+Fiber's documentation is the `docs/` directory that holds this skill, two levels above its `SKILL.md`. The installed docs match the installed version, so they are the authority on what this Fiber does. Read them with your file tools; do not answer a question about Fiber from memory.
 
 ## Where to look
 
@@ -29,4 +29,3 @@ Fiber's documentation is installed with the binary, in `docs/` under Fiber home.
 1. List `docs/` in Fiber home, open the page that fits, and read the section the question is about.
 2. Quote the doc's rule or name the key, command or code it gives. Say which file it came from.
 3. A doc can describe behaviour the binary does not have yet, because the docs are written before the code. When a doc and what you observe disagree, say so.
-4. When `docs/` is missing from Fiber home, as for a binary copied without the installer, the docs are not installed. Say so, and send the person to the Fiber website, where the same pages are published.

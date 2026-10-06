@@ -570,10 +570,12 @@ fn listed_includes(krate: &str) -> String {
         .map(|(path, _)| {
             let path: &str = path;
             match krate {
-                "loop" => format!(
-                    "include_str!(\"../{rel}\");\n",
-                    rel = path.strip_prefix("crates/loop/").unwrap_or(path)
-                ),
+                "loop" => match path.strip_prefix("crates/loop/") {
+                    Some(rel) => format!("include_str!(\"../{rel}\");\n"),
+                    // A listed file outside the crate, as a `loop` source
+                    // writes it: `docs/skills/` from `crates/loop/src/`.
+                    None => format!("include_str!(\"../../../{path}\");\n"),
+                },
                 _ => format!("include_str!(\"../../../{path}\");\n"),
             }
         })

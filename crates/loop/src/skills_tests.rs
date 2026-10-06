@@ -644,101 +644,111 @@ fn a_skill_the_model_may_not_load_adds_nothing_to_the_size() {
     assert_eq!(large(&found, Some(100)), None);
 }
 
-fn with_builtins(tree: &Tree) -> PromptInputs {
-    let mut inputs = with_extension(tree);
-    inputs.builtin_skills = true;
-    inputs
+fn builtin_dir(tree: &Tree) -> PathBuf {
+    tree.home().join("docs/skills")
 }
 
 #[test]
-fn the_built_ins_are_found_alone_as_builtin_with_their_own_paths() {
+fn a_built_in_skill_is_found_with_its_real_path() {
     let tree = Tree::new();
-    let found = discover(&with_builtins(&tree), &tree.top());
-    assert_eq!(names(&found), ["cache-warming", "using-fiber"]);
+    let path = skill(&builtin_dir(&tree), "a", "built", "d");
+    let found = tree.discover();
+    assert_eq!(names(&found), ["built"]);
+    assert!(found.notices.is_empty(), "{:?}", messages(&found));
+    let skill = &found.skills[0];
+    assert_eq!(skill.listed.source, SkillSource::Builtin);
+    assert_eq!(skill.listed.path, path.display().to_string());
+    assert!(skill.model_invocable);
+    assert_eq!(skill.place, builtin_dir(&tree).display().to_string());
+}
+
+#[test]
+fn without_docs_or_docs_skills_there_are_no_built_ins_and_no_notice() {
+    let tree = Tree::new();
+    let found = tree.discover();
+    assert!(found.skills.is_empty());
     assert!(found.notices.is_empty());
-    for skill in &found.skills {
-        assert_eq!(skill.listed.source, SkillSource::Builtin);
-        assert_eq!(skill.listed.path, format!("builtin:{}", skill.listed.name));
-        assert!(skill.model_invocable);
-        assert_eq!(skill.place, "built-in");
-        assert!(!skill.listed.description.is_empty());
+    std::fs::create_dir_all(tree.home().join("docs")).unwrap();
+    let found = tree.discover();
+    assert!(found.skills.is_empty());
+    assert!(found.notices.is_empty(), "{:?}", messages(&found));
+}
+
+#[test]
+fn a_skill_of_any_other_place_wins_over_a_built_in_of_its_name() {
+    for winner in 0..6 {
+        let tree = Tree::new();
+        let places = six_places(&tree);
+        let won = skill(&places[winner], "a", "same", "mine");
+        let lost = skill(&builtin_dir(&tree), "b", "same", "built-in");
+        let found = discover(&with_extension(&tree), &tree.top());
+        assert_eq!(names(&found), ["same"], "place {winner}");
+        assert_eq!(found.skills[0].listed.description, "mine", "place {winner}");
+        assert_ne!(
+            found.skills[0].listed.source,
+            SkillSource::Builtin,
+            "place {winner}"
+        );
+        assert_eq!(
+            messages(&found),
+            [(
+                ErrorCode::SkillShadowed,
+                format!(
+                    "Skill same at {} is shadowed by {}, which is used.",
+                    lost.display(),
+                    won.display()
+                )
+            )],
+            "place {winner}"
+        );
     }
-}
-
-#[test]
-fn the_built_ins_are_off_unless_the_input_is_set() {
-    let tree = Tree::new();
-    assert!(!tree.inputs().builtin_skills);
-    assert!(tree.discover().skills.is_empty());
-}
-
-#[test]
-fn a_skill_of_any_other_source_wins_over_a_built_in_of_its_name() {
-    for (source, place_index) in [("repository", 0), ("personal", 2), ("extension", 4)] {
-        for name in ["using-fiber", "cache-warming"] {
-            let tree = Tree::new();
-            let won = skill(&six_places(&tree)[place_index], "a", name, "mine");
-            let found = discover(&with_builtins(&tree), &tree.top());
-            let kept = found.skills.iter().find(|s| s.listed.name == name).unwrap();
-            assert_eq!(kept.listed.description, "mine", "{source} {name}");
-            assert_ne!(kept.listed.source, SkillSource::Builtin);
-            assert_eq!(
-                messages(&found),
-                [(
-                    ErrorCode::SkillShadowed,
-                    format!(
-                        "Skill {name} at builtin:{name} is shadowed by {}, which is used.",
-                        won.display()
-                    )
-                )],
-                "{source} {name}"
-            );
-        }
-    }
-}
-
-#[test]
-fn an_extensions_prompt_also_shadows_a_built_in() {
-    let tree = Tree::new();
-    let won = skill(&six_places(&tree)[5], "a", "using-fiber", "mine");
-    let found = discover(&with_builtins(&tree), &tree.top());
-    assert_eq!(
-        messages(&found),
-        [(
-            ErrorCode::SkillShadowed,
-            format!(
-                "Skill using-fiber at builtin:using-fiber is shadowed by {}, which is used.",
-                won.display()
-            )
-        )]
-    );
 }
 
 #[test]
 fn a_switched_off_built_in_is_left_out_and_the_other_stays() {
     let tree = Tree::new();
-    let found = discover(&with_builtins(&tree), &tree.top());
-    assert_eq!(
-        listed_names(&found.skills, &["cache-warming"]),
-        ["using-fiber"]
+    skill(&builtin_dir(&tree), "a", "alpha", "d");
+    skill(&builtin_dir(&tree), "b", "beta", "d");
+    let found = tree.discover();
+    assert_eq!(listed_names(&found.skills, &["alpha"]), ["beta"]);
+    assert_eq!(listed_names(&found.skills, &[]), ["alpha", "beta"]);
+}
+
+#[test]
+fn the_size_notice_names_the_built_in_directory() {
+    let tree = Tree::new();
+    skill(&builtin_dir(&tree), "a", "alpha", "d");
+    skill(&builtin_dir(&tree), "b", "beta", "d");
+    let found = tree.discover();
+    let message = large(&found.skills, Some(10)).unwrap();
+    assert!(
+        message.contains(&format!("Largest: {} (", builtin_dir(&tree).display())),
+        "{message}"
     );
 }
 
-#[test]
-fn the_size_notice_names_the_built_in_place() {
-    let tree = Tree::new();
-    let found = discover(&with_builtins(&tree), &tree.top());
-    let message = large(&found.skills, Some(10)).unwrap();
-    assert!(message.contains("Largest: built-in ("), "{message}");
-}
+/// The shipped texts, checked where they ship (`docs/skills/`): each
+/// parses, its name is its directory's, the model may load it and its
+/// description is non-empty. A change to either text runs `loop` in CI
+/// (`docs/ci.md`, "Selection").
+const SHIPPED: [(&str, &str); 2] = [
+    (
+        "cache-warming",
+        include_str!("../../../docs/skills/cache-warming/SKILL.md"),
+    ),
+    (
+        "using-fiber",
+        include_str!("../../../docs/skills/using-fiber/SKILL.md"),
+    ),
+];
 
 #[test]
-fn both_compiled_texts_parse_with_the_name_of_their_directory() {
-    for (directory, text) in super::BUILTIN {
+fn both_shipped_texts_parse_with_the_name_of_their_directory() {
+    for (directory, text) in SHIPPED {
         let header = crate::skill_header::parse(text).unwrap();
         assert_eq!(&header.name, directory);
         assert!(header.model_invocable);
         assert!(!header.description.is_empty());
     }
-    assert_eq!(super::BUILTIN.len(), 2);
+    assert_eq!(SHIPPED.len(), 2);
 }

@@ -240,7 +240,7 @@ pub enum SkillSource {
     Personal,
     /// An installed extension.
     Extension,
-    /// Compiled into the binary.
+    /// Fiber home's `docs/skills/`, from the docs archive.
     Builtin,
 }
 
