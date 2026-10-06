@@ -92,7 +92,7 @@ impl Setup {
     fn run(&self, search: Option<&str>, json: bool) -> (Result<(), Failure>, String, String) {
         let mut out = Vec::new();
         let mut err = Vec::new();
-        let clock: std::sync::Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
+        let home = self.home();
         let result = run(
             &self.home(),
             &self.workspace(),
@@ -100,8 +100,16 @@ impl Setup {
             json,
             &mut out,
             &mut err,
-            clock,
-            std::sync::Arc::new(NoLock),
+            &|config: &config::Config| {
+                let clock: std::sync::Arc<dyn contract::clock::Clock> =
+                    fakes::clock::FakeClock::new();
+                extensions::SessionExtensions::load(
+                    &home,
+                    config,
+                    clock,
+                    std::sync::Arc::new(NoLock),
+                )
+            },
         );
         (
             result,
@@ -382,7 +390,12 @@ fn models_exits_zero_and_prints_the_row() {
     // code is `models`' own. The parent checks the code and the row: a code
     // alone would not catch a `models` that returns 0 without printing.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(super::models(None, false, fakes::clock::FakeClock::new()));
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+        ));
     }
     let setup = Setup::new();
     setup.install(
@@ -428,7 +441,12 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     // anything is read. It runs in a child so the process's own `FIBER_HOME`
     // cannot change the outcome.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(super::models(None, false, fakes::clock::FakeClock::new()));
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+        ));
     }
     let setup = Setup::new();
     let name = module_path!().split_once("::").unwrap().1;

@@ -114,8 +114,7 @@ fn run(
     json: bool,
     out: &mut dyn Write,
     err: &mut dyn Write,
-    clock: Arc<dyn Clock>,
-    locks: Arc<dyn PathLock>,
+    load: &dyn Fn(&Config) -> SessionExtensions,
 ) -> Result<(), Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
@@ -128,7 +127,7 @@ fn run(
         overrides: Vec::new(),
     })
     .map_err(|e| failed(e.code(), e))?;
-    let extensions = SessionExtensions::load(home, &config, clock, locks);
+    let extensions = load(&config);
     for (extension, provider) in extensions.lua_providers() {
         let _notices = providers.add_lua(extension, provider);
     }
@@ -209,8 +208,9 @@ pub fn models(
                 json,
                 &mut io::stdout(),
                 &mut io::stderr(),
-                clock,
-                locks,
+                &|config: &Config| {
+                    SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
+                },
             )
         });
     match ran {
