@@ -400,7 +400,6 @@ pub(crate) fn render(
         // The opening message is rendered from its logged fields only, so
         // a resume renders the identical bytes; it is the conversation's
         // first message (`docs/system-prompt.md`, "Recording").
-        // debt: the skills listing is always empty; fixed by #511.
         // It sits at index 0 of the context it opens: after a handoff the
         // carried input and the note are already there.
         Event::OpeningMessage(message) => {
