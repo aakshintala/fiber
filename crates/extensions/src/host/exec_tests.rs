@@ -637,3 +637,34 @@ fn group_ids_0_and_1_are_refused() {
 fn signal_name_pins_sigterm() {
     assert_eq!(signal_name(15), "SIGTERM");
 }
+
+#[test]
+fn a_snapshot_with_no_end_takes_the_final_wait_status_and_keeps_its_own() {
+    use std::os::unix::process::ExitStatusExt as _;
+    use std::process::ExitStatus;
+    let snapshot = |exit_code: Option<i32>, signal: Option<&str>| super::Ran {
+        exit_code,
+        signal: signal.map(str::to_owned),
+        stdout: b"out".to_vec(),
+        stderr: Vec::new(),
+        timed_out: false,
+    };
+    // A raw wait status: the exit code in the second byte, a signal in the first.
+    let exited_3 = Some(ExitStatus::from_raw(3 << 8));
+    let killed = Some(ExitStatus::from_raw(9));
+    let filled = super::completed(snapshot(None, None), killed);
+    assert_eq!(filled.signal.as_deref(), Some("SIGKILL"));
+    assert_eq!(filled.exit_code, None);
+    assert_eq!(filled.stdout, b"out");
+    let filled = super::completed(snapshot(None, None), exited_3);
+    assert_eq!((filled.exit_code, filled.signal), (Some(3), None));
+    let kept = super::completed(snapshot(Some(0), None), killed);
+    assert_eq!((kept.exit_code, kept.signal), (Some(0), None));
+    let kept = super::completed(snapshot(None, Some("SIGTERM")), exited_3);
+    assert_eq!(
+        (kept.exit_code, kept.signal.as_deref()),
+        (None, Some("SIGTERM"))
+    );
+    let unknown = super::completed(snapshot(None, None), None);
+    assert_eq!((unknown.exit_code, unknown.signal), (None, None));
+}

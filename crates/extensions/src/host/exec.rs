@@ -368,12 +368,14 @@ fn abort_startup(
         reap_now(&mut child, shared);
     });
     // The drain after a SIGKILL may end before the reap; the child is dead
-    // or dying, and a reaped one answers at once.
-    drop(child.wait());
+    // or dying, and a reaped one answers at once. Its status then completes
+    // the snapshot `supervise` took.
+    let status = child.wait().ok();
     let ran = match ended {
         Ok(ran) => Some(ran),
         Err(capped) => capped.ran,
-    };
+    }
+    .map(|ran| completed(ran, status));
     ExecError {
         message: format!("host.exec: {}: {source}", req.program),
         ran,
@@ -393,15 +395,28 @@ fn reap_now(child: &mut Child, shared: &Shared) {
     inner.status = status;
 }
 
-fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
-    let (exit_code, signal) = match status {
+/// A run snapshot with no end yet takes the end `status` reports.
+fn completed(mut ran: Ran, status: Option<ExitStatus>) -> Ran {
+    if ran.exit_code.is_none() && ran.signal.is_none() {
+        (ran.exit_code, ran.signal) = ended(status);
+    }
+    ran
+}
+
+/// How `status` ended: its exit code, or the name of the signal that ended it.
+fn ended(status: Option<ExitStatus>) -> (Option<i32>, Option<String>) {
+    match status {
         Some(status) => match (status.code(), status.signal()) {
             (Some(code), _) => (Some(code), None),
             (None, Some(number)) => (None, Some(signal_name(number))),
             (None, None) => (None, None),
         },
         None => (None, None),
-    };
+    }
+}
+
+fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
+    let (exit_code, signal) = ended(status);
     let inner = lock(&shared.inner);
     Ran {
         exit_code,
