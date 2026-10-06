@@ -240,7 +240,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `mcp_tool_removed` | tool call | the server has removed the tool |
 | `message_refused` | tool call | the target session's `before_message` refused a session message |
 | `model_ambiguous` | exit | a bare model id matches models of two or more installed providers; prefix the provider |
-| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, or it declares no `context_window`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
+| `model_invalid` | notice | a model's `extra_body` names a field Fiber builds, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_not_found` | model call, turn | the provider does not know the model |
 | `model_unconfigured` | notice | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the setting (`docs/model-routing.md`, "A per-account host") |
 | `name_pinned` | tool call | `name_session` was called while the person's name pins the session |
@@ -294,7 +294,7 @@ Notices, for a failure outside any action:
 | `extension_shadowed` | a repository's approved copy of an extension loads in place of the personal install of the same name; the message names both versions |
 | `hook_failed` | a `non-blocking` hook or a watcher failed |
 | `instructions_large` | the instruction text passes 10% of the context window (`docs/system-prompt.md`, "Size") |
-| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, or it declares no `context_window`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search") |
+| `model_invalid` | a model's `extra_body` names a field Fiber builds, such as `tools`, its `web_search` names a type its protocol does not read, it declares no `context_window`, or its `thinking_default` is not among its `thinking_levels`, so the model is left out of the model list; the message names the model and the field or type (`docs/model-routing.md`, "Extra request body fields", "Hosted web search", "Thinking") |
 | `model_unconfigured` | a model's base URL names a per-account host whose setting has no value, so the model is left out of the model list; the message names the model and the setting (`docs/model-routing.md`, "A per-account host") |
 | `no_model` | nothing chose the reviewer's model; set `reviewer.model` (`docs/permissions.md`, "How it runs") |
 | `repository_code_skipped` | an extension, hook or MCP server the repository declares was skipped, unapproved, with nobody to ask; the message names it and says to run `fiber approve` |
