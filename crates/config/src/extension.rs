@@ -52,6 +52,10 @@ pub struct Manifest {
     /// data directories.
     #[serde(default)]
     pub opening: Option<Opening>,
+    /// The top-level settings keys a repository's file may set
+    /// (`docs/configuration.md`, "Extension settings").
+    #[serde(default)]
+    pub repo_settings: Vec<String>,
 }
 
 /// An extension section's files in the opening message

@@ -199,6 +199,32 @@ impl Config {
         &self.notices
     }
 
+    /// The workspace whose `.fiber/` is the repository layer.
+    pub fn workspace(&self) -> &Path {
+        &self.workspace
+    }
+
+    /// The project, naming `projects/<key>/` in Fiber home.
+    pub fn project(&self) -> &ProjectKey {
+        &self.project
+    }
+
+    /// The merged value of `key` in `extension`'s settings, `None` when no
+    /// layer sets it. `key` is a dotted key in the `path::parse` syntax
+    /// `fiber config get` uses; the repository's file contributes only the
+    /// keys `repo_settings` lists. Notices about ignored repository keys
+    /// are dropped here; the session collects them once at load.
+    pub fn extension_setting(
+        &self,
+        extension: &str,
+        repo_settings: &[&str],
+        key: &str,
+    ) -> Result<Option<Value>, ConfigError> {
+        let key = path::parse(key).ok_or_else(|| ConfigError::Override { arg: key.into() })?;
+        let (merged, _) = self.extension_settings(extension, repo_settings)?;
+        Ok(path::get(&merged, &key).cloned())
+    }
+
     /// Every layer merged, lowest first. With a model, each layer's
     /// `models."<model>"` wins over the same keys at that layer's top level
     /// ("Per model").

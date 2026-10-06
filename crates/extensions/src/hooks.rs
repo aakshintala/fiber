@@ -13,10 +13,12 @@ use config::Config;
 use contract::ErrorCode;
 use contract::clock::Clock;
 use contract::events::{LoadedExtension, Notice};
+use contract::files::PathLock;
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use serde_json::{Map, Value};
 
 use crate::git::short_name;
+use crate::host::Session;
 use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
 use crate::{API, Error};
 
@@ -62,7 +64,16 @@ impl SessionExtensions {
     /// point's hooks by phase, `hooks.order`, then name. A failure leaves a
     /// notice and the session goes on: an extension whose entry script
     /// failed is not loaded, and a hook that did not register is not run.
-    pub fn load(home: &Path, config: &Config, clock: Arc<dyn Clock>) -> Self {
+    /// `locks` is the session's per-path lock, offered to `host.fs`; every
+    /// extension also gets its own clone of `config` and the settings keys
+    /// its manifest lists. The repository's ignored settings keys are
+    /// collected here, once, into [`notices`](Self::notices).
+    pub fn load(
+        home: &Path,
+        config: &Config,
+        clock: Arc<dyn Clock>,
+        locks: Arc<dyn PathLock>,
+    ) -> Self {
         let mut session = Self {
             home: home.to_path_buf(),
             ..Self::default()
@@ -118,7 +129,20 @@ impl SessionExtensions {
                 continue;
             }
             if dir.join(ENTRY).is_file() {
-                let mut extension = LuaExtension::new(&item.name, &dir, home, Arc::clone(&clock));
+                let repo: Vec<&str> = manifest.repo_settings.iter().map(String::as_str).collect();
+                match config.extension_settings(&item.name, &repo) {
+                    Ok((_, mut ignored)) => session.notices.append(&mut ignored),
+                    Err(e) => {
+                        session.failed(&item.name, &Error::Config(e));
+                        continue;
+                    }
+                }
+                let mut extension = LuaExtension::new(&item.name, &dir, home, Arc::clone(&clock))
+                    .with_session(Session {
+                        config: config.clone(),
+                        repo_settings: manifest.repo_settings.clone(),
+                        locks: Arc::clone(&locks),
+                    });
                 if let Some(cap) = manifest
                     .memory_mib
                     .and_then(|mib| usize::try_from(mib).ok())

@@ -2,14 +2,15 @@
 //! calls"): `host.secret`, `host.http`, `host.sha256`, `host.hmac_sha256` and
 //! `json`, and converting between Lua values and JSON.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use config::CredentialLock;
+use config::{Config, CredentialLock};
 use contract::clock::Clock;
+use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
 use ring::{digest, hmac};
@@ -18,6 +19,39 @@ use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::oauth::{self, Browser};
+
+mod fs;
+mod settings;
+
+#[cfg(test)]
+pub(crate) use fs::FakeLock;
+
+/// One Lua extension's session: its own clone of the session's
+/// configuration, the settings keys a repository may set, and the session's
+/// per-path lock (`docs/extensions.md`, "Host calls").
+#[derive(Clone)]
+pub struct Session {
+    /// The extension's own clone: its `set` is visible to its own later
+    /// `get` at once, and to other sessions at their next load.
+    pub config: Config,
+    /// The top-level settings keys the repository's file may set.
+    pub repo_settings: Vec<String>,
+    /// The session's per-path lock, offered to `host.fs`.
+    pub locks: Arc<dyn PathLock>,
+}
+
+/// What `install` builds the host calls from.
+#[derive(Clone)]
+pub(crate) struct HostContext {
+    /// Fiber home, anchoring secrets and data directories.
+    pub home: PathBuf,
+    /// The session's workspace, resolving relative `host.fs` paths.
+    pub workspace: PathBuf,
+    /// The extension's name, slugged for data directories and settings.
+    pub extension: String,
+    /// The session, absent without [`LuaExtension::with_session`].
+    pub session: Option<Session>,
+}
 
 /// `host.http` yields this tag, `"http"` and the request table. The
 /// extension's thread runs the request off to the side and resumes the
@@ -44,11 +78,12 @@ const MAX_DEPTH: usize = 128;
 /// yields, so the scheduler can tell that yield from any other.
 pub(crate) fn install(
     lua: &Lua,
-    home: PathBuf,
+    ctx: HostContext,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
 ) -> mlua::Result<LuaValue> {
     let host = lua.create_table()?;
+    let home = ctx.home.clone();
     host.set(
         "secret",
         lua.create_function(move |_, name: String| {
@@ -57,6 +92,30 @@ pub(crate) fn install(
                 .map_err(mlua::Error::external)
         })?,
     )?;
+    let session = ctx.session.map(|session| {
+        let project = session.config.project().as_str().to_owned();
+        let locks = Arc::clone(&session.locks);
+        let settings = settings::Settings {
+            extension: ctx.extension.clone(),
+            repo_settings: session.repo_settings.clone(),
+            config: Rc::new(RefCell::new(session.config)),
+        };
+        (project, locks, settings)
+    });
+    let (project, locks, settings) = match session {
+        Some((project, locks, settings)) => (Some(project), Some(locks), Some(settings)),
+        None => (None, None, None),
+    };
+    fs::install(
+        lua,
+        &host,
+        ctx.workspace,
+        ctx.home,
+        &ctx.extension,
+        project.as_deref(),
+        locks,
+    )?;
+    settings::install(lua, &host, settings)?;
     let tag = lua.create_table()?;
     lua.load(HTTP)
         .set_name("=host.http")

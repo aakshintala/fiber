@@ -18,7 +18,6 @@ use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::thread;
 use std::time::{Duration, Instant};
 
 use contract::clock::Clock;
@@ -172,6 +171,9 @@ pub struct LuaExtension {
     dir: PathBuf,
     home: PathBuf,
     memory_cap: usize,
+    /// The session, when started from one: its configuration, settings
+    /// keys and per-path lock.
+    session: Option<host::Session>,
     /// What `host.oauth.open` opens URLs with.
     browser: Arc<dyn Browser>,
     /// The state every caller and the extension's thread observe.
@@ -193,9 +195,20 @@ impl LuaExtension {
             dir: dir.into(),
             home: home.into(),
             memory_cap: MEMORY_CAP,
+            session: None,
             browser: Arc::new(SystemBrowser::default()),
             hub: Hub::new(clock),
         }
+    }
+
+    /// Starts this extension in a session: its workspace, configuration,
+    /// settings keys and per-path lock feed `host.fs`, `host.data_dir`
+    /// and `host.config`. Without it, `host.fs` resolves relative paths
+    /// against the process's current directory and takes no lock, and
+    /// `host.data_dir` and `host.config` raise.
+    pub fn with_session(mut self, session: host::Session) -> Self {
+        self.session = Some(session);
+        self
     }
 
     /// Sets this extension's memory cap in bytes.
@@ -350,27 +363,7 @@ impl LuaExtension {
     /// Spawns the thread on the first call. The entry script's clock starts
     /// here.
     fn start(&self, shared: &mut Shared) -> Result<(), Error> {
-        if !matches!(shared.phase, Phase::Idle) {
-            return Ok(());
-        }
-        let load_by = self.hub.clock().now().checked_add(LOAD_TIMEOUT);
-        let (name, dir, home) = (self.name.clone(), self.dir.clone(), self.home.clone());
-        let memory_cap = self.memory_cap;
-        let browser = Arc::clone(&self.browser);
-        let hub = Arc::clone(&self.hub);
-        thread::Builder::new()
-            .name(format!("lua {}", self.name))
-            .spawn(move || {
-                schedule::serve(&name, &dir, &home, &hub, load_by, memory_cap, browser);
-            })
-            .map_err(|source| Error::Io {
-                path: self.dir.clone(),
-                source,
-            })?;
-        shared.phase = Phase::Registering {
-            abandon_at: load_by.and_then(|at| at.checked_add(GRACE)),
-        };
-        Ok(())
+        schedule::start(self, shared)
     }
 }
 
@@ -471,17 +464,18 @@ impl Vm {
     /// Creates the VM and runs the entry script under the deadline
     /// `load_by`, which started when Fiber first asked, so creating the VM
     /// and reading the script count.
-    fn load(
-        name: &str,
-        dir: &Path,
-        home: &Path,
-        clock: Arc<dyn Clock>,
-        load_by: Option<Instant>,
-        memory_cap: usize,
-        browser: Arc<dyn Browser>,
-    ) -> Result<Self, Error> {
+    fn load(clock: Arc<dyn Clock>, start: &schedule::Start) -> Result<Self, Error> {
+        let schedule::Start {
+            name,
+            dir,
+            home,
+            load_by,
+            memory_cap,
+            browser,
+            session,
+        } = start;
         let deadline = Deadline::new(Arc::clone(&clock));
-        deadline.restore(load_by);
+        deadline.restore(*load_by);
         let fail = |message: String| Error::Lua {
             extension: name.to_owned(),
             message,
@@ -500,12 +494,26 @@ impl Vm {
             LuaOptions::new().catch_rust_panics(false),
         )
         .map_err(lua_error)?;
-        lua.set_memory_limit(memory_cap).map_err(lua_error)?;
+        lua.set_memory_limit(*memory_cap).map_err(lua_error)?;
         let (commands, providers, hooks, problems) =
-            setup::install(&lua, &deadline, dir.clone(), memory_cap).map_err(lua_error)?;
+            setup::install(&lua, &deadline, dir.clone(), *memory_cap).map_err(lua_error)?;
+        let workspace = session
+            .as_ref()
+            .map(|session| session.config.workspace().to_path_buf())
+            .unwrap_or_else(|| std::env::current_dir().unwrap_or_default());
         let entry = Rc::new(Cell::new(true));
-        let http_tag =
-            host::install(&lua, home.to_owned(), browser, Rc::clone(&entry)).map_err(lua_error)?;
+        let http_tag = host::install(
+            &lua,
+            host::HostContext {
+                home: home.to_owned(),
+                workspace,
+                extension: name.to_owned(),
+                session: session.clone(),
+            },
+            Arc::clone(browser),
+            Rc::clone(&entry),
+        )
+        .map_err(lua_error)?;
         let vm = Self {
             lua,
             name: name.to_owned(),
@@ -518,7 +526,7 @@ impl Vm {
             problems,
         };
 
-        let entry_fn = match setup::load_file(&vm.lua, &dir, ENTRY, memory_cap) {
+        let entry_fn = match setup::load_file(&vm.lua, &dir, ENTRY, *memory_cap) {
             Ok(Ok(entry_fn)) => entry_fn,
             Ok(Err(message)) => return Err(fail(message)),
             Err(e) => return Err(lua_error(e)),

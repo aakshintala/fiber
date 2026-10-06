@@ -4,7 +4,12 @@ fn lua() -> Lua {
     let lua = Lua::new();
     install(
         &lua,
-        PathBuf::from("/nonexistent-fiber-home"),
+        HostContext {
+            home: PathBuf::from("/nonexistent-fiber-home"),
+            workspace: PathBuf::from("/nonexistent-workspace"),
+            extension: "fiber.test/x".to_owned(),
+            session: None,
+        },
         Arc::new(crate::SystemBrowser::default()),
         Rc::default(),
     )

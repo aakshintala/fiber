@@ -79,6 +79,7 @@ pub(crate) fn new_session(
         workspace,
         sessions,
         extensions,
+        locks,
         mcp,
         web_search,
     } = parts;
@@ -91,6 +92,7 @@ pub(crate) fn new_session(
         &dir.join("artifacts"),
         &clock,
         &jobs,
+        &locks,
         mcp.specs,
         web_search.as_deref(),
     ) {

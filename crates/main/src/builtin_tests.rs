@@ -38,6 +38,7 @@ fn the_driver_shell_runs_echo() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         None,
     )
     .unwrap();
@@ -81,6 +82,7 @@ fn read_is_wired_to_the_image_child() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         None,
     )
     .unwrap();
@@ -120,6 +122,7 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         None,
     )
     .unwrap();
@@ -164,6 +167,7 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         None,
     )
     .unwrap();
@@ -208,6 +212,7 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         None,
     )
     .unwrap();
@@ -262,6 +267,7 @@ fn the_model_shell_is_non_interactive() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         None,
     )
     .unwrap();
@@ -299,6 +305,7 @@ fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, 
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        &Arc::new(tools::PathLocks::new()),
         web_search,
     )
     .unwrap();

@@ -23,6 +23,7 @@ use fakes::clock::FakeClock;
 use serde_json::{Map, json};
 
 use super::SessionExtensions;
+use crate::host::FakeLock;
 use crate::lua::HookPhase;
 use crate::{Origin, Request, plan};
 
@@ -93,8 +94,9 @@ impl Home {
         })
         .unwrap();
         let home = self.home();
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(FakeLock::new());
         Arc::new(bounded(move || {
-            SessionExtensions::load(&home, &config, FakeClock::new())
+            SessionExtensions::load(&home, &config, FakeClock::new(), locks)
         }))
     }
 }
@@ -724,4 +726,54 @@ fn each_hooks_phase_is_read_as_registered() {
             (HookPhase::Transform, false),
         ]
     );
+}
+
+#[test]
+fn a_hook_reads_the_extension_s_project_settings_through_host_config() {
+    let home = Home::new();
+    home.install(
+        "notes",
+        Some(
+            "fiber.hook(\"after_tool\", { timeout = 1000, on_failure = \"blocking\",\n\
+               run = function(call) return { content = \"greeting:\" .. tostring(host.config.get(\"greeting\")) } end })\n",
+        ),
+    );
+    // The per-project settings file, as `host.config.set` would write it.
+    let file = home.home().join("projects/p/config/fiber.test-notes.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, r#"{"greeting": "hi"}"#).unwrap();
+    let session = home.load(&[]);
+    assert!(session.notices().is_empty(), "{:?}", session.notices());
+    assert_eq!(
+        changed_content(&after_tool(&session, "x")),
+        Some("greeting:hi")
+    );
+}
+
+#[test]
+fn a_repository_key_the_manifest_does_not_list_is_one_notice() {
+    let home = Home::new();
+    home.install("notes", Some(&tagging("notes", "transform")));
+    home.edit_manifest("notes", |m| m["repo_settings"] = json!(["listed"]));
+    let file = home
+        .root
+        .path()
+        .join("workspace/.fiber/config/fiber.test-notes.json");
+    fs::create_dir_all(file.parent().unwrap()).unwrap();
+    fs::write(&file, r#"{"listed": "yes", "nope": "evil"}"#).unwrap();
+    let session = home.load(&[]);
+    let all = session.notices();
+    let ignored: Vec<_> = all
+        .iter()
+        .filter(|notice| notice.code == ErrorCode::ConfigKeyIgnored)
+        .collect();
+    assert_eq!(ignored.len(), 1, "{:?}", session.notices());
+    assert_eq!(ignored[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert!(
+        ignored[0].message.contains("`nope`"),
+        "{}",
+        ignored[0].message
+    );
+    // Collected once at load, not once per `get`.
+    assert_eq!(session.notices().len(), 1);
 }

@@ -362,3 +362,50 @@ fn riff_without_webp_and_webp_without_riff_are_text() {
         }
     }
 }
+
+#[test]
+fn with_locks_shares_one_lock_set_with_outside_holders() {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use super::{Files, PathLocks};
+
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    let dir = TempDir::new("fiber-files-with-locks");
+    let locks = Arc::new(PathLocks::new());
+    let files = Files::new(dir.path().to_path_buf()).with_locks(Arc::clone(&locks));
+    assert!(Arc::ptr_eq(&locks, &files.locks()));
+    let path = dir.path().join("a.txt");
+    let guard = locks.lock(&path);
+    let through_files = files.locks();
+    let (done, done_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let guard = through_files.lock(&path);
+        done.send(()).unwrap();
+        drop(guard);
+    });
+    let probe = Arc::clone(&locks);
+    let (seen, seen_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        while probe.waiting() != 1 {
+            std::thread::yield_now();
+        }
+        seen.send(()).unwrap();
+    });
+    assert!(
+        seen_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the lock through Files to be waiting"
+    );
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the lock through Files acquired the path while it was held"
+    );
+    drop(guard);
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the lock through Files to acquire the path"
+    );
+    handle.join().unwrap();
+    assert!(locks.is_clear());
+}

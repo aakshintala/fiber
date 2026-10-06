@@ -77,6 +77,7 @@ pub(crate) fn session_tools(
     artifacts: &Path,
     clock: &Arc<dyn contract::clock::Clock>,
     jobs: &Arc<jobs::Registry>,
+    locks: &Arc<tools::PathLocks>,
     specs: Vec<mcp::ServerSpec>,
     web_search: Option<&str>,
 ) -> Result<
@@ -89,7 +90,7 @@ pub(crate) fn session_tools(
     Failure,
 > {
     let (mut tools, mut infos, driver, forget) =
-        crate::builtin::builtin(workspace, artifacts, clock, jobs, web_search)?;
+        crate::builtin::builtin(workspace, artifacts, clock, jobs, locks, web_search)?;
     // Every spec starts with the session; a server that fails is left out
     // and its failure is returned for the log, written after `fiber_started`.
     let started = mcp::start(specs, workspace, clock, env!("CARGO_PKG_VERSION"));

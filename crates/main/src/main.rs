@@ -76,6 +76,8 @@ struct Parts {
     idle: Option<Duration>,
     /// The installed extensions, started, and their hooks.
     extensions: Arc<extensions::SessionExtensions>,
+    /// The session's per-path lock, shared by the file tools and `host.fs`.
+    locks: Arc<tools::PathLocks>,
     mcp: mcp_servers::Specs,
     /// The session model's hosted search type, such as `web_search_20250305`.
     web_search: Option<String>,
@@ -589,7 +591,10 @@ fn parts_with(
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
-    let extensions = extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock));
+    let locks = Arc::new(tools::PathLocks::new());
+    let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
+    let extensions =
+        extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
     // debt: extension prompt texts and the model's addendum arrive empty;
     // filled by #510.
     // The session log's path is set by the caller, which mints the session
@@ -626,6 +631,7 @@ fn parts_with(
         retry,
         handoff,
         idle,
+        locks,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),
         web_search: model.model.web_search.clone(),

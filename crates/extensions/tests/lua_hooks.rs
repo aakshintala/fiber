@@ -17,6 +17,16 @@ use extensions::SessionExtensions;
 use fakes::clock::FakeClock;
 use serde_json::Map;
 
+/// The session's per-path lock, offered to `host.fs`: this test never
+/// takes it, so it runs every call straight through.
+struct NoLock;
+
+impl contract::files::PathLock for NoLock {
+    fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
+        run();
+    }
+}
+
 /// How long a test waits for a signal or an answer before failing. A hook
 /// that is stopped returns on the fake clock, so this fires only when one
 /// is never stopped.
@@ -85,7 +95,8 @@ fn load(setup: &Setup, overrides: &[&str], clock: Arc<FakeClock>) -> Arc<Session
     let home = setup.home();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
-        let _sent = tx.send(SessionExtensions::load(&home, &config, clock));
+        let locks: Arc<dyn contract::files::PathLock> = Arc::new(NoLock);
+        let _sent = tx.send(SessionExtensions::load(&home, &config, clock, locks));
     });
     Arc::new(
         rx.recv_timeout(WAIT)

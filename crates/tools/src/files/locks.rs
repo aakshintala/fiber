@@ -91,6 +91,13 @@ impl Drop for PathGuard<'_> {
     }
 }
 
+impl contract::files::PathLock for PathLocks {
+    fn hold(&self, path: &Path, run: &mut dyn FnMut()) {
+        let _guard = self.lock(path);
+        run();
+    }
+}
+
 fn guard(mutex: &Mutex<State>) -> MutexGuard<'_, State> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

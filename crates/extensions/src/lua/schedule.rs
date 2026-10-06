@@ -8,7 +8,7 @@
 //! finishes. Each parked callback still ends at its own deadline. The thread
 //! quits once the extension is stopped.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Sender;
 use std::thread;
@@ -20,8 +20,8 @@ use crate::Error;
 use crate::host::{self, Reply, Request};
 use crate::oauth::{self, Browser, Deliver};
 
-use super::hub::{Hub, Job, Phase, Progress, not_registered, timed_out};
-use super::{Step, Target, Vm, expired};
+use super::hub::{Hub, Job, Phase, Progress, Shared, not_registered, timed_out};
+use super::{GRACE, LOAD_TIMEOUT, LuaExtension, Step, Target, Vm, expired};
 
 /// A callback suspended on a host call. Its deadline keeps running.
 struct Parked {
@@ -45,26 +45,53 @@ enum Work {
     Collect,
 }
 
+/// Everything the extension's thread starts from: where it runs, its
+/// bounds and its session.
+pub(super) struct Start {
+    pub(super) name: String,
+    pub(super) dir: PathBuf,
+    pub(super) home: PathBuf,
+    pub(super) load_by: Option<Instant>,
+    pub(super) memory_cap: usize,
+    pub(super) browser: Arc<dyn Browser>,
+    pub(super) session: Option<crate::host::Session>,
+}
+
+/// Spawns the extension's thread on the first call.
+pub(super) fn start(extension: &LuaExtension, shared: &mut Shared) -> Result<(), Error> {
+    if !matches!(shared.phase, Phase::Idle) {
+        return Ok(());
+    }
+    let load_by = extension.hub.clock().now().checked_add(LOAD_TIMEOUT);
+    let start = Start {
+        name: extension.name.clone(),
+        dir: extension.dir.clone(),
+        home: extension.home.clone(),
+        load_by,
+        memory_cap: extension.memory_cap,
+        browser: Arc::clone(&extension.browser),
+        session: extension.session.clone(),
+    };
+    let hub = Arc::clone(&extension.hub);
+    thread::Builder::new()
+        .name(format!("lua {}", extension.name))
+        .spawn(move || {
+            serve(hub, start);
+        })
+        .map_err(|source| Error::Io {
+            path: extension.dir.clone(),
+            source,
+        })?;
+    shared.phase = Phase::Registering {
+        abandon_at: load_by.and_then(|at| at.checked_add(GRACE)),
+    };
+    Ok(())
+}
+
 /// Runs the entry script, under the deadline `load_by`, then serves calls
 /// until the extension is stopped.
-pub(super) fn serve(
-    name: &str,
-    dir: &Path,
-    home: &Path,
-    hub: &Arc<Hub>,
-    load_by: Option<Instant>,
-    memory_cap: usize,
-    browser: Arc<dyn Browser>,
-) {
-    let loaded = Vm::load(
-        name,
-        dir,
-        home,
-        hub.clock_handle(),
-        load_by,
-        memory_cap,
-        browser,
-    );
+pub(super) fn serve(hub: Arc<Hub>, start: Start) {
+    let loaded = Vm::load(hub.clock_handle(), &start);
     let vm = {
         let mut shared = hub.lock();
         if !matches!(shared.phase, Phase::Registering { .. }) {
@@ -89,7 +116,7 @@ pub(super) fn serve(
         return;
     };
     let mut parked = Vec::new();
-    while let Some(work) = next(name, hub, &mut parked) {
+    while let Some(work) = next(&start.name, &hub, &mut parked) {
         // The call has started or resumed.
         hub.notify();
         let (id, step) = match work {
@@ -111,7 +138,15 @@ pub(super) fn serve(
         // A callback that ended in an error may have left a held credential
         // in its coroutine.
         let failed = step.is_err();
-        settle(name, dir, home, hub, &mut parked, id, step);
+        settle(
+            &start.name,
+            &start.dir,
+            &start.home,
+            &hub,
+            &mut parked,
+            id,
+            step,
+        );
         if failed {
             vm.collect();
         }

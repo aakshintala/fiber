@@ -319,6 +319,35 @@ impl Files {
     /// running binary, and the child writes the processed file into
     /// `artifacts`, the session's `artifacts/` directory.
     #[must_use]
+    pub fn with_locks(self, locks: Arc<PathLocks>) -> Self {
+        match Arc::try_unwrap(self.shared) {
+            Ok(mut shared) => {
+                shared.locks = locks;
+                Self {
+                    shared: Arc::new(shared),
+                }
+            }
+            Err(shared) => {
+                let workspace = shared.workspace().to_path_buf();
+                Self {
+                    shared: Arc::new(Shared {
+                        workspace,
+                        locks,
+                        state: Mutex::new(Session {
+                            seen: BTreeMap::new(),
+                            judged: BTreeMap::new(),
+                        }),
+                        images: OnceLock::new(),
+                    }),
+                }
+            }
+        }
+    }
+
+    /// Lets `read` process images: it runs `fiber image` with `fiber`, the
+    /// running binary, and the child writes the processed file into
+    /// `artifacts`, the session's `artifacts/` directory.
+    #[must_use]
     pub fn with_images(self, fiber: PathBuf, artifacts: PathBuf) -> Self {
         self.shared
             .images

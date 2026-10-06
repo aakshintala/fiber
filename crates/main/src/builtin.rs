@@ -27,7 +27,9 @@ type SessionTools = (
 /// `edit`, `handoff`, `read`, `shell`, `web_fetch`, `write` and `jobs`, each
 /// registered by `builtin`, and `web_search` when `web_search` names the
 /// hosted search type of the session's model. `read`, `write` and `edit`
-/// share one session's file state, which a handoff forgets, and `read` runs
+/// share one session's file state, which a handoff forgets, take `locks`,
+/// the session's per-path lock, which an extension's `host.fs` shares, and
+/// `read` runs
 /// the image child (`fiber image`) into `artifacts`, the session's
 /// `artifacts/` directory, where `web_fetch` saves the PDFs and images it
 /// downloads; the model's
@@ -39,11 +41,12 @@ pub(crate) fn builtin(
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
+    locks: &Arc<tools::PathLocks>,
     web_search: Option<&str>,
 ) -> Result<SessionTools, Failure> {
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
-    with_binary(fiber, workspace, artifacts, clock, jobs, web_search)
+    with_binary(fiber, workspace, artifacts, clock, jobs, locks, web_search)
 }
 
 /// [`builtin`] with the binary the shell's search and the image child run.
@@ -55,10 +58,12 @@ pub(crate) fn with_binary(
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
+    locks: &Arc<tools::PathLocks>,
     web_search: Option<&str>,
 ) -> Result<SessionTools, Failure> {
     let files = Arc::new(
         tools::Files::new(workspace.to_path_buf())
+            .with_locks(Arc::clone(locks))
             .with_images(fiber.clone(), artifacts.to_path_buf()),
     );
     let moves: Arc<dyn contract::jobs::Jobs> = jobs.clone();
