@@ -3613,6 +3613,26 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
     live.inbox.send(support::delivery("hi")).unwrap();
     live.turn();
     let live_lines = live.lines();
+    assert_eq!(
+        live_lines
+            .iter()
+            .map(|l| l.kind.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let live_opening = live_lines
         .iter()
         .find(|line| line.kind == "opening_message")
@@ -3634,6 +3654,23 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
 
     let looped = history.resume(Vec::new());
     history.run(looped, "two");
+    assert_eq!(
+        history.history_kinds(),
+        ["session_started", "opening_message", "turn_started"]
+    );
+    assert_eq!(
+        history.new_kinds(),
+        [
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
 
     let requests = history.provider.requests();
     assert_eq!(requests.len(), 1);

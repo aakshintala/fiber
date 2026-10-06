@@ -243,30 +243,11 @@ const MIB: u64 = 1 << 20;
 /// Whether `path` names a file inside a data directory: non-empty and made
 /// only of normal components.
 fn is_inside(path: &str) -> bool {
-    if path.is_empty() || path.starts_with('/') {
-        return false;
-    }
-    let parsed = std::path::Path::new(path);
-    if parsed.is_absolute()
-        || parsed
-            .components()
-            .any(|c| !matches!(c, std::path::Component::Normal(_)))
-    {
-        return false;
-    }
-    // `components` normalises interior `.` away, so check the raw parts
-    // too: no empty, `.` or `..` part, and no Windows drive or separator.
-    if path.contains('\\') || path.as_bytes().get(1) == Some(&b':') {
-        return false;
-    }
-    let mut any = false;
-    for part in path.split('/') {
-        if part.is_empty() || part == "." || part == ".." {
-            return false;
-        }
-        any = true;
-    }
-    any
+    !path.contains('\\')
+        && path.as_bytes().get(1) != Some(&b':')
+        && path
+            .split('/')
+            .all(|p| !p.is_empty() && p != "." && p != "..")
 }
 
 /// Reads `extension.json` at the top of an extension's directory.

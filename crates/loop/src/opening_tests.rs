@@ -893,7 +893,7 @@ fn section_inputs(
 }
 
 #[test]
-fn sections_come_after_instruction_files_in_extension_name_order() {
+fn sections_keep_the_given_send_order() {
     let (home, _held) = dir();
     write(&home.join("AGENTS.md"), "Global rules.\n");
     let workspace = home.join("workspace");
@@ -907,7 +907,8 @@ fn sections_come_after_instruction_files_in_extension_name_order() {
     write(&machine_a, "A machine.\n");
     write(&project_a, "A project.\n");
     let fake = clock();
-    // Given out of name order, machine files before project files.
+    // Given out of name order, the build keeps send order: the loader
+    // already returns name order.
     let with = section_inputs(
         &home,
         &fake,
@@ -931,21 +932,21 @@ fn sections_come_after_instruction_files_in_extension_name_order() {
         .iter()
         .map(|section| section.extension.as_str())
         .collect();
-    assert_eq!(names, ["alpha", "zeta"]);
-    // Machine files before project files, each in manifest order.
-    let alpha = &message.extension_sections[0];
-    let paths: Vec<&str> = alpha.files.iter().map(|file| file.path.as_str()).collect();
+    assert_eq!(names, ["zeta", "alpha"]);
+    // Each extension's files stay in the given order.
+    let zeta = &message.extension_sections[0];
+    let paths: Vec<&str> = zeta.files.iter().map(|file| file.path.as_str()).collect();
     assert_eq!(
         paths,
         [
-            machine_a.display().to_string(),
-            project_a.display().to_string(),
+            machine_z.display().to_string(),
+            project_z.display().to_string(),
         ]
     );
-    assert_eq!(alpha.files[0].content, "A machine.\n");
-    assert_eq!(alpha.files[1].content, "A project.\n");
-    assert_eq!(alpha.budget_bytes, None);
-    assert_eq!(message.extension_sections[1].budget_bytes, Some(1_000));
+    assert_eq!(zeta.files[0].content, "Z machine.\n");
+    assert_eq!(zeta.files[1].content, "Z project.\n");
+    assert_eq!(zeta.budget_bytes, Some(1_000));
+    assert_eq!(message.extension_sections[1].budget_bytes, None);
 }
 
 #[test]

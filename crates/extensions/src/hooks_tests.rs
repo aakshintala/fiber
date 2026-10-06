@@ -209,7 +209,7 @@ fn sections_list_machine_then_project_paths_in_extension_name_order() {
 }
 
 #[test]
-fn sections_omit_a_disabled_extension_one_without_opening_and_an_empty_opening() {
+fn sections_omit_a_disabled_extension_and_one_without_opening() {
     let home = Home::new();
     home.install("off", None);
     home.install("plain", None);
@@ -227,6 +227,24 @@ fn sections_omit_a_disabled_extension_one_without_opening_and_an_empty_opening()
             .iter()
             .any(|e| e.name == "fiber.test/plain")
     );
+    let project = ProjectKey::new("p").unwrap();
+    // An `opening` with no paths yields no paths; the opening-message
+    // build drops a section with no files, so none reaches the model.
+    assert_eq!(
+        session.sections(&project),
+        [("fiber.test/empty".to_owned(), Vec::new(), None)]
+    );
+}
+
+#[test]
+fn an_extension_whose_entry_script_fails_has_no_section() {
+    let home = Home::new();
+    home.install("broken", Some("error(\"bad start\")\n"));
+    home.edit_manifest("broken", |m| {
+        m["opening"] = opening(&["index.md"], &[], None);
+    });
+    let session = home.load(&[]);
+    assert!(session.loaded().is_empty());
     let project = ProjectKey::new("p").unwrap();
     assert!(session.sections(&project).is_empty());
 }

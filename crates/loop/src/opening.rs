@@ -57,11 +57,8 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     }
     let found = skills::discover(inputs, chain.first().unwrap_or(&workspace));
     let listed = skills::listing(&found.skills, &inputs.skills_disabled);
-    let mut ordered: Vec<&crate::prompt::ExtensionSection> =
-        inputs.extension_sections.iter().collect();
-    ordered.sort_by(|a, b| a.0.cmp(&b.0));
     let mut sections = Vec::new();
-    for (name, paths, budget) in ordered {
+    for (name, paths, budget) in &inputs.extension_sections {
         let mut files = Vec::new();
         for path in paths {
             match std::fs::read(path) {

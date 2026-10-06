@@ -5,10 +5,6 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
-/// One extension section's files for the opening message: the extension's
-/// name, its files' absolute paths in send order, and its byte budget.
-pub(crate) type ExtensionSection = (String, Vec<PathBuf>, Option<u64>);
-
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
 /// system prompt" and `docs/prompt-cache.md`, "The preamble").
 /// [`PromptInputs::new`] returns every optional input absent.

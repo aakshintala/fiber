@@ -232,6 +232,13 @@ impl From<Output> for Run {
 }
 
 impl Run {
+    fn kinds(&self) -> Vec<&str> {
+        self.lines
+            .iter()
+            .map(|line| line["kind"].as_str().unwrap())
+            .collect()
+    }
+
     fn first(&self, kind: &str) -> &Value {
         self.lines
             .iter()
@@ -265,6 +272,24 @@ fn hello() -> Response {
     Response::stream(body)
 }
 
+/// The event kinds of a turn answered by [`hello`]: one text fragment.
+const HELLO_KINDS: [&str; 14] = [
+    "session_started",
+    "fiber_started",
+    "extensions_loaded",
+    "preamble_built",
+    "opening_message",
+    "turn_started",
+    "step_started",
+    "assistant_message_started",
+    "assistant_message_delta",
+    "text_completed",
+    "usage_recorded",
+    "assistant_message_completed",
+    "turn_completed",
+    "fiber_exited",
+];
+
 #[test]
 fn an_installed_section_is_recorded_with_its_extension_in_order_and_sent() {
     let setup = Setup::new();
@@ -272,6 +297,7 @@ fn an_installed_section_is_recorded_with_its_extension_in_order_and_sent() {
     let a = setup.machine_file("a.md", "First.\n");
     let b = setup.machine_file("b.md", "Second.\n");
     let (run, server) = setup.ask(&json!({}));
+    assert_eq!(run.kinds(), HELLO_KINDS);
 
     // `opening_message` records both files, in manifest order, with the
     // extension; with no budget the key is absent.
@@ -303,6 +329,7 @@ fn a_disabled_section_extension_has_no_section() {
     setup.section_fixture("notes", &json!({"machine": ["a.md"]}));
     setup.machine_file("a.md", "First.\n");
     let (run, server) = setup.ask(&json!({"extensions": {FIXTURE: {"enabled": false}}}));
+    assert_eq!(run.kinds(), HELLO_KINDS);
 
     let opening = run.first("opening_message");
     assert!(opening["payload"].get("extension_sections").is_none());
@@ -320,6 +347,7 @@ fn a_removed_section_extension_has_no_section() {
         .commit()
         .unwrap();
     let (run, server) = setup.ask(&json!({}));
+    assert_eq!(run.kinds(), HELLO_KINDS);
 
     let opening = run.first("opening_message");
     assert!(opening["payload"].get("extension_sections").is_none());
@@ -333,6 +361,7 @@ fn an_over_budget_section_ends_with_the_prune_line() {
     setup.section_fixture("notes", &json!({"machine": ["big.md"], "budget_bytes": 5}));
     setup.machine_file("big.md", "123456");
     let (run, server) = setup.ask(&json!({}));
+    assert_eq!(run.kinds(), HELLO_KINDS);
 
     let opening = run.first("opening_message");
     assert_eq!(

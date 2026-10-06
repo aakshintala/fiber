@@ -310,6 +310,23 @@ fn an_extension_section_is_logged_and_sent_after_the_instruction_files() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
     assert_eq!(
         opening.payload["extension_sections"],
@@ -364,6 +381,23 @@ fn a_section_whose_files_are_all_missing_has_no_entry() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
     // The missing file sends nothing, and the all-missing extension has
     // no section: only the present file is recorded.
@@ -389,6 +423,24 @@ fn over_budget_ends_the_section_with_the_prune_line_and_under_does_not() {
         );
         session.inbox.send(delivery("hi")).unwrap();
         session.turn();
+        let lines = session.lines();
+        assert_eq!(
+            kinds(&lines),
+            [
+                "session_started",
+                "preamble_built",
+                "opening_message",
+                "turn_started",
+                "step_started",
+                "assistant_message_started",
+                "assistant_message_delta",
+                "assistant_message_delta",
+                "text_completed",
+                "usage_recorded",
+                "assistant_message_completed",
+                "turn_completed",
+            ]
+        );
         let text = opening_text(&session);
         if over {
             assert!(

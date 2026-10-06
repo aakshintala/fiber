@@ -106,12 +106,6 @@ impl SessionExtensions {
             if manifest.api != API || manifest.process.is_some() {
                 continue;
             }
-            // An empty `opening` (no paths) names no section.
-            if let Some(opening) = manifest.opening.clone()
-                && (!opening.machine.is_empty() || !opening.project.is_empty())
-            {
-                session.openings.push((item.name.clone(), slug, opening));
-            }
             if dir.join(ENTRY).is_file() {
                 let mut extension = LuaExtension::new(&item.name, &dir, home, Arc::clone(&clock));
                 if let Some(cap) = manifest
@@ -138,6 +132,9 @@ impl SessionExtensions {
                 };
                 session.register(&item.name, declared, &mut chain);
                 session.lua.push(extension);
+            }
+            if let Some(opening) = manifest.opening.clone() {
+                session.openings.push((item.name.clone(), slug, opening));
             }
             session.dirs.push((item.name.clone(), dir));
             session.loaded.push(LoadedExtension {
@@ -179,8 +176,9 @@ impl SessionExtensions {
     /// Each loaded extension's section files for the opening message:
     /// the extension's name, its files' absolute paths with the machine
     /// directory's first, then the project's, each in manifest order, and
-    /// its byte budget. In extension-name order; extensions with an empty
-    /// `opening` are omitted. Reads no file (`docs/system-prompt.md`,
+    /// its byte budget. In extension-name order. An `opening` with no
+    /// paths yields no paths; the opening-message build drops a section
+    /// with no files. Reads no file (`docs/system-prompt.md`,
     /// "Extension sections").
     pub fn sections(
         &self,
