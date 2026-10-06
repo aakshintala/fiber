@@ -239,8 +239,14 @@ impl Fold {
             Event::DelegateFinished(finished) => {
                 self.delegates.remove(&finished.job_id);
             }
-            Event::FiberStarted(_)
-            | Event::FiberExited(_)
+            // A process boundary: a call the last process left running is
+            // not running now. A pending approval stays: the resumed turn
+            // finishes it.
+            Event::FiberStarted(_) => {
+                self.running_calls.clear();
+                self.retrying = false;
+            }
+            Event::FiberExited(_)
             | Event::Rewound(_)
             | Event::SteeringApplied(_)
             | Event::SteeringQueue(_)

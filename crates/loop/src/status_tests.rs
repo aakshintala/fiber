@@ -383,6 +383,36 @@ fn a_turn_streams_and_a_started_call_is_a_tool_until_it_completes() {
     assert_eq!(w.status().state, SessionState::Idle);
 }
 
+/// A crash leaves a call started and never completed; the resumed process
+/// is not running it, but an approval the crash left pending still waits.
+#[test]
+fn a_resumed_process_does_not_report_the_crashed_process_s_running_call() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    w.call("a1", "shell");
+    assert_eq!(
+        w.status().state,
+        SessionState::Tool {
+            tool: "shell".into()
+        }
+    );
+    assert!(w.feed(
+        "fiber_started",
+        None,
+        &json!({"version": "0.0.1", "resumed": true})
+    ));
+    assert_eq!(w.status().state, SessionState::Streaming);
+    w.call("a2", "read");
+    w.ask("a3", "r1");
+    w.feed(
+        "fiber_started",
+        None,
+        &json!({"version": "0.0.1", "resumed": true}),
+    );
+    assert_eq!(waiting_of(&w).request_id.0, "r1");
+}
+
 #[test]
 fn the_latest_started_call_names_the_tool_and_an_earlier_one_returns() {
     let mut w = world();
