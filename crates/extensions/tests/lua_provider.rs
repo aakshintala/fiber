@@ -84,12 +84,17 @@ fn models_runs_when_there_is_no_cached_copy_and_its_list_is_cached() {
     let setup = Setup::new();
     let server = ProviderServer::start([listing(&["m1", "m2"])]).unwrap();
     let provider = fixture(&setup, &server);
+    assert!(
+        !provider.has_model_cache(),
+        "no copy before the first discovery"
+    );
     let models = within({
         let provider = Arc::clone(&provider);
         move || provider.models()
     })
     .unwrap();
     assert_eq!(ids(&models), ["m1", "m2"]);
+    assert!(provider.has_model_cache(), "discovery writes the copy");
     assert_eq!(models[0].base_url, format!("{}/v1", server.url()));
     assert_eq!(models[0].context_window, Some(1000));
 
