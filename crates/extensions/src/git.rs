@@ -50,14 +50,13 @@ pub fn full_name(typed: &str) -> String {
 pub(crate) fn short_name(name: &str) -> &str {
     const PROVIDERS: &str = "github.com/aakshintala/fiber/providers/";
     const EXTENSIONS: &str = "github.com/aakshintala/fiber/extensions/";
-    match name.strip_prefix(PROVIDERS) {
-        Some(short) if SHORT_NAMES.contains(&short) => short,
-        Some(_) => name,
-        None => match name.strip_prefix(EXTENSIONS) {
-            Some(short) if EXTENSION_SHORT_NAMES.contains(&short) => short,
-            Some(_) | None => name,
-        },
-    }
+    name.strip_prefix(PROVIDERS)
+        .filter(|s| SHORT_NAMES.contains(s))
+        .or_else(|| {
+            name.strip_prefix(EXTENSIONS)
+                .filter(|s| EXTENSION_SHORT_NAMES.contains(s))
+        })
+        .unwrap_or(name)
 }
 
 /// Whether `typed` names a directory rather than an extension.
@@ -242,21 +241,9 @@ mod tests {
     }
 
     #[test]
-    fn any_other_name_is_left_alone_in_both_directions() {
-        assert_eq!(full_name("other"), "other");
-        assert_eq!(
-            full_name("muse"),
-            "github.com/aakshintala/fiber/providers/muse"
-        );
-        assert_eq!(
-            short_name("github.com/aakshintala/fiber/extensions/other"),
-            "github.com/aakshintala/fiber/extensions/other"
-        );
-    }
-
-    #[test]
     fn a_full_name_is_left_alone() {
         assert_eq!(full_name("github.com/acme/x"), "github.com/acme/x");
+        assert_eq!(full_name("other"), "other");
     }
 
     #[test]
@@ -271,6 +258,18 @@ mod tests {
             "github.com/aakshintala/fiber/providers/notashort"
         );
         assert_eq!(short_name("acme"), "acme");
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/extensions/other"),
+            "github.com/aakshintala/fiber/extensions/other"
+        );
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/providers/memory"),
+            "github.com/aakshintala/fiber/providers/memory"
+        );
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/extensions/muse"),
+            "github.com/aakshintala/fiber/extensions/muse"
+        );
     }
 
     #[test]

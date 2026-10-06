@@ -429,13 +429,10 @@ fn a_scripted_page_write_takes_the_fast_path() {
         "fiber_exited",
     ];
     assert_eq!(run.kinds(), expected);
-    let completed: Vec<_> = run
-        .lines
-        .iter()
-        .filter(|line| line["kind"] == "tool_call_completed")
-        .collect();
-    assert_eq!(completed.len(), 1);
-    assert_eq!(completed[0]["payload"]["status"], "completed");
+    assert_eq!(
+        run.first("tool_call_completed")["payload"]["status"],
+        "completed"
+    );
     assert_eq!(
         fs::read_to_string(setup.home().join("data").join(SLUG).join("page.md")).unwrap(),
         "first\n"
