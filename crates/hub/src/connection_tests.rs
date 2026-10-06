@@ -488,28 +488,6 @@ fn until_clients(hub: &Arc<Hub>, n: usize, what: &str) {
         .unwrap_or_else(|_| panic!("the hub counts {n} connections {what}"));
 }
 
-/// Waits, at most one deadline, for the hub's activity to reach `expected`:
-/// `disconnect` removes before it bumps, so clients can read 0 while the
-/// departure has yet to bump.
-fn until_activity(hub: &Arc<Hub>, expected: u64, what: &str) {
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-activity".to_owned())
-        .spawn({
-            let hub = Arc::clone(hub);
-            move || {
-                while hub.activity() != expected {
-                    std::thread::yield_now();
-                }
-                done_tx.send(()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    done_rx
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("the hub reaches activity {expected} {what}"));
-}
-
 #[test]
 fn session_ids_outside_the_minted_shape_are_session_not_found() {
     let temp = Temp::new();
@@ -589,43 +567,69 @@ fn relay_slots_drop_only_their_own_entry() {
     assert_eq!(relay_slot(&[], "s_aaaaaaaaaaaaaaaa", 1), None);
 }
 
+/// A hub on `clock`, for tests that move time.
+fn hub_on(temp: &Temp, clock: &Arc<fakes::clock::FakeClock>) -> Hub {
+    let timed = Arc::clone(clock);
+    let timed: Arc<dyn Clock> = timed;
+    Hub::new(
+        &temp.dir,
+        "0.0.0",
+        Arc::new(FakeStarter::hang(&temp.dir)),
+        timed,
+    )
+}
+
 #[test]
-fn activity_counts_arrivals_and_departures_in_order() {
+fn the_idle_timer_starts_when_the_open_count_reaches_zero() {
     let temp = Temp::new();
-    let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    assert_eq!(hub.activity(), 0);
-    let client = Client::connect(&hub);
-    until_clients(&hub, 1, "after the arrival");
-    assert_eq!(hub.activity(), 1);
-    drop(client);
-    until_clients(&hub, 0, "after the departure");
-    // The removal lands before the bump, so 0 clients is observable while
-    // the departure has yet to bump: wait for the bump before asserting.
-    until_activity(&hub, 2, "after the departure");
-    assert_eq!(hub.activity(), 2);
+    let clock = fakes::clock::FakeClock::new();
+    let hub = hub_on(&temp, &clock);
+    assert_eq!(hub.zero_since(), Some(clock.origin()), "start counts as 0");
+    let (a, _a) = UnixStream::pair().unwrap();
+    let (b, _b) = UnixStream::pair().unwrap();
+    let first = hub.register(&a).expect("the clone succeeds");
+    assert_eq!(hub.zero_since(), None, "an open client clears the timer");
+    let second = hub.register(&b).expect("the clone succeeds");
+    clock.advance(Duration::from_secs(5));
+    disconnect(&hub, first);
+    assert_eq!(hub.zero_since(), None, "one client is still open");
+    clock.advance(Duration::from_secs(5));
+    disconnect(&hub, second);
+    assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the departure");
+    assert_eq!(hub.clients(), 0);
 }
 
 #[test]
 fn a_failed_clone_counts_nothing_and_serves_nothing() {
     let temp = Temp::new();
-    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let clock = fakes::clock::FakeClock::new();
+    let hub = hub_on(&temp, &clock);
     let failed: std::io::Result<UnixStream> = Err(std::io::Error::other("no fd"));
-    assert!(hub.register_with(|| failed, &mut Vec::new()).is_none());
+    let mut conns = lock(&hub.conns);
+    assert!(hub.register_with(|| failed, &mut conns).is_none());
+    drop(conns);
     assert_eq!(hub.clients(), 0);
-    assert_eq!(hub.activity(), 0);
+    assert_eq!(hub.zero_since(), Some(clock.origin()), "the timer runs on");
 }
 
 #[test]
-fn rollback_removes_the_count_and_bumps_activity() {
+fn rollback_removes_the_count_and_restarts_the_timer_at_zero() {
     let temp = Temp::new();
-    let hub = temp.hub(FakeStarter::hang(&temp.dir));
-    let (a, _b) = UnixStream::pair().unwrap();
-    let n = hub.register(&a).expect("the clone succeeds");
+    let clock = fakes::clock::FakeClock::new();
+    let hub = hub_on(&temp, &clock);
+    let (a, _a) = UnixStream::pair().unwrap();
+    let (b, _b) = UnixStream::pair().unwrap();
+    let first = hub.register(&a).expect("the clone succeeds");
+    let second = hub.register(&b).expect("the clone succeeds");
+    assert_eq!(hub.clients(), 2);
+    clock.advance(Duration::from_secs(5));
+    hub.rollback(first);
     assert_eq!(hub.clients(), 1);
-    assert_eq!(hub.activity(), 1);
-    hub.rollback(n);
+    assert_eq!(hub.zero_since(), None, "one client is still open");
+    clock.advance(Duration::from_secs(5));
+    hub.rollback(second);
     assert_eq!(hub.clients(), 0);
-    assert_eq!(hub.activity(), 2);
+    assert_eq!(hub.zero_since(), Some(clock.now()), "0 at the rollback");
 }
 
 #[test]

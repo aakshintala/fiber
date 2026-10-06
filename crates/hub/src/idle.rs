@@ -1,13 +1,15 @@
 //! Idle exit and signal shutdown: the accept loop, the wait while no
 //! client is connected, and stopping on the first SIGTERM, SIGINT or SIGHUP.
 //!
-//! The hub counts open client connections. While the count is 0 it waits on
-//! the injected clock until `idle_since + idle_exit`; a connection arriving
-//! resets it. At expiry with 0 clients it writes `hub_stopped`, removes
-//! `run/hub` while still holding the lock, and returns 0. On the first
-//! SIGTERM, SIGINT or SIGHUP it shuts down every client connection and
-//! relay stream, writes `hub_stopped`, removes `run/hub`, and returns
-//! 128 plus the signal. Sessions are untouched either way.
+//! The hub counts open client connections. When the count reaches 0, at
+//! start or on a departure, it records the instant; while the count stays 0
+//! it waits on the injected clock until that instant plus `idle_exit`, and
+//! while a client is open it waits with no deadline. At expiry with 0
+//! clients it writes `hub_stopped`, removes `run/hub` while still holding
+//! the lock, and returns 0. On the first SIGTERM, SIGINT or SIGHUP it shuts
+//! down every client connection and relay stream, writes `hub_stopped`,
+//! removes `run/hub`, and returns 128 plus the signal. Sessions are
+//! untouched either way.
 
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -15,9 +17,7 @@ use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::thread;
 use std::time::Duration;
 
-use contract::clock::Clock;
-
-use crate::connection::{Accept, Hub, serve_counted};
+use crate::connection::{Accept, Hub, Idle, serve_counted};
 use crate::listen::Held;
 
 /// How the hub stopped.
@@ -39,14 +39,9 @@ impl Exit {
 }
 
 /// Serves `held` until idleness or a signal. `got` carries the signal's
-/// number once one arrives; tests store one to simulate it.
-pub(crate) fn run(
-    hub: &Arc<Hub>,
-    held: &Held,
-    idle_exit: Duration,
-    clock: &Arc<dyn Clock>,
-    got: &Arc<AtomicI32>,
-) -> Exit {
+/// number once one arrives, then [`Hub::waker`] wakes the wait; tests do the
+/// same to simulate one.
+pub(crate) fn run(hub: &Arc<Hub>, held: &Held, idle_exit: Duration, got: &AtomicI32) -> Exit {
     let Ok(accept) = held.listener.try_clone() else {
         return Exit::Idle;
     };
@@ -93,35 +88,28 @@ pub(crate) fn run(
     }) else {
         return Exit::Idle;
     };
-    let mut idle_since = clock.now();
-    let mut seen = hub.activity();
     loop {
-        let signal = got.swap(0, Ordering::SeqCst);
-        if signal != 0 {
-            stop.store(true, Ordering::SeqCst);
-            wake(&socket);
-            match acceptor.join() {
-                Ok(()) | Err(_) => {}
+        match hub.idle_wait(idle_exit, &stop, got) {
+            Idle::Signal(signal) => {
+                stop.store(true, Ordering::SeqCst);
+                wake(&socket);
+                match acceptor.join() {
+                    Ok(()) | Err(_) => {}
+                }
+                hub.shutdown_clients();
+                hub.diag.info("hub_stopped", "The hub stopped: signal.");
+                return Exit::Signal(signal);
             }
-            hub.shutdown_clients();
-            hub.diag.info("hub_stopped", "The hub stopped: signal.");
-            return Exit::Signal(signal);
-        }
-        let now = clock.now();
-        let quiet = hub.quiet(seen);
-        if quiet && now >= idle_since + idle_exit && hub.claim_exit(&stop, seen) {
-            wake(&socket);
-            match acceptor.join() {
-                Ok(()) | Err(_) => {}
+            Idle::Expired => {
+                wake(&socket);
+                match acceptor.join() {
+                    Ok(()) | Err(_) => {}
+                }
+                hub.diag.info("hub_stopped", "The hub stopped: idle.");
+                return Exit::Idle;
             }
-            hub.diag.info("hub_stopped", "The hub stopped: idle.");
-            return Exit::Idle;
+            Idle::Woken => {}
         }
-        if !quiet {
-            idle_since = now;
-            seen = hub.activity();
-        }
-        hub.park_until(&**clock, idle_since + idle_exit);
     }
 }
 

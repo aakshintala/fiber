@@ -11,7 +11,7 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -33,24 +33,41 @@ pub(crate) struct Hub {
     fiber_version: String,
     /// How `start` runs the session command.
     pub(crate) starter: Arc<dyn Starter>,
-    /// The injected clock, for `ts` and `start`'s deadline.
+    /// The injected clock, for `ts`, `start`'s deadline and the idle wait.
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) diag: Diag,
     next_client: AtomicU64,
-    /// Every connection the idle wait counts, and its shutdown handle.
-    conns: Mutex<Vec<(u64, UnixStream)>>,
-    /// Bumped on every arrival and departure: the idle wait exits only
-    /// when no client has been connected for the whole `idle_exit`.
-    activity: AtomicU64,
-    /// Woken on every clock move and every arrival and departure.
+    /// The open connections and the idle timer, under one lock.
+    conns: Mutex<Conns>,
+    /// Woken on every clock move, every change to `conns` and every signal.
     tick: Arc<Tick>,
-    /// The clock's subscriber: kept alive so advances wake the idle wait.
-    _wake: Arc<dyn Wake>,
+    /// `tick` as the clock's subscriber: kept alive so advances wake the
+    /// idle wait.
+    wake: Arc<dyn Wake>,
+}
+
+/// The open connections and the idle timer. `zero_since` is `Some` exactly
+/// while `open` is empty: the instant the count last reached 0.
+struct Conns {
+    /// Every connection the idle wait counts, and its shutdown handle.
+    open: Vec<(u64, UnixStream)>,
+    zero_since: Option<Instant>,
+}
+
+/// What one pass of [`Hub::idle_wait`] found.
+pub(crate) enum Idle {
+    /// A signal arrived: its number.
+    Signal(i32),
+    /// No client for the whole `idle_exit`: the exit is claimed.
+    Expired,
+    /// Woken by a clock move or a change: check again.
+    Woken,
 }
 
 impl Hub {
     /// Opens the hub in `home`: the diagnostic log, pruned, before the
-    /// caller writes `hub_started`.
+    /// caller writes `hub_started`. The open count starts at 0, so the idle
+    /// timer starts now.
     pub(crate) fn new(
         home: &Path,
         fiber_version: &str,
@@ -61,6 +78,7 @@ impl Hub {
         let wake = Arc::clone(&tick);
         let wake: Arc<dyn Wake> = wake;
         clock.subscribe(Arc::downgrade(&wake));
+        let zero_since = Some(clock.now());
         Self {
             home: home.to_path_buf(),
             fiber_version: fiber_version.to_owned(),
@@ -68,34 +86,48 @@ impl Hub {
             clock: Arc::clone(&clock),
             diag: Diag::open(home, clock),
             next_client: AtomicU64::new(0),
-            conns: Mutex::new(Vec::new()),
-            activity: AtomicU64::new(0),
+            conns: Mutex::new(Conns {
+                open: Vec::new(),
+                zero_since,
+            }),
             tick,
-            _wake: wake,
+            wake,
         }
     }
 
     /// The open client connections, this connection's asker included.
     pub(crate) fn clients(&self) -> usize {
-        lock(&self.conns).len()
+        lock(&self.conns).open.len()
     }
 
-    /// Every arrival and departure, in order.
-    pub(crate) fn activity(&self) -> u64 {
-        self.activity.load(Ordering::SeqCst)
+    /// When the open count last reached 0; `None` while a client is open.
+    #[cfg(test)]
+    pub(crate) fn zero_since(&self) -> Option<Instant> {
+        lock(&self.conns).zero_since
+    }
+
+    /// Wakes the idle wait: the signal arm calls it after recording a
+    /// signal.
+    pub(crate) fn waker(&self) -> Arc<dyn Wake> {
+        Arc::clone(&self.wake)
     }
 
     /// Counts a connection the accept loop holds: under the connection
-    /// lock, so the idle exit's check and claim see it. Exiting once the hub
-    /// is exiting: the caller drops the stream unanswered, EOF with no
-    /// `hub_hello`, and the client retries. Dropped when the shutdown
-    /// clone fails: count nothing, serve nothing, and continue accepting.
+    /// lock, so the idle exit's claim sees it. Exiting once the hub is
+    /// exiting: the caller drops the stream unanswered, EOF with no
+    /// `hub_hello`, and the client retries. Dropped when the shutdown clone
+    /// fails: count nothing, serve nothing, and continue accepting.
     pub(crate) fn poll_accept(&self, stream: &UnixStream, stop: &AtomicBool) -> Accept {
         let mut conns = lock(&self.conns);
         if stop.load(Ordering::SeqCst) {
             return Accept::Exiting;
         }
-        match self.register_with(|| stream.try_clone(), &mut conns) {
+        let counted = self.register_with(|| stream.try_clone(), &mut conns);
+        drop(conns);
+        // Woken after the connection lock is released: the idle wait takes
+        // the tick lock before the connection lock.
+        self.tick.wake();
+        match counted {
             Some(n) => Accept::Counted(n),
             None => Accept::Dropped,
         }
@@ -106,13 +138,16 @@ impl Hub {
     #[cfg(test)]
     pub(crate) fn register(&self, stream: &UnixStream) -> Option<u64> {
         let mut conns = lock(&self.conns);
-        self.register_with(|| stream.try_clone(), &mut conns)
+        let counted = self.register_with(|| stream.try_clone(), &mut conns);
+        drop(conns);
+        self.tick.wake();
+        counted
     }
 
     fn register_with(
         &self,
         clone: impl FnOnce() -> std::io::Result<UnixStream>,
-        conns: &mut Vec<(u64, UnixStream)>,
+        conns: &mut Conns,
     ) -> Option<u64> {
         // Clone first: a failure counts nothing, serves nothing, and
         // consumes no client number.
@@ -120,66 +155,75 @@ impl Hub {
             return None;
         };
         let n = self.next_client.fetch_add(1, Ordering::SeqCst) + 1;
-        conns.push((n, shutdown));
-        self.activity.fetch_add(1, Ordering::SeqCst);
-        self.tick.wake();
+        conns.open.push((n, shutdown));
+        conns.zero_since = None;
         Some(n)
     }
 
-    /// Rolls back a counted connection whose serving thread never started:
-    /// removes it, bumps activity, and wakes, before the stream is dropped.
+    /// Rolls back a counted connection whose serving thread never started.
     /// Never connected, so no `client_disconnected` line.
     pub(crate) fn rollback(&self, n: u64) {
+        self.release(n);
+    }
+
+    /// Removes connection `n`; when the count reaches 0 the idle timer
+    /// starts now. Wakes the idle wait.
+    fn release(&self, n: u64) {
         let mut conns = lock(&self.conns);
-        if let Some(at) = conns.iter().position(|(id, _)| *id == n) {
-            conns.remove(at);
+        if let Some(at) = conns.open.iter().position(|(id, _)| *id == n) {
+            conns.open.remove(at);
+            if conns.open.is_empty() {
+                conns.zero_since = Some(self.clock.now());
+            }
         }
         drop(conns);
-        self.activity.fetch_add(1, Ordering::SeqCst);
         self.tick.wake();
     }
 
-    /// Whether no client is connected and none arrived since `seen`.
-    pub(crate) fn quiet(&self, seen: u64) -> bool {
-        self.activity.load(Ordering::SeqCst) == seen && lock(&self.conns).is_empty()
-    }
-
-    /// Claims the idle exit under the connection lock: no client connected
-    /// and none arrived since `seen`. An accept racing the claim either
-    /// counts first, and the claim fails, or sees the claim, and its
-    /// stream is dropped unanswered.
-    pub(crate) fn claim_exit(&self, stop: &AtomicBool, seen: u64) -> bool {
-        let conns = lock(&self.conns);
-        if self.activity.load(Ordering::SeqCst) == seen && conns.is_empty() {
-            stop.store(true, Ordering::SeqCst);
-            true
-        } else {
-            false
-        }
-    }
-
-    /// Parks until `until` on `clock`, woken early by client arrivals and
-    /// departures and by clock moves.
-    pub(crate) fn park_until(&self, clock: &dyn Clock, until: Instant) {
-        // Taken before the clock is read and held into the wait: an
-        // arrival or departure that lands in between blocks on it instead
-        // of waking nobody.
+    /// One pass of the idle wait. A pending signal returns it. With no
+    /// client open since `zero_since` for the whole `idle_exit`, claims the
+    /// exit under the connection lock: sets `stop`, so an accept racing the
+    /// claim sees it and drops its stream unanswered. Otherwise parks on the
+    /// clock until `zero_since + idle_exit`, or with no deadline while a
+    /// client is open, woken by clock moves, changes and signals.
+    pub(crate) fn idle_wait(
+        &self,
+        idle_exit: Duration,
+        stop: &AtomicBool,
+        got: &AtomicI32,
+    ) -> Idle {
+        // Taken before the checks and held into the wait: a change or a
+        // signal that lands in between blocks in `Tick::wake` until this
+        // thread waits, instead of waking nobody.
         let guard = lock(&self.tick.held);
-        if clock.now() >= until {
-            return;
+        let signal = got.swap(0, Ordering::SeqCst);
+        if signal != 0 {
+            return Idle::Signal(signal);
         }
+        let until = {
+            let conns = lock(&self.conns);
+            // An `idle_exit` past the end of time never expires.
+            match conns
+                .zero_since
+                .and_then(|since| since.checked_add(idle_exit))
+            {
+                Some(until) if self.clock.now() >= until => {
+                    stop.store(true, Ordering::SeqCst);
+                    return Idle::Expired;
+                }
+                until => until,
+            }
+        };
         let mut slot = Some(guard);
-        clock.wait_until(Some(until), &mut |bound| {
+        self.clock.wait_until(until, &mut |bound| {
             let Some(guard) = slot.take() else {
                 return;
             };
             slot = Some(match bound {
-                // The real clock never moves on its own: bound each park
-                // so a signal is noticed within `POLL`.
                 Some(limit) => {
                     self.tick
                         .moved
-                        .wait_timeout(guard, limit.min(POLL))
+                        .wait_timeout(guard, limit)
                         .unwrap_or_else(PoisonError::into_inner)
                         .0
                 }
@@ -190,13 +234,14 @@ impl Hub {
                     .unwrap_or_else(PoisonError::into_inner),
             });
         });
+        Idle::Woken
     }
 
     /// Shuts down every client connection: each session sees its clients
     /// leave. Sessions are untouched.
     pub(crate) fn shutdown_clients(&self) {
         let conns = lock(&self.conns);
-        for (_, stream) in conns.iter() {
+        for (_, stream) in &conns.open {
             match stream.shutdown(Shutdown::Both) {
                 Ok(()) | Err(_) => {}
             }
@@ -214,11 +259,8 @@ pub(crate) enum Accept {
     Exiting,
 }
 
-/// How often the idle wait re-checks signals on the real clock. The fake
-/// clock parks until woken, unaffected.
-const POLL: Duration = Duration::from_millis(100);
-
-/// Woken on every clock move and every client arrival or departure.
+/// Woken on every clock move, every change to the open connections and
+/// every signal.
 #[derive(Default)]
 pub(crate) struct Tick {
     held: Mutex<()>,
@@ -227,12 +269,13 @@ pub(crate) struct Tick {
 
 impl Wake for Tick {
     fn wake(&self) {
-        // Taken before the notify, so a waiter that has read the clock
-        // and not yet parked cannot miss it.
+        // Taken before the notify, so a waiter that has checked and not
+        // yet parked cannot miss it.
         let _held = lock(&self.held);
         self.moved.notify_all();
     }
 }
+
 /// One relay: the session connection, and the writer the next command for
 /// it uses. The relay thread owns the reader; both halves close together.
 struct Relay {
@@ -296,16 +339,12 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     disconnect(&hub, n);
 }
 
+/// Logs the departure, then releases the count: once the count shows it
+/// gone, the line is written, and the idle exit's `hub_stopped` follows it.
 fn disconnect(hub: &Hub, n: u64) {
-    let mut conns = lock(&hub.conns);
-    if let Some(at) = conns.iter().position(|(id, _)| *id == n) {
-        conns.remove(at);
-    }
-    drop(conns);
-    hub.activity.fetch_add(1, Ordering::SeqCst);
-    hub.tick.wake();
     hub.diag
         .info("client_disconnected", &format!("Client {n} disconnected."));
+    hub.release(n);
 }
 
 fn on_command(

@@ -1,5 +1,6 @@
-//! Tests for idle exit and signal shutdown: the hub parks with no client
-//! connected, leaves while one is, resets on arrival, and stops on signal.
+//! Tests for idle exit and signal shutdown. Every fake-clock advance follows
+//! proof of the park the hub chose: `[None]` while a client is open, or
+//! `[Some(t0 + idle_exit)]` once the count reached 0 at `t0`.
 
 #![allow(
     clippy::unwrap_used,
@@ -16,7 +17,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
 use std::sync::mpsc;
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
+
+use contract::clock::Clock;
 
 use super::*;
 use crate::connection::Hub;
@@ -30,6 +33,9 @@ const WITHIN: Duration = Duration::from_secs(10);
 
 /// Thirty idle minutes, the documented default.
 const IDLE: Duration = Duration::from_millis(1_800_000);
+
+/// The smallest step of fake time.
+const TICK: Duration = Duration::from_nanos(1);
 
 struct Temp {
     dir: PathBuf,
@@ -79,16 +85,13 @@ fn serve_in(
     done_rx
 }
 
-/// Serves the hub on a thread with its handle: the caller waits on
-/// activity before each advance, so every advance follows a park that began
-/// after the event under test.
+/// Serves the hub on a thread with its handle and its signal flag.
 fn serve_with_hub(
     temp: &Temp,
     idle: Duration,
     clock: Arc<fakes::clock::FakeClock>,
-) -> (Arc<Hub>, mpsc::Receiver<i32>) {
-    let timed = Arc::clone(&clock);
-    let timed: Arc<dyn contract::clock::Clock> = timed;
+) -> (Arc<Hub>, Arc<AtomicI32>, mpsc::Receiver<i32>) {
+    let timed: Arc<dyn contract::clock::Clock> = clock;
     let hub = Arc::new(Hub::new(
         &temp.dir,
         "0.0.0",
@@ -103,27 +106,27 @@ fn serve_with_hub(
         .name("hub-test-run".to_owned())
         .spawn({
             let hub = Arc::clone(&hub);
-            let timed = Arc::clone(&clock);
-            let timed: Arc<dyn contract::clock::Clock> = timed;
+            let got = Arc::clone(&got);
             move || {
-                let exit = run(&hub, &held, idle, &timed, &got);
+                let exit = run(&hub, &held, idle, &got);
                 held.stop();
                 done_tx.send(exit.code()).unwrap_or(());
             }
         })
         .unwrap();
-    (hub, done_rx)
+    (hub, got, done_rx)
 }
 
-/// Waits, at most one deadline, for the hub's activity to reach `expected`.
-fn until_activity(hub: &Arc<Hub>, expected: u64, what: &str) {
+/// Waits, at most `WITHIN`, until the hub's only park has no deadline: it
+/// saw a client open. Panics past the deadline naming the wait.
+fn await_open_park(clock: &Arc<fakes::clock::FakeClock>, what: &str) {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
-        .name("hub-test-activity".to_owned())
+        .name("hub-test-parked".to_owned())
         .spawn({
-            let hub = Arc::clone(hub);
+            let clock = Arc::clone(clock);
             move || {
-                while hub.activity() != expected {
+                while clock.parked() != [None] {
                     thread::yield_now();
                 }
                 done_tx.send(()).unwrap_or(());
@@ -131,59 +134,51 @@ fn until_activity(hub: &Arc<Hub>, expected: u64, what: &str) {
         })
         .unwrap();
     done_rx
-        .recv_timeout(DEADLINE)
-        .unwrap_or_else(|_| panic!("the hub reaches activity {expected} {what}"));
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the hub parks with no deadline {what}"));
+}
+
+/// Waits, at most `WITHIN`, until the hub parks until `zero + IDLE`: it saw
+/// the count reach 0 at `zero`. Panics past the deadline naming the wait.
+fn await_idle_park(clock: &Arc<fakes::clock::FakeClock>, zero: Instant, what: &str) {
+    assert!(
+        clock.await_parked(zero + IDLE, WITHIN),
+        "the hub parks until idle_exit after the count reached 0 {what}"
+    );
 }
 
 /// A client on the hub's socket: connected once its `hub_hello` arrives.
 struct Client {
     _stream: UnixStream,
+    read: BufReader<UnixStream>,
 }
 
-/// The instant the hub currently waits on: advancing past it is observed.
-/// Panics past the deadline naming the wait. Each use follows proof that
-/// the hub parked after the event under test (activity), so the returned
-/// park began after it: for a quiet hub the deadline is unchanged, for a
-/// connected one it moved, but either way the park is current.
-fn parked_until(clock: &Arc<fakes::clock::FakeClock>) -> std::time::Instant {
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-parked".to_owned())
-        .spawn({
-            let clock = Arc::clone(clock);
-            move || {
-                loop {
-                    if let [Some(until)] = clock.parked().as_slice() {
-                        done_tx.send(*until).unwrap_or(());
-                        return;
-                    }
-                    thread::yield_now();
-                }
-            }
-        })
-        .unwrap();
-    done_rx
-        .recv_timeout(WITHIN)
-        .expect("the hub parks before its deadline")
-}
-
-fn connect(temp: &Temp) -> (Client, String) {
+/// Connects and reads the first line: `hub_hello` proves the hub counted
+/// the connection.
+fn connect(temp: &Temp) -> Client {
     let stream = UnixStream::connect(temp.socket()).unwrap();
     stream.set_read_timeout(Some(DEADLINE)).unwrap();
     let mut read = BufReader::new(stream.try_clone().unwrap());
     let mut hello = String::new();
     read.read_line(&mut hello).expect("the hub speaks first");
-    (Client { _stream: stream }, hello)
+    assert!(
+        hello.contains("\"kind\":\"hub_hello\""),
+        "the hub answers with hub_hello: {hello:?}"
+    );
+    Client {
+        _stream: stream,
+        read,
+    }
 }
 
 #[test]
-fn with_no_clients_the_hub_parks_then_exits_idle() {
+fn with_no_clients_the_hub_exits_at_idle_exit() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let done = serve_in(&temp, IDLE, Arc::clone(&clock));
-    let deadline = clock.origin() + IDLE;
-    assert!(clock.await_parked(deadline, WITHIN));
-    clock.advance(IDLE + Duration::from_millis(1));
+    await_idle_park(&clock, clock.origin(), "at start");
+    // Exactly the deadline: the exit is due at, not after, it.
+    clock.advance(IDLE);
     assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
     assert!(!temp.socket().exists());
     let log = temp.log();
@@ -193,187 +188,111 @@ fn with_no_clients_the_hub_parks_then_exits_idle() {
 }
 
 #[test]
-fn a_connected_client_keeps_the_hub_and_leaving_exits_it() {
+fn one_tick_before_idle_exit_the_hub_still_answers() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let (hub, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
-    assert!(clock.await_parked(clock.origin() + IDLE, WITHIN));
-    let (client, hello) = connect(&temp);
-    assert!(hello.contains("\"kind\":\"hub_hello\""));
-    // The arrival is counted before any advance: otherwise the advance
-    // could spend the idle period before the count lands and exit spuriously.
-    until_activity(&hub, 1, "after the arrival");
-    // The re-park has the same deadline while the clock is frozen, so force
-    // a new one: prove the old park, move a millisecond, then prove the
-    // current park that began after the arrival before spending idle time.
-    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
-    clock.advance(Duration::from_millis(1));
-    parked_until(&clock);
-    // The client is connected: a whole idle period passes without exit.
-    clock.advance(IDLE + Duration::from_millis(1));
-    assert!(
-        done.recv_timeout(Duration::from_millis(200)).is_err(),
-        "a connected client keeps the hub"
-    );
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    clock.advance(IDLE.checked_sub(TICK).unwrap());
+    // A hub that had exited answers EOF or refuses: the hello proves it
+    // still serves.
+    let client = connect(&temp);
+    await_open_park(&clock, "after the arrival");
     drop(client);
-    // The departure is counted before any advance. A quiet hub keeps its
-    // deadline across the millisecond, so prove the current park after it
-    // rather than a computed one, then spend one period past it.
-    until_activity(&hub, 2, "after the departure");
-    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
-    clock.advance(Duration::from_millis(1));
-    parked_until(&clock);
-    clock.advance(IDLE + Duration::from_millis(1));
+    let zero = clock.now();
+    await_idle_park(&clock, zero, "after the departure");
+    clock.advance(IDLE);
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+}
+
+#[test]
+fn a_connected_client_keeps_the_hub_and_leaving_starts_the_timer() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    let client = connect(&temp);
+    await_open_park(&clock, "after the arrival");
+    // Far past any deadline: an open client has none.
+    clock.advance(IDLE * 100);
+    drop(client);
+    // The timer starts at the departure, so this park also proves the hub
+    // outlived the advance.
+    let zero = clock.now();
+    await_idle_park(&clock, zero, "after the departure");
+    clock.advance(IDLE);
     assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
     assert!(!temp.socket().exists());
 }
 
 #[test]
-fn a_reconnect_resets_the_idle_timer() {
+fn a_reconnect_clears_the_timer_and_a_later_departure_restarts_it() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let (hub, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
-    assert!(clock.await_parked(clock.origin() + IDLE, WITHIN));
-    let (first, _) = connect(&temp);
-    until_activity(&hub, 1, "after the first arrival");
-    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
-    clock.advance(Duration::from_millis(1));
-    parked_until(&clock);
-    clock.advance(IDLE + Duration::from_millis(1));
-    assert!(
-        done.recv_timeout(Duration::from_millis(200)).is_err(),
-        "the first client keeps the hub"
-    );
+    let (_hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    let first = connect(&temp);
+    await_open_park(&clock, "after the first arrival");
+    clock.advance(IDLE);
     drop(first);
-    until_activity(&hub, 2, "after the first departure");
-    let (second, _) = connect(&temp);
-    until_activity(&hub, 3, "after the second arrival");
-    // The second arrival began after the first departure: force a new park
-    // after it before spending another idle period.
-    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
-    clock.advance(Duration::from_millis(1));
-    parked_until(&clock);
-    // The second client arrived after the first left: passing another
-    // idle period still exits nothing.
-    clock.advance(IDLE + Duration::from_millis(1));
-    assert!(
-        done.recv_timeout(Duration::from_millis(200)).is_err(),
-        "a reconnect resets the timer"
-    );
+    let first_zero = clock.now();
+    await_idle_park(&clock, first_zero, "after the first departure");
+    clock.advance(IDLE.checked_sub(TICK).unwrap());
+    // Within the window: the hello proves the hub still serves.
+    let second = connect(&temp);
+    await_open_park(&clock, "after the second arrival");
+    // Past the first departure's deadline: the reconnect cleared it.
+    clock.advance(IDLE);
     drop(second);
-    until_activity(&hub, 4, "after the second departure");
-    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
-    clock.advance(Duration::from_millis(1));
-    parked_until(&clock);
-    clock.advance(IDLE + Duration::from_millis(1));
+    let second_zero = clock.now();
+    await_idle_park(&clock, second_zero, "after the second departure");
+    clock.advance(IDLE);
     assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
     assert!(!temp.socket().exists());
 }
 
 #[test]
-fn a_signal_stops_the_hub_with_its_code() {
+fn a_spawn_failure_rollback_restarts_the_timer() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
-    let timed = Arc::clone(&clock);
-    let timed: Arc<dyn contract::clock::Clock> = timed;
-    let hub = Arc::new(Hub::new(
-        &temp.dir,
-        "0.0.0",
-        Arc::new(FakeStarter::hang(&temp.dir)),
-        timed,
-    ));
-    let held = crate::listen::listen(&temp.dir).unwrap().unwrap();
-    let got = Arc::new(AtomicI32::new(0));
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-run".to_owned())
-        .spawn({
-            let hub = Arc::clone(&hub);
-            let got = Arc::clone(&got);
-            let timed: Arc<dyn contract::clock::Clock> = clock.clone();
-            move || {
-                let exit = run(&hub, &held, IDLE, &timed, &got);
-                held.stop();
-                done_tx.send(exit.code()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    assert!(clock.await_parked(clock.origin() + IDLE, WITHIN));
-    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
-    clock.advance(Duration::from_millis(1));
-    assert_eq!(done_rx.recv_timeout(DEADLINE).expect("the hub stops"), 143);
-    assert!(!temp.socket().exists());
-    assert!(temp.log().contains("The hub stopped: signal."));
+    let (hub, _got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    // What the accept loop does: count, then roll back when the serving
+    // thread fails to spawn.
+    let (counted, _peer) = UnixStream::pair().unwrap();
+    let n = hub.register(&counted).expect("the clone succeeds");
+    await_open_park(&clock, "after the count");
+    clock.advance(IDLE);
+    hub.rollback(n);
+    let zero = clock.now();
+    await_idle_park(&clock, zero, "after the rollback");
+    clock.advance(IDLE);
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub exits idle"), 0);
+    assert!(!temp.log().contains("client_disconnected"));
 }
 
 #[test]
-fn a_signal_shuts_down_connected_clients() {
+fn an_accept_after_the_exit_claim_gets_eof_without_hello() {
     let temp = Temp::new();
     let clock = fakes::clock::FakeClock::new();
     let timed = Arc::clone(&clock);
-    let timed: Arc<dyn contract::clock::Clock> = timed;
-    let hub = Arc::new(Hub::new(
+    let timed: Arc<dyn Clock> = timed;
+    let hub = Hub::new(
         &temp.dir,
         "0.0.0",
         Arc::new(FakeStarter::hang(&temp.dir)),
         timed,
-    ));
-    let held = crate::listen::listen(&temp.dir).unwrap().unwrap();
-    let got = Arc::new(AtomicI32::new(0));
-    let (done_tx, done_rx) = mpsc::channel();
-    thread::Builder::new()
-        .name("hub-test-run".to_owned())
-        .spawn({
-            let hub = Arc::clone(&hub);
-            let got = Arc::clone(&got);
-            let timed: Arc<dyn contract::clock::Clock> = clock.clone();
-            move || {
-                let exit = run(&hub, &held, IDLE, &timed, &got);
-                held.stop();
-                done_tx.send(exit.code()).unwrap_or(());
-            }
-        })
-        .unwrap();
-    assert!(clock.await_parked(clock.origin() + IDLE, WITHIN));
-    let stream = UnixStream::connect(temp.socket()).unwrap();
-    stream.set_read_timeout(Some(DEADLINE)).unwrap();
-    let mut read = BufReader::new(stream.try_clone().unwrap());
-    let mut hello = String::new();
-    read.read_line(&mut hello).expect("the hub speaks first");
-    assert!(hello.contains("\"kind\":\"hub_hello\""));
-    // The hello proves the arrival was counted: force a new park after it
-    // before waking for the signal, so the advance is observed.
-    until_activity(&hub, 1, "after the arrival");
-    assert!(clock.await_parked(clock.now() + IDLE, WITHIN));
-    clock.advance(Duration::from_millis(1));
-    parked_until(&clock);
-    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
-    clock.advance(Duration::from_millis(1));
-    assert_eq!(done_rx.recv_timeout(DEADLINE).expect("the hub stops"), 143);
-    // The shutdown closed the hub's end: EOF, and nothing after the hello.
-    let mut tail = String::new();
-    assert_eq!(
-        read.read_line(&mut tail)
-            .expect("the shutdown closes the socket"),
-        0,
-        "the client sees EOF after the hello"
     );
-}
-
-#[test]
-fn a_connection_accepted_after_the_exit_decision_gets_eof_without_hello() {
-    let temp = Temp::new();
-    let clock = fakes::clock::FakeClock::new();
-    let timed: Arc<dyn contract::clock::Clock> = clock;
-    let hub = Arc::new(Hub::new(
-        &temp.dir,
-        "0.0.0",
-        Arc::new(FakeStarter::hang(&temp.dir)),
-        timed,
+    // No thread waits on the clock: the idle wait below runs on this one.
+    clock.advance(IDLE);
+    let stop = AtomicBool::new(false);
+    assert!(matches!(
+        hub.idle_wait(IDLE, &stop, &AtomicI32::new(0)),
+        crate::connection::Idle::Expired
     ));
-    // The exit decision already ran: the accept loop drops the stream
-    // unanswered, and the client retries.
-    let stop = AtomicBool::new(true);
+    assert!(stop.load(Ordering::SeqCst), "the claim sets stop");
+    // The accept loop sees the claim: the stream is dropped unanswered,
+    // and the client retries.
     let (served, mut client) = UnixStream::pair().unwrap();
     client.set_read_timeout(Some(DEADLINE)).unwrap();
     assert!(matches!(
@@ -385,6 +304,44 @@ fn a_connection_accepted_after_the_exit_decision_gets_eof_without_hello() {
     assert_eq!(client.read_to_end(&mut got).expect("EOF, not a hello"), 0);
     assert!(got.is_empty());
     assert_eq!(hub.clients(), 0);
+}
+
+#[test]
+fn a_signal_stops_the_hub_with_its_code() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    // What the signal arm does: record, then wake.
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    assert!(!temp.socket().exists());
+    assert!(temp.log().contains("The hub stopped: signal."));
+}
+
+#[test]
+fn a_signal_shuts_down_connected_clients() {
+    let temp = Temp::new();
+    let clock = fakes::clock::FakeClock::new();
+    let (hub, got, done) = serve_with_hub(&temp, IDLE, Arc::clone(&clock));
+    await_idle_park(&clock, clock.origin(), "at start");
+    let mut client = connect(&temp);
+    // An open client parks with no deadline: only the wake ends it.
+    await_open_park(&clock, "after the arrival");
+    got.store(signal_hook::consts::SIGTERM, Ordering::SeqCst);
+    hub.waker().wake();
+    assert_eq!(done.recv_timeout(DEADLINE).expect("the hub stops"), 143);
+    // The shutdown closed the hub's end: EOF, and nothing after the hello.
+    let mut tail = String::new();
+    assert_eq!(
+        client
+            .read
+            .read_line(&mut tail)
+            .expect("the shutdown closes the socket"),
+        0,
+        "the client sees EOF after the hello"
+    );
 }
 
 #[test]

@@ -23,7 +23,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::SessionId;
-use contract::clock::Clock;
+use contract::clock::{Clock, Wake};
 use contract::shapes::Failure;
 
 use crate::connection::Hub;
@@ -68,16 +68,16 @@ pub fn serve(
     let hub = Arc::new(Hub::new(home, fiber_version, starter, clock));
     hub.diag.info("hub_started", "The hub started.");
     let got = Arc::new(AtomicI32::new(0));
-    arm(&got);
-    let exit = idle::run(&hub, &held, idle_exit, &hub.clock, &got);
+    arm(&got, hub.waker());
+    let exit = idle::run(&hub, &held, idle_exit, &got);
     held.stop();
     exit.code()
 }
 
-/// Arms SIGTERM, SIGINT and SIGHUP to end the hub through `got`. Tests
-/// simulate signals through the flag; one test raises a real signal at
-/// itself to prove the arm records it.
-fn arm(got: &Arc<AtomicI32>) {
+/// Arms SIGTERM, SIGINT and SIGHUP to end the hub through `got`, waking the
+/// idle wait through `wake`. Tests simulate signals the same way; one test
+/// raises a real signal at itself to prove the arm records it and wakes.
+fn arm(got: &Arc<AtomicI32>, wake: Arc<dyn Wake>) {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     use std::sync::atomic::Ordering;
 
@@ -91,6 +91,7 @@ fn arm(got: &Arc<AtomicI32>) {
         .spawn(move || {
             for signal in signals.forever() {
                 got.store(signal, Ordering::SeqCst);
+                wake.wake();
             }
         });
     if spawned.is_err() {}
