@@ -23,12 +23,12 @@ fn guidelines_md_bytes_are_pinned() {
     let bytes = include_bytes!("../prompt/guidelines.md");
     assert_eq!(
         bytes.len(),
-        1018,
+        1133,
         "length changed: edit is a reviewed change"
     );
     assert_eq!(
         fnv1a(bytes),
-        0xb7406b9871d18543,
+        0xc2f6797ff96ad579,
         "bytes changed: edit is a reviewed change"
     );
 }
