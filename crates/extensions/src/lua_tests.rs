@@ -450,6 +450,61 @@ fn the_thread_quits_once_stopped_with_a_callback_parked() {
     ));
 }
 
+/// While a command is parked, the next command does not start: a provider
+/// call queued behind the queued command still runs, which proves the
+/// thread judged the queue with the command in front of it.
+#[test]
+fn a_command_queued_behind_a_parked_command_does_not_start() {
+    let (url, accepted_rx) = hold_server();
+    let dir = extension(
+        "parked-second",
+        &format!(
+            "fiber.command(\"hold\", {{ timeout = 5000, run = function() return host.http({{ url = \"{url}\" }}).body end }})\n\
+             fiber.command(\"second\", {{ timeout = 5000, run = function() return \"second\" end }})\n\
+             fiber.provider(\"p\", {{ sign = {{ timeout = 1000, run = function() return {{}} end }} }})\n"
+        ),
+    );
+    let clock = FakeClock::new();
+    let (hub, hold, done) = serve_after(dir.path(), "hold", &clock);
+    accepted_rx
+        .recv_timeout(WAIT_UNTIL)
+        .expect("waited for hold to reach the server");
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&hold),
+        Some(Progress::Started { parked: true, .. })
+    )));
+    let asked = clock.now();
+    let (second, sign) = {
+        let mut shared = hub.lock();
+        let second = shared.push(command("second"), Value::Null, asked);
+        let sign = shared.push(
+            Target::Provider {
+                name: "p".to_owned(),
+                function: "sign",
+            },
+            Value::Null,
+            asked,
+        );
+        (second, sign)
+    };
+    hub.notify();
+    assert!(until(&hub, |s| matches!(
+        s.calls.get(&sign),
+        Some(Progress::Done(_))
+    )));
+    {
+        let shared = hub.lock();
+        assert!(
+            matches!(shared.calls.get(&second), Some(Progress::Queued)),
+            "the second command started while hold was parked"
+        );
+        assert!(shared.queue.iter().any(|job| job.id == second));
+    }
+    stop(&hub);
+    done.recv_timeout(WAIT_UNTIL)
+        .expect("waited for the extension thread to quit");
+}
+
 /// A thread stopped while a callback runs quits when that callback ends,
 /// and does not start the call queued behind it.
 #[test]
