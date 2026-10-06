@@ -3,7 +3,6 @@
 //! code.
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 
 use contract::ErrorCode;
@@ -19,10 +18,7 @@ const PNG: &[u8] = b"\x89PNG\r\n\x1a\nnot really a png";
 /// A stub `fiber` that runs `body` with `$2` the input, `$3` the artifacts
 /// directory and `$4` the stem.
 fn stub(dir: &Path, body: &str) -> PathBuf {
-    let path = dir.join("fiber-stub");
-    fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
-    fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
-    path
+    fakes::script(dir, "fiber-stub", body)
 }
 
 fn run_with(dir: &Path, fiber: &Path, name: &str) -> Output {

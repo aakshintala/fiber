@@ -10,7 +10,6 @@
 )]
 
 use std::fs;
-use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
@@ -35,17 +34,12 @@ fn text(output: &contract::tool::Output) -> String {
 /// A stand-in search binary: appends its arguments to `calls.log` beside
 /// itself, prints them, and exits `code`.
 fn stand_in(dir: &Path, name: &str, code: i32) -> PathBuf {
-    let script = dir.join(name);
-    fs::write(
-        &script,
-        format!(
-            "#!/bin/sh\nprintf '%s\\n' \"$@\" >> \"{}.log\"\nprintf 'STANDIN:%s\\n' \"$@\"\nexit {code}\n",
-            script.display()
-        ),
-    )
-    .unwrap();
-    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-    script
+    let target = dir.join(name);
+    let body = format!(
+        "printf '%s\\n' \"$@\" >> \"{}.log\"\nprintf 'STANDIN:%s\\n' \"$@\"\nexit {code}\n",
+        target.display()
+    );
+    fakes::script(dir, name, &body)
 }
 
 /// The arguments the stand-in recorded, or nothing when it never ran.
