@@ -575,7 +575,7 @@ fn a_pending_path_does_not_survive_a_semicolon() {
     let sources = vec![decl(
         "main",
         "crates/main/src/settings.rs",
-        "#[path = \"idle_tests.rs\"] use crate::idle;\nmod idle_tests;",
+        "#[path = \"idle_tests.rs\"] use idle;\nmod idle_tests;",
     )];
     let (expression, _) = test_filter(&files, &members(), &sources);
     assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");

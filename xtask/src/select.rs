@@ -564,18 +564,14 @@ fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
             },
             // Any other item ends the attribute run a pending `#[path]`
             // belonged to, so a `#[path]` on a non-`mod` item registers
-            // nothing. Only brace groups clear it: a paren group is
-            // `pub(crate)` between the attribute and its `mod`.
-            TokenTree::Punct(semi) if semi.as_char() == ';' => {
-                pending = None;
-            }
+            // nothing. Any punctuation but `#` and any brace group clear
+            // it: neither can sit between an attribute and its `mod`, while
+            // a paren group is the `(crate)` of `pub(crate) mod`.
+            TokenTree::Punct(_) => pending = None,
             TokenTree::Group(body) if body.delimiter() == proc_macro2::Delimiter::Brace => {
                 pending = None;
             }
-            TokenTree::Group(_)
-            | TokenTree::Ident(_)
-            | TokenTree::Punct(_)
-            | TokenTree::Literal(_) => {}
+            TokenTree::Group(_) | TokenTree::Ident(_) | TokenTree::Literal(_) => {}
         }
     }
     decls
