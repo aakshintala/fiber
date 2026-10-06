@@ -206,10 +206,9 @@ fn data_writes(
     workspace: &std::path::Path,
     home: &std::path::Path,
     effects: &[Effect],
-    paths: &[String],
+    paths: &[&str],
 ) -> bool {
-    let paths: Vec<&str> = paths.iter().map(String::as_str).collect();
-    fast_path(&declared(effects, Some(&paths)), workspace, home)
+    fast_path(&declared(effects, Some(paths)), workspace, home)
 }
 
 #[test]
@@ -217,27 +216,21 @@ fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
     let (_root, ws, home) = data_dirs();
     let path = |rest: &str| home.join(rest).display().to_string();
     let kept = path("data/n/x.md");
-    assert!(
-        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&kept)),
-        "{kept}"
-    );
     let fresh = path("data/n/new.md");
-    assert!(
-        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&fresh)),
-        "{fresh}"
-    );
     let nested = path("data/n/sub/new.md");
-    assert!(
-        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&nested)),
-        "{nested}"
-    );
+    for single in [&kept, &fresh, &nested] {
+        assert!(
+            data_writes(&ws, &home, &[Effect::Writes], &[single.as_str()]),
+            "{single}"
+        );
+    }
     let project = path("projects/k/data/n/x.md");
     assert!(
         data_writes(
             &ws,
             &home,
             &[Effect::Reads, Effect::Writes],
-            std::slice::from_ref(&project)
+            &[project.as_str()]
         ),
         "{project}"
     );
@@ -247,7 +240,7 @@ fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
             &ws,
             &home,
             &[Effect::Writes],
-            &[first.clone(), second.clone()]
+            &[first.as_str(), second.as_str()]
         ),
         "{first} + {second}"
     );
@@ -284,7 +277,7 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
         path("data/n/../../x.md"),
     ] {
         assert!(
-            !data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&single)),
+            !data_writes(&ws, &home, &[Effect::Writes], &[single.as_str()]),
             "{single}"
         );
     }
@@ -295,14 +288,19 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
     let upper = path("DATA/n/x.md");
     let folded = std::fs::canonicalize(&upper).is_ok_and(|p| p.starts_with(home.join("data/n")));
     assert_eq!(
-        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&upper)),
+        data_writes(&ws, &home, &[Effect::Writes], &[upper.as_str()]),
         folded,
         "{upper}"
     );
     let kept = path("data/n/a.md");
     let lua = path("data/n/b.lua");
     assert!(
-        !data_writes(&ws, &home, &[Effect::Writes], &[kept.clone(), lua.clone()]),
+        !data_writes(
+            &ws,
+            &home,
+            &[Effect::Writes],
+            &[kept.as_str(), lua.as_str()]
+        ),
         "{kept} + {lua}"
     );
     let workspace_file = ws.join("a.rs").display().to_string();
@@ -311,7 +309,7 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
             &ws,
             &home,
             &[Effect::Writes],
-            &[kept.clone(), workspace_file.clone()]
+            &[kept.as_str(), workspace_file.as_str()]
         ),
         "{kept} + {workspace_file}"
     );
@@ -322,12 +320,7 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
     );
     for effect in [Effect::Executes, Effect::Network] {
         assert!(
-            !data_writes(
-                &ws,
-                &home,
-                &[Effect::Writes, effect],
-                std::slice::from_ref(&kept)
-            ),
+            !data_writes(&ws, &home, &[Effect::Writes, effect], &[kept.as_str()]),
             "{kept} + {effect:?}"
         );
     }

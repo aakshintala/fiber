@@ -403,6 +403,15 @@ fn hello() -> Response {
     ])
 }
 
+/// An `openai-responses` stream answering `text`: what a scripted
+/// reviewer verdict reads as. Reviewer replies are never streamed to
+/// watchers, so no delta is needed, only the finished message.
+fn text_reply(text: &str) -> Response {
+    stream(&[json!({"type": "response.output_item.done", "item": {
+        "type": "message", "content": [{"type": "output_text", "text": text}]
+    }})])
+}
+
 fn tool_names(body: &[u8]) -> Vec<String> {
     let body: Value = serde_json::from_slice(body).unwrap();
     body["tools"]
@@ -1722,4 +1731,149 @@ fn markdown_writes_in_extension_data_directories_take_the_fast_path() {
             .all(|line| !line["kind"].as_str().unwrap().starts_with("permission_"))
     );
     assert_eq!(server.requests().len(), 5);
+}
+
+/// The event kinds of a turn whose first reply makes one reviewed write,
+/// which the reviewer blocks, and whose second is [`hello`]. Headless, no
+/// person can answer, so the block writes `permission_resolved` with no
+/// `permission_requested`; each reviewer stage still records its usage.
+fn blocked_write_kinds() -> Vec<&'static str> {
+    vec![
+        "session_started",
+        "fiber_started",
+        "extensions_loaded",
+        "preamble_built",
+        "opening_message",
+        "turn_started",
+        "step_started",
+        "assistant_message_started",
+        "tool_call_requested",
+        "usage_recorded",
+        "assistant_message_completed",
+        "usage_recorded",
+        "usage_recorded",
+        "permission_resolved",
+        "tool_call_completed",
+        "step_started",
+        "assistant_message_started",
+        "assistant_message_delta",
+        "assistant_message_delta",
+        "text_completed",
+        "usage_recorded",
+        "assistant_message_completed",
+        "turn_completed",
+        "fiber_exited",
+    ]
+}
+
+/// A run whose one `write` the reviewer blocked (`docs/testing.md`, "What
+/// a test asserts"): the call is refused, it never starts, and the target
+/// bytes are unchanged. The `permission_resolved` line names the reviewer
+/// as decider, and the provider server saw the reviewer's two stages
+/// beside the session's two replies.
+fn assert_blocked_by_reviewer(run: &Run, server: &ProviderServer) {
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), blocked_write_kinds());
+    let requested = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_requested")
+        .unwrap();
+    let action = &requested["action_id"];
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(&resolved["action_id"], action);
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(
+        resolved["payload"]["reviewer"],
+        json!({"model": "fake/m", "stage": 2})
+    );
+    let done = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap();
+    assert_eq!(&done["action_id"], action);
+    assert_eq!(done["payload"]["status"], "denied");
+    assert_eq!(done["payload"]["reason"], "reviewer");
+    assert!(
+        !run.lines
+            .iter()
+            .any(|line| line["kind"] == "tool_call_started" && &line["action_id"] == action)
+    );
+    assert_eq!(server.requests().len(), 4);
+}
+
+/// Points the session's reviewer at the fake server, beside the session's
+/// own model.
+fn with_reviewer(setup: &Setup) {
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"}}),
+    );
+}
+
+#[test]
+fn a_lua_write_in_a_data_directory_is_reviewed_and_blocked() {
+    let setup = Setup::new();
+    let lua = setup.home().join("data/notes/x.lua").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_lua",
+            "write",
+            &json!({"path": lua, "content": "return {}\n"}),
+        )]),
+        text_reply("check"),
+        text_reply("block Lua files may run as code"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    with_reviewer(&setup);
+
+    let run = setup.run(&["ask", "save the snippet"]);
+
+    assert_blocked_by_reviewer(&run, &server);
+    assert!(!setup.home().join("data/notes/x.lua").exists());
+}
+
+#[test]
+fn a_markdown_write_escaping_its_data_directory_through_a_link_is_reviewed_and_blocked() {
+    let setup = Setup::new();
+    fs::create_dir_all(setup.home().join("../outside")).unwrap();
+    let outside = fs::canonicalize(setup.home().join("../outside")).unwrap();
+    let target = outside.join("kept.md");
+    fs::write(&target, "away\n").unwrap();
+    let notes = setup.home().join("data/notes");
+    fs::create_dir_all(&notes).unwrap();
+    std::os::unix::fs::symlink(&target, notes.join("out.md")).unwrap();
+    let link = notes.join("out.md").display().to_string();
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "write_link",
+            "write",
+            &json!({"path": link, "content": "changed\n"}),
+        )]),
+        text_reply("check"),
+        text_reply("block the link leaves its data directory"),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    with_reviewer(&setup);
+
+    let run = setup.run(&["ask", "save the note"]);
+
+    assert_blocked_by_reviewer(&run, &server);
+    assert_eq!(fs::read(&target).unwrap(), b"away\n");
+    assert!(
+        fs::symlink_metadata(notes.join("out.md"))
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
