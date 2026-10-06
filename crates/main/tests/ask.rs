@@ -2424,16 +2424,6 @@ fn install_review_skill(setup: &Setup) {
     .unwrap();
 }
 
-/// Every string the JSON `value` holds, in order.
-fn texts(value: &Value, out: &mut Vec<String>) {
-    match value {
-        Value::String(text) => out.push(text.clone()),
-        Value::Array(items) => items.iter().for_each(|item| texts(item, out)),
-        Value::Object(map) => map.values().for_each(|item| texts(item, out)),
-        Value::Null | Value::Bool(_) | Value::Number(_) => {}
-    }
-}
-
 #[test]
 fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
     let setup = Setup::new();
@@ -2444,15 +2434,16 @@ fn a_slash_prompt_runs_the_skill_with_the_rest_as_its_arguments() {
     let run = setup.fiber(&["ask", "/review-pr 42"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     let expanded = "Review the pull request named in the arguments.\n\n42";
     assert_eq!(turn_input(&run), expanded);
     // The fake provider's received user message carries the expanded text.
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
-    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    let mut found = Vec::new();
-    texts(&body, &mut found);
-    assert!(found.iter().any(|text| text == expanded), "{found:?}");
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string(expanded).unwrap())
+    );
 }
 
 #[test]
@@ -2465,13 +2456,14 @@ fn a_prompt_naming_no_skill_is_sent_as_written() {
     let run = setup.fiber(&["ask", "/nope x"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "/nope x");
     let requests = server.requests();
     assert_eq!(requests.len(), 1);
-    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
-    let mut found = Vec::new();
-    texts(&body, &mut found);
-    assert!(found.iter().any(|text| text == "/nope x"), "{found:?}");
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string("/nope x").unwrap())
+    );
 }
 
 #[test]
@@ -2492,5 +2484,6 @@ fn a_slash_prompt_runs_a_prompt_template() {
     let run = setup.fiber(&["ask", "/plan 42"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     assert_eq!(turn_input(&run), "Plan the work below.\n\n42");
 }

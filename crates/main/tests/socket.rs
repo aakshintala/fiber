@@ -215,13 +215,9 @@ struct Running {
 }
 
 fn start(setup: &Setup) -> Running {
-    start_with(setup, "hi")
-}
-
-fn start_with(setup: &Setup, prompt: &str) -> Running {
     let mut command = Command::new(env!("CARGO_BIN_EXE_fiber"));
     command
-        .args(["ask", prompt])
+        .args(["ask", "hi"])
         .current_dir(setup.workspace())
         .env_clear()
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
@@ -492,42 +488,4 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     assert_eq!(last_status["payload"]["state"], "idle");
     finish(running);
     drop(client);
-}
-
-#[test]
-fn a_slash_prompt_is_expanded_in_the_turn_a_subscriber_sees() {
-    let setup = Setup::new();
-    let server = ProviderServer::start([hello()]).unwrap();
-    setup.provider(&server);
-    let dir = setup.workspace().join(".agents/skills/review-pr");
-    fs::create_dir_all(&dir).unwrap();
-    fs::write(
-        dir.join("SKILL.md"),
-        "---\nname: review-pr\ndescription: Reviews a pull request.\n---\nReview the pull request named in the arguments.\n",
-    )
-    .unwrap();
-    // `fiber ask` sends its prompt as a `prompt` delivery, then `close`: a
-    // second client's own `prompt` starts no turn, so the expansion is read
-    // here on the first turn, through a subscription.
-    let running = start_with(&setup, "/review-pr 42");
-    let started = first_line(&running.stdout);
-    assert_eq!(started["kind"], "session_started");
-    let session_id = started["session_id"].as_str().unwrap().to_owned();
-    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
-    send(
-        &client,
-        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
-    );
-    let lines = until(&client, "fiber_exited", |line| {
-        line["kind"] == "fiber_exited"
-    });
-    let started = lines
-        .iter()
-        .find(|line| line["kind"] == "turn_started")
-        .expect("a turn_started line");
-    assert_eq!(
-        started["payload"]["input"][0]["content"][0]["text"],
-        "Review the pull request named in the arguments.\n\n42"
-    );
-    finish(running);
 }

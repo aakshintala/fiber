@@ -39,15 +39,15 @@ struct Entry<'a> {
 /// (no opening or closing `---`). Everything after the closing fence is
 /// the body, including a later `---` line.
 pub(crate) fn body(text: &str) -> Option<&str> {
-    // The header's two fences, read like `parse` reads them: exactly
-    // `---`, down to the `\r` of a CRLF ending.
+    // The closing fence, read like `parse` reads it: exactly `---`,
+    // down to the `\r` of a CRLF ending.
     let mut offset = 0;
-    let mut body_start = None;
+    let mut found = None;
     for (index, line) in text.split('\n').enumerate() {
         let stripped = line.strip_suffix('\r').unwrap_or(line);
         if stripped == "---" {
             if index > 0 {
-                body_start = Some((offset + line.len() + 1).min(text.len()));
+                found = Some((offset + line.len() + 1).min(text.len()));
                 break;
             }
         } else if index == 0 {
@@ -55,43 +55,15 @@ pub(crate) fn body(text: &str) -> Option<&str> {
         }
         offset += line.len() + 1;
     }
-    let mut start = body_start?;
-    let mut end = text.len();
-    // Leading blank lines go, with their line endings.
-    while start < end {
-        let line_end = text[start..end].find('\n').map_or(end, |at| start + at);
-        let line = &text[start..line_end];
-        if !line.strip_suffix('\r').unwrap_or(line).trim().is_empty() {
-            break;
-        }
-        start = if line_end < end {
-            line_end + 1
-        } else {
-            line_end
-        };
-    }
-    // Trailing blank lines go, with the newline before each.
-    while start < end {
-        let last = &text[start..end];
-        match last.rfind('\n') {
-            Some(at)
-                if last[at + 1..]
-                    .strip_suffix('\r')
-                    .unwrap_or(&last[at + 1..])
-                    .trim()
-                    .is_empty() =>
-            {
-                end = start + at;
-            }
-            None if last.strip_suffix('\r').unwrap_or(last).trim().is_empty() => {
-                end = start;
-            }
-            _ => break,
-        }
-    }
-    // The `\r` a CRLF ending leaves on the last line is the line ending,
-    // not content: the newline before it went with the trailing blanks.
-    let out = &text[start..end];
+    let rest = &text[found?..];
+    let lead = rest.len() - rest.trim_start().len();
+    let start = rest[..lead].rfind('\n').map_or(0, |i| i + 1);
+    let mid = &rest[start..];
+    let kept = mid.trim_end().len();
+    let end = mid[kept..]
+        .find('\n')
+        .map_or(rest.len(), |at| start + kept + at);
+    let out = &rest[start..end];
     Some(out.strip_suffix('\r').unwrap_or(out))
 }
 
