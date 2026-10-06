@@ -21,6 +21,7 @@ use contract::emit::Emit;
 use contract::events::TurnOutcome;
 use contract::inbox::Delivery;
 use contract::provider::{Input, Provider};
+use contract::rules::{Rule, RuleDecision, StandingRules};
 use contract::shapes::{ContentPart, DeclaredEffects, Effect};
 use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{Envelope, SessionId};
@@ -82,6 +83,63 @@ impl Tool for WriteAgents {
 
 fn city() -> Value {
     json!({"city": "Paris"})
+}
+
+/// A tool whose calls rewrite `<home>/AGENTS.md`, outside the workspace.
+/// The declared path is the absolute path the opening message records:
+/// the canonical home joined with `AGENTS.md`.
+struct WriteHome {
+    home: Mutex<PathBuf>,
+}
+
+impl WriteHome {
+    fn target(&self) -> PathBuf {
+        self.home
+            .lock()
+            .unwrap()
+            .canonicalize()
+            .unwrap()
+            .join("AGENTS.md")
+    }
+}
+
+impl Tool for WriteHome {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "write_home".into(),
+            description: "The test home write tool.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": false
+            }),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Writes],
+                reversible: true,
+                paths: Some(vec![self.target().display().to_string()]),
+            },
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        std::fs::write(self.target(), "Global, revised.\n").unwrap();
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Wrote it.".into(),
+            }],
+            ..Output::default()
+        }
+    }
 }
 
 fn users(conversation: &[Input]) -> usize {
@@ -276,6 +334,557 @@ fn an_own_edit_is_recorded_after_the_call_and_sends_nothing() {
     assert_eq!(requests.len(), 2);
     assert_eq!(users(&requests[0].conversation), 2);
     assert_eq!(users(&requests[1].conversation), 2);
+}
+
+#[test]
+fn an_own_edit_outside_the_workspace_is_recorded_and_sends_nothing() {
+    let writer = Arc::new(WriteHome {
+        home: Mutex::new(PathBuf::new()),
+    });
+    let mut session = Session::with_tools(
+        vec![
+            calls_reply("Working.", &[("write_home", city())]),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![Arc::clone(&writer) as Arc<dyn Tool>],
+    );
+    let home = session.dir.parent().unwrap().to_path_buf();
+    std::fs::write(home.join("AGENTS.md"), "Global.\n").unwrap();
+    *writer.home.lock().unwrap() = home;
+    // Outside the workspace the call takes no fast path: a standing
+    // allow lets it run without asking a person.
+    session.rules.set(allow("write_home"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: the own edit lands with its call's
+    // completion, before the next step starts.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let own = lines
+        .iter()
+        .find(|line| line.kind == "instruction_file")
+        .unwrap();
+    assert_eq!(own.payload["reason"], "own_edit");
+    assert_eq!(own.payload["sent"], "none");
+    assert_eq!(own.payload["content"], "Global, revised.\n");
+    // Nothing was sent: both requests hold the opening and the prompt only.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(users(&requests[0].conversation), 2);
+    assert_eq!(users(&requests[1].conversation), 2);
+}
+
+/// A standing allow for `tool`, so its calls run without asking a person.
+fn allow(tool: &str) -> StandingRules {
+    StandingRules {
+        global: vec![Rule {
+            decision: RuleDecision::Allow,
+            tool: tool.into(),
+            prefix: String::new(),
+            added: None,
+            session_id: None,
+        }],
+        project: Vec::new(),
+    }
+}
+
+/// The prompt's extension sections: each extension's name, its files'
+/// paths, and its budget.
+type Sections = Vec<(String, Vec<PathBuf>, Option<u64>)>;
+
+/// A section file outside every temporary home, and the manifest entry
+/// naming it: the tests own the directory, so its path is known before
+/// the session is built.
+fn section(content: &str) -> (fakes::TempDir, PathBuf, Sections) {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    std::fs::write(&path, content).unwrap();
+    let sections = vec![("fiber.test/notes".to_owned(), vec![path.clone()], None)];
+    (held, path, sections)
+}
+
+#[test]
+fn an_own_write_to_a_section_file_sends_nothing_at_the_next_turn() {
+    let (_held, path, sections) = section("Notes.\n");
+    let writer = Arc::new(support::WriteFile {
+        name: "write",
+        target: path,
+        content: "Revised by the call.\n".into(),
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("write", city())]),
+            Scripted::text("Done."),
+            Scripted::text("After."),
+        ],
+        vec![writer as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("write"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: the own edit lands with its call's
+    // completion, before the next step starts.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let own = lines
+        .iter()
+        .find(|line| line.kind == "instruction_file")
+        .unwrap();
+    assert_eq!(own.payload["reason"], "own_edit");
+    assert_eq!(own.payload["extension"], "fiber.test/notes");
+    assert_eq!(own.payload["sent"], "none");
+    assert_eq!(own.payload["content"], "Revised by the call.\n");
+    // Nothing was sent: both requests hold the opening and the prompt only.
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(users(&requests[0].conversation), 2);
+    assert_eq!(users(&requests[1].conversation), 2);
+    // The next turn starts with no change.
+    session.inbox.send(delivery("again")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), later_text_turn());
+}
+
+#[test]
+fn an_outside_edit_to_a_section_file_sends_a_diff_at_the_next_turn() {
+    let old = (0..100).map(|n| format!("line {n}\n")).collect::<String>();
+    let (_held, path, sections) = section(&old);
+    let mut session = Session::sectioned(
+        vec![Scripted::text("One."), Scripted::text("Two.")],
+        sections,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
+    let new = old.replace("line 50\n", "line fifty\n");
+    std::fs::write(&path, &new).unwrap();
+    session.inbox.send(delivery("again")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let mut changed = vec!["instruction_file"];
+    changed.extend(later_text_turn());
+    assert_eq!(kinds(&lines), changed);
+    assert_eq!(lines[0].payload["reason"], "changed");
+    assert_eq!(lines[0].payload["extension"], "fiber.test/notes");
+    assert_eq!(lines[0].payload["sent"], "diff");
+    assert_eq!(lines[0].payload["content"], new);
+    let requests = session.requests();
+    assert!(
+        requests[1]
+            .conversation
+            .iter()
+            .any(|input| matches!(input, Input::User { text } if text.contains("Apply this diff"))),
+        "{:?}",
+        requests[1].conversation
+    );
+}
+
+#[test]
+fn an_outside_deletion_of_a_section_file_sends_one_line() {
+    let (_held, path, sections) = section("Notes.\n");
+    let mut session = Session::sectioned(
+        vec![Scripted::text("One."), Scripted::text("Two.")],
+        sections,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
+    std::fs::remove_file(&path).unwrap();
+    session.inbox.send(delivery("again")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let mut deleted = vec!["instruction_file"];
+    deleted.extend(later_text_turn());
+    assert_eq!(kinds(&lines), deleted);
+    assert_eq!(lines[0].payload["reason"], "deleted");
+    assert_eq!(lines[0].payload["extension"], "fiber.test/notes");
+    assert_eq!(lines[0].payload["sent"], "deleted");
+    assert!(lines[0].payload.get("content").is_none());
+}
+
+#[test]
+fn an_outside_creation_of_a_section_file_sends_its_full_text() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    // The manifest names a path that does not exist yet.
+    let sections = vec![("fiber.test/notes".to_owned(), vec![path.clone()], None)];
+    let mut session = Session::sectioned(
+        vec![Scripted::text("One."), Scripted::text("Two.")],
+        sections,
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    assert_eq!(kinds(&session.lines()), first_text_turn());
+    std::fs::write(&path, "New notes.\n").unwrap();
+    session.inbox.send(delivery("again")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let mut created = vec!["instruction_file"];
+    created.extend(later_text_turn());
+    assert_eq!(kinds(&lines), created);
+    assert_eq!(lines[0].payload["reason"], "created");
+    assert_eq!(lines[0].payload["extension"], "fiber.test/notes");
+    assert_eq!(lines[0].payload["sent"], "full");
+    assert_eq!(lines[0].payload["content"], "New notes.\n");
+    let requests = session.requests();
+    assert!(
+        requests[1].conversation.iter().any(
+            |input| matches!(input, Input::User { text } if text.contains("a new file appeared in the fiber.test/notes extension's section"))
+        ),
+        "{:?}",
+        requests[1].conversation
+    );
+    drop(held);
+}
+
+/// A section file budgeted at `budget`, holding `content`: the manifest
+/// entry naming it.
+fn budgeted(path: &std::path::Path, budget: u64, content: &str) -> Sections {
+    std::fs::write(path, content).unwrap();
+    vec![(
+        "fiber.test/notes".to_owned(),
+        vec![path.to_path_buf()],
+        Some(budget),
+    )]
+}
+
+/// The text parts of a `tool_call_completed` line's content.
+fn texts(line: &Envelope) -> Vec<&str> {
+    line.payload["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|part| part.get("text").and_then(|text| text.as_str()))
+        .collect()
+}
+
+#[test]
+fn an_over_budget_write_ends_its_result_with_the_prune_line() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    let sections = budgeted(&path, 5, "1234");
+    let writer = Arc::new(support::WriteFile {
+        name: "write",
+        target: path,
+        content: "123456".into(),
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("write", city())]),
+            Scripted::text("Done."),
+        ],
+        vec![writer as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("write"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: the own edit lands with its call's
+    // completion, before the next step starts, and the prune line ends
+    // the call's result.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert_eq!(done.payload["status"], "completed");
+    let parts = texts(done);
+    assert_eq!(
+        *parts.last().unwrap(),
+        "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them."
+    );
+    // The own edit is recorded too, with nothing sent.
+    let own = lines
+        .iter()
+        .find(|line| line.kind == "instruction_file")
+        .unwrap();
+    assert_eq!(own.payload["reason"], "own_edit");
+    assert_eq!(own.payload["sent"], "none");
+    drop(held);
+}
+
+#[test]
+fn an_under_budget_write_has_no_prune_line() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    let sections = budgeted(&path, 5, "1234");
+    let writer = Arc::new(support::WriteFile {
+        name: "edit",
+        target: path,
+        content: "12".into(),
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("edit", city())]),
+            Scripted::text("Done."),
+        ],
+        vec![writer as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("edit"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: the own edit lands with its call's
+    // completion, before the next step starts.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "instruction_file",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert!(
+        texts(done).iter().all(|text| !text.contains("Prune them")),
+        "{}",
+        done.payload["content"]
+    );
+    drop(held);
+}
+
+#[test]
+fn a_write_touching_no_section_file_has_no_prune_line() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    // Over budget, but the call touches another file.
+    let sections = budgeted(&path, 5, "123456");
+    let writer = Arc::new(support::WriteFile {
+        name: "write",
+        target: held.path().join("b.md"),
+        content: "Elsewhere.\n".into(),
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("write", city())]),
+            Scripted::text("Done."),
+        ],
+        vec![writer as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("write"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: the write touches no section file,
+    // so no own edit is recorded and no prune line ends the result.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert!(
+        texts(done).iter().all(|text| !text.contains("Prune them")),
+        "{}",
+        done.payload["content"]
+    );
+    drop(held);
+}
+
+#[test]
+fn a_failed_write_over_budget_has_no_prune_line() {
+    let held = fakes::TempDir::new("fiber-section-file");
+    let path = held.path().join("a.md");
+    // Over budget on disk, but the call fails.
+    let sections = budgeted(&path, 5, "123456");
+    let mut failing = support::TestTool::failing("write", contract::ErrorCode::ToolError);
+    failing.effects = Ok(DeclaredEffects {
+        effects: vec![Effect::Writes],
+        reversible: true,
+        paths: Some(vec![path.display().to_string()]),
+    });
+    let mut session = Session::with_tools_sectioned(
+        vec![
+            calls_reply("Working.", &[("write", city())]),
+            Scripted::text("Done."),
+        ],
+        vec![Arc::new(failing) as Arc<dyn Tool>],
+        sections,
+    );
+    session.rules.set(allow("write"));
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    // The complete turn, in order: the call fails, so no own edit is
+    // recorded and no prune line ends the result.
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "tool_call_arguments_delta",
+            "text_completed",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let done = lines
+        .iter()
+        .find(|line| line.kind == "tool_call_completed")
+        .unwrap();
+    assert_eq!(done.payload["status"], "failed");
+    assert!(
+        texts(done).iter().all(|text| !text.contains("Prune them")),
+        "{}",
+        done.payload["content"]
+    );
+    drop(held);
 }
 
 #[test]

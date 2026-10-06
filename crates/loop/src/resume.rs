@@ -269,7 +269,7 @@ impl Loop {
         // an opening message; without one the first turn writes it fresh
         // and rebuilds the state from it.
         let changes = if opened {
-            crate::changes::State::resumed(lines, &workspace, &prompt.home)?
+            crate::changes::State::resumed(lines, &workspace, &prompt)?
         } else {
             crate::changes::State::empty(&prompt.home)
         };

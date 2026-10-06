@@ -2445,6 +2445,7 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
     assert_kinds(
         &second,
         &[
+            &["instruction_file"],
             &["turn_started"],
             STEP,
             CALL_BODY,
@@ -2454,6 +2455,14 @@ fn a_handoff_rebuilds_the_section_from_its_current_files() {
             ENDED,
         ],
     );
+    // The turn-start check reports the outside edit as a diff naming the
+    // section, before the handoff rebuilds from the current files.
+    let changed = of_kind(&second, "instruction_file");
+    assert_eq!(changed.len(), 1);
+    assert_eq!(changed[0].payload["reason"], "changed");
+    assert_eq!(changed[0].payload["extension"], "fiber.test/notes");
+    // A one-line file: the diff headers outweigh it, so the full text.
+    assert_eq!(changed[0].payload["sent"], "full");
     // The handoff's rebuild carries the current content, v2.
     let rebuilt = of_kind(&second, "opening_message");
     assert_eq!(rebuilt.len(), 1);

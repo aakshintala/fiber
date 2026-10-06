@@ -687,7 +687,7 @@ impl Loop {
         let Some(call) = running.iter_mut().find(|call| !is_done(call)) else {
             return Ok(false);
         };
-        let completed = match &call.state {
+        let mut completed = match &call.state {
             State::Done => return Ok(false),
             // A decided call the cancel reached before its completion was
             // written completes `cancelled`: a denial or failure decided
@@ -712,10 +712,20 @@ impl Loop {
                 None => return Ok(false),
             },
         };
-        let declared = match &call.state {
-            State::Running { declared, .. } => Some(declared.clone()),
-            State::Ready(_) | State::Done => None,
+        let (tool, declared) = match &call.state {
+            State::Running { tool, declared, .. } => (Some(tool.clone()), Some(declared.clone())),
+            State::Ready(_) | State::Done => (None, None),
         };
+        // An over-budget section a completed `write` or `edit` touched
+        // ends its result with the prune line, before the line is
+        // written; the session's own edits below come after it.
+        if let (Some(tool), Some(declared)) = (tool.as_deref(), declared.as_ref())
+            && completed.status == CallStatus::Completed
+        {
+            for line in self.changes.prune_lines(&self.workspace, tool, declared) {
+                completed.content.push(ContentPart::Text { text: line });
+            }
+        }
         call.state = State::Done;
         self.append(&Event::ToolCallCompleted(*completed), turn, Some(&call.id))?;
         // The session's own edits and subdirectory files: a call that ran

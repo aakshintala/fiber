@@ -180,6 +180,17 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
     )
 }
 
+/// The prune line ending an over-budget section, and the line a
+/// `write` or `edit` result carries while its section is over budget
+/// (`docs/system-prompt.md`, "Extension sections"): one helper, so the
+/// two never drift.
+pub(crate) fn budget_line(size: u64, budget: u64) -> String {
+    fill(
+        &crate::prompt::body(MESSAGES_MD, "budget-line"),
+        &[("size", &size.to_string()), ("budget", &budget.to_string())],
+    )
+}
+
 /// One extension section, rendered from its logged fields only: each file
 /// under its path, then the budget line when the files together are over
 /// the budget (`docs/system-prompt.md`, "Extension sections").
@@ -216,10 +227,7 @@ fn render_section(section: &ExtensionSectionSent) -> String {
         && size > budget
     {
         text.push_str("\n\n");
-        text.push_str(&fill(
-            &crate::prompt::body(MESSAGES_MD, "budget-line"),
-            &[("size", &size.to_string()), ("budget", &budget.to_string())],
-        ));
+        text.push_str(&budget_line(size, budget));
     }
     text
 }

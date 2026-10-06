@@ -327,6 +327,54 @@ impl Tool for TestTool {
     }
 }
 
+/// A tool named `name` whose calls overwrite `target` with `content`,
+/// declaring the absolute path. A stand-in for the `write` and `edit`
+/// tools in section-file tests.
+pub(crate) struct WriteFile {
+    pub(crate) name: &'static str,
+    pub(crate) target: PathBuf,
+    pub(crate) content: String,
+}
+
+impl Tool for WriteFile {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: self.name.into(),
+            description: "The test file write tool.".into(),
+            input_schema: json!({
+                "type": "object",
+                "properties": {"city": {"type": "string"}},
+                "required": ["city"],
+                "additionalProperties": false
+            }),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Ok(Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Writes],
+                reversible: true,
+                paths: Some(vec![self.target.display().to_string()]),
+            },
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
+        std::fs::write(&self.target, &self.content).unwrap();
+        Output {
+            content: vec![ContentPart::Text {
+                text: "Wrote it.".into(),
+            }],
+            ..Output::default()
+        }
+    }
+}
+
 /// One step of a test tool's scripted run: emit an event through the
 /// call's emitter, or rendezvous with the test at a gate.
 pub(crate) enum Script {
@@ -730,6 +778,16 @@ impl Session {
         sections: Vec<(String, Vec<std::path::PathBuf>, Option<u64>)>,
     ) -> Self {
         Self::open_sectioned(script, Vec::new(), Vec::new(), unpriced(), sections)
+    }
+
+    /// As [`Session::with_tools`], with `sections` as the prompt's
+    /// extension sections.
+    pub(crate) fn with_tools_sectioned(
+        script: Vec<Scripted>,
+        tools: Vec<Arc<dyn Tool>>,
+        sections: Vec<(String, Vec<std::path::PathBuf>, Option<u64>)>,
+    ) -> Self {
+        Self::open_sectioned(script, Vec::new(), tools, unpriced(), sections)
     }
 
     /// A session whose `fire_at`-th model call (1-based) fires the session's

@@ -66,8 +66,37 @@ fn readonly(path: &Path, yes: bool) {
 /// from the message and folded into what the model had, as the loop's
 /// render does when it writes the line.
 fn initial(home: &Path, workspace: &Path, clock: &Arc<FakeClock>) -> State {
-    let collected = opening::collect(&inputs(home, clock), workspace);
-    let mut state = State::initial(&collected.message, workspace, home);
+    let prompt = inputs(home, clock);
+    let collected = opening::collect(&prompt, workspace);
+    let mut state = State::initial(&collected.message, workspace, &prompt);
+    apply(&mut state.had, &Event::OpeningMessage(collected.message));
+    state
+}
+
+/// The prompt's extension sections: each extension's name, its files'
+/// paths, and its budget.
+type Sections = Vec<(String, Vec<PathBuf>, Option<u64>)>;
+
+/// `inputs` with `sections` as the prompt's extension sections: each
+/// extension's name, its files' paths, and its budget.
+fn sectioned_inputs(home: &Path, clock: &Arc<FakeClock>, sections: Sections) -> PromptInputs {
+    let mut prompt = inputs(home, clock);
+    prompt.extension_sections = sections;
+    prompt
+}
+
+/// The state after an opening message over `workspace` with `sections`:
+/// built from the message and folded into what the model had, as the
+/// loop's render does when it writes the line.
+fn initial_sectioned(
+    home: &Path,
+    workspace: &Path,
+    clock: &Arc<FakeClock>,
+    sections: Sections,
+) -> State {
+    let prompt = sectioned_inputs(home, clock, sections);
+    let collected = opening::collect(&prompt, workspace);
+    let mut state = State::initial(&collected.message, workspace, &prompt);
     apply(&mut state.had, &Event::OpeningMessage(collected.message));
     state
 }
@@ -632,6 +661,24 @@ fn own_edit_ignores_undeclared_outside_and_unresolvable_paths() {
 }
 
 #[test]
+fn untracked_path_outside_the_workspace_changes_nothing() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let fake = clock();
+    let mut state = initial(&home, &workspace, &fake);
+    let workspace = canon(&workspace);
+    let before = state.dirs.clone();
+    // Outside the workspace and never tracked: no own edit, and no
+    // subdirectory is adopted above the workspace.
+    write(&home.join("outside.txt"), "Outside.\n");
+    let own = state.call_completed(&workspace, &declared(Some(&["../outside.txt"])));
+    assert!(own.is_empty());
+    assert!(state.take_queued().is_empty());
+    assert_eq!(state.dirs, before);
+}
+
+#[test]
 fn own_call_on_a_file_under_a_file_records_nothing() {
     let (home, _held) = root();
     let workspace = home.join("workspace");
@@ -745,7 +792,7 @@ fn resumed_state_reads_each_file_before_sending() {
     let lines = vec![envelope("opening_message", &Event::OpeningMessage(message))];
     // No size or time remembered: an identical file sends nothing, without
     // a recorded stat to shortcut on.
-    let mut state = State::resumed(&lines, &workspace, &home).unwrap();
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
     let out = state.check(&*fake);
     assert!(out.files.is_empty());
     assert!(out.notices.is_empty());
@@ -788,7 +835,7 @@ fn resumed_state_folds_changes_deletes_and_the_date() {
     ];
     // The deletion really happened: the file is gone from the disk.
     std::fs::remove_file(&gone).unwrap();
-    let mut state = State::resumed(&lines, &workspace, &home).unwrap();
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
     // The fold matches the live map: the kept file sends nothing, the
     // deleted one stays silent while gone, and the date is last given.
     let out = state.check(&*fake);
@@ -811,7 +858,7 @@ fn resumed_state_forgets_subdirectories_that_held_no_file() {
     let fake = clock();
     let message = opening::collect(&inputs(&home, &fake), &workspace).message;
     let lines = vec![envelope("opening_message", &Event::OpeningMessage(message))];
-    let state = State::resumed(&lines, &workspace, &home).unwrap();
+    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
     // `lonely/` was checked before the resume but never sent a file, so
     // the log cannot restore it: touching it again checks it.
     assert!(!state.dirs.contains(&workspace.join("lonely")));
@@ -1476,5 +1523,498 @@ fn home_through_a_file_names_its_global_file() {
         out.notices[0]
             .message
             .contains(&home_file.join("AGENTS.md").display().to_string())
+    );
+}
+
+/// One section file under `home`, with `budget` as its budget: the path
+/// and the manifest entry naming it.
+fn section_file(home: &Path, budget: Option<u64>) -> (PathBuf, Sections) {
+    let path = home.join("data/fiber.test-notes/a.md");
+    let sections = vec![("fiber.test/notes".into(), vec![path.clone()], budget)];
+    (path, sections)
+}
+
+#[test]
+fn section_file_changed_outside_gives_a_diff_with_extension() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    let old = (0..100).map(|n| format!("line {n}\n")).collect::<String>();
+    write(&path, &old);
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    let new = old.replace("line 50\n", "line fifty\n");
+    write(&path, &new);
+    let out = state.check(&*fake);
+    assert!(out.notices.is_empty());
+    assert_eq!(out.files.len(), 1);
+    let change = &out.files[0];
+    assert_eq!(change.path, path.display().to_string());
+    assert_eq!(change.reason, InstructionReason::Changed);
+    assert_eq!(change.extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(change.sent, InstructionSent::Diff);
+    assert_eq!(change.content.as_deref(), Some(new.as_str()));
+}
+
+#[test]
+fn section_file_changed_wholesale_sends_full_text_with_extension() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "ab\n");
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    // A wholesale change to a tiny file: the headers alone outweigh it.
+    write(&path, "cd\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+    assert_eq!(out.files[0].content.as_deref(), Some("cd\n"));
+}
+
+#[test]
+fn section_file_deleted_gives_one_line_with_extension() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    std::fs::remove_file(&path).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Deleted);
+    assert_eq!(out.files[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(out.files[0].sent, InstructionSent::Deleted);
+    assert_eq!(out.files[0].content, None);
+    for line in &out.files {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // Still gone: nothing more to say.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn section_file_absent_at_build_is_created_with_full_text() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // The manifest names a path that does not exist: the build sends
+    // nothing for it.
+    let (path, sections) = section_file(&home, None);
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    write(&path, "New notes.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+    assert_eq!(out.files[0].content.as_deref(), Some("New notes.\n"));
+}
+
+#[test]
+fn section_file_untouched_sends_nothing() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    // Present and untouched: silence. The manifest's other path stays
+    // absent: silence too.
+    let mut sections = sections;
+    sections[0]
+        .1
+        .push(home.join("data/fiber.test-notes/missing.md"));
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn unreadable_section_file_names_the_section_once() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    // A directory where the file was: size and time differ, and no read
+    // succeeds, on any platform and user.
+    std::fs::remove_file(&path).unwrap();
+    std::fs::create_dir(&path).unwrap();
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert_eq!(out.notices.len(), 1);
+    assert_eq!(
+        out.notices[0].extension.as_deref(),
+        Some("fiber.test/notes")
+    );
+    assert!(out.notices[0].message.contains(&path.display().to_string()));
+    // Same size and time: the notice does not repeat.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    std::fs::remove_dir_all(&path).unwrap();
+}
+
+#[test]
+fn apply_opening_inserts_section_files_into_had() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    let message = opening::collect(&sectioned_inputs(&home, &fake, sections), &workspace).message;
+    assert_eq!(message.extension_sections.len(), 1);
+    let mut had = BTreeMap::new();
+    apply(&mut had, &Event::OpeningMessage(message));
+    assert_eq!(
+        had.get(&path.display().to_string()),
+        Some(&"Notes.\n".to_owned())
+    );
+}
+
+#[test]
+fn path_in_both_roles_is_tracked_once_with_the_section_extension() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    let file = workspace.join("AGENTS.md");
+    write(&file, "Leaf.\n");
+    let fake = clock();
+    // The manifest names the workspace instruction file too.
+    let sections = vec![("fiber.test/notes".into(), vec![canon(&file)], None)];
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    // Tracked once, under one key.
+    assert_eq!(state.files.len(), 1);
+    write(&file, "Leaf, revised.\n");
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].extension.as_deref(), Some("fiber.test/notes"));
+}
+
+#[test]
+fn resumed_restores_section_paths_and_had() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    let old = (0..100).map(|n| format!("line {n}\n")).collect::<String>();
+    write(&path, &old);
+    let fake = clock();
+    let prompt = sectioned_inputs(&home, &fake, sections);
+    let message = opening::collect(&prompt, &workspace).message;
+    let lines = vec![envelope("opening_message", &Event::OpeningMessage(message))];
+    let mut state = State::resumed(&lines, &workspace, &prompt).unwrap();
+    // What the model had comes from the section files.
+    assert_eq!(state.had.get(&path.display().to_string()), Some(&old));
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    // An outside edit after the resume gives a diff with the extension.
+    let new = old.replace("line 50\n", "line fifty\n");
+    write(&path, &new);
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Changed);
+    assert_eq!(out.files[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(out.files[0].sent, InstructionSent::Diff);
+}
+
+#[test]
+fn resumed_ignores_a_section_path_the_manifest_no_longer_names() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    // The log's opening message sent the section file, but today's
+    // manifest names nothing.
+    let message = opening::collect(&sectioned_inputs(&home, &fake, sections), &workspace).message;
+    assert_eq!(message.extension_sections.len(), 1);
+    let lines = vec![envelope("opening_message", &Event::OpeningMessage(message))];
+    let mut state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    // Deleted after the resume: not tracked, so not even a deleted line.
+    std::fs::remove_file(&path).unwrap();
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn resumed_ignores_a_historical_section_line_the_manifest_no_longer_names() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    // The log holds a section `own_edit` for the path, but today's
+    // manifest names nothing.
+    let message = opening::collect(&sectioned_inputs(&home, &fake, sections), &workspace).message;
+    assert_eq!(message.extension_sections.len(), 1);
+    let key = path.display().to_string();
+    let own = Event::InstructionFile(contract::events::InstructionFile {
+        path: key.clone(),
+        reason: InstructionReason::OwnEdit,
+        extension: Some("fiber.test/notes".into()),
+        content: Some("Revised by the call.\n".into()),
+        sent: InstructionSent::None,
+    });
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        envelope("instruction_file", &own),
+    ];
+    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    // Neither the path nor its directory is tracked.
+    assert!(!state.files.contains_key(&key));
+    assert!(!state.dirs.contains(path.parent().unwrap()));
+    let mut state = state;
+    // Edited outside after the resume: not tracked, so nothing sent.
+    write(&path, "Edited outside.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    assert!(!state.files.contains_key(&key));
+    // Deleted after the resume: not even a deleted line.
+    std::fs::remove_file(&path).unwrap();
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    assert!(!state.files.contains_key(&key));
+    // Its directory never became checked: an `AGENTS.md` beside it is
+    // not adopted.
+    write(&path.parent().unwrap().join("AGENTS.md"), "Stowaway.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn resumed_tracks_a_manifest_path_new_since_the_log() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    // The log's opening message never named the file; today's manifest
+    // does. It exists, so the first check sends it as created.
+    let message = opening::collect(&inputs(&home, &fake), &workspace).message;
+    assert!(message.extension_sections.is_empty());
+    let lines = vec![envelope("opening_message", &Event::OpeningMessage(message))];
+    let prompt = sectioned_inputs(&home, &fake, sections);
+    let mut state = State::resumed(&lines, &workspace, &prompt).unwrap();
+    let out = state.check(&*fake);
+    assert_eq!(out.files.len(), 1);
+    assert_eq!(out.files[0].reason, InstructionReason::Created);
+    assert_eq!(out.files[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(out.files[0].sent, InstructionSent::Full);
+    assert_eq!(out.files[0].content.as_deref(), Some("Notes.\n"));
+}
+
+#[test]
+fn own_edit_of_a_section_file_records_extension_and_sends_nothing() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    let workspace = canon(&workspace);
+    // Declared exactly as the manifest names it.
+    let key = path.display().to_string();
+    write(&path, "Revised by the call.\n");
+    let own = state.call_completed(&workspace, &declared(Some(&[key.as_str()])));
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].reason, InstructionReason::OwnEdit);
+    assert_eq!(own[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(own[0].sent, InstructionSent::None);
+    assert_eq!(own[0].content.as_deref(), Some("Revised by the call.\n"));
+    for line in &own {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // The next check finds the file exactly as recorded.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
+fn own_deletion_of_a_section_file_is_an_empty_own_edit_with_extension() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    let mut state = initial_sectioned(&home, &workspace, &fake, sections);
+    let workspace = canon(&workspace);
+    std::fs::remove_file(&path).unwrap();
+    let key = path.display().to_string();
+    let own = state.call_completed(&workspace, &declared(Some(&[key.as_str()])));
+    assert_eq!(own.len(), 1);
+    assert_eq!(own[0].reason, InstructionReason::OwnEdit);
+    assert_eq!(own[0].extension.as_deref(), Some("fiber.test/notes"));
+    assert_eq!(own[0].sent, InstructionSent::None);
+    assert_eq!(own[0].content, None);
+    for line in &own {
+        apply(&mut state.had, &Event::InstructionFile(line.clone()));
+    }
+    // Tracked as absent: the turn-start check stays silent too.
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+}
+
+/// A budgeted section file with `content`: the path and the manifest
+/// entry budgeting it at `budget`.
+fn budgeted(home: &Path, name: &str, content: &str, budget: Option<u64>) -> (PathBuf, Sections) {
+    let path = home.join(format!("data/{name}/a.md"));
+    write(&path, content);
+    (path.clone(), vec![(name.into(), vec![path], budget)])
+}
+
+/// The prune lines a `tool` call declaring `paths` gets.
+fn pruned(state: &State, workspace: &Path, tool: &str, paths: Option<&[&str]>) -> Vec<String> {
+    state.prune_lines(workspace, tool, &declared(paths))
+}
+
+#[test]
+fn prune_line_write_over_budget() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // Two files of 3 bytes: the line needs their sum of 6.
+    let (first, mut sections) = budgeted(&home, "fiber.test/notes", "123", Some(5));
+    let second = home.join("data/fiber.test/notes/b.md");
+    write(&second, "456");
+    sections[0].1.push(second);
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = first.display().to_string();
+    assert_eq!(
+        pruned(&state, &workspace, "write", Some(&[key.as_str()])),
+        vec![
+            "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn prune_line_edit_over_budget() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(5));
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    assert_eq!(
+        pruned(&state, &workspace, "edit", Some(&[key.as_str()])),
+        vec![
+            "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.".to_owned()
+        ]
+    );
+}
+
+#[test]
+fn prune_line_at_or_under_budget_is_none() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    // Exactly at budget is not over: only strictly greater counts.
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(6));
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    assert!(pruned(&state, &workspace, "write", Some(&[key.as_str()])).is_empty());
+    // Under budget: silence too.
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "12", Some(5));
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    assert!(pruned(&state, &workspace, "write", Some(&[key.as_str()])).is_empty());
+}
+
+#[test]
+fn prune_line_without_a_budget_is_none() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "123456", None);
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    assert!(pruned(&state, &workspace, "write", Some(&[key.as_str()])).is_empty());
+}
+
+#[test]
+fn prune_line_shell_call_over_budget_is_none() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(5));
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let key = path.display().to_string();
+    // A shell edit is never seen when it happens.
+    assert!(pruned(&state, &workspace, "bash", Some(&[key.as_str()])).is_empty());
+}
+
+#[test]
+fn prune_line_call_touching_no_section_file_is_none() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (_path, sections) = budgeted(&home, "fiber.test/notes", "123456", Some(5));
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    assert!(pruned(&state, &workspace, "write", Some(&["other.txt"])).is_empty());
+    assert!(pruned(&state, &workspace, "write", None).is_empty());
+}
+
+#[test]
+fn prune_lines_two_over_budget_sections_come_in_name_order() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (beta, beta_section) = budgeted(&home, "fiber.test/beta", "12345678", Some(7));
+    let (alpha, alpha_section) = budgeted(&home, "fiber.test/alpha", "123456", Some(5));
+    // Send order is beta first: the lines still come in name order.
+    let mut sections = beta_section;
+    sections.extend(alpha_section);
+    let fake = clock();
+    let state = initial_sectioned(&home, &workspace, &fake, sections);
+    let lines = pruned(
+        &state,
+        &workspace,
+        "write",
+        Some(&[
+            beta.display().to_string().as_str(),
+            alpha.display().to_string().as_str(),
+        ]),
+    );
+    assert_eq!(
+        lines,
+        vec![
+            "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them.".to_owned(),
+            "Fiber: these files are 8 bytes, over their budget of 7 bytes. Prune them.".to_owned(),
+        ]
     );
 }

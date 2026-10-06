@@ -588,14 +588,27 @@ fn changed_message(file: &InstructionFile, had: &BTreeMap<String, String>) -> Op
             &body(MESSAGES_MD, "replaced-file"),
             &[("path", file.path.as_str()), ("content", content)],
         ),
-        (InstructionReason::Created, InstructionSent::Full) => fill(
-            &body(MESSAGES_MD, "created-file"),
-            &[
-                ("path", file.path.as_str()),
-                ("dir", dir_of(&file.path).as_str()),
-                ("content", content),
-            ],
-        ),
+        (InstructionReason::Created, InstructionSent::Full) => match &file.extension {
+            // A section file's creation names its section: the
+            // instruction-file template's "applies to {dir}" is wrong
+            // for it.
+            Some(extension) => fill(
+                &body(MESSAGES_MD, "created-section-file"),
+                &[
+                    ("extension", extension.as_str()),
+                    ("path", file.path.as_str()),
+                    ("content", content),
+                ],
+            ),
+            None => fill(
+                &body(MESSAGES_MD, "created-file"),
+                &[
+                    ("path", file.path.as_str()),
+                    ("dir", dir_of(&file.path).as_str()),
+                    ("content", content),
+                ],
+            ),
+        },
         (InstructionReason::Subdirectory, InstructionSent::Full) => fill(
             &body(MESSAGES_MD, "subdirectory-file"),
             &[
