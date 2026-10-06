@@ -247,3 +247,94 @@ fn models_runs_a_lua_providers_models_with_no_cached_copy() {
     assert_eq!(run.stderr, "");
     assert!(run.stdout.contains("fixture/m1"), "stdout: {}", run.stdout);
 }
+
+/// Waits until the cache file's bytes differ from `old`, in slices of
+/// 100 ms up to [`DEADLINE`]: the detached refresh child rewrites it.
+fn await_refreshed(file: &std::path::Path, old: &[u8]) {
+    let (_tx, rx) = mpsc::channel::<()>();
+    let slices = DEADLINE.as_millis() / 100;
+    for _ in 0..slices {
+        match std::fs::read(file) {
+            Ok(now) if now != old => return,
+            _ => {}
+        }
+        let _waited = rx.recv_timeout(Duration::from_millis(100));
+    }
+    panic!("waited {DEADLINE:?} for the cached model list to refresh");
+}
+
+#[test]
+fn models_prints_a_stale_list_at_once_and_it_is_fresh_on_the_next_run() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start([fakes::Response::status(
+        200,
+        json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
+    )])
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(fakes::lua_fixture()),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.url",
+        &config::Secret::new(server.url()),
+    )
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.api_key",
+        &config::Secret::new("k1".into()),
+    )
+    .unwrap();
+    // A stale cached copy: an ancient mtime is older than any
+    // `model_lists.refresh_after`, without reading the clock.
+    let file = setup.home().join("cache/models/fixture.json");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        json!([{ "id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:9/v1" }])
+        .to_string(),
+    )
+    .unwrap();
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
+    let old = std::fs::read(&file).unwrap();
+
+    let first = setup.fiber(&["models"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.stderr, "");
+    assert!(
+        first.stdout.contains("fixture/old"),
+        "stdout: {}",
+        first.stdout
+    );
+
+    // The first run returns without waiting: the list is fresh on the
+    // next run, once the detached child rewrites the cache.
+    await_refreshed(&file, &old);
+    let second = setup.fiber(&["models"]);
+    assert_eq!(second.code, Some(0), "stderr: {}", second.stderr);
+    assert_eq!(second.stderr, "");
+    assert!(
+        second.stdout.contains("fixture/m1"),
+        "stdout: {}",
+        second.stdout
+    );
+    assert!(
+        !second.stdout.contains("fixture/old"),
+        "stdout: {}",
+        second.stdout
+    );
+}

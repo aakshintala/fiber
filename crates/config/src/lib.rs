@@ -27,7 +27,7 @@ use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::{Map, Value};
 
-pub use cache::{read_model_cache, write_model_cache};
+pub use cache::{model_cache_age, model_cache_lock_file, read_model_cache, write_model_cache};
 pub use credential_file::{CredentialFile, CredentialLock};
 pub use error::ConfigError;
 pub use extension::{
@@ -41,6 +41,8 @@ pub use secret::{
     read_credential, read_secret, store_credential, store_secret,
 };
 pub use write::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
+
+pub use keys::parse_duration;
 
 use home::{parse, plain, read, read_bytes};
 

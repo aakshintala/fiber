@@ -4,12 +4,14 @@
 //! no provider fails with its code.
 
 #![allow(clippy::unwrap_used, reason = "test helpers; a failure is the test's")]
+#![allow(clippy::panic, reason = "test helpers; a hang is the test's failure")]
 
 mod common;
 
 use common::{Setup, install, manifest, provider, write};
 use config::{Config, ModelData, ProjectKey, Sources, write_model_cache};
 use contract::ErrorCode;
+use contract::clock::Clock;
 use extensions::{Error, Providers, leave_out_invalid};
 use serde_json::json;
 
@@ -530,6 +532,9 @@ fn lua_acme(setup: &Setup, dir: &str, models_run: &str) -> std::sync::Arc<extens
     lua_named(setup, dir, "acme", models_run)
 }
 
+/// A Lua provider whose `models()` is `models_run`, with a `credential`
+/// function: what most `add_lua` tests use, so the credential gate lets
+/// `models()` run.
 fn lua_named(
     setup: &Setup,
     dir: &str,
@@ -539,14 +544,37 @@ fn lua_named(
     let ext = setup.home().join(dir);
     write(
         &ext.join("init.lua"),
-        &[
-            "fiber.provider(\"",
-            provider,
-            "\", { models = { timeout = 1000, run = function() return ",
-            models_run,
-            " end } })\n",
-        ]
-        .concat(),
+        &format!(
+            "fiber.provider(\"{provider}\", {{ \
+             credential = {{ timeout = 1000, run = function() \
+             return {{ token = \"test-token\", expires_at = 1893456000 }} end }}, \
+             models = {{ timeout = 1000, run = function() return {models_run} end }} }})\n"
+        ),
+    );
+    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
+        "acme-ext",
+        ext,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
+    extensions::LuaProvider::new(extension, provider)
+}
+
+/// A Lua provider with no `credential` function and no other credential:
+/// the credential gate never lets its `models()` run.
+fn lua_bare(
+    setup: &Setup,
+    dir: &str,
+    provider: &str,
+    models_run: &str,
+) -> std::sync::Arc<extensions::LuaProvider> {
+    let ext = setup.home().join(dir);
+    write(
+        &ext.join("init.lua"),
+        &format!(
+            "fiber.provider(\"{provider}\", {{ \
+             models = {{ timeout = 1000, run = function() return {models_run} end }} }})\n"
+        ),
     );
     let extension = std::sync::Arc::new(extensions::LuaExtension::new(
         "acme-ext",
@@ -575,7 +603,7 @@ fn add_lua_without_a_data_file_creates_the_provider() {
     let setup = Setup::new();
     let mut providers = Providers::default();
     let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/m").is_ok());
     let data = providers.get("acme").unwrap();
@@ -594,7 +622,7 @@ fn add_lua_with_a_data_file_replaces_only_models() {
     data["reviewer_model"] = json!("tiny");
     let mut providers = installed(&setup, &[("acme", data)]);
     let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/new").is_ok());
     assert!(matches!(
@@ -624,7 +652,7 @@ fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
         ]
         .concat(),
     );
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(providers.resolve("acme/ok").is_ok());
     assert!(matches!(
         providers.resolve("acme/bad").unwrap_err(),
@@ -655,7 +683,7 @@ fn add_lua_filters_a_cached_list_without_running_lua() {
     )
     .unwrap();
     let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(providers.resolve("acme/ok").is_ok());
     assert!(matches!(
         providers.resolve("acme/bad").unwrap_err(),
@@ -670,7 +698,7 @@ fn a_failing_models_leaves_no_models_with_the_errors_code() {
     let setup = Setup::new();
     let mut providers = Providers::default();
     let lua = lua_acme(&setup, "ext", "error(\"boom\")");
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert_eq!(providers.names().count(), 0);
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
@@ -687,7 +715,7 @@ fn a_failing_models_keeps_the_data_files_models() {
     let setup = Setup::new();
     let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
     let lua = lua_acme(&setup, "ext", "error(\"boom\")");
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(providers.resolve("acme/a").is_ok());
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
@@ -706,13 +734,18 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
     let setup = Setup::new();
     let mut providers = Providers::default();
     let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
-    providers.add_lua("acme-ext", &lua);
+    providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(providers.lua("acme").is_some());
     assert!(providers.lua("nobody").is_none());
 
     let mut failing = Providers::default();
     let bad = lua_named(&setup, "bad", "broke", "error(\"boom\")");
-    assert_eq!(failing.add_lua("broke-ext", &bad).len(), 1);
+    assert_eq!(
+        failing
+            .add_lua("broke-ext", &bad, &config(&setup, &[]))
+            .len(),
+        1
+    );
     assert!(failing.lua("broke").is_some());
 }
 
@@ -815,7 +848,7 @@ fn add_lua_reads_the_addendum_against_the_lua_extensions_directory() {
     let mut providers = Providers::default();
     write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(notices.is_empty(), "{notices:?}");
     let model = providers.resolve("acme/m").unwrap();
     assert_eq!(providers.addendum(&model), Some("Lua says hi.\n"));
@@ -839,7 +872,7 @@ fn add_lua_replaces_the_data_files_models_and_addenda_together() {
     );
     write(&setup.home().join("ext/prompts/new.md"), "Fresh.\n");
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("new", "prompts/new.md"));
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(notices.is_empty(), "{notices:?}");
     assert!(providers.resolve("acme/old").is_err());
     let model = providers.resolve("acme/new").unwrap();
@@ -851,7 +884,7 @@ fn add_lua_with_a_missing_addendum_leaves_no_models_but_keeps_the_provider() {
     let setup = Setup::new();
     let mut providers = Providers::default();
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert_eq!(providers.names().count(), 0);
     assert!(providers.lua("acme").is_some());
     assert_eq!(notices.len(), 1, "{notices:?}");
@@ -869,7 +902,7 @@ fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
     let setup = Setup::new();
     let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
     let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
-    let notices = providers.add_lua("acme-ext", &lua);
+    let notices = providers.add_lua("acme-ext", &lua, &config(&setup, &[]));
     assert!(providers.resolve("acme/a").is_ok());
     assert_eq!(
         providers.addendum(&providers.resolve("acme/a").unwrap()),
@@ -878,4 +911,239 @@ fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
     assert_eq!(notices.len(), 1, "{notices:?}");
     assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
     assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+}
+
+/// How long a test waits for one background refresh to return.
+const REFRESH_WAIT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Runs `f` on its own thread under [`REFRESH_WAIT`], so a refresh that
+/// never returns fails the test instead of hanging it.
+fn within<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || tx.send(f()));
+    rx.recv_timeout(REFRESH_WAIT)
+        .unwrap_or_else(|_| panic!("the refresh did not return within {REFRESH_WAIT:?}"))
+}
+
+/// Sets the cached list's mtime, so its age reads against the fake clock.
+fn set_cache_mtime(home: &std::path::Path, provider: &str, mtime: std::time::SystemTime) {
+    let file = home.join("cache/models").join(format!("{provider}.json"));
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(mtime)
+        .unwrap();
+}
+
+fn wrote(home: &std::path::Path, provider: &str, ids: &[&str]) {
+    let models: Vec<serde_json::Value> = ids
+        .iter()
+        .map(|id| {
+            json!({"id": id, "protocol": "openai-responses", "base_url": "http://127.0.0.1:1/v1"})
+        })
+        .collect();
+    write_model_cache(home, provider, &serde_json::Value::Array(models)).unwrap();
+}
+
+fn cached_ids(home: &std::path::Path, provider: &str) -> Vec<String> {
+    config::read_model_cache(home, provider)
+        .unwrap()
+        .unwrap()
+        .iter()
+        .map(|m| m.id.clone())
+        .collect()
+}
+
+const DAY: std::time::Duration = std::time::Duration::from_secs(24 * 60 * 60);
+
+#[test]
+fn a_fresh_list_is_not_refreshed_and_lua_never_runs() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(&home, "acme", clock.wall());
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    assert!(lua.refresh(Some(DAY)).is_none());
+    assert_eq!(cached_ids(&home, "acme"), ["old"]);
+}
+
+#[test]
+fn a_list_exactly_as_old_as_the_maximum_is_not_stale() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(&home, "acme", clock.wall() - DAY);
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    assert!(lua.refresh(Some(DAY)).is_none());
+    assert_eq!(cached_ids(&home, "acme"), ["old"]);
+}
+
+#[test]
+fn a_stale_list_refreshes_once_and_the_cache_is_replaced() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(
+        &home,
+        "acme",
+        clock.wall() - DAY - std::time::Duration::from_secs(1),
+    );
+    let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
+    let models = within(move || lua.refresh(Some(DAY)).unwrap().join().unwrap()).unwrap();
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["new"]
+    );
+    assert_eq!(cached_ids(&home, "acme"), ["new"]);
+}
+
+#[test]
+fn without_a_maximum_even_a_fresh_list_refreshes() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(&home, "acme", clock.wall());
+    let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
+    within(move || lua.refresh(None).unwrap().join().unwrap()).unwrap();
+    assert_eq!(cached_ids(&home, "acme"), ["new"]);
+}
+
+#[test]
+fn two_providers_over_one_stale_list_refresh_it_once() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(
+        &home,
+        "acme",
+        clock.wall() - DAY - std::time::Duration::from_secs(1),
+    );
+    // Two extensions, two VMs, one home: the second sees the first's lock.
+    let first = lua_named(&setup, "one", "acme", &lua_list(&["new"]));
+    let second = lua_named(&setup, "two", "acme", &lua_list(&["new"]));
+    let a = first.refresh(Some(DAY));
+    let b = second.refresh(Some(DAY));
+    assert!(a.is_some(), "the first refresh starts");
+    assert!(b.is_none(), "the second sees the first's lock");
+    within(move || a.unwrap().join().unwrap()).unwrap();
+    assert_eq!(cached_ids(&home, "acme"), ["new"]);
+}
+
+#[test]
+fn a_lock_held_elsewhere_is_not_started_again() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "acme", &["old"]);
+    set_cache_mtime(
+        &home,
+        "acme",
+        clock.wall() - DAY - std::time::Duration::from_secs(1),
+    );
+    let path = config::model_cache_lock_file(&home, "acme").unwrap();
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let held = std::fs::File::options()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .unwrap();
+    held.try_lock().unwrap();
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    assert!(lua.refresh(Some(DAY)).is_none());
+    assert!(lua.refresh(None).is_none());
+    drop(held);
+    assert_eq!(cached_ids(&home, "acme"), ["old"]);
+}
+
+/// Writes the cached list of `provider` and backdates it past `DAY`, so it
+/// is stale against the fake clock.
+fn stale(home: &std::path::Path, provider: &str, ids: &[&str]) {
+    wrote(home, provider, ids);
+    let wall = fakes::clock::FakeClock::new().wall();
+    set_cache_mtime(
+        home,
+        provider,
+        wall - DAY - std::time::Duration::from_secs(1),
+    );
+}
+
+#[test]
+fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let clock = fakes::clock::FakeClock::new();
+    wrote(&home, "fresh", &["old-fresh"]);
+    set_cache_mtime(&home, "fresh", clock.wall());
+    stale(&home, "stale", &["old-stale"]);
+    stale(&home, "nocred", &["old-nocred"]);
+    let fresh = lua_named(&setup, "one", "fresh", &lua_list(&["new-fresh"]));
+    let stale = lua_named(&setup, "two", "stale", &lua_list(&["new-stale"]));
+    let nocred = lua_bare(&setup, "three", "nocred", "error(\"must not run\")");
+    let lua = [
+        ("one".to_owned(), fresh),
+        ("two".to_owned(), stale),
+        ("three".to_owned(), nocred),
+    ];
+    let config = config(&setup, &[]);
+    let providers = Providers::default();
+    let lua: Vec<std::sync::Arc<extensions::LuaProvider>> = lua
+        .iter()
+        .map(|(_, provider)| std::sync::Arc::clone(provider))
+        .collect();
+    let started = extensions::refresh_lists(&lua, &providers, &config, Some(DAY));
+    assert_eq!(started.len(), 1);
+    let names: Vec<&str> = started.iter().map(|(name, _)| name.as_str()).collect();
+    assert_eq!(names, ["stale"]);
+    for (_, handle) in started {
+        within(move || handle.join().unwrap()).unwrap();
+    }
+    // Only the stale provider with a credential ran: the fresh list and
+    // the credential-less one are untouched.
+    assert_eq!(cached_ids(&home, "fresh"), ["old-fresh"]);
+    assert_eq!(cached_ids(&home, "stale"), ["new-stale"]);
+    assert_eq!(cached_ids(&home, "nocred"), ["old-nocred"]);
+}
+
+#[test]
+fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
+    let setup = Setup::new();
+    let home = setup.home();
+    let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    // No cached copy, and the data file's credential names an unset
+    // variable: `models()` would fail the test if it ran.
+    let lua = lua_bare(&setup, "ext", "acme", "error(\"must not run\")");
+    let config = config(&setup, &[]);
+    let notices = providers.add_lua("acme-ext", &lua, &config);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/a").is_ok());
+    assert!(
+        config::read_model_cache(&home, "acme").unwrap().is_none(),
+        "no discovery ran, so no copy was written"
+    );
+}
+
+#[test]
+fn retain_lua_drops_every_lua_provider_but_keeps_the_models() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let config = config(&setup, &[]);
+    let a = lua_named(&setup, "a", "a", &lua_list(&["m"]));
+    let b = lua_named(&setup, "b", "b", &lua_list(&["m"]));
+    providers.add_lua("a-ext", &a, &config);
+    providers.add_lua("b-ext", &b, &config);
+    assert!(providers.lua("a").is_some());
+    assert!(providers.lua("b").is_some());
+    providers.retain_lua(&["a"]);
+    assert!(providers.lua("a").is_some());
+    assert!(providers.lua("b").is_none());
+    // The installed models stay: only the signer and token go.
+    assert!(providers.resolve("a/m").is_ok());
+    assert!(providers.resolve("b/m").is_ok());
 }

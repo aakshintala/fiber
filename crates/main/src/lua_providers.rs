@@ -5,8 +5,9 @@
 //! request through the signing seam.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use config::{ProviderData, Secret};
+use config::{Config, ProviderData, Secret};
 use contract::shapes::Failure;
 use contract::signing::Signer;
 use extensions::{LuaProvider, Providers, SessionExtensions};
@@ -20,29 +21,42 @@ pub(crate) type KeyAndSigner = (Option<String>, Option<Arc<dyn Signer>>);
 
 /// Merges every Lua provider's models into `providers`
 /// (`docs/model-routing.md`, "Model discovery"): with no cached copy
-/// `models()` runs synchronously once at startup, never on a request; with
-/// one the cache serves and the refresh runs in the background at every
-/// start. Background threads are detached; the cache write is atomic, so an
-/// interrupted refresh leaves the old copy.
-pub(crate) fn add_lua(extensions: &SessionExtensions, providers: &mut Providers) {
+/// `models()` runs synchronously once at startup for a provider with a
+/// credential, never on a request; a stale cached list refreshes in the
+/// background, once across the processes sharing a Fiber home. Background
+/// threads are detached; the cache write is atomic, so an interrupted
+/// refresh leaves the old copy. A refresh never touches `providers`, so a
+/// running session's tool definitions never change.
+pub(crate) fn add_lua(extensions: &SessionExtensions, providers: &mut Providers, config: &Config) {
     for (extension, provider) in extensions.lua_providers() {
-        // debt: notices from discovery and the `registers` error are
-        // dropped, as `parts_with` drops them; surfaced when #382 lands.
-        // The cache is read before the add: with none `models()` runs
-        // synchronously inside it, and `discover` writes the cache, so a
-        // read after would see its own write.
-        let cached = provider.has_model_cache();
-        let _notices = providers.add_lua(extension, provider);
-        if cached
-            && provider
-                .registers("models")
-                .is_ok_and(|registers| registers)
-        {
-            // Detached: nothing joins it, and `fiber ask` does not wait on
-            // it to exit.
-            provider.refresh_models();
-        }
+        // debt: notices from discovery are dropped, as `parts_with` drops
+        // them; surfaced when #382 lands.
+        let _notices = providers.add_lua(extension, provider, config);
     }
+    // Detached: nothing joins them, and `fiber ask` does not wait on them
+    // to exit.
+    let started = extensions::refresh_lists(
+        &extensions
+            .lua_providers()
+            .iter()
+            .map(|(_, provider)| Arc::clone(provider))
+            .collect::<Vec<_>>(),
+        providers,
+        config,
+        Some(max_age(config)),
+    );
+    let _detached = started;
+}
+
+/// How old a provider's cached model list must be before it refreshes in
+/// the background (`docs/configuration.md`, `model_lists.refresh_after`).
+/// Configuration validation holds every layer to the duration grammar, so
+/// a value that does not parse falls back to the default.
+fn max_age(config: &Config) -> Duration {
+    config
+        .get("model_lists.refresh_after", None)
+        .and_then(|(value, _)| value.as_str().and_then(config::parse_duration))
+        .unwrap_or(Duration::from_secs(24 * 60 * 60))
 }
 
 /// The session's key and signer for `provider`: no key when it registered

@@ -3,6 +3,8 @@
 //! this table is where unknown keys become notices and wrong types become
 //! errors.
 
+use std::time::Duration;
+
 use serde_json::{Map, Value};
 
 use contract::ErrorCode;
@@ -30,6 +32,8 @@ pub(crate) enum Kind {
     Credential,
     /// A list of `{path, required}` objects: `repository_extensions`.
     RepositoryExtensions,
+    /// A duration string such as `"24h"`: `model_lists.refresh_after`.
+    Duration,
 }
 
 impl Kind {
@@ -62,6 +66,9 @@ impl Kind {
                     })
                 })
             }),
+            Self::Duration => value
+                .as_str()
+                .is_some_and(|text| parse_duration(text).is_some()),
         }
     }
 
@@ -81,6 +88,7 @@ impl Kind {
             Self::RepositoryExtensions => {
                 "a list of objects, each with a string `path` and an optional true or false `required`".into()
             }
+            Self::Duration => "a duration such as \"7d\"".into(),
         }
     }
 }
@@ -120,7 +128,8 @@ const fn repo_only(path: &'static str, kind: Kind) -> Key {
 }
 
 use Kind::{
-    Bool, BoolMap, Count, Credential, Number, OneOf, RepositoryExtensions, Str, StrList, StrMap,
+    Bool, BoolMap, Count, Credential, Duration as DurationKind, Number, OneOf,
+    RepositoryExtensions, Str, StrList, StrMap,
 };
 
 const YES: bool = true;
@@ -128,6 +137,12 @@ const NO: bool = false;
 const LIFETIMES: &[&str] = &["5m", "1h"];
 
 pub(crate) const KEYS: &[Key] = &[
+    key(
+        "model_lists.refresh_after",
+        DurationKind,
+        NO,
+        Some("\"24h\""),
+    ),
     key("model", Str, YES, None),
     key("roles.*", Str, YES, None),
     key("hub.idle_exit_ms", Count, NO, Some("1800000")),
@@ -282,4 +297,23 @@ fn walk(
         path.pop();
     }
     Ok(kept)
+}
+
+/// Reads a duration string such as `"7d"`: a whole number of 1 or more and a
+/// unit, `s`, `m`, `h` or `d` (`docs/configuration.md`,
+/// `model_lists.refresh_after`). Anything else is `None`.
+pub fn parse_duration(text: &str) -> Option<Duration> {
+    let (number, unit) = text.split_at(text.len().checked_sub(1)?);
+    let count: u64 = number.parse().ok()?;
+    if count == 0 || !number.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let seconds = match unit {
+        "s" => count,
+        "m" => count.checked_mul(60)?,
+        "h" => count.checked_mul(60 * 60)?,
+        "d" => count.checked_mul(60 * 60 * 24)?,
+        _ => return None,
+    };
+    Some(Duration::from_secs(seconds))
 }

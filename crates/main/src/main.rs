@@ -150,6 +150,9 @@ fn run() -> i32 {
             clock,
             Arc::new(tools::PathLocks::new()),
         ),
+        cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
+            ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()))
+        }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
         cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
@@ -598,9 +601,9 @@ fn parts_with(
     let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
     let locks = Arc::new(tools::PathLocks::new());
     let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let extensions =
+    let mut extensions =
         extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
-    lua_providers::add_lua(&extensions, &mut providers);
+    lua_providers::add_lua(&extensions, &mut providers, &config);
     // `recorded` first, then `--model` and configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
@@ -615,9 +618,39 @@ fn parts_with(
     let session_credential = (key.clone(), signer.clone());
     let provider = connect(model, key, signer)?;
     let reviewer = choose_reviewer(&providers, &config, &model, &session_credential);
+    // Owned copies of what the session keeps from its model. The unload
+    // below needs `providers` mutably, which `model` borrows: after these
+    // nothing borrows `providers` through `model`.
+    let session_provider = model.provider.name.clone();
+    let reviewer_provider = reviewer.as_ref().ok().and_then(|judge| {
+        judge
+            .model
+            .reference
+            .split_once('/')
+            .map(|(name, _)| name.to_owned())
+    });
+    let model_reference = model.reference();
+    let model_cost = model.model.cost.clone().map(cost::declared);
+    let model_subscription = model.model.subscription;
+    let context_window = model.model.context_window;
+    let addendum = providers.addendum(&model).map(str::to_owned);
+    let web_search = model.model.web_search.clone();
+    // Every refreshed provider the session does not use is unloaded once
+    // its list is written: only the session's and the reviewer's stay
+    // loaded (`docs/model-routing.md`, "Model discovery").
+    {
+        let mut keep = vec![session_provider.as_str()];
+        if let Some(name) = reviewer_provider.as_deref()
+            && name != session_provider.as_str()
+        {
+            keep.push(name);
+        }
+        extensions.retain_lua_providers(&keep);
+        providers.retain_lua(&keep);
+    }
     let limits = settings::block_limits(&config);
     let retry = settings::retry_policy(&config);
-    let handoff = handoff::handoff_settings(&config, &model.reference());
+    let handoff = handoff::handoff_settings(&config, &model_reference);
     let idle = settings::idle_exit(&config);
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.
@@ -631,15 +664,15 @@ fn parts_with(
     );
     prompt.system = prompt_files::system(&home, &project);
     prompt.append = prompt_files::append(&home, &project);
-    prompt.context_window = model.model.context_window;
+    prompt.context_window = context_window;
     prompt.agents_home = prompt_files::agents_home(std::env::var_os("HOME"));
-    prompt.addendum = providers.addendum(&model).map(str::to_owned);
+    prompt.addendum = addendum;
     prompt.extensions = extensions.prompts();
     prompt.extension_dirs = extensions.dirs();
     prompt.extension_sections = extensions.sections(&project);
     prompt.skills_disabled = config.union_list("skills.disabled");
     prompt.credential = Some(label);
-    prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
+    prompt.cache_lifetime = settings::cache_lifetime(&config, &model_reference);
     Ok(Parts {
         sessions,
         home,
@@ -648,9 +681,9 @@ fn parts_with(
         provider,
         prompt,
         model: Model {
-            reference: model.reference(),
-            cost: model.model.cost.clone().map(cost::declared),
-            subscription: model.model.subscription,
+            reference: model_reference,
+            cost: model_cost,
+            subscription: model_subscription,
         },
         reviewer,
         limits,
@@ -661,7 +694,7 @@ fn parts_with(
         locks,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),
-        web_search: model.model.web_search.clone(),
+        web_search,
     })
 }
 

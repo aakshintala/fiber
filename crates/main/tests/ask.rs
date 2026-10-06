@@ -2871,14 +2871,25 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     )
     .unwrap();
     fixture(&setup, &server);
+    let file = setup.home().join("cache/models/fixture.json");
     write(
-        &setup.home().join("cache/models/fixture.json"),
+        &file,
         &json!([{
             "id": "m1",
             "protocol": "openai-responses",
             "base_url": format!("{}/v1", server.url()),
         }]),
     );
+    // The copy is stale: backdated past `model_lists.refresh_after`, so
+    // startup refreshes it in the background (`docs/model-routing.md`,
+    // "Model discovery"). An ancient mtime is older than any age cap,
+    // without reading the clock.
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(std::time::UNIX_EPOCH + Duration::from_secs(1))
+        .unwrap();
     let run = setup.fiber(&["ask", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     let exited = &run.last()["payload"];

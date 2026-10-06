@@ -6,9 +6,11 @@
 //! but without the background refresh: a one-shot command has nothing to
 //! serve after.
 
+use std::collections::BTreeMap;
 use std::io::{self, Write};
 use std::path::Path;
 use std::sync::Arc;
+use std::time::{Duration, SystemTime};
 
 use config::{Config, Sources};
 use contract::ErrorCode;
@@ -19,6 +21,84 @@ use extensions::{Providers, SessionExtensions};
 use serde::Serialize;
 
 use crate::{fail, failed, project_of};
+
+/// Starts the detached refresh of stale model lists: the running binary
+/// re-run as its hidden refresh child.
+trait Spawner {
+    /// Starts the refresh of `providers` in the background.
+    fn spawn(&self, providers: Vec<String>) -> io::Result<()>;
+}
+
+/// The running binary, re-run as its hidden refresh child: its own process
+/// group, nothing on any pipe, never waited on.
+struct Detached;
+
+impl Spawner for Detached {
+    fn spawn(&self, providers: Vec<String>) -> io::Result<()> {
+        let mut command = std::process::Command::new(std::env::current_exe()?);
+        command.arg("refresh-model-lists").args(&providers);
+        command
+            .stdin(std::process::Stdio::null())
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+        #[cfg(unix)]
+        {
+            use std::os::unix::process::CommandExt;
+            command.process_group(0);
+        }
+        command.spawn().map(|_| ())
+    }
+}
+
+/// How old a provider's cached model list must be before it refreshes in
+/// the background (`docs/configuration.md`, `model_lists.refresh_after`).
+/// Configuration validation holds every layer to the duration grammar, so
+/// a value that does not parse falls back to the default.
+fn max_age(config: &Config) -> Duration {
+    config
+        .get("model_lists.refresh_after", None)
+        .and_then(|(value, _)| value.as_str().and_then(config::parse_duration))
+        .unwrap_or(Duration::from_secs(24 * 60 * 60))
+}
+
+/// The providers due a background refresh: a credential and a cached list
+/// older than `max_age` (`docs/model-routing.md`, "Model discovery"). A
+/// list exactly `max_age` old is not stale, and one with no cached copy is
+/// not due: it already ran when the lists were read.
+fn stale_lists(
+    home: &Path,
+    providers: &Providers,
+    config: &Config,
+    max_age: Duration,
+    now: SystemTime,
+) -> Vec<String> {
+    let mut stale = Vec::new();
+    for name in providers.names() {
+        let Some(lua) = providers.lua(name) else {
+            continue;
+        };
+        let data = providers
+            .get(name)
+            .cloned()
+            .unwrap_or(config::ProviderData {
+                name: name.to_owned(),
+                models: Vec::new(),
+                credential: None,
+                credential_name: None,
+                headers: BTreeMap::new(),
+                reviewer_model: None,
+            });
+        if !lua.has_credential(config, &data) {
+            continue;
+        }
+        if let Ok(Some(age)) = config::model_cache_age(home, name, now)
+            && age > max_age
+        {
+            stale.push(name.to_owned());
+        }
+    }
+    stale
+}
 
 /// What `fiber models` says when no provider is installed.
 const NO_PROVIDER: &str =
@@ -107,6 +187,10 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
 
 /// Lists the installed providers' models in `home`, marking the configured
 /// default, filtered by `search` and printed as text or JSON Lines.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one call of the one-shot command: inputs, writers, loader, spawner and clock"
+)]
 fn run(
     home: &Path,
     workspace: &Path,
@@ -115,6 +199,8 @@ fn run(
     out: &mut dyn Write,
     err: &mut dyn Write,
     load: &dyn Fn(&Config) -> SessionExtensions,
+    spawner: &dyn Spawner,
+    clock: &dyn Clock,
 ) -> Result<(), Failure> {
     // debt: notices from loading are dropped, as `parts_with` drops them;
     // surfaced when #382 lands.
@@ -129,7 +215,14 @@ fn run(
     .map_err(|e| failed(e.code(), e))?;
     let extensions = load(&config);
     for (extension, provider) in extensions.lua_providers() {
-        let _notices = providers.add_lua(extension, provider);
+        let _notices = providers.add_lua(extension, provider, &config);
+    }
+    // A stale list refreshes in the background for the next run: the
+    // detached child, never waited on. A spawn that fails is ignored:
+    // `fiber models` still prints from the cache and exits 0.
+    let stale = stale_lists(home, &providers, &config, max_age(&config), clock.wall());
+    if !stale.is_empty() {
+        let _ignored = spawner.spawn(stale);
     }
     if providers.names().next().is_none() {
         writeln!(err, "{NO_PROVIDER}")
@@ -211,12 +304,52 @@ pub fn models(
                 &|config: &Config| {
                     SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
                 },
+                &Detached,
+                clock.as_ref(),
             )
         });
     match ran {
         Ok(()) => 0,
         Err(e) => fail(e),
     }
+}
+
+/// `fiber refresh-model-lists <provider>...`: refreshes the named providers'
+/// cached model lists with the age check, for the next run. The hidden
+/// child `fiber models` spawns: hidden and free to change, like the other
+/// hidden subcommands. It joins every refresh it starts, and exits 0
+/// whatever the result: a background refresh never fails a command.
+pub fn refresh_model_lists(
+    names: &[String],
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+) -> i32 {
+    if let Ok(home) = config::fiber_home_from_env()
+        && let Ok(workspace) = std::env::current_dir()
+        && let Ok((_, project)) = project_of(&home, &workspace)
+        && let Ok(config) = Config::load(Sources {
+            home: home.clone(),
+            workspace,
+            project,
+            overrides: Vec::new(),
+        })
+        && let Ok((mut providers, _)) = Providers::load(&home)
+    {
+        let loaded = SessionExtensions::load(&home, &config, clock, locks);
+        for (extension, provider) in loaded.lua_providers() {
+            let _notices = providers.add_lua(extension, provider, &config);
+        }
+        let wanted: Vec<Arc<extensions::LuaProvider>> = names
+            .iter()
+            .filter_map(|name| providers.lua(name).map(Arc::clone))
+            .collect();
+        for (_, handle) in
+            extensions::refresh_lists(&wanted, &providers, &config, Some(max_age(&config)))
+        {
+            let _ignored = handle.join();
+        }
+    }
+    0
 }
 
 #[cfg(test)]

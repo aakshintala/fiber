@@ -186,6 +186,12 @@ impl SessionExtensions {
                         continue;
                     }
                 };
+                // An extension that registered no hooks is held only by
+                // its providers: it never enters `lua`, so dropping its
+                // providers unloads its VM (`docs/model-routing.md`,
+                // "Model discovery"). An extension with hooks is used by
+                // the session and stays.
+                let runs_hooks = declared.by_point.values().any(|hooks| !hooks.is_empty());
                 session.register(&item.name, declared, &mut chain);
                 let extension = Arc::new(extension);
                 match extension.provider_names() {
@@ -197,7 +203,9 @@ impl SessionExtensions {
                     }
                     Err(e) => session.failed(&item.name, &e),
                 }
-                session.lua.push(extension);
+                if runs_hooks {
+                    session.lua.push(extension);
+                }
             }
             if let Some(opening) = manifest.opening.clone() {
                 session.openings.push((item.name.clone(), slug, opening));
@@ -237,6 +245,16 @@ impl SessionExtensions {
     /// order: the extension's name beside its provider.
     pub fn lua_providers(&self) -> &[(String, Arc<LuaProvider>)] {
         &self.lua_providers
+    }
+
+    /// Drops every Lua provider except those in `keep`, by provider name.
+    /// An extension that registered hooks stays for them; one that only
+    /// provided models is then held by nothing, once any refresh thread
+    /// holding it ends, and its VM goes with it (`docs/model-routing.md`,
+    /// "Model discovery").
+    pub fn retain_lua_providers(&mut self, keep: &[&str]) {
+        self.lua_providers
+            .retain(|(_, provider)| keep.contains(&provider.name()));
     }
 
     /// Every extension the session loaded, by name: `extensions_loaded`

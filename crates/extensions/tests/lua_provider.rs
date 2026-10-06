@@ -127,7 +127,7 @@ fn a_cached_list_is_served_without_running_lua_until_the_refresh_returns() {
     assert_eq!(ids(&provider.models().unwrap()), ["old"]);
     assert!(server.requests().is_empty(), "the cached copy is served");
 
-    let refresh = provider.refresh_models();
+    let refresh = provider.refresh(None).unwrap();
     let refreshed = within(move || refresh.join().unwrap()).unwrap();
     assert_eq!(ids(&refreshed), ["new"]);
     assert_eq!(ids(&provider.models().unwrap()), ["new"]);
@@ -416,7 +416,7 @@ fn sign_returns_while_a_background_refresh_is_stuck_on_http() {
         fakes::clock::FakeClock::new(),
     ));
     let provider = LuaProvider::new(extension, "fixture");
-    let refresh = provider.refresh_models();
+    let refresh = provider.refresh(None).unwrap();
     accepted_rx
         .recv_timeout(WAIT)
         .expect("waited for models() to reach the server");

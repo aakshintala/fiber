@@ -7,6 +7,8 @@ use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
 use std::sync::Arc;
+use std::thread::JoinHandle;
+use std::time::Duration;
 
 use config::{Config, ModelData, ProviderData};
 use contract::ErrorCode;
@@ -252,15 +254,26 @@ impl Providers {
     /// Adds the models `provider`'s `models()` returns: with no data file
     /// one is created with every other field default, with one only its
     /// models are replaced. Either list passes through
-    /// [`leave_out_invalid`]. A `models()` that fails leaves no models, or
+    /// [`leave_out_invalid`]. With no cached copy `models()` runs
+    /// synchronously, but only for a provider with a credential: with none
+    /// it never runs, and the provider serves its data file's models, if
+    /// any. A `models()` that fails leaves no models, or
     /// the data file's, and one notice with the error's own code. A model
     /// whose addendum file is missing or outside the package leaves no
     /// models from it, with one `extension_failed` notice naming the
     /// extension. The provider is kept either way, for its signer and
     /// token.
-    pub fn add_lua(&mut self, extension: &str, provider: &Arc<LuaProvider>) -> Vec<Notice> {
+    pub fn add_lua(
+        &mut self,
+        extension: &str,
+        provider: &Arc<LuaProvider>,
+        config: &Config,
+    ) -> Vec<Notice> {
         let name = provider.name().to_owned();
         self.lua.insert(name.clone(), Arc::clone(provider));
+        if !provider.has_model_cache() && !provider.has_credential(config, &self.data(&name)) {
+            return Vec::new();
+        }
         let mut models = match provider.models() {
             Ok(models) => models,
             Err(e) => {
@@ -299,6 +312,27 @@ impl Providers {
             }
         }
         notices
+    }
+
+    /// The installed data of `name`: the data file's, else one naming only
+    /// the provider, as [`LuaProvider::has_credential`] reads it.
+    fn data(&self, name: &str) -> ProviderData {
+        self.by_name.get(name).cloned().unwrap_or(ProviderData {
+            name: name.to_owned(),
+            models: Vec::new(),
+            credential: None,
+            credential_name: None,
+            headers: BTreeMap::new(),
+            reviewer_model: None,
+        })
+    }
+
+    /// Drops every Lua provider except those in `keep`, by provider name:
+    /// what unloads a refreshed provider the session does not use
+    /// (`docs/model-routing.md`, "Model discovery"). The installed models
+    /// stay: only the signer and token go.
+    pub fn retain_lua(&mut self, keep: &[&str]) {
+        self.lua.retain(|name, _| keep.contains(&name.as_str()));
     }
 
     /// The Lua provider `name`, for its signer and token, if an extension
@@ -400,4 +434,35 @@ impl Providers {
             thinking,
         })
     }
+}
+
+/// One started background refresh: the provider's name and its thread.
+/// Joining is the caller's choice: a session never does, a one-shot child
+/// does (`docs/model-routing.md`, "Model discovery").
+pub type StartedRefresh = (String, JoinHandle<Result<Vec<ModelData>, crate::Error>>);
+
+/// Refreshes one provider, or all providers that have a credential, with
+/// or without the age check: every provider in `lua` with a credential
+/// whose cached list `max_age` lets through (`None` runs whatever the
+/// cache holds). One entry per provider started, in `lua` order. A refresh
+/// writes only the cache file and the provider's in-memory list, never this
+/// `Providers`: a running session's tool definitions never change, and
+/// nothing here schedules a later refresh (`docs/model-routing.md`, "Model
+/// discovery").
+pub fn refresh_lists(
+    lua: &[Arc<LuaProvider>],
+    providers: &Providers,
+    config: &Config,
+    max_age: Option<Duration>,
+) -> Vec<StartedRefresh> {
+    let mut started = Vec::new();
+    for provider in lua {
+        if !provider.has_credential(config, &providers.data(provider.name())) {
+            continue;
+        }
+        if let Some(handle) = provider.refresh(max_age) {
+            started.push((provider.name().to_owned(), handle));
+        }
+    }
+    started
 }

@@ -5,12 +5,13 @@
 //! function on the request path, which sees the body's SHA-256 and never the
 //! body.
 
+use std::fs::File;
 use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use config::{ModelData, Secret};
+use config::{Config, ModelData, ProviderData, Secret};
 use contract::signing::{self, SignRequest, Signer};
 use serde_json::{Map, Value, json};
 
@@ -104,12 +105,77 @@ impl LuaProvider {
         )
     }
 
-    /// Calls `models()` on its own thread, as Fiber does at every start, and
-    /// replaces the cached list with what it returns. Until it returns,
-    /// [`LuaProvider::models`] serves the copy it had.
-    pub fn refresh_models(self: &Arc<Self>) -> JoinHandle<Result<Vec<ModelData>, Error>> {
+    /// Whether this provider has a credential to refresh with: it registers
+    /// `credential`, or the session's key lookup finds one for `data`
+    /// (`docs/model-routing.md`, "Model discovery"). `data` is the data
+    /// file's, else one naming only the provider: the same lookup a session
+    /// uses for its key.
+    pub fn has_credential(&self, config: &Config, data: &ProviderData) -> bool {
+        self.registers("credential").unwrap_or(false)
+            || config
+                .credential(data, &config.credential_label(data))
+                .is_ok()
+    }
+
+    /// Calls `models()` on its own thread, unless `max_age` names one and
+    /// the cached list is no older than it; `None` then, and no `models()`
+    /// call. `None` for `max_age` always runs, whatever the cache holds.
+    /// Across the processes sharing a Fiber home a provider refreshes once:
+    /// an exclusive lock on its lock file is held for the whole refresh,
+    /// and a provider already refreshing is not started again. The age is
+    /// re-read under the lock, so a refresh that finished between the
+    /// first check and the lock is skipped too. A failing `models()` keeps
+    /// the old cache (`docs/model-routing.md`, "Model discovery").
+    pub fn refresh(
+        self: &Arc<Self>,
+        max_age: Option<Duration>,
+    ) -> Option<JoinHandle<Result<Vec<ModelData>, Error>>> {
+        if self.fresh(max_age) {
+            return None;
+        }
+        let home = self.extension.home();
+        let path = config::model_cache_lock_file(home, &self.name).ok()?;
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).ok()?;
+        }
+        // The lock is the file description, never its bytes: the file
+        // stays empty, and is created when missing.
+        let lock = File::options()
+            .create(true)
+            .write(true)
+            .truncate(false)
+            .open(&path)
+            .ok()?;
+        // Held elsewhere, by this process or another: skipped, not queued.
+        if lock.try_lock().is_err() {
+            return None;
+        }
+        if self.fresh(max_age) {
+            return None;
+        }
         let this = Arc::clone(self);
-        thread::spawn(move || this.discover())
+        Some(thread::spawn(move || {
+            // Held until the cache is written: dropping the file
+            // releases the lock.
+            let _held = lock;
+            this.discover()
+        }))
+    }
+
+    /// Whether `max_age` names one and the cached list is no older than
+    /// it. A list whose age reads exactly `max_age` is not stale.
+    fn fresh(&self, max_age: Option<Duration>) -> bool {
+        let Some(max) = max_age else {
+            return false;
+        };
+        matches!(
+            config::model_cache_age(
+                self.extension.home(),
+                &self.name,
+                self.extension.clock().wall()
+            ),
+            Ok(Some(age)) if age <= max
+        )
     }
 
     fn discover(&self) -> Result<Vec<ModelData>, Error> {

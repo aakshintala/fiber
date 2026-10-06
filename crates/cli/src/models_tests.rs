@@ -15,10 +15,11 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
+use contract::clock::Clock;
 use contract::shapes::Failure;
 use serde_json::{Value, json};
 
-use super::run;
+use super::{Spawner, run};
 
 /// `fiber models` never writes a file, so its lock runs every call straight
 /// through.
@@ -89,7 +90,13 @@ impl Setup {
     }
 
     /// Runs the command with in-memory writers.
-    fn run(&self, search: Option<&str>, json: bool) -> (Result<(), Failure>, String, String) {
+    fn run(
+        &self,
+        search: Option<&str>,
+        json: bool,
+        spawner: &dyn Spawner,
+        clock: std::sync::Arc<dyn contract::clock::Clock>,
+    ) -> (Result<(), Failure>, String, String) {
         let mut out = Vec::new();
         let mut err = Vec::new();
         let home = self.home();
@@ -101,15 +108,17 @@ impl Setup {
             &mut out,
             &mut err,
             &|config: &config::Config| {
-                let clock: std::sync::Arc<dyn contract::clock::Clock> =
-                    fakes::clock::FakeClock::new();
+                let locks: std::sync::Arc<dyn contract::files::PathLock> =
+                    std::sync::Arc::new(NoLock);
                 extensions::SessionExtensions::load(
                     &home,
                     config,
-                    clock,
-                    std::sync::Arc::new(NoLock),
+                    std::sync::Arc::clone(&clock),
+                    locks,
                 )
             },
+            spawner,
+            clock.as_ref(),
         );
         (
             result,
@@ -137,7 +146,9 @@ impl Setup {
         fs::write(
             src.join("init.lua"),
             format!(
-                "fiber.provider(\"{name}\", {{ models = {{ timeout = 1000, \
+                "fiber.provider(\"{name}\", {{ credential = {{ timeout = 1000, \
+                 run = function() return {{ token = \"t\", expires_at = 1893456000 }} end }}, \
+                 models = {{ timeout = 1000, \
                  run = function() return {models} end }} }})\n"
             ),
         )
@@ -186,7 +197,7 @@ fn two_provider_setup() -> Setup {
 #[test]
 fn the_text_table_marks_exactly_the_default_row() {
     let setup = two_provider_setup();
-    let (result, out, err) = setup.run(None, false);
+    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -200,7 +211,7 @@ fn the_text_table_marks_exactly_the_default_row() {
 #[test]
 fn json_prints_the_same_rows_in_the_same_order() {
     let setup = two_provider_setup();
-    let (result, out, err) = setup.run(None, true);
+    let (result, out, err) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -216,7 +227,12 @@ fn json_prints_the_same_rows_in_the_same_order() {
 fn the_search_matches_provider_slash_model_without_regard_to_case() {
     let setup = two_provider_setup();
     for search in ["acme", "ACME", "Big", "acme/b", "localhost/t"] {
-        let (result, out, err) = setup.run(Some(search), false);
+        let (result, out, err) = setup.run(
+            Some(search),
+            false,
+            &NoSpawn,
+            fakes::clock::FakeClock::new(),
+        );
         result.unwrap();
         assert_eq!(err, "", "{search}");
         assert_eq!(out.lines().count(), 2, "{search}: {out:?}");
@@ -227,7 +243,8 @@ fn the_search_matches_provider_slash_model_without_regard_to_case() {
             "{search}: {out:?}"
         );
     }
-    let (result, out, err) = setup.run(Some("acme"), true);
+    let (result, out, err) =
+        setup.run(Some("acme"), true, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(out.lines().count(), 1);
@@ -238,7 +255,12 @@ fn the_search_matches_provider_slash_model_without_regard_to_case() {
 fn a_search_with_no_match_prints_nothing() {
     let setup = two_provider_setup();
     for json in [false, true] {
-        let (result, out, err) = setup.run(Some("nothing-matches-this"), json);
+        let (result, out, err) = setup.run(
+            Some("nothing-matches-this"),
+            json,
+            &NoSpawn,
+            fakes::clock::FakeClock::new(),
+        );
         result.unwrap();
         assert_eq!(out, "", "json={json}");
         assert_eq!(err, "", "json={json}");
@@ -249,7 +271,7 @@ fn a_search_with_no_match_prints_nothing() {
 fn a_bare_id_as_the_default_marks_the_providers_row() {
     let setup = two_provider_setup();
     setup.write_config(&json!({"model": "big"}));
-    let (result, out, err) = setup.run(None, false);
+    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert!(
@@ -257,7 +279,7 @@ fn a_bare_id_as_the_default_marks_the_providers_row() {
             .any(|line| line == "* acme/big        200000   3       15"),
         "{out:?}"
     );
-    let (result, out, _) = setup.run(None, true);
+    let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert!(out.contains("\"default\":true"), "{out:?}");
 }
@@ -267,12 +289,12 @@ fn a_default_that_does_not_resolve_marks_no_row_and_is_not_an_error() {
     for model in [json!({"model": "acme/missing"}), json!({})] {
         let setup = two_provider_setup();
         setup.write_config(&model);
-        let (result, out, err) = setup.run(None, false);
+        let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
         result.unwrap();
         assert_eq!(err, "");
         assert!(!out.lines().any(|line| line.starts_with('*')), "{out:?}");
         assert_eq!(out.lines().count(), 3, "{out:?}");
-        let (result, out, _) = setup.run(None, true);
+        let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
         result.unwrap();
         assert!(!out.contains("\"default\":true"), "{out:?}");
     }
@@ -282,7 +304,7 @@ fn a_default_that_does_not_resolve_marks_no_row_and_is_not_an_error() {
 fn with_no_provider_it_names_extension_install_on_stderr() {
     let setup = Setup::new();
     for json in [false, true] {
-        let (result, out, err) = setup.run(None, json);
+        let (result, out, err) = setup.run(None, json, &NoSpawn, fakes::clock::FakeClock::new());
         result.unwrap();
         assert_eq!(out, "", "json={json}");
         assert_eq!(
@@ -317,7 +339,7 @@ fn a_tiered_model_shows_its_base_prices() {
         }]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
-    let (result, out, err) = setup.run(None, false);
+    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -325,7 +347,7 @@ fn a_tiered_model_shows_its_base_prices() {
         "  model     context  in $/M  out $/M\n\
          * acme/big  1000     1.25    0.3\n"
     );
-    let (result, out, _) = setup.run(None, true);
+    let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(
         out,
@@ -358,7 +380,7 @@ fn a_model_listed_twice_prints_two_rows_and_marks_only_the_first() {
         ]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
-    let (result, out, err) = setup.run(None, false);
+    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -367,7 +389,7 @@ fn a_model_listed_twice_prints_two_rows_and_marks_only_the_first() {
          * acme/big  7        1       2\n\
          \x20 acme/big  7        1       2\n"
     );
-    let (result, out, _) = setup.run(None, true);
+    let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(
         out,
@@ -496,7 +518,7 @@ fn padding_counts_characters_not_bytes() {
         ]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
-    let (result, out, err) = setup.run(None, false);
+    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -516,7 +538,7 @@ fn a_lua_providers_discovered_models_are_listed_with_no_cached_copy() {
         "{ { id = \"m\", protocol = \"openai-responses\", \
          base_url = \"http://127.0.0.1:1/v1\", context_window = 8000 } }",
     );
-    let (result, out, err) = setup.run(None, false);
+    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert!(
@@ -524,8 +546,135 @@ fn a_lua_providers_discovered_models_are_listed_with_no_cached_copy() {
             .any(|line| line.contains("acme/m") && line.contains("8000")),
         "{out:?}"
     );
-    let (result, out, err) = setup.run(Some("acme"), true);
+    let (result, out, err) =
+        setup.run(Some("acme"), true, &NoSpawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert!(out.contains("\"model\":\"acme/m\""), "{out:?}");
+}
+
+/// A spawner that records its calls and fails when told to.
+struct Recorder {
+    calls: std::sync::Mutex<Vec<Vec<String>>>,
+    fail: bool,
+}
+
+impl Recorder {
+    fn fresh() -> Self {
+        Self {
+            calls: std::sync::Mutex::new(Vec::new()),
+            fail: false,
+        }
+    }
+
+    fn calls(&self) -> Vec<Vec<String>> {
+        self.calls.lock().unwrap().clone()
+    }
+}
+
+impl Spawner for Recorder {
+    fn spawn(&self, providers: Vec<String>) -> std::io::Result<()> {
+        self.calls.lock().unwrap().push(providers);
+        if self.fail {
+            Err(std::io::Error::other("cannot start the refresh child"))
+        } else {
+            Ok(())
+        }
+    }
+}
+
+/// A spawner for the tests that never refresh: recording the call is
+/// enough, since none of them starts one.
+struct NoSpawn;
+
+impl Spawner for NoSpawn {
+    fn spawn(&self, providers: Vec<String>) -> std::io::Result<()> {
+        Err(std::io::Error::other(format!(
+            "must not refresh: {providers:?}"
+        )))
+    }
+}
+
+/// Writes the cached list of `name` and backdates it, so its age reads
+/// against `now`.
+fn write_stale_cache(home: &std::path::Path, name: &str, list: &Value, now: std::time::SystemTime) {
+    config::write_model_cache(home, name, list).unwrap();
+    let file = home.join("cache/models").join(format!("{name}.json"));
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(now - std::time::Duration::from_secs(25 * 60 * 60))
+        .unwrap();
+}
+
+fn lua_list(id: &str) -> String {
+    format!(
+        "{{ {{ id = \"{id}\", protocol = \"openai-responses\", \
+         base_url = \"http://127.0.0.1:1/v1\" }} }}"
+    )
+}
+
+#[test]
+fn a_stale_list_prints_at_once_and_spawns_its_refresh() {
+    let setup = Setup::new();
+    setup.install_lua("acme-lua", "acme", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    write_stale_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        clock.wall(),
+    );
+    let spawner = Recorder::fresh();
+    let (result, out, err) = setup.run(None, false, &spawner, clock);
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(out.contains("acme/old"), "{out:?}");
+    assert!(!out.contains("acme/new"), "{out:?}");
+    assert_eq!(spawner.calls(), [vec!["acme".to_owned()]]);
+}
+
+#[test]
+fn a_fresh_list_prints_at_once_and_spawns_nothing() {
+    let setup = Setup::new();
+    setup.install_lua("acme-lua", "acme", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let spawner = Recorder::fresh();
+    let (result, out, err) = setup.run(None, false, &spawner, clock);
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(out.contains("acme/old"), "{out:?}");
+    assert!(spawner.calls().is_empty());
+}
+
+#[test]
+fn a_spawn_that_fails_still_prints_from_the_cache() {
+    let setup = Setup::new();
+    setup.install_lua("acme-lua", "acme", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    write_stale_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        clock.wall(),
+    );
+    let spawner = Recorder {
+        calls: std::sync::Mutex::new(Vec::new()),
+        fail: true,
+    };
+    let (result, out, err) = setup.run(None, false, &spawner, clock);
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(out.contains("acme/old"), "{out:?}");
+    assert_eq!(spawner.calls(), [vec!["acme".to_owned()]]);
 }

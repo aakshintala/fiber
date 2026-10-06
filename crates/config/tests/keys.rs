@@ -100,6 +100,13 @@ fn rows() -> Vec<(&'static [&'static str], Value, Value, &'static str, bool)> {
             true,
         ),
         (
+            &["model_lists", "refresh_after"],
+            json!("7d"),
+            json!("1w"),
+            "a duration such as \"7d\"",
+            false,
+        ),
+        (
             &["models", "a/b", "handoff", "enabled"],
             json!(false),
             json!(1),
@@ -587,6 +594,7 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         json!({
             "cache": {"lifetime": "1h"},
             "handoff": {"enabled": true, "nudge": true, "tokens": 400000, "window_fraction": 0.7},
+            "model_lists": {"refresh_after": "24h"},
             "quota": {"notice_at": 80},
             "retry": {"attempts": 3, "initial_delay_ms": 2000, "max_delay_ms": 60000},
             "reviewer": {"block_limits": {"consecutive": 3, "session": 20}},
@@ -640,4 +648,46 @@ fn set_refuses_a_key_at_the_wrong_layer_naming_the_key() {
     assert_eq!(e.code(), ErrorCode::Usage);
     assert!(e.to_string().contains("`session.idle_exit_ms`"), "{e}");
     assert!(e.to_string().contains("a repository may not set it"), "{e}");
+}
+
+#[test]
+fn model_lists_refresh_after_accepts_durations_and_refuses_the_rest() {
+    for good in ["90s", "30m", "24h", "7d"] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["model_lists", "refresh_after"], json!(good)).to_string(),
+        );
+        let config = setup.load(&[]).unwrap();
+        assert!(config.notices().is_empty(), "{good}");
+        assert_eq!(
+            config.get("model_lists.refresh_after", None).unwrap().0,
+            json!(good),
+            "{good}"
+        );
+    }
+    for bad in [json!("0h"), json!("24"), json!("1w"), json!(""), json!(24)] {
+        let setup = Setup::new();
+        setup.write(
+            &setup.global(),
+            &nest(&["model_lists", "refresh_after"], bad.clone()).to_string(),
+        );
+        let err = setup.load(&[]).unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{bad}");
+        assert!(
+            err.to_string()
+                .contains("`model_lists.refresh_after` must be"),
+            "{bad}: {err}"
+        );
+    }
+}
+
+#[test]
+fn model_lists_refresh_after_defaults_to_one_day() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(
+        config.get("model_lists.refresh_after", None),
+        Some((json!("24h"), Source::Default))
+    );
 }
