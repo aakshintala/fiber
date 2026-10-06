@@ -336,7 +336,7 @@ fn list(clock: &dyn contract::clock::Clock) -> i32 {
         Ok(listing) => {
             let mut out = io::stdout().lock();
             // Each damaged directory first, one line each, then the
-            // healthy rows exactly as before.
+            // healthy rows.
             for hit in &listing.damaged {
                 writeln!(out, "{hit}").unwrap_or(());
             }

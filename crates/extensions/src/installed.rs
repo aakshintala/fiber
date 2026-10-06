@@ -106,10 +106,10 @@ impl Damaged {
 
 /// What is installed: the healthy extensions and the damaged directories.
 /// A manifest that cannot be read beside a healthy record stays a hard
-/// error, as today.
+/// error.
 #[derive(Debug, Default)]
 pub struct Listing {
-    /// The healthy extensions, sorted by name, as today.
+    /// The healthy extensions, sorted by name.
     pub installed: Vec<Installed>,
     /// The damaged directories, sorted by name.
     pub damaged: Vec<Damaged>,
