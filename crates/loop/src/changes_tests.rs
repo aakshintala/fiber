@@ -1758,6 +1758,55 @@ fn resumed_ignores_a_section_path_the_manifest_no_longer_names() {
 }
 
 #[test]
+fn resumed_ignores_a_historical_section_line_the_manifest_no_longer_names() {
+    let (home, _held) = root();
+    let workspace = home.join("workspace");
+    std::fs::create_dir_all(&workspace).unwrap();
+    let (path, sections) = section_file(&home, None);
+    write(&path, "Notes.\n");
+    let fake = clock();
+    // The log holds a section `own_edit` for the path, but today's
+    // manifest names nothing.
+    let message = opening::collect(&sectioned_inputs(&home, &fake, sections), &workspace).message;
+    assert_eq!(message.extension_sections.len(), 1);
+    let key = path.display().to_string();
+    let own = Event::InstructionFile(contract::events::InstructionFile {
+        path: key.clone(),
+        reason: InstructionReason::OwnEdit,
+        extension: Some("fiber.test/notes".into()),
+        content: Some("Revised by the call.\n".into()),
+        sent: InstructionSent::None,
+    });
+    let lines = vec![
+        envelope("opening_message", &Event::OpeningMessage(message)),
+        envelope("instruction_file", &own),
+    ];
+    let state = State::resumed(&lines, &workspace, &inputs(&home, &fake)).unwrap();
+    // Neither the path nor its directory is tracked.
+    assert!(!state.files.contains_key(&key));
+    assert!(!state.dirs.contains(path.parent().unwrap()));
+    let mut state = state;
+    // Edited outside after the resume: not tracked, so nothing sent.
+    write(&path, "Edited outside.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    assert!(!state.files.contains_key(&key));
+    // Deleted after the resume: not even a deleted line.
+    std::fs::remove_file(&path).unwrap();
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+    assert!(!state.files.contains_key(&key));
+    // Its directory never became checked: an `AGENTS.md` beside it is
+    // not adopted.
+    write(&path.parent().unwrap().join("AGENTS.md"), "Stowaway.\n");
+    let out = state.check(&*fake);
+    assert!(out.files.is_empty());
+    assert!(out.notices.is_empty());
+}
+
+#[test]
 fn resumed_tracks_a_manifest_path_new_since_the_log() {
     let (home, _held) = root();
     let workspace = home.join("workspace");

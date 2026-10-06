@@ -174,9 +174,17 @@ impl State {
                 }
             }
             if let Event::InstructionFile(file) = &event {
-                state.files.entry(file.path.clone()).or_default();
-                if let Some(parent) = Path::new(&file.path).parent() {
-                    state.dirs.insert(parent.to_path_buf());
+                if file.extension.is_some() {
+                    // A historical section file: only today's manifest
+                    // tracks it, and its directory never becomes checked.
+                    if state.extension_of(&file.path).is_some() {
+                        state.files.entry(file.path.clone()).or_default();
+                    }
+                } else {
+                    state.files.entry(file.path.clone()).or_default();
+                    if let Some(parent) = Path::new(&file.path).parent() {
+                        state.dirs.insert(parent.to_path_buf());
+                    }
                 }
             }
             if let Event::DateChanged(changed) = &event {
@@ -200,14 +208,10 @@ impl State {
                 .map(|path| path.display().to_string())
                 .collect();
             for key in &keys {
-                if sized {
-                    self.files.entry(key.clone()).or_insert(Tracked {
-                        stat: stat_of(key),
-                        noticed: None,
-                    });
-                } else {
-                    self.files.entry(key.clone()).or_default();
-                }
+                self.files.entry(key.clone()).or_insert_with(|| Tracked {
+                    stat: if sized { stat_of(key) } else { None },
+                    noticed: None,
+                });
             }
             self.sections.push(Section {
                 extension: name.clone(),
