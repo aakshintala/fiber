@@ -98,7 +98,7 @@ fn a_meta_past_1024_bytes_is_ignored() {
     page.extend_from_slice(b"<meta charset=\"shift_jis\">");
     page.extend_from_slice(SHIFT_JIS_A);
     // Falls back to UTF-8: the Shift-JIS bytes are invalid there.
-    assert!(!decode(None, &page).as_ref().contains("あ"));
+    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
@@ -141,7 +141,7 @@ fn an_unknown_meta_label_falls_through_to_utf8() {
 fn a_meta_inside_a_comment_is_not_a_charset() {
     let mut page = b"<!-- <meta charset=\"shift_jis\"> -->".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(!decode(None, &page).as_ref().contains("あ"));
+    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
@@ -177,7 +177,7 @@ fn a_meta_content_without_an_equals_falls_back_to_utf8() {
     let mut page =
         b"<meta http-equiv=\"content-type\" content=\"text/html; charset shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(!decode(None, &page).as_ref().contains("あ"));
+    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
@@ -203,7 +203,7 @@ fn a_non_meta_start_tag_is_not_a_charset() {
     // would decode the page as Shift-JIS.
     let mut page = b"<div charset=\"shift_jis\">".to_vec();
     page.extend_from_slice(SHIFT_JIS_A);
-    assert!(!decode(None, &page).as_ref().contains("あ"));
+    assert_eq!(decode(None, &page), String::from_utf8_lossy(&page));
 }
 
 #[test]
