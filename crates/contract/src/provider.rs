@@ -204,6 +204,8 @@ pub struct Reply {
     pub generation_id: GenerationId,
     /// The call's tokens.
     pub tokens: Tokens,
+    /// Hosted web searches the reply reports; `None` when it reports none.
+    pub web_searches: Option<u64>,
 }
 
 impl Reply {

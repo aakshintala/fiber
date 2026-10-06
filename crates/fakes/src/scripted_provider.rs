@@ -70,6 +70,7 @@ pub fn reply(text: &str) -> Reply {
             cache_write: Default::default(),
             output: 3,
         },
+        web_searches: None,
     }
 }
 

@@ -321,3 +321,37 @@ fn a_manifest_that_is_not_json_or_lacks_a_field_is_invalid() {
     let err = read_manifest(&setup.root().join("nowhere")).unwrap_err();
     assert_eq!(err.code(), ErrorCode::IoFailed);
 }
+
+#[test]
+fn web_search_reads_and_defaults_to_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","models":[
+            {"id":"s","protocol":"anthropic-messages","base_url":"u","web_search":"web_search_20250305"},
+            {"id":"plain","protocol":"anthropic-messages","base_url":"u"}]}"#,
+    );
+    let models = &read_providers(&dir).unwrap()[0].models;
+    assert_eq!(models[0].web_search.as_deref(), Some("web_search_20250305"));
+    assert_eq!(models[1].web_search, None);
+}
+
+#[test]
+fn reads_web_search_is_true_only_for_the_known_anthropic_type() {
+    assert!(Protocol::AnthropicMessages.reads_web_search("web_search_20250305"));
+    assert!(!Protocol::AnthropicMessages.reads_web_search("web_search_20260209"));
+    assert!(!Protocol::AnthropicMessages.reads_web_search(""));
+    for protocol in [
+        Protocol::OpenaiCompletions,
+        Protocol::OpenaiResponses,
+        Protocol::GoogleGenerativeAi,
+        Protocol::BedrockConverse,
+    ] {
+        assert!(
+            !protocol.reads_web_search("web_search_20250305"),
+            "{protocol:?}"
+        );
+        assert!(!protocol.reads_web_search("google_search"), "{protocol:?}");
+    }
+}

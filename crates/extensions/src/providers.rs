@@ -80,7 +80,23 @@ impl Providers {
                 });
                 continue;
             }
-            for data in config::read_providers(&dir)? {
+            for mut data in config::read_providers(&dir)? {
+                data.models
+                    .retain(|model| match model.web_search.as_deref() {
+                        Some(kind) if !model.protocol.reads_web_search(kind) => {
+                            notices.push(Notice {
+                                code: ErrorCode::ModelInvalid,
+                                message: format!(
+                                    "The model `{}/{}` names `{kind}` as its `web_search` type, \
+                                 which its protocol does not read.",
+                                    data.name, model.id
+                                ),
+                                extension: Some(manifest.name.clone()),
+                            });
+                            false
+                        }
+                        _ => true,
+                    });
                 providers.by_name.insert(data.name.clone(), data);
             }
         }

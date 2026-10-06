@@ -717,11 +717,18 @@ impl Decoder {
                 ));
             }
         };
+        let web_searches = self
+            .usage
+            .get("server_tool_use")
+            .and_then(|use_| use_.get("web_search_requests"))
+            .and_then(serde_json::Value::as_u64)
+            .filter(|n| *n > 0);
         Ok(Reply {
             actions: std::mem::take(&mut self.actions),
             finish,
             generation_id: GenerationId(std::mem::take(&mut self.id)),
             tokens: tokens(&Value::Object(std::mem::take(&mut self.usage))),
+            web_searches,
         })
     }
 }
