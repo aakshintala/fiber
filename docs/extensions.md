@@ -992,7 +992,8 @@ not exist fails with `extension_not_found`.
 Each first-party provider extension also has a short name, so
 `fiber extension install openrouter` means the first-party extension's full name. The
 short names are `anthropic`, `openai`, `gemini`, `codex`, `openrouter`,
-`opencode`, `databricks`, `muse`, `bedrock`, `vertex` and `azure`.
+`opencode`, `databricks`, `muse`, `bedrock`, `vertex` and `azure`. `hooks`
+and `memory` are short names for `github.com/aakshintala/fiber/extensions/<name>`.
 
 The first-party provider extensions live in Fiber's own repository, one
 directory each under `providers/`, so `muse` is

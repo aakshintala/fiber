@@ -1,0 +1,12 @@
+{
+  "name": "github.com/aakshintala/fiber/extensions/memory",
+  "version": "0.0.0",
+  "fiber": "0.0.0",
+  "api": 1,
+  "prompt": "prompt.md",
+  "opening": {
+    "machine": ["index.md"],
+    "project": ["index.md"],
+    "budget_bytes": 25000
+  }
+}
