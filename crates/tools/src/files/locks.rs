@@ -91,6 +91,35 @@ impl Drop for PathGuard<'_> {
     }
 }
 
+impl contract::files::PathLock for PathLocks {
+    fn hold(&self, path: &Path, run: &mut dyn FnMut()) {
+        let key = key_of(path);
+        let _guard = self.lock(&key);
+        run();
+    }
+
+    fn hold_all(&self, paths: &[PathBuf], run: &mut dyn FnMut()) {
+        let mut keys: Vec<PathBuf> = paths.iter().map(|path| key_of(path)).collect();
+        keys.sort();
+        keys.dedup();
+        let mut guards = Vec::with_capacity(keys.len());
+        for key in &keys {
+            guards.push(self.lock(key));
+        }
+        run();
+    }
+}
+
+/// The key `hold` locks for `path`: the file tools' resolved key, so an
+/// extension's lock contends with a built-in's. A non-UTF-8 path, or one
+/// the resolver refuses, locks as given.
+fn key_of(path: &Path) -> PathBuf {
+    match path.to_str() {
+        Some(text) => super::resolve(Path::new("/"), text).unwrap_or_else(|_| path.to_path_buf()),
+        None => path.to_path_buf(),
+    }
+}
+
 fn guard(mutex: &Mutex<State>) -> MutexGuard<'_, State> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }

@@ -101,6 +101,7 @@ pub(crate) fn ask_resume(
         home,
         project,
         extensions,
+        locks,
         mcp,
         web_search,
         ..
@@ -121,6 +122,7 @@ pub(crate) fn ask_resume(
         &dir.join("artifacts"),
         &clock,
         &jobs,
+        &locks,
         mcp.specs,
         web_search.as_deref(),
     ) {

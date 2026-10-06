@@ -302,10 +302,16 @@ struct Session {
 impl Files {
     /// File tools for `workspace`. Nothing has been seen.
     pub fn new(workspace: PathBuf) -> Self {
+        Self::with_locks(workspace, Arc::new(PathLocks::new()))
+    }
+
+    /// File tools for `workspace`, sharing `locks` with outside holders,
+    /// so an extension's `host.fs` contends with the file tools.
+    pub fn with_locks(workspace: PathBuf, locks: Arc<PathLocks>) -> Self {
         Self {
             shared: Arc::new(Shared {
                 workspace,
-                locks: Arc::new(PathLocks::new()),
+                locks,
                 state: Mutex::new(Session {
                     seen: BTreeMap::new(),
                     judged: BTreeMap::new(),

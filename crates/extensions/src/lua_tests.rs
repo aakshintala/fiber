@@ -2,6 +2,7 @@ use std::io::Read;
 use std::net::TcpListener;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::mpsc;
+use std::thread;
 
 use fakes::clock::FakeClock;
 
@@ -26,13 +27,16 @@ const WAIT_SERVER: Duration = Duration::from_secs(3);
 fn a_panic_in_a_host_function_passes_the_extensions_pcall() {
     let clock = FakeClock::new();
     let vm = Vm::load(
-        "fixture",
-        &fakes::lua_fixture(),
-        Path::new("/nonexistent-fiber-home"),
         clock.clone(),
-        Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()),
-        MEMORY_CAP,
-        Arc::new(SystemBrowser::default()),
+        &schedule::Start {
+            name: "fixture".to_owned(),
+            dir: fakes::lua_fixture(),
+            home: PathBuf::from("/nonexistent-fiber-home"),
+            load_by: Some(clock.now().checked_add(LOAD_TIMEOUT).unwrap()),
+            memory_cap: MEMORY_CAP,
+            browser: Arc::new(SystemBrowser::default()),
+            session: None,
+        },
     )
     .unwrap();
     let boom = vm
@@ -393,13 +397,16 @@ fn serve_after(
     let load_by = asked.checked_add(LOAD_TIMEOUT);
     thread::spawn(move || {
         schedule::serve(
-            "ext",
-            &dir,
-            Path::new("/nonexistent-fiber-home"),
-            &thread_hub,
-            load_by,
-            MEMORY_CAP,
-            Arc::new(SystemBrowser::default()),
+            Arc::clone(&thread_hub),
+            schedule::Start {
+                name: "ext".to_owned(),
+                dir,
+                home: PathBuf::from("/nonexistent-fiber-home"),
+                load_by,
+                memory_cap: MEMORY_CAP,
+                browser: Arc::new(SystemBrowser::default()),
+                session: None,
+            },
         );
         match done_tx.send(()) {
             Ok(()) | Err(mpsc::SendError(())) => {}

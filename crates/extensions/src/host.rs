@@ -8,8 +8,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::Duration;
 
-use config::CredentialLock;
+use config::{Config, CredentialLock};
 use contract::clock::Clock;
+use contract::files::PathLock;
 
 use mlua::{Lua, LuaSerdeExt, LuaString, MultiValue, Table, Value as LuaValue};
 use ring::{digest, hmac};
@@ -18,6 +19,41 @@ use ureq::Agent;
 use ureq::tls::{RootCerts, TlsConfig};
 
 use crate::oauth::{self, Browser};
+
+mod fs;
+mod settings;
+
+#[cfg(test)]
+pub(crate) use fs::FakeLock;
+
+/// One Lua extension's session: its own clone of the session's
+/// configuration, the settings keys a repository may set, and the session's
+/// per-path lock (`docs/extensions.md`, "Host calls").
+#[derive(Clone)]
+pub struct Session {
+    /// The extension's own clone: its `set` is visible to its own later
+    /// `get` at once, and to other sessions at their next load.
+    pub config: Config,
+    /// The top-level settings keys the repository's file may set.
+    pub repo_settings: Vec<String>,
+    /// The session's per-path lock, offered to `host.fs`.
+    pub locks: Arc<dyn PathLock>,
+}
+
+/// What `install` builds the host calls from.
+#[derive(Clone)]
+pub(crate) struct HostContext {
+    /// Fiber home, anchoring secrets and data directories.
+    pub home: PathBuf,
+    /// The session's workspace, resolving relative `host.fs` paths.
+    pub workspace: PathBuf,
+    /// The extension's name, slugged for data directories and settings.
+    pub extension: String,
+    /// The session, absent without [`LuaExtension::with_session`].
+    pub session: Option<Session>,
+    /// The extension's memory cap in bytes, bounding `host.fs.read`.
+    pub memory_cap: usize,
+}
 
 /// `host.http` yields this tag, `"http"` and the request table. The
 /// extension's thread runs the request off to the side and resumes the
@@ -44,19 +80,37 @@ const MAX_DEPTH: usize = 128;
 /// yields, so the scheduler can tell that yield from any other.
 pub(crate) fn install(
     lua: &Lua,
-    home: PathBuf,
+    ctx: HostContext,
     browser: Arc<dyn Browser>,
     entry: Rc<Cell<bool>>,
 ) -> mlua::Result<LuaValue> {
+    let HostContext {
+        home,
+        workspace,
+        extension,
+        session,
+        memory_cap,
+    } = ctx;
     let host = lua.create_table()?;
+    let secret_home = home.clone();
     host.set(
         "secret",
         lua.create_function(move |_, name: String| {
-            config::read_secret(&home, &name)
+            config::read_secret(&secret_home, &name)
                 .map(|secret| secret.map(|s| s.expose().trim().to_owned()))
                 .map_err(mlua::Error::external)
         })?,
     )?;
+    fs::install(
+        lua,
+        &host,
+        workspace,
+        home,
+        &extension,
+        memory_cap,
+        session.as_ref(),
+    )?;
+    settings::install(lua, &host, &extension, session)?;
     let tag = lua.create_table()?;
     lua.load(HTTP)
         .set_name("=host.http")

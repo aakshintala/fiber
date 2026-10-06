@@ -362,3 +362,66 @@ fn riff_without_webp_and_webp_without_riff_are_text() {
         }
     }
 }
+
+#[test]
+fn with_locks_shares_one_lock_set_with_outside_holders() {
+    use std::sync::{Arc, mpsc};
+    use std::time::Duration;
+
+    use super::{Files, PathLocks};
+
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    let dir = TempDir::new("fiber-files-with-locks");
+    let locks = Arc::new(PathLocks::new());
+    let files = Files::with_locks(dir.path().to_path_buf(), Arc::clone(&locks));
+    assert!(Arc::ptr_eq(&locks, &files.locks()));
+    let path = dir.path().join("a.txt");
+    let first = Arc::clone(&locks);
+    let holder_path = path.clone();
+    let (holding, holding_rx) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        let guard = first.lock(&holder_path);
+        holding.send(()).unwrap();
+        release_rx
+            .recv_timeout(DEADLINE)
+            .expect("waited 10s for the release of the outside holder");
+        drop(guard);
+    });
+    assert!(
+        holding_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the outside holder to be held"
+    );
+    let through_files = files.locks();
+    let (done, done_rx) = mpsc::channel();
+    let handle = std::thread::spawn(move || {
+        let guard = through_files.lock(&path);
+        done.send(()).unwrap();
+        drop(guard);
+    });
+    let probe = Arc::clone(&locks);
+    let (seen, seen_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        while probe.waiting() != 1 {
+            std::thread::yield_now();
+        }
+        seen.send(()).unwrap();
+    });
+    assert!(
+        seen_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the lock through Files to be waiting"
+    );
+    assert!(
+        done_rx.try_recv().is_err(),
+        "the lock through Files acquired the path while it was held"
+    );
+    release.send(()).unwrap();
+    assert!(
+        done_rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the lock through Files to acquire the path"
+    );
+    holder.join().unwrap();
+    handle.join().unwrap();
+    assert!(locks.is_clear());
+}

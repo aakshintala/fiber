@@ -11,6 +11,7 @@ pub mod commands;
 pub mod emit;
 mod envelope;
 pub mod events;
+pub mod files;
 pub mod hook;
 mod ids;
 pub mod inbox;
