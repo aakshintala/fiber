@@ -39,7 +39,7 @@ pub fn full_name(typed: &str) -> String {
 /// The inverse of [`full_name`]:
 /// `github.com/aakshintala/fiber/providers/opencode` shows as `opencode`;
 /// any other name shows whole, so a `remove` command naming it works.
-pub fn short_name(name: &str) -> &str {
+pub(crate) fn short_name(name: &str) -> &str {
     const PREFIX: &str = "github.com/aakshintala/fiber/providers/";
     match name.strip_prefix(PREFIX) {
         Some(short) if SHORT_NAMES.contains(&short) => short,

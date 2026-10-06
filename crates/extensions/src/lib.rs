@@ -28,7 +28,7 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
-pub use git::{Origin, SHORT_NAMES, full_name, is_path, short_name};
+pub use git::{Origin, SHORT_NAMES, full_name, is_path};
 pub use hooks::SessionExtensions;
 pub use install::Provenance;
 pub use installed::{Damaged, Installed, Listing, Removal, list, removal};
