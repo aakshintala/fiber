@@ -9,7 +9,7 @@ use std::path::Path;
 
 use contract::events::{
     CallStatus, Event, InputItem, InstructionFile, InstructionReason, InstructionSent, Outcome,
-    ToolCallCompleted,
+    ToolCallCompleted, ToolCallRequested,
 };
 use contract::provider::{ImageRef, Input};
 use contract::shapes::ContentPart;
@@ -133,6 +133,17 @@ impl Rendered {
         open: &HashSet<ActionId>,
     ) {
         match event {
+            // A call the provider ran has no fixed result and no pending
+            // state. It renders with its result or not at all: sending the
+            // call block alone would be refused.
+            Event::ToolCallRequested(call) if call.provider_item.is_some() => {
+                if action.is_some_and(|action| completed.contains(action)) {
+                    self.render(event, action, model);
+                }
+            }
+            Event::ToolCallCompleted(done) if done.provider_item.is_some() => {
+                self.render(event, action, model);
+            }
             Event::ToolCallRequested(call) => {
                 if let Some(action) = action {
                     let input = Input::ToolCall {
@@ -447,6 +458,20 @@ pub(crate) fn render(
                 provider_item: part.provider_item.clone(),
             });
         }
+        // A call the provider ran, and its result, render as the raw blocks
+        // they arrived as; the handoff carry does not record them.
+        Event::ToolCallRequested(ToolCallRequested {
+            provider_item: Some(item),
+            ..
+        })
+        | Event::ToolCallCompleted(ToolCallCompleted {
+            provider_item: Some(item),
+            ..
+        }) => conversation.push(Input::Assistant {
+            model: model.to_owned(),
+            text: String::new(),
+            provider_item: Some(item.clone()),
+        }),
         Event::ToolCallRequested(call) => {
             if let Some(action) = action {
                 let input = Input::ToolCall {

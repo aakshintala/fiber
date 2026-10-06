@@ -34,6 +34,7 @@ mod completion;
 mod conversation;
 mod handoff;
 mod hooks;
+mod hosted;
 mod inbox;
 mod jobs;
 mod opening;
@@ -674,7 +675,7 @@ impl Loop {
                     self.append(&Event::ToolCallRequested(call.clone()), turn, Some(&id))?;
                     calls.push((id, call));
                 }
-                ReplyAction::Hosted(_) => {}
+                ReplyAction::Hosted(hosted) => self.write_hosted(&hosted, turn)?,
             }
         }
         let cost = self
