@@ -23,8 +23,10 @@ use std::time::Duration;
 use fakes::{ProviderServer, Response, Watchdog};
 use serde_json::{Value, json};
 
-/// How long one `fiber` run may take.
-const DEADLINE: Duration = Duration::from_secs(20);
+/// How long one `fiber` run may take. A test runs `fiber` at most twice,
+/// each with an exit wait and a watchdog wait: 48 s of deadlines, under
+/// half the 120 s nextest timeout (`docs/testing.md`, "Waits and timeouts").
+const DEADLINE: Duration = Duration::from_secs(12);
 
 /// The shipped extension's full name.
 const MEMORY: &str = "github.com/aakshintala/fiber/extensions/memory";
