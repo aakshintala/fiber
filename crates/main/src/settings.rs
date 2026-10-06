@@ -49,9 +49,17 @@ pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {
 /// The prompt-cache lifetime for `model`, from `cache.lifetime`
 /// (`docs/prompt-cache.md`, "Cache lifetime" and
 /// `docs/configuration.md`). A per-model key wins over the same key at
-/// the top level.
-pub(crate) fn cache_lifetime(_config: &Config, _model: &str) -> CacheLifetime {
-    CacheLifetime::OneHour
+/// the top level. `"5m"` is five minutes; anything else or absent is the
+/// 1-hour default (the config crate's `OneOf` refuses other values).
+pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
+    let lifetime = config
+        .get("cache.lifetime", Some(model))
+        .and_then(|(value, _)| value.as_str().map(str::to_owned));
+    if lifetime.as_deref() == Some("5m") {
+        CacheLifetime::FiveMinutes
+    } else {
+        CacheLifetime::OneHour
+    }
 }
 
 pub(crate) fn retry_policy(config: &Config) -> r#loop::Retry {

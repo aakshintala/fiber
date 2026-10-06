@@ -2175,11 +2175,7 @@ fn openrouter_claude_request(
     write(&setup.home().join("config.json"), &home_config);
     if let Some(repo) = repo_config {
         write(
-            &setup
-                .root
-                .path()
-                .join("w")
-                .join(".fiber/config.json"),
+            &setup.root.path().join("w").join(".fiber/config.json"),
             &repo,
         );
     }

@@ -457,10 +457,8 @@ fn over_budget_ends_the_section_with_the_prune_line_and_under_does_not() {
 
 #[test]
 fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
-    let mut session = Session::with_cache_lifetime(
-        vec![Scripted::text("Done.")],
-        CacheLifetime::FiveMinutes,
-    );
+    let mut session =
+        Session::with_cache_lifetime(vec![Scripted::text("Done.")], CacheLifetime::FiveMinutes);
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();

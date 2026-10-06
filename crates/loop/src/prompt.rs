@@ -300,7 +300,7 @@ pub(crate) fn build(
         )
         .collect();
     let tool_choice = "auto".to_owned();
-    let cache_lifetime = contract::events::CacheLifetime::OneHour;
+    let cache_lifetime = inputs.cache_lifetime;
     let event = contract::events::PreambleBuilt {
         reason,
         model: model.to_owned(),
