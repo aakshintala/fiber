@@ -75,6 +75,7 @@ fn weather_tool() -> ToolDefinition {
             "additionalProperties": false
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -245,7 +246,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
+                        None
+                    }
                 })
                 .collect();
             let streamed = deltas
@@ -380,6 +383,7 @@ fn the_tool_use_stream_decodes_the_call() {
             provider_id: Some(ProviderCallId("toolu_01AXa3EtWnvLzfgA63BeZm68".into())),
             repair: None,
             ran_by: None,
+            provider_item: None,
         }
     );
     assert!(deltas.iter().any(
@@ -539,6 +543,7 @@ fn two_requests_built_from_the_same_inputs_are_the_same_bytes() {
         description: "First alphabetically.".into(),
         input_schema: json!({"type": "object", "properties": {}, "required": []}),
         deferred: false,
+        hosted: None,
     });
     for request in [request(), request(), reordered.clone()] {
         run(Box::new(messages.request(&request))).0.unwrap();
@@ -728,6 +733,7 @@ fn four_turn_conversation() -> Vec<Input> {
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -816,6 +822,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -1268,6 +1275,7 @@ fn text_around_a_tool_call_decodes_and_replays_in_that_order() {
                 provider_id: Some(ProviderCallId("t1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::Assistant {
@@ -1361,6 +1369,7 @@ fn a_failed_tool_result_sends_is_error_and_a_success_sends_none() {
                     provider_id: Some(ProviderCallId("toolu_1".into())),
                     repair: None,
                     ran_by: None,
+                    provider_item: None,
                 },
             },
             Input::ToolResult {
@@ -1407,6 +1416,7 @@ fn image_conversation(is_error: bool, images: Vec<contract::provider::ImageRef>)
                 provider_id: Some(ProviderCallId("toolu_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {
@@ -1610,4 +1620,409 @@ fn web_search_requests_in_usage_become_the_reply_count() {
         finished("end_turn")[1].clone(),
     ]));
     assert_eq!(reply.unwrap().web_searches, None);
+}
+
+fn search_call(index: u64, id: &str) -> Vec<Value> {
+    vec![
+        json!({"type": "content_block_start", "index": index, "content_block":
+            {"type": "server_tool_use", "id": id, "name": "web_search", "input": {}}}),
+        json!({"type": "content_block_delta", "index": index, "delta":
+            {"type": "input_json_delta", "partial_json": "{\"query\":"}}),
+        json!({"type": "content_block_delta", "index": index, "delta":
+            {"type": "input_json_delta", "partial_json": "\"rust 1.90\"}"}}),
+        stopped(index),
+    ]
+}
+
+fn search_result(index: u64, tool_use_id: &str, content: Value) -> Vec<Value> {
+    vec![
+        json!({"type": "content_block_start", "index": index, "content_block":
+            {"type": "web_search_tool_result", "tool_use_id": tool_use_id, "content": content}}),
+        stopped(index),
+    ]
+}
+
+fn two_results() -> Value {
+    json!([
+        {"type": "web_search_result", "url": "https://blog.rust-lang.org/",
+         "title": "Rust Blog", "encrypted_content": "Eq", "page_age": null},
+        {"type": "web_search_result", "url": "https://doc.rust-lang.org/",
+         "title": "Docs", "encrypted_content": "Er", "page_age": "May 1, 2026"}
+    ])
+}
+
+fn citation(url: &str) -> Value {
+    json!({"type": "web_search_result_location", "url": url, "title": "T",
+        "encrypted_index": "Eo", "cited_text": "c"})
+}
+
+fn hosted_stream(parts: Vec<Vec<Value>>) -> Vec<u8> {
+    let mut events = vec![started()];
+    events.extend(parts.into_iter().flatten());
+    events.extend(finished("end_turn"));
+    stream(&events)
+}
+
+#[test]
+fn a_hosted_search_decodes_with_its_result_and_the_citing_text_around_it() {
+    let mut events = search_call(0, "srvtoolu_01");
+    events.extend(search_result(1, "srvtoolu_01", two_results()));
+    events.push(json!({"type": "content_block_start", "index": 2,
+        "content_block": {"type": "text", "text": ""}}));
+    events.push(json!({"type": "content_block_delta", "index": 2,
+        "delta": {"type": "text_delta", "text": "Rust 1.90 is out."}}));
+    for url in ["https://blog.rust-lang.org/", "https://doc.rust-lang.org/"] {
+        events.push(json!({"type": "content_block_delta", "index": 2,
+            "delta": {"type": "citations_delta", "citation": citation(url)}}));
+    }
+    events.push(stopped(2));
+    let (reply, deltas) = decoded(&hosted_stream(vec![events]));
+    let reply = reply.unwrap();
+    assert!(
+        deltas
+            .iter()
+            .all(|d| !matches!(d, Delta::ToolCallArguments(_))),
+        "a hosted call streams no arguments"
+    );
+    let [ReplyAction::Hosted(hosted), ReplyAction::Text(text)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(hosted.call.name, "web_search");
+    assert_eq!(hosted.call.arguments, json!({"query": "rust 1.90"}));
+    assert_eq!(
+        hosted.call.provider_id,
+        Some(ProviderCallId("srvtoolu_01".into()))
+    );
+    assert_eq!(
+        hosted.call.provider_item,
+        Some(json!({"type": "server_tool_use", "id": "srvtoolu_01",
+            "name": "web_search", "input": {"query": "rust 1.90"}}))
+    );
+    assert_eq!(
+        hosted.completed.status,
+        contract::events::CallStatus::Completed
+    );
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "https://blog.rust-lang.org/\nhttps://doc.rust-lang.org/".into()
+        }]
+    );
+    assert_eq!(
+        hosted.completed.provider_item,
+        Some(
+            json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+            "content": two_results()})
+        )
+    );
+    assert_eq!(text.text, "Rust 1.90 is out.");
+    assert_eq!(
+        text.provider_item,
+        Some(
+            json!({"type": "text", "text": "Rust 1.90 is out.", "citations": [
+            citation("https://blog.rust-lang.org/"), citation("https://doc.rust-lang.org/")]})
+        )
+    );
+    assert_eq!(reply.text(), "Rust 1.90 is out.");
+}
+
+#[test]
+fn a_hosted_search_that_failed_completes_failed_with_the_vendors_code() {
+    let mut events = search_call(0, "srvtoolu_01");
+    let error = json!({"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"});
+    events.extend(search_result(1, "srvtoolu_01", error.clone()));
+    let (reply, _) = decoded(&hosted_stream(vec![events]));
+    let reply = reply.unwrap();
+    let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    let done = &hosted.completed;
+    assert_eq!(done.status, contract::events::CallStatus::Failed);
+    let failure = done.error.as_ref().unwrap();
+    assert_eq!(failure.code, ErrorCode::ToolError);
+    assert_eq!(
+        failure.message,
+        "The provider's search failed: max_uses_exceeded."
+    );
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: failure.message.clone()
+        }]
+    );
+    assert_eq!(
+        done.provider_item,
+        Some(
+            json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+            "content": error})
+        )
+    );
+}
+
+#[test]
+fn a_hosted_call_with_no_result_and_a_result_with_no_call_are_left_out() {
+    // No result by `message_stop`: no search ran.
+    let (reply, _) = decoded(&hosted_stream(vec![search_call(0, "srvtoolu_01")]));
+    assert!(reply.unwrap().actions.is_empty());
+    // A result whose call is unknown.
+    let (reply, _) = decoded(&hosted_stream(vec![search_result(
+        0,
+        "srvtoolu_99",
+        two_results(),
+    )]));
+    assert!(reply.unwrap().actions.is_empty());
+    // A result pairs with its own call by id, not by position.
+    let mut events = search_call(0, "srvtoolu_01");
+    events.extend(search_call(1, "srvtoolu_02"));
+    events.extend(search_result(2, "srvtoolu_02", two_results()));
+    let (reply, _) = decoded(&hosted_stream(vec![events]));
+    let reply = reply.unwrap();
+    let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(
+        hosted.call.provider_id,
+        Some(ProviderCallId("srvtoolu_02".into()))
+    );
+}
+
+#[test]
+fn a_text_block_without_citations_keeps_no_provider_item() {
+    let (reply, _) = decoded(&hosted_stream(vec![
+        text_block(0, "plain").to_vec(),
+        vec![stopped(0)],
+    ]));
+    let reply = reply.unwrap();
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [ReplyAction::Text(part)] if part.text == "plain" && part.provider_item.is_none()
+    ));
+}
+
+fn hosted_tool() -> ToolDefinition {
+    ToolDefinition {
+        name: "web_search".into(),
+        description: String::new(),
+        input_schema: json!({}),
+        deferred: false,
+        hosted: Some("web_search_20250305".into()),
+    }
+}
+
+#[test]
+fn a_hosted_tool_is_sent_as_its_type_and_name_and_takes_no_strict_slot() {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let mut request = request();
+    request.tools = (0..20)
+        .map(|i| ToolDefinition {
+            name: format!("tool_{i:02}"),
+            ..weather_tool()
+        })
+        .collect();
+    request.tools.insert(0, hosted_tool());
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    let tools = sent_body(&server, 0)["tools"].as_array().unwrap().clone();
+    assert_eq!(tools.len(), 21);
+    let search: Vec<&Value> = tools.iter().filter(|t| t["name"] == "web_search").collect();
+    assert_eq!(
+        search,
+        [&json!({"name": "web_search", "type": "web_search_20250305"})]
+    );
+    let strict = tools.iter().filter(|t| t["strict"] == json!(true)).count();
+    assert_eq!(strict, 20);
+}
+
+fn hosted_conversation(model: &str) -> Vec<Input> {
+    let mut conversation = request().conversation;
+    conversation.extend([
+        Input::Assistant {
+            model: model.into(),
+            text: String::new(),
+            provider_item: Some(json!({"type": "server_tool_use", "id": "srvtoolu_01",
+                "name": "web_search", "input": {"query": "rust 1.90"}})),
+        },
+        Input::Assistant {
+            model: model.into(),
+            text: String::new(),
+            provider_item: Some(json!({"type": "web_search_tool_result",
+                "tool_use_id": "srvtoolu_01", "content": []})),
+        },
+        Input::Assistant {
+            model: model.into(),
+            text: "Rust 1.90 is out.".into(),
+            provider_item: Some(json!({"type": "text", "text": "Rust 1.90 is out.",
+                "citations": [{"type": "web_search_result_location", "url": "u"}]})),
+        },
+        Input::User {
+            text: "Thanks.".into(),
+        },
+    ]);
+    conversation
+}
+
+fn sent_messages(conversation: Vec<Input>) -> Value {
+    let server = ProviderServer::start([completed_reply()]).unwrap();
+    let request = ModelRequest {
+        conversation,
+        ..request()
+    };
+    run(Box::new(Messages::new(endpoint(&server)).request(&request)))
+        .0
+        .unwrap();
+    sent_body(&server, 0)["messages"].clone()
+}
+
+#[test]
+fn a_hosted_pair_goes_back_unchanged_to_the_model_that_produced_it() {
+    let messages = sent_messages(hosted_conversation("anthropic/claude-sonnet-5-5"));
+    assert_eq!(
+        messages,
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            {"role": "assistant", "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
+                 "input": {"query": "rust 1.90"}},
+                {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": []},
+                {"type": "text", "text": "Rust 1.90 is out.",
+                 "citations": [{"type": "web_search_result_location", "url": "u"}]}]},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Thanks.", "cache_control": {"type": "ephemeral"}}]},
+        ])
+    );
+}
+
+#[test]
+fn a_hosted_pair_is_left_out_for_another_model_and_its_citing_text_goes_as_plain_text() {
+    let messages = sent_messages(hosted_conversation("openai/gpt-6-luna"));
+    assert_eq!(
+        messages,
+        json!([
+            {"role": "user", "content": "What is the weather in Paris? Use the tool."},
+            {"role": "assistant", "content": "Rust 1.90 is out."},
+            {"role": "user", "content": [
+                {"type": "text", "text": "Thanks.", "cache_control": {"type": "ephemeral"}}]},
+        ])
+    );
+}
+
+#[test]
+fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
+    let mut conversation = hosted_conversation("anthropic/claude-sonnet-5-5");
+    conversation.truncate(3);
+    let messages = sent_messages(conversation);
+    assert_eq!(
+        messages[1]["content"][1],
+        json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01", "content": [],
+            "cache_control": {"type": "ephemeral"}})
+    );
+    assert_eq!(
+        messages[1]["content"][0],
+        json!({"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
+            "input": {"query": "rust 1.90"}})
+    );
+}
+
+/// One live hosted search on `claude-sonnet-5-5`, recorded with the `record`
+/// jig from the request Fiber builds for a model whose `web_search` is
+/// `web_search_20250305`.
+fn web_search_recording() -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings/anthropic-web-search.sse"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
+    let bytes = web_search_recording();
+    let server = ProviderServer::start([Response::stream(bytes), completed_reply()]).unwrap();
+    let provider: Box<dyn Provider> = Box::new(Messages::new(endpoint(&server)));
+    let (reply, _) = run(provider.call(&request()));
+    let reply = reply.unwrap();
+    assert_eq!(reply.finish, Finish::Completed);
+    assert_eq!(reply.web_searches, Some(1));
+
+    let hosted: Vec<_> = reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Hosted(hosted) => Some(hosted),
+            ReplyAction::Text(_) | ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) => None,
+        })
+        .collect();
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", reply.actions);
+    };
+    let call_item = hosted.call.provider_item.as_ref().unwrap();
+    assert_eq!(hosted.call.name, "web_search");
+    assert_eq!(call_item["type"], "server_tool_use");
+    assert_eq!(
+        hosted.call.provider_id.as_ref().unwrap().0,
+        call_item["id"].as_str().unwrap()
+    );
+    assert!(hosted.call.arguments["query"].is_string());
+    assert_eq!(call_item["input"], hosted.call.arguments);
+
+    let result_item = hosted.completed.provider_item.as_ref().unwrap();
+    assert_eq!(result_item["type"], "web_search_tool_result");
+    assert_eq!(result_item["tool_use_id"], call_item["id"]);
+    let urls: Vec<&str> = result_item["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["url"].as_str().unwrap())
+        .collect();
+    assert!(!urls.is_empty());
+    assert_eq!(
+        hosted.completed.status,
+        contract::events::CallStatus::Completed
+    );
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: urls.join("\n")
+        }]
+    );
+
+    let cited: Vec<&Value> = reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Text(part) => part.provider_item.as_ref(),
+            ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+        })
+        .collect();
+    assert!(!cited.is_empty(), "the answer cites the search");
+    assert!(
+        cited
+            .iter()
+            .all(|item| item["citations"][0]["encrypted_index"].is_string())
+    );
+
+    // The next request to the same model sends both raw blocks back
+    // unchanged, in order, in the assistant message.
+    let reference = "anthropic/claude-sonnet-5-5".to_owned();
+    let mut next = request();
+    next.conversation.extend([
+        Input::Assistant {
+            model: reference.clone(),
+            text: String::new(),
+            provider_item: Some(call_item.clone()),
+        },
+        Input::Assistant {
+            model: reference,
+            text: String::new(),
+            provider_item: Some(result_item.clone()),
+        },
+        Input::User {
+            text: "Thanks.".into(),
+        },
+    ]);
+    let (second, _) = run(provider.call(&next));
+    second.unwrap();
+    let sent = sent_body(&server, 1);
+    let blocks = sent["messages"][1]["content"].as_array().unwrap();
+    assert_eq!(blocks, &vec![call_item.clone(), result_item.clone()]);
 }

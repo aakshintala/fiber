@@ -93,6 +93,12 @@ pub struct ToolCallRequested {
     /// On an inner call, its extension and anchor; absent on the model's calls.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ran_by: Option<RanBy>,
+    /// On a call the provider ran itself, such as a hosted web search, the
+    /// provider's call block exactly as it arrived, sent back unchanged only
+    /// to the model that produced it (`docs/tools.md`, "Hosted by the
+    /// provider").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_item: Option<Value>,
 }
 
 /// An inner call's extension and the outer call or command it ran inside
@@ -175,6 +181,7 @@ struct ToolCallRequestedLine {
     repaired: Option<Map<String, Value>>,
     repairs: Option<Vec<Repair>>,
     ran_by: Option<RanBy>,
+    provider_item: Option<Value>,
 }
 
 impl TryFrom<ToolCallRequestedLine> for ToolCallRequested {
@@ -192,6 +199,7 @@ impl TryFrom<ToolCallRequestedLine> for ToolCallRequested {
             provider_id: line.provider_id,
             repair,
             ran_by: line.ran_by,
+            provider_item: line.provider_item,
         })
     }
 }
@@ -290,6 +298,11 @@ pub struct ToolCallCompleted {
     /// When an `after_tool` hook rewrote the result.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub changed_by: Option<Vec<String>>,
+    /// On a call the provider ran, its result block exactly as it arrived,
+    /// sent back unchanged only to the model that produced it
+    /// (`docs/tools.md`, "Hosted by the provider").
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_item: Option<Value>,
 }
 
 /// One file a call changed.

@@ -153,7 +153,8 @@ pub(crate) fn suspended(lines: &[Envelope]) -> Result<Option<Suspended>, Error> 
         .unwrap_or(0);
     let mut batch = Vec::new();
     for line in lines.iter().skip(start) {
-        if line.kind != "tool_call_requested" {
+        // A call the provider ran is never given a result.
+        if line.kind != "tool_call_requested" || line.payload.contains_key("provider_item") {
             continue;
         }
         if let Some(id) = &line.action_id

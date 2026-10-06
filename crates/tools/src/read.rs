@@ -59,6 +59,7 @@ impl Tool for Read {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 

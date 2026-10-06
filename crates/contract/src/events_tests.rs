@@ -341,6 +341,13 @@ fn samples() -> Vec<(&'static str, Value)> {
             "ran_by": {"extension": "checks", "command_id": "c_1"}}),
         ),
         (
+            "tool_call_requested",
+            json!({"name": "web_search", "arguments": {"query": "rust"},
+            "provider_id": "srvtoolu_01",
+            "provider_item": {"type": "server_tool_use", "id": "srvtoolu_01",
+            "name": "web_search", "input": {"query": "rust"}}}),
+        ),
+        (
             "tool_call_started",
             json!({"effects": ["reads", "writes", "executes", "network"],
             "reversible": false, "paths": ["/a"], "arguments": {"path": "/a"},
@@ -356,6 +363,12 @@ fn samples() -> Vec<(&'static str, Value)> {
             "process": process, "content": content, "details": [1], "artifact": "artifacts/x",
             "changes": [{"path": "/a", "added": 1, "removed": 2}],
             "control": {"handoff": "note"}, "changed_by": ["e"]}),
+        ),
+        (
+            "tool_call_completed",
+            json!({"status": "completed", "content": content,
+            "provider_item": {"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+            "content": []}}),
         ),
         (
             "permission_requested",
@@ -833,4 +846,31 @@ fn fibers_own_message_has_source_fiber_and_no_command_id() {
         serde_json::from_value::<crate::shapes::Sender>(value).unwrap(),
         sender
     );
+}
+
+#[test]
+fn provider_item_is_read_from_a_hosted_call_and_absent_from_an_ordinary_one() {
+    let item = json!({"type": "server_tool_use", "id": "srvtoolu_01"});
+    let call = |payload: Value| match read("tool_call_requested", payload).unwrap() {
+        Some(Event::ToolCallRequested(call)) => call,
+        other => panic!("{other:?}"),
+    };
+    let hosted = call(json!({"name": "web_search", "arguments": {}, "provider_item": item}));
+    assert_eq!(hosted.provider_item, Some(item));
+    let ordinary = call(json!({"name": "read", "arguments": {}}));
+    assert_eq!(ordinary.provider_item, None);
+    let written = serde_json::to_value(&ordinary).unwrap();
+    assert!(written.get("provider_item").is_none(), "{written}");
+
+    let result = |payload: Value| match read("tool_call_completed", payload).unwrap() {
+        Some(Event::ToolCallCompleted(done)) => done,
+        other => panic!("{other:?}"),
+    };
+    let block = json!({"type": "web_search_tool_result"});
+    let hosted = result(json!({"status": "completed", "content": [], "provider_item": block}));
+    assert_eq!(hosted.provider_item, Some(block));
+    let ordinary = result(json!({"status": "completed", "content": []}));
+    assert_eq!(ordinary.provider_item, None);
+    let written = serde_json::to_value(&ordinary).unwrap();
+    assert!(written.get("provider_item").is_none(), "{written}");
 }

@@ -11,6 +11,7 @@
 mod builtin;
 mod cli;
 mod clock;
+mod connect;
 mod cost;
 mod crash;
 mod credential;
@@ -36,7 +37,8 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use config::{Config, Protocol, Sources};
+use config::{Config, Sources};
+use connect::connect;
 use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::shapes::Failure;
@@ -45,12 +47,6 @@ use doors::{Session, failure};
 use extensions::{Origin, Provenance, Providers, Request};
 use log::Log;
 use r#loop::{Loop, Model};
-use provider::anthropic_messages::Messages;
-use provider::google_generative_ai::Gemini;
-use provider::openai_completions::Completions;
-use provider::openai_responses::Responses;
-use provider::{Compat, Endpoint};
-use serde_json::Value;
 
 /// What a session is built from, read before it exists.
 struct Parts {
@@ -78,6 +74,8 @@ struct Parts {
     /// The installed extensions, started, and their hooks.
     extensions: Arc<extensions::SessionExtensions>,
     mcp: mcp_servers::Specs,
+    /// The session model's hosted search type, such as `web_search_20250305`.
+    web_search: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -400,6 +398,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         sessions,
         extensions,
         mcp,
+        web_search,
     } = parts;
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
     // Before the log exists: a failure here, such as not finding the running
@@ -410,6 +409,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         &clock,
         &jobs,
         mcp.specs,
+        web_search.as_deref(),
     ) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),
@@ -628,6 +628,7 @@ fn parts_with(
         idle,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),
+        web_search: model.model.web_search.clone(),
     })
 }
 
@@ -640,70 +641,6 @@ pub(crate) fn idle_exit(config: &Config) -> Option<Duration> {
         .and_then(|(value, _)| value.as_u64())
         .unwrap_or(1_800_000);
     Some(Duration::from_millis(ms))
-}
-
-/// The provider a model reaches: the endpoint and protocol construction the
-/// session's model and the reviewer's share. A reviewer failure never falls
-/// back to the session's model (`docs/permissions.md`, "How it runs").
-fn connect(model: extensions::Model<'_>, key: String) -> Result<Arc<dyn Provider>, Failure> {
-    let endpoint = Endpoint {
-        provider: model.provider.name.clone(),
-        model: model.model.id.clone(),
-        base_url: model.model.base_url.clone(),
-        key: Some(key),
-        headers: model
-            .provider
-            .headers
-            .iter()
-            .map(|(k, v)| (k.clone(), v.clone()))
-            .collect(),
-        compat: Compat::from_data(&model.model.compat),
-        max_output_tokens: model.model.max_output_tokens,
-        extra_body: model.model.extra_body.clone(),
-        text_only: !model.model.input.iter().any(|kind| kind == "image"),
-        direct: false,
-    };
-    Ok(match model.model.protocol {
-        Protocol::OpenaiResponses => {
-            let responses = Responses::new(endpoint);
-            Arc::new(
-                match model
-                    .model
-                    .compat
-                    .get("cache_key_header")
-                    .and_then(Value::as_str)
-                {
-                    Some(name) => responses.cache_key_header(name),
-                    None => responses,
-                },
-            )
-        }
-        Protocol::OpenaiCompletions => Arc::new(Completions::new(endpoint)),
-        Protocol::AnthropicMessages => Arc::new(Messages::new(endpoint)),
-        Protocol::GoogleGenerativeAi => {
-            let gemini = Gemini::new(endpoint);
-            Arc::new(
-                match model
-                    .model
-                    .compat
-                    .get("cache_key_header")
-                    .and_then(Value::as_str)
-                {
-                    Some(name) => gemini.cache_key_header(name),
-                    None => gemini,
-                },
-            )
-        }
-        Protocol::BedrockConverse => {
-            return Err(failure(
-                ErrorCode::ProtocolUnsupported,
-                format!(
-                    "The model `{}` speaks a protocol this Fiber does not speak yet.",
-                    model.reference()
-                ),
-            ));
-        }
-    })
 }
 
 /// Who judges step 7's calls: `reviewer.model` when set, else the session

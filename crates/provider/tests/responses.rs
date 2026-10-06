@@ -73,6 +73,7 @@ fn weather_tool() -> ToolDefinition {
             "additionalProperties": false
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -87,6 +88,7 @@ fn loose_tool() -> ToolDefinition {
             "required": ["a"]
         }),
         deferred: false,
+        hosted: None,
     }
 }
 
@@ -256,7 +258,9 @@ fn every_probe_recording_decodes_into_the_actions_and_usage_it_holds() {
                 .iter()
                 .filter_map(|a| match a {
                     ReplyAction::ToolCall(c) => Some(c),
-                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) => None,
+                    ReplyAction::Reasoning(_) | ReplyAction::Text(_) | ReplyAction::Hosted(_) => {
+                        None
+                    }
                 })
                 .collect();
             let streamed = deltas
@@ -356,6 +360,7 @@ fn the_opencode_tool_exchange_decodes_call_reasoning_and_answer() {
             )),
             repair: None,
             ran_by: None,
+            provider_item: None,
         }
     );
     assert!(deltas.contains(&Delta::ToolCallArguments(
@@ -1075,6 +1080,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                     provider_id: Some(ProviderCallId("call_1".into())),
                     repair: None,
                     ran_by: None,
+                    provider_item: None,
                 },
             },
             Input::ToolResult {
@@ -1124,6 +1130,7 @@ fn image_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> 
                 provider_id: Some(ProviderCallId("call_1".into())),
                 repair: None,
                 ran_by: None,
+                provider_item: None,
             },
         },
         Input::ToolResult {

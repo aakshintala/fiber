@@ -56,6 +56,7 @@ impl McpTool {
                 description,
                 input_schema: schema,
                 deferred: false,
+                hosted: None,
             },
             effects: Effects {
                 declared: hints.declared(),

@@ -91,6 +91,7 @@ fn call(name: &str, arguments: serde_json::Value) -> Input {
             provider_id: None,
             repair: None,
             ran_by: None,
+            provider_item: None,
         },
     }
 }

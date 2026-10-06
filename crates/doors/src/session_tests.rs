@@ -1052,6 +1052,7 @@ impl Tool for LateShell {
             description: "test".to_owned(),
             input_schema: Value::Object(Map::new()),
             deferred: false,
+            hosted: None,
         }
     }
 

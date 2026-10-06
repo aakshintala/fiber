@@ -84,6 +84,7 @@ fn requested(name: &str) -> Event {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     })
 }
 
@@ -111,6 +112,7 @@ fn completed(text: &str) -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        provider_item: None,
     })
 }
 
@@ -3485,4 +3487,114 @@ fn a_context_not_nudged_before_the_crash_is_nudged_once_a_reply_measures_it() {
     let mut expected = RESUMED_TURN.to_vec();
     expected.insert(10, "context_nudged");
     assert_eq!(nudge_after_resume(false), expected);
+}
+
+fn hosted_requested() -> Event {
+    Event::ToolCallRequested(ToolCallRequested {
+        name: "web_search".into(),
+        arguments: json!({"query": "rust 1.90"}),
+        provider_id: Some(contract::ProviderCallId("srvtoolu_01".into())),
+        repair: None,
+        ran_by: None,
+        provider_item: Some(json!({"type": "server_tool_use", "id": "srvtoolu_01"})),
+    })
+}
+
+fn hosted_completed() -> Event {
+    let Event::ToolCallCompleted(done) = completed("https://blog.rust-lang.org/") else {
+        panic!("completed builds a tool_call_completed");
+    };
+    Event::ToolCallCompleted(ToolCallCompleted {
+        provider_item: Some(json!({"type": "web_search_tool_result"})),
+        ..done
+    })
+}
+
+fn raw(item: serde_json::Value) -> Input {
+    Input::Assistant {
+        model: MODEL.into(),
+        text: String::new(),
+        provider_item: Some(item),
+    }
+}
+
+#[test]
+fn a_hosted_pair_rebuilds_as_its_two_raw_blocks_and_no_result() {
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(message_started(), Some("a_0"));
+    log.append(hosted_requested(), Some("a_1"));
+    log.append(started(), Some("a_1"));
+    log.append(hosted_completed(), Some("a_1"));
+    log.append(assistant("Done."), Some("a_0"));
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    assert_eq!(
+        conversation[1..],
+        [
+            raw(json!({"type": "server_tool_use", "id": "srvtoolu_01"})),
+            raw(json!({"type": "web_search_tool_result"})),
+            Input::Assistant {
+                model: MODEL.into(),
+                text: "Done.".into(),
+                provider_item: None
+            }
+        ]
+    );
+    assert!(
+        conversation
+            .iter()
+            .all(|i| !matches!(i, Input::ToolCall { .. } | Input::ToolResult { .. }))
+    );
+}
+
+#[test]
+fn a_hosted_call_cut_from_its_result_by_a_crash_renders_nothing_and_gets_no_fixed_result() {
+    let log = LogLines::new();
+    log.append(user_turn("one"), None);
+    log.append(message_started(), Some("a_0"));
+    log.append(hosted_requested(), Some("a_1"));
+    log.append(started(), Some("a_1"));
+
+    let conversation = r#loop::rebuild(&log.lines(), MODEL).unwrap();
+
+    assert_eq!(conversation.len(), 1, "{conversation:?}");
+    assert!(matches!(conversation[0], Input::User { .. }));
+}
+
+#[test]
+fn a_suspended_batch_leaves_a_hosted_call_out() {
+    let mut history = History::new(vec![Scripted::text("Hello.")]);
+    history.write(user_turn("one"), None);
+    history.write(message_started(), Some("a_0"));
+    history.write(requested("read"), Some("a_1"));
+    history.write(hosted_requested(), Some("a_2"));
+    history.write(standing_request("r_9"), Some("a_1"));
+    history.write(fiber_started(), None);
+    history.write(fiber_exited(Some("r_9")), None);
+    history.freeze();
+
+    let looped = history.resume_headless(Vec::new());
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Completed));
+    let new = history.new_lines();
+    let done: Vec<_> = new
+        .iter()
+        .filter(|l| l.kind == "tool_call_completed")
+        .map(|l| l.action_id.clone().unwrap().0)
+        .collect();
+    assert_eq!(done, ["a_1"], "the hosted call is given no result");
+    let conversation = &history.provider.requests()[0].conversation;
+    assert!(conversation.iter().all(|i| !matches!(
+        i,
+        Input::Assistant {
+            provider_item: Some(_),
+            ..
+        }
+    )));
+    assert!(conversation.iter().all(
+        |i| !matches!(i, Input::ToolCall { action_id, .. } | Input::ToolResult { action_id, .. } if action_id.0 == "a_2")
+    ));
 }

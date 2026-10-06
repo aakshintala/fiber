@@ -49,6 +49,7 @@ impl Tool for WriteAgents {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 

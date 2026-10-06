@@ -33,8 +33,14 @@ fn the_driver_shell_runs_echo() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (_tools, _infos, driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
+    let (_tools, _infos, driver, _forget) = super::builtin(
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        None,
+    )
+    .unwrap();
     let mut arguments = serde_json::Map::new();
     arguments.insert(
         "command".to_owned(),
@@ -77,6 +83,7 @@ fn read_is_wired_to_the_image_child() {
         &root.path().join("artifacts"),
         &clock,
         &jobs,
+        None,
     )
     .unwrap();
     let (_, read) = tools
@@ -110,8 +117,14 @@ fn the_forget_callback_clears_what_the_file_tools_have_seen() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
+    let (tools, _infos, _driver, forget) = super::builtin(
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        None,
+    )
+    .unwrap();
     let tool = |name: &str| {
         tools
             .iter()
@@ -148,8 +161,14 @@ fn without_the_forget_callback_the_same_write_goes_through() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
+    let (tools, _infos, _driver, _forget) = super::builtin(
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        None,
+    )
+    .unwrap();
     let tool = |name: &str| {
         tools
             .iter()
@@ -186,8 +205,14 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, infos, _driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
+    let (tools, infos, _driver, _forget) = super::builtin(
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        None,
+    )
+    .unwrap();
     let names: Vec<String> = tools
         .iter()
         .map(|(who, tool)| {
@@ -215,8 +240,14 @@ fn the_model_shell_is_non_interactive() {
         Arc::clone(&clock),
         Arc::new(fakes::Recorder::default()),
     );
-    let (tools, _infos, _driver, _forget) =
-        super::builtin(root.path(), &root.path().join("artifacts"), &clock, &jobs).unwrap();
+    let (tools, _infos, _driver, _forget) = super::builtin(
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        None,
+    )
+    .unwrap();
     let shell = tools
         .iter()
         .map(|(_, tool)| tool)
@@ -234,4 +265,57 @@ fn the_model_shell_is_non_interactive() {
     assert_eq!(error.code, contract::ErrorCode::InvalidArguments);
     assert!(error.message.contains("600000"), "{}", error.message);
     assert!(!marker.exists());
+}
+
+/// The names and hosted types `with_binary` registers for `web_search`.
+fn registered_with(web_search: Option<&str>) -> (Vec<(String, Option<String>)>, Vec<String>) {
+    let root = fakes::TempDir::new("fiber-hosted-search");
+    let clock: Arc<dyn Clock> = fakes::clock::FakeClock::new();
+    let jobs = jobs::Registry::new(
+        root.path().join("artifacts"),
+        Arc::clone(&clock),
+        Arc::new(fakes::Recorder::default()),
+    );
+    let (tools, infos, _driver, _forget) = super::with_binary(
+        root.path().join("fiber-stub"),
+        root.path(),
+        &root.path().join("artifacts"),
+        &clock,
+        &jobs,
+        web_search,
+    )
+    .unwrap();
+    let definitions = tools
+        .iter()
+        .map(|(_, tool)| {
+            let definition = tool.definition();
+            (definition.name, definition.hosted)
+        })
+        .collect();
+    (
+        definitions,
+        infos.into_iter().map(|info| info.name).collect(),
+    )
+}
+
+#[test]
+fn a_hosted_search_type_registers_web_search_and_its_info() {
+    let (definitions, infos) = registered_with(Some("web_search_20250305"));
+
+    assert!(
+        definitions.contains(&(
+            "web_search".to_owned(),
+            Some("web_search_20250305".to_owned())
+        )),
+        "{definitions:?}"
+    );
+    assert!(infos.contains(&"web_search".to_owned()), "{infos:?}");
+}
+
+#[test]
+fn no_hosted_search_type_registers_no_web_search() {
+    let (definitions, infos) = registered_with(None);
+
+    assert!(definitions.iter().all(|(name, _)| name != "web_search"));
+    assert!(!infos.contains(&"web_search".to_owned()), "{infos:?}");
 }

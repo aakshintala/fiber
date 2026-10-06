@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde_json::json;
 
 use super::*;
-use crate::events::{ReasoningCompleted, TextCompleted, ToolCallRequested};
+use crate::events::{
+    CallStatus, ReasoningCompleted, TextCompleted, ToolCallCompleted, ToolCallRequested,
+};
 use crate::shapes::Tokens;
 use crate::{ActionId, GenerationId, ProviderCallId};
 
@@ -39,6 +41,32 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
             provider_id: Some(ProviderCallId("c".into())),
             repair: None,
             ran_by: None,
+            provider_item: None,
+        }),
+        ReplyAction::Hosted(HostedCall {
+            call: ToolCallRequested {
+                name: "web_search".into(),
+                arguments: json!({"query": "q"}),
+                provider_id: Some(ProviderCallId("srvtoolu_01".into())),
+                repair: None,
+                ran_by: None,
+                provider_item: Some(json!({"type": "server_tool_use"})),
+            },
+            completed: ToolCallCompleted {
+                status: CallStatus::Completed,
+                reason: None,
+                error: None,
+                process: None,
+                content: vec![crate::shapes::ContentPart::Text {
+                    text: "hosted result".into(),
+                }],
+                details: None,
+                artifact: None,
+                changes: None,
+                control: None,
+                changed_by: None,
+                provider_item: Some(json!({"type": "web_search_tool_result"})),
+            },
         }),
         ReplyAction::Text(TextCompleted {
             text: "B".into(),
@@ -58,6 +86,7 @@ fn text_joins_text_parts_in_order_and_skips_the_rest() {
             provider_id: None,
             repair: None,
             ran_by: None,
+            provider_item: None,
         }),
     ]);
     assert_eq!(none.text(), "");
@@ -79,12 +108,14 @@ fn default_wire_tools_is_each_definition_as_an_object_in_name_order() {
             description: "second".into(),
             input_schema: json!({"type": "object"}),
             deferred: false,
+            hosted: None,
         },
         ToolDefinition {
             name: "a".into(),
             description: "first".into(),
             input_schema: json!({"type": "object"}),
             deferred: true,
+            hosted: None,
         },
     ];
     let wired = Fake.wire_tools(&tools);
@@ -144,4 +175,31 @@ fn a_request_without_a_session_dir_reads_an_empty_one() {
     });
     let read: ModelRequest = serde_json::from_value(request).unwrap();
     assert_eq!(read.session_dir, PathBuf::new());
+}
+
+#[test]
+fn a_tool_definition_without_hosted_has_no_hosted_key_and_reads_back() {
+    let plain = ToolDefinition {
+        name: "read".into(),
+        description: "d".into(),
+        input_schema: json!({"type": "object"}),
+        deferred: false,
+        hosted: None,
+    };
+    let value = serde_json::to_value(&plain).unwrap();
+    assert!(value.get("hosted").is_none(), "{value}");
+    assert_eq!(
+        serde_json::from_value::<ToolDefinition>(value).unwrap(),
+        plain
+    );
+    let hosted = ToolDefinition {
+        hosted: Some("web_search_20250305".into()),
+        ..plain
+    };
+    let value = serde_json::to_value(&hosted).unwrap();
+    assert_eq!(value["hosted"], "web_search_20250305");
+    assert_eq!(
+        serde_json::from_value::<ToolDefinition>(value).unwrap(),
+        hosted
+    );
 }

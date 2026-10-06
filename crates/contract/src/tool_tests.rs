@@ -15,6 +15,7 @@ impl Tool for NoGuidelines {
             description: "A stub.".to_owned(),
             input_schema: serde_json::json!({}),
             deferred: false,
+            hosted: None,
         }
     }
 

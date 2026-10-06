@@ -25,7 +25,8 @@ type SessionTools = (
 );
 
 /// `edit`, `handoff`, `read`, `shell`, `write` and `jobs`, each registered
-/// by `builtin`. `read`, `write` and `edit` share one session's file state,
+/// by `builtin`, and `web_search` when `web_search` names the hosted search
+/// type of the session's model. `read`, `write` and `edit` share one session's file state,
 /// which a handoff forgets, and `read` runs the image child (`fiber image`)
 /// into `artifacts`, the session's `artifacts/` directory; the model's
 /// `shell` moves commands into `jobs`, which the `jobs` tool lists, waits on
@@ -36,10 +37,11 @@ pub(crate) fn builtin(
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
+    web_search: Option<&str>,
 ) -> Result<SessionTools, Failure> {
     let fiber = std::env::current_exe()
         .map_err(|error| failed(ErrorCode::IoFailed, format!("the running binary: {error}")))?;
-    with_binary(fiber, workspace, artifacts, clock, jobs)
+    with_binary(fiber, workspace, artifacts, clock, jobs, web_search)
 }
 
 /// [`builtin`] with the binary the shell's search and the image child run.
@@ -51,6 +53,7 @@ pub(crate) fn with_binary(
     artifacts: &Path,
     clock: &Arc<dyn Clock>,
     jobs: &Arc<jobs::Registry>,
+    web_search: Option<&str>,
 ) -> Result<SessionTools, Failure> {
     let files = Arc::new(
         tools::Files::new(workspace.to_path_buf())
@@ -64,7 +67,7 @@ pub(crate) fn with_binary(
         .non_interactive();
     let driver =
         Arc::new(tools::Shell::new(workspace.to_path_buf(), Arc::clone(clock)).with_search(fiber));
-    let built = [
+    let mut built = vec![
         registered(files.edit())?,
         registered(tools::Handoff)?,
         registered(files.read())?,
@@ -72,6 +75,12 @@ pub(crate) fn with_binary(
         registered(files.write())?,
         registered(jobs::JobsTool::new(Arc::clone(jobs)))?,
     ];
+    // Declared only for a model whose provider hosts a search; it is fixed
+    // when the session's preamble is built (`docs/tools.md`, "Hosted by the
+    // provider").
+    if let Some(kind) = web_search {
+        built.push(registered(tools::HostedSearch::new(kind.to_owned()))?);
+    }
     let mut pairs = Vec::new();
     let mut infos = Vec::new();
     for (tool, info) in built {

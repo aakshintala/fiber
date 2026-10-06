@@ -332,6 +332,7 @@ fn a_change_after_a_crash_follows_the_fixed_result() {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     });
     let changed = file(
         "/w/AGENTS.md",
@@ -403,6 +404,7 @@ fn a_job_notice_after_a_crash_follows_the_fixed_result() {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     });
     let started = Event::ToolCallStarted(contract::events::ToolCallStarted {
         declared: contract::shapes::DeclaredEffects {
@@ -500,6 +502,7 @@ fn a_job_record_under_an_action_does_not_flush_its_call() {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     });
     let completed = Event::ToolCallCompleted(contract::events::ToolCallCompleted {
         status: contract::events::CallStatus::Completed,
@@ -514,6 +517,7 @@ fn a_job_record_under_an_action_does_not_flush_its_call() {
         changes: None,
         control: None,
         changed_by: None,
+        provider_item: None,
     });
     let lines = vec![
         line("tool_call_requested", &requested, Some("a_1")),
@@ -535,6 +539,7 @@ fn call(name: &str) -> Event {
         provider_id: None,
         repair: None,
         ran_by: None,
+        provider_item: None,
     })
 }
 
@@ -550,6 +555,7 @@ fn result(text: &str) -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        provider_item: None,
     })
 }
 
@@ -632,6 +638,7 @@ fn image_result() -> Event {
         changes: None,
         control: None,
         changed_by: None,
+        provider_item: None,
     })
 }
 

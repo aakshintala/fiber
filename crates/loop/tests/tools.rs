@@ -1035,3 +1035,214 @@ fn a_returned_call_flushes_while_an_earlier_call_still_runs() {
         "the flush did not precede every completion"
     );
 }
+
+/// The hosted search a provider runs: it declares `network`, and fails the
+/// test if the loop ever asks it to run.
+struct HostedSearch;
+
+impl Tool for HostedSearch {
+    fn definition(&self) -> contract::provider::ToolDefinition {
+        contract::provider::ToolDefinition {
+            name: "web_search".into(),
+            description: String::new(),
+            input_schema: json!({}),
+            deferred: false,
+            hosted: Some("web_search_20250305".into()),
+        }
+    }
+
+    fn effects(
+        &self,
+        _: &serde_json::Map<String, Value>,
+    ) -> Result<contract::tool::Effects, EffectsError> {
+        Ok(contract::tool::Effects {
+            declared: DeclaredEffects {
+                effects: vec![Effect::Network],
+                reversible: true,
+                paths: None,
+            },
+            subject: Some(String::new()),
+            prefix: None,
+        })
+    }
+
+    fn run(
+        &self,
+        _: &serde_json::Map<String, Value>,
+        _: &dyn contract::tool::Cancel,
+        _: &dyn contract::emit::Emit,
+    ) -> contract::tool::Output {
+        panic!("a hosted search is never run by Fiber");
+    }
+}
+
+fn search_call_block() -> Value {
+    json!({"type": "server_tool_use", "id": "srvtoolu_01", "name": "web_search",
+        "input": {"query": "rust 1.90"}})
+}
+
+fn search_result_block() -> Value {
+    json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+        "content": [{"type": "web_search_result", "url": "https://blog.rust-lang.org/"}]})
+}
+
+fn hosted_action() -> contract::provider::ReplyAction {
+    use contract::events::{CallStatus, ToolCallCompleted, ToolCallRequested};
+    contract::provider::ReplyAction::Hosted(contract::provider::HostedCall {
+        call: ToolCallRequested {
+            name: "web_search".into(),
+            arguments: json!({"query": "rust 1.90"}),
+            provider_id: Some(contract::ProviderCallId("srvtoolu_01".into())),
+            repair: None,
+            ran_by: None,
+            provider_item: Some(search_call_block()),
+        },
+        completed: ToolCallCompleted {
+            status: CallStatus::Completed,
+            reason: None,
+            error: None,
+            process: None,
+            content: vec![ContentPart::Text {
+                text: "https://blog.rust-lang.org/".into(),
+            }],
+            details: None,
+            artifact: None,
+            changes: None,
+            control: None,
+            changed_by: None,
+            provider_item: Some(search_result_block()),
+        },
+    })
+}
+
+/// A reply of `hosted_action` then `rest`'s actions.
+fn hosted_reply(mut rest: Scripted) -> Scripted {
+    let end = rest.end.as_mut().unwrap();
+    end.actions.insert(0, hosted_action());
+    rest
+}
+
+fn raw(item: Value) -> Input {
+    Input::Assistant {
+        model: support::MODEL.into(),
+        text: String::new(),
+        provider_item: Some(item),
+    }
+}
+
+#[test]
+fn a_hosted_search_is_logged_in_three_lines_and_never_reviewed_or_run() {
+    let mut session = Session::with_tools(
+        vec![hosted_reply(Scripted::text("Rust 1.90 is out."))],
+        None,
+        vec![Arc::new(HostedSearch)],
+    );
+    let reviewer = session.reviewer(Vec::new());
+    session.inbox.send(delivery("search")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let at = lines
+        .iter()
+        .position(|l| l.kind == "tool_call_requested")
+        .unwrap();
+    let three = &lines[at..at + 3];
+    assert_eq!(
+        kinds(three),
+        [
+            "tool_call_requested",
+            "tool_call_started",
+            "tool_call_completed"
+        ]
+    );
+    assert_eq!(three[0].action_id, three[1].action_id);
+    assert_eq!(three[1].action_id, three[2].action_id);
+    assert_eq!(three[0].payload["name"], "web_search");
+    assert_eq!(three[0].payload["arguments"], json!({"query": "rust 1.90"}));
+    assert_eq!(three[0].payload["provider_item"], search_call_block());
+    assert_eq!(three[1].payload["effects"], json!(["network"]));
+    assert_eq!(three[1].payload["reversible"], true);
+    assert_eq!(three[2].payload["status"], "completed");
+    assert_eq!(text(&three[2]), "https://blog.rust-lang.org/");
+    assert_eq!(three[2].payload["provider_item"], search_result_block());
+    let all = kinds(&lines);
+    assert!(!all.contains(&"permission_requested"), "{all:?}");
+    assert_eq!(
+        all.iter().filter(|k| **k == "step_started").count(),
+        1,
+        "{all:?}"
+    );
+    assert_eq!(all.last(), Some(&"turn_completed"));
+    assert!(reviewer.requests().is_empty());
+}
+
+#[test]
+fn a_hosted_call_beside_an_ordinary_one_leaves_only_the_ordinary_one_to_run() {
+    let tool = Arc::new(TestTool::reads("get_weather", "Sunny."));
+    let mut session = Session::with_tools(
+        vec![
+            hosted_reply(calls_reply("", &[("get_weather", paris())])),
+            Scripted::text("Done."),
+        ],
+        None,
+        vec![Arc::new(HostedSearch), tool.clone()],
+    );
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    assert_eq!(tool.ran().len(), 1);
+    let lines = session.lines();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|l| l.kind == "tool_call_completed")
+            .count(),
+        2,
+        "the hosted call and the ordinary one"
+    );
+    let requests = session.requests();
+    assert_eq!(requests.len(), 2);
+    let sent = &requests[1].conversation;
+    let first = sent
+        .iter()
+        .position(|i| *i == raw(search_call_block()))
+        .unwrap();
+    assert_eq!(sent[first + 1], raw(search_result_block()));
+    let results = sent
+        .iter()
+        .filter(|i| matches!(i, Input::ToolResult { .. }))
+        .count();
+    assert_eq!(results, 1, "the hosted call is given no result of its own");
+    assert!(
+        sent.iter()
+            .all(|i| !matches!(i, Input::ToolCall { call, .. } if call.name == "web_search"))
+    );
+}
+
+#[test]
+fn a_hosted_search_the_registry_does_not_know_declares_no_effects() {
+    let mut session = Session::new(vec![hosted_reply(Scripted::text("Done."))], None);
+    session.inbox.send(delivery("search")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Completed));
+    let lines = session.lines();
+    let started = lines
+        .iter()
+        .find(|l| l.kind == "tool_call_started")
+        .unwrap();
+    assert_eq!(started.payload["effects"], json!([]));
+    assert_eq!(started.payload["reversible"], true);
+}
+
+#[test]
+fn a_hosted_search_in_a_reply_cut_off_by_the_output_limit_is_still_logged() {
+    let mut cut = hosted_reply(Scripted::text("Rust 1.9"));
+    cut.end.as_mut().unwrap().finish = Finish::OutputLimit;
+    let mut session = Session::with_tools(
+        vec![cut, Scripted::text("Rust 1.90.")],
+        None,
+        vec![Arc::new(HostedSearch)],
+    );
+    session.inbox.send(delivery("search")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let all = kinds(&lines);
+    assert!(all.contains(&"tool_call_completed"), "{all:?}");
+}

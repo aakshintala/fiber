@@ -9,6 +9,7 @@ mod image;
 mod read;
 mod search;
 mod shell;
+mod web_search;
 mod write;
 
 pub use edit::Edit;
@@ -17,4 +18,5 @@ pub use handoff::Handoff;
 pub use read::Read;
 pub use search::{find_main, grep_main};
 pub use shell::Shell;
+pub use web_search::HostedSearch;
 pub use write::Write;

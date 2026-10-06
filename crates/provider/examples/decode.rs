@@ -88,6 +88,11 @@ fn show(bytes: &[u8]) {
                         "tool_call_requested {}",
                         serde_json::to_value(c).unwrap_or_default()
                     ),
+                    ReplyAction::Hosted(h) => println!(
+                        "hosted tool_call_requested {} tool_call_completed {}",
+                        serde_json::to_value(&h.call).unwrap_or_default(),
+                        serde_json::to_value(&h.completed).unwrap_or_default()
+                    ),
                 }
             }
             println!(

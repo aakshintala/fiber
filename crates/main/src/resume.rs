@@ -101,6 +101,7 @@ pub(crate) fn ask_resume(
         project,
         extensions,
         mcp,
+        web_search,
         ..
     } = parts;
     // The recorded workspace, not the launch directory. A failure here,
@@ -119,6 +120,7 @@ pub(crate) fn ask_resume(
         &clock,
         &jobs,
         mcp.specs,
+        web_search.as_deref(),
     ) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),

@@ -569,6 +569,7 @@ through the outer call's result.
 | `repaired` | object | no | the arguments after repair (`docs/tools.md`, "Before a call runs"); absent when nothing was repaired |
 | `repairs` | array | no | with `repaired`, one object per fix: `path` (string, a JSON Pointer into `arguments`) and `fix`, one of `null_dropped`, `string_to_number`, `string_to_boolean` or `string_parsed` |
 | `ran_by` | `ran_by` | no | on an inner call, its extension and anchor; absent on the model's calls |
+| `provider_item` | any JSON | no | on a call the provider ran itself, such as a hosted web search, the provider's call block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
 #### `tool_call_started`
 
@@ -609,6 +610,7 @@ Durable. The call's outcome.
 | `changes` | array | no | on a call that changed files, one object per file: `path` (string) and `added` and `removed` (integers, lines) |
 | `control` | object | no | instructions to the loop; the one key is `handoff` (string), a handoff note (`docs/handoff.md`) |
 | `changed_by` | `changed_by` | no | when an `after_tool` hook rewrote the result |
+| `provider_item` | any JSON | no | on a call the provider ran, its result block exactly as it arrived, sent back unchanged only to the model that produced it (`docs/tools.md`, "Hosted by the provider"); absent on a call Fiber runs |
 
 A failed model call is an assistant message that completed with a failed
 outcome, an `error` and an attempt number; the retry is a new action. Its codes
@@ -1268,6 +1270,7 @@ What the reader can tell about work that was in flight, from the log alone:
 | What the log shows | What it means |
 |---|---|
 | `tool_call_requested`, no `tool_call_started` | provably never ran; safe to run or discard |
+| `tool_call_requested` with `provider_item` | the provider ran it; Fiber never reviews, runs or answers it on resume |
 | `tool_call_started`, no `tool_call_completed` | uncertain; Fiber never re-runs it, and the model is told its outcome is unknown |
 | `tool_call_completed` | ran, with its outcome |
 | `job_started`, no `job_completed` | the process that ran it died; on open Fiber writes `job_completed` with `status: failed` and `error.code: orphaned`, unless a `rewound` lists the job |

@@ -55,6 +55,7 @@ impl Tool for Write {
                 "additionalProperties": false
             }),
             deferred: false,
+            hosted: None,
         }
     }
 
