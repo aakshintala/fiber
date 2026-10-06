@@ -394,6 +394,11 @@ end })
 // fire in the gaps of the session's stream, on the extension's injected
 // clock, and stop on `:cancel()`.
 
+/// A timer that never fires inside a test: set beside the timers under
+/// test, it keeps the extension's thread parked at a known due once nothing
+/// else waits, the signal that the thread waits on the clock.
+const SENTINEL: Duration = Duration::from_secs(60);
+
 /// Makes `dir/name` a fifo the timer callbacks below write to signal they
 /// fired: `host.fs.write` blocks until the test opens it for reading.
 #[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
@@ -496,27 +501,76 @@ fn after_fires_once() {
              n = n + 1\n\
              host.fs.write(dir .. \"/fired.fifo\", \"x\")\n\
            end, { timeout = 1000 })\n\
+           host.after(60000, function() end, { timeout = 1000 })\n\
            return \"armed\"\n\
          end })\n\
          fiber.command(\"count\", { timeout = 5000, run = function() return tostring(n) end })\n",
         clock.clone(),
     );
     let fired = read_fifo(timer_fifo(&dir, "fired.fifo"));
+    let due = clock.now() + Duration::from_millis(50);
+    let sentinel = clock.now() + SENTINEL;
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     // The thread parks at the `after` due before the advance.
-    let due = clock.now() + Duration::from_millis(50);
     assert!(
         clock.await_parked(due, WAIT),
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&fired, "the after timer"), b"x");
-    // The `count` call runs only after the thread is free, so past it the
-    // one-shot has ended and no timer waits: the advance cannot shift a
-    // rescheduling.
-    assert_eq!(exec_call(&ext, "count").unwrap(), "1");
+    // Once the one-shot has ended only the sentinel waits: the thread parks
+    // at its due, the signal that it waits on the clock before the advance.
+    assert!(
+        clock.await_parked(sentinel, WAIT),
+        "waited {WAIT:?} for the fired `after` to end and the thread to park"
+    );
     clock.advance(Duration::from_secs(10));
     assert_eq!(exec_call(&ext, "count").unwrap(), "1");
+}
+
+/// A fired `after` leaves the timer table: its Lua function is released.
+/// A weak table holds the only other reference, so it empties once the
+/// function is collected.
+#[test]
+fn a_fired_after_releases_its_function() {
+    let setup = Setup::new();
+    let clock = FakeClock::new();
+    let (ext, dir) = timer_extension(
+        &setup,
+        "local weak = setmetatable({}, { __mode = \"v\" })\n\
+         fiber.command(\"arm\", { timeout = 5000, run = function()\n\
+           local f = function() host.fs.write(dir .. \"/fired.fifo\", \"x\") end\n\
+           weak.f = f\n\
+           host.after(50, f, { timeout = 1000 })\n\
+           return \"armed\"\n\
+         end })\n\
+         fiber.command(\"held\", { timeout = 5000, run = function()\n\
+           collectgarbage()\n\
+           collectgarbage()\n\
+           return tostring(weak.f ~= nil)\n\
+         end })\n",
+        clock.clone(),
+    );
+    let fired = read_fifo(timer_fifo(&dir, "fired.fifo"));
+    let due = clock.now() + Duration::from_millis(50);
+    assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
+    assert_eq!(
+        exec_call(&ext, "held").unwrap(),
+        "true",
+        "a waiting timer holds its function"
+    );
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
+    clock.advance(Duration::from_millis(1000));
+    assert_eq!(next_line(&fired, "the after timer"), b"x");
+    // `held` runs only after the firing ended and the thread freed it.
+    assert_eq!(
+        exec_call(&ext, "held").unwrap(),
+        "false",
+        "the fired `after` released its function"
+    );
 }
 
 #[test]
@@ -559,6 +613,10 @@ fn every_fires_again_ms_after_each_firing_ends() {
     // later: 49 ms must not fire it, 2 ms more must.
     clock.advance(Duration::from_millis(49));
     no_line(&second, "the second firing 1 ms early");
+    assert!(
+        clock.await_parked(rescheduled, WAIT),
+        "waited {WAIT:?} for the thread to park again at the every's due"
+    );
     clock.advance(Duration::from_millis(2));
     assert_eq!(next_line(&second, "the second firing"), b"x");
 }
@@ -574,6 +632,7 @@ fn cancel_before_the_due_time_stops_it_and_twice_is_a_no_op() {
            t = host.after(10000, function()\n\
              host.fs.write(dir .. \"/fired.fifo\", \"x\")\n\
            end, { timeout = 1000 })\n\
+           host.after(60000, function() end, { timeout = 1000 })\n\
            return \"armed\"\n\
          end })\n\
          fiber.command(\"cancel\", { timeout = 5000, run = function()\n\
@@ -584,10 +643,15 @@ fn cancel_before_the_due_time_stops_it_and_twice_is_a_no_op() {
         clock.clone(),
     );
     let fired = read_fifo(timer_fifo(&dir, "fired.fifo"));
+    let sentinel = clock.now() + SENTINEL;
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     assert_eq!(exec_call(&ext, "cancel").unwrap(), "cancelled");
-    // The `cancel` return proves the timer is gone and no timer waits: the
-    // advance cannot shift a rescheduling.
+    // With the timer gone only the sentinel waits: the thread parks at its
+    // due, the signal that it waits on the clock before the advance.
+    assert!(
+        clock.await_parked(sentinel, WAIT),
+        "waited {WAIT:?} for the thread to park at the sentinel's due"
+    );
     clock.advance(Duration::from_secs(20));
     no_line(&fired, "the cancelled timer");
 }
@@ -605,12 +669,14 @@ fn cancel_inside_its_own_every_callback_stops_it() {
            host.fs.write(dir .. \"/f\" .. n .. \".fifo\", \"x\")\n\
            if n == 2 then t:cancel() end\n\
          end, { timeout = 1000 })\n\
+         host.after(60000, function() end, { timeout = 1000 })\n\
          fiber.command(\"nop\", { timeout = 5000, run = function() return \"nop\" end })\n",
         clock.clone(),
     );
     let first = read_fifo(timer_fifo(&dir, "f1.fifo"));
     let second = read_fifo(timer_fifo(&dir, "f2.fifo"));
     let third = read_fifo(timer_fifo(&dir, "f3.fifo"));
+    let sentinel = clock.now() + SENTINEL;
     exec_call(&ext, "nop").expect("loading sets the timer");
     // The thread parks at the `every` due before the advance.
     let due = clock.now() + Duration::from_millis(50);
@@ -630,10 +696,13 @@ fn cancel_inside_its_own_every_callback_stops_it() {
     );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&second, "the second firing"), b"x");
-    // The fifo proves the write, not that the cancelling firing ended: the
-    // `nop` call runs only after the thread is free, so past it no timer
-    // waits and the advance cannot shift a rescheduling.
-    exec_call(&ext, "nop").expect("the cancelling firing ended");
+    // The fifo proves the write, not that the cancelling firing ended: once
+    // it has, only the sentinel waits and the thread parks at its due, the
+    // signal that it waits on the clock before the advance.
+    assert!(
+        clock.await_parked(sentinel, WAIT),
+        "waited {WAIT:?} for the cancelling firing to end and the thread to park"
+    );
     clock.advance(Duration::from_secs(10));
     no_line(&third, "a third firing after the cancel");
 }
@@ -681,49 +750,58 @@ fn a_queued_command_starts_before_a_due_timer() {
     let clock = FakeClock::new();
     let (ext, dir) = timer_extension(
         &setup,
-        "host.every(10000, function()\n\
-           host.fs.write(dir .. \"/tick.fifo\", \"x\")\n\
-         end, { timeout = 1000 })\n\
-         fiber.command(\"slow\", { timeout = 60000, run = function()\n\
-           host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
-           local x = 0\n\
-           for i = 1, 30000000 do x = x + i end\n\
-           return \"slow-\" .. tostring(x > 0)\n\
+        // `slow` sets a timer due at once, then holds the thread in a
+        // blocking write to `gate.fifo` until the test reads it: no clock
+        // move is needed for the timer to be due.
+        "fiber.command(\"slow\", { timeout = 60000, run = function()\n\
+           host.after(0, function()\n\
+             host.fs.write(dir .. \"/tick.fifo\", \"x\")\n\
+           end, { timeout = 1000 })\n\
+           host.fs.write(dir .. \"/gate.fifo\", \"x\")\n\
+           return \"slow\"\n\
          end })\n\
-         fiber.command(\"quick\", { timeout = 60000, run = function()\n\
+         fiber.command(\"quick\", { timeout = 50000, run = function()\n\
            host.fs.write(dir .. \"/bstarted.fifo\", \"x\")\n\
            return \"done\"\n\
          end })\n",
         clock.clone(),
     );
-    let started = read_fifo(timer_fifo(&dir, "started.fifo"));
     // No reader yet: whichever of the timer and `quick` reaches its write
     // first blocks, so the test's read order proves the run order.
     timer_fifo(&dir, "tick.fifo");
     timer_fifo(&dir, "bstarted.fifo");
+    let gate = timer_fifo(&dir, "gate.fifo");
+    exec_call(&ext, "nop").expect("loading runs the entry script");
+    // A started call's caller parks at its deadline plus the 1 s grace;
+    // a queued one at its timeout. The first park proves `slow` holds the
+    // thread before `quick` is asked.
+    let slow_started = clock.now() + Duration::from_millis(60000) + GRACE;
     let (slow_tx, slow_rx) = mpsc::channel();
     let slow_caller = Arc::clone(&ext);
     std::thread::spawn(move || slow_tx.send(slow_caller.command("slow", "")));
-    // `slow` runs, spinning in Lua past the advance below; its long
-    // timeout never comes due on the fake clock. The `started` fifo is the
-    // signal: it proves `slow` reached its write and now spins, so the
-    // timer coming due during the spin cannot fire until `slow` ends. No
-    // parked signal exists while the thread spins in Lua.
-    assert_eq!(next_line(&started, "the slow command"), b"x");
-    clock.advance(Duration::from_millis(20000));
-    // Queued while `slow` runs and the timer is due: `quick` starts
-    // before the timer fires.
+    assert!(
+        clock.await_parked(slow_started, WAIT),
+        "waited {WAIT:?} for `slow` to start and hold the thread"
+    );
+    // `quick` is queued while `slow` holds the thread and the timer is due.
+    // Its caller parks at its own timeout from when it asked only once the
+    // call is in the queue: that park is the signal, not a spin.
+    let quick_queued = clock.now() + Duration::from_millis(50000);
     let (quick_tx, quick_rx) = mpsc::channel();
     let quick_caller = Arc::clone(&ext);
     std::thread::spawn(move || quick_tx.send(quick_caller.command("quick", "")));
+    assert!(
+        clock.await_parked(quick_queued, WAIT),
+        "waited {WAIT:?} for `quick` to wait in the queue"
+    );
+    // Releasing `slow` frees the thread with `quick` queued and the timer
+    // due: `quick` starts first.
+    assert_eq!(next_line(&read_fifo(gate), "the slow command's gate"), b"x");
     match slow_rx.recv_timeout(WAIT) {
-        Ok(result) => assert_eq!(result.unwrap(), "slow-true"),
+        Ok(result) => assert_eq!(result.unwrap(), "slow"),
         Err(_) => panic!("the slow command did not return within {WAIT:?}"),
     }
-    let bstarted = {
-        let path = dir.join("bstarted.fifo");
-        read_fifo(path)
-    };
+    let bstarted = read_fifo(dir.join("bstarted.fifo"));
     assert_eq!(next_line(&bstarted, "the quick command"), b"x");
     match quick_rx.recv_timeout(WAIT) {
         Ok(result) => assert_eq!(result.unwrap(), "done"),
@@ -739,22 +817,21 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     let clock = FakeClock::new();
     let (ext, dir) = timer_extension(
         &setup,
+        // The first firing parks on a long `host.exec`, so the thread waits
+        // on the clock for the firing's deadline.
         "local n = 0\n\
          fiber.command(\"arm\", { timeout = 5000, run = function()\n\
            host.every(50, function()\n\
              n = n + 1\n\
-             if n == 1 then\n\
-               host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
-               while true do end\n\
-             end\n\
-             host.fs.write(dir .. \"/f2.fifo\", \"x\")\n\
+             if n == 1 then host.exec(\"sleep\", {\"30\"}) end\n\
+             host.fs.write(dir .. \"/f\" .. n .. \".fifo\", \"x\")\n\
            end, { timeout = 200 })\n\
            return \"armed\"\n\
          end })\n\
          fiber.command(\"count\", { timeout = 5000, run = function() return tostring(n) end })\n",
         clock.clone(),
     );
-    let started = read_fifo(timer_fifo(&dir, "started.fifo"));
+    let first = read_fifo(timer_fifo(&dir, "f1.fifo"));
     let second = read_fifo(timer_fifo(&dir, "f2.fifo"));
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     // The thread parks at the `every` due before the advance.
@@ -764,15 +841,16 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
         "waited {WAIT:?} for the thread to park at the timer due"
     );
     clock.advance(Duration::from_millis(1000));
-    assert_eq!(next_line(&started, "the first firing"), b"x");
-    // Past the firing's 200 ms timeout it ends. The `started` fifo proves
-    // the firing spins; the `count` call past the next advance is the
-    // barrier: it runs only after the thread is free, so past it the
-    // first firing has ended and only the first one has run.
+    // The firing starts at the frozen now and parks in its exec: the thread
+    // parks at the firing's 200 ms deadline, the signal before the advance.
+    let deadline = clock.now() + Duration::from_millis(200);
+    assert!(
+        clock.await_parked(deadline, WAIT),
+        "waited {WAIT:?} for the thread to park at the firing's deadline"
+    );
     clock.advance(Duration::from_millis(400));
-    assert_eq!(exec_call(&ext, "count").unwrap(), "1");
-    // Its `every` is due 50 ms after that end: await the rescheduled park,
-    // which proves the end, before advancing; 500 ms later it fires again.
+    // Past its timeout the firing ends, and its `every` is due 50 ms after
+    // that end: the park there proves the end before the next advance.
     let rescheduled = clock.now() + Duration::from_millis(50);
     assert!(
         clock.await_parked(rescheduled, WAIT),
@@ -781,6 +859,8 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     clock.advance(Duration::from_millis(500));
     assert_eq!(next_line(&second, "the second firing"), b"x");
     assert_eq!(exec_call(&ext, "count").unwrap(), "2");
+    // The first firing never reached its write.
+    no_line(&first, "the timed-out firing's write");
 }
 
 #[test]
@@ -873,8 +953,47 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
     }
 }
 
+/// The child's marker: set, a test that signals every listed group runs its
+/// body in this process, which holds no other test's group.
+const CHILD: &str = "FIBER_EXTENSIONS_LUA_HOOKS_TEST_CHILD";
+
+/// Runs the test `name` alone in a child process and asserts it passed:
+/// `kill_every_group` reaches every group this process lists, so it runs
+/// where no other test's group is listed.
+#[allow(clippy::unwrap_used, reason = "a test helper; a failure is the test's")]
+#[allow(clippy::panic, reason = "a test helper; a hang is the test's failure")]
+fn in_child(name: &str) {
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args(["--exact", name, "--nocapture", "--test-threads=1"])
+        .env(CHILD, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
+    let Ok(output) = rx.recv_timeout(WAIT) else {
+        drop(fakes::kill_pid(pid, "KILL"));
+        panic!("waited {WAIT:?} for the child running {name}");
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{name} failed in its child: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran exactly {name}: {stdout}"
+    );
+}
+
 #[test]
 fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
+    if std::env::var_os(CHILD).is_none() {
+        in_child("kill_every_group_stops_a_hook_parked_on_a_long_exec");
+        return;
+    }
     let setup = Setup::new();
     let dir = setup.workspace();
     let init = format!(
@@ -900,14 +1019,16 @@ fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
     assert!(pid > 1);
     let watchdog = fakes::Watchdog::group(pid);
     extensions::kill_every_group();
-    assert!(
-        !fakes::kill_group(pid, "0").unwrap(),
-        "the exec group is gone after the kill"
-    );
-    // The killed run ends the hook: its signal, not an error.
+    // The killed run ends the hook: its signal, not an error. The run
+    // returns only once it has reaped the shell and seen the group empty,
+    // so the probe below cannot meet an unreaped member.
     match answered.recv_timeout(WAIT) {
         Ok(_) => {}
         Err(_) => panic!("the hook did not return within {WAIT:?}"),
     }
+    assert!(
+        !fakes::kill_group(pid, "0").unwrap(),
+        "the exec group is gone after the kill"
+    );
     watchdog.stand_down(WAIT);
 }

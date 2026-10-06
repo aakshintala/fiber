@@ -1,6 +1,6 @@
 //! `send_exec` against `set_exec_inbox`: buffered runs flush in order,
 //! and a `deliver_to` racing a run's end strands nothing
-//! (`docs/extensions.md`, "Host calls").
+//! (`docs/extensions.md`, "Host calls"). `cancel_timer` twice.
 
 #![allow(
     clippy::unwrap_used,
@@ -8,7 +8,8 @@
     clippy::panic,
     reason = "test code"
 )]
-use std::sync::Barrier;
+use std::sync::TryLockError;
+use std::sync::mpsc;
 
 use fakes::clock::FakeClock;
 
@@ -58,37 +59,128 @@ fn a_run_before_any_sender_flushes_on_the_first_one() {
     assert!(hub.lock().exec_buffer.is_empty());
 }
 
-/// `deliver_to` racing a run's end strands nothing: sender choice,
-/// buffering and the flush serialize under one lock, so every run is
-/// either received or still buffered, in order. The barrier starts both
-/// threads together, forcing the overlap without timing.
+/// How long a test waits on a worker before it fails.
+const WAIT: Duration = Duration::from_secs(10);
+
+/// Whether the hub lock is held: at a window it must be, so the other half
+/// of the race cannot run inside it.
+fn locked(hub: &Hub) -> bool {
+    matches!(hub.shared.try_lock(), Err(TryLockError::WouldBlock))
+}
+
+/// A run ending against `deliver_to`, paused where `send_exec` has chosen
+/// the buffer: the hub lock is still held, so the `deliver_to` started
+/// there runs only after the run is buffered, and flushes it.
 #[test]
-fn deliver_to_racing_a_run_end_strands_nothing() {
-    for i in 0..50 {
-        let clock = FakeClock::new();
-        let hub = Hub::new(clock);
-        let tag = format!("run-{i}");
-        let run = exec(&tag);
-        let barrier = Arc::new(Barrier::new(2));
-        let (tx, rx) = std::sync::mpsc::channel();
-        let (hub_run, barrier_run) = (Arc::clone(&hub), Arc::clone(&barrier));
-        let sending = std::thread::spawn(move || {
-            barrier_run.wait();
-            hub_run.send_exec(run);
+fn deliver_to_at_a_runs_buffer_choice_flushes_the_run() {
+    let hub = Hub::new(FakeClock::new());
+    let (tx, rx) = mpsc::channel();
+    let (held_tx, held_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let inbox = std::sync::Mutex::new(Some(tx));
+    let other = Arc::clone(&hub);
+    hub.pause_at_windows(Arc::new(move |hub, at| {
+        if at != Window::Selected {
+            return;
+        }
+        let _held = held_tx.send(locked(hub));
+        let Some(tx) = inbox.lock().unwrap().take() else {
+            return;
+        };
+        let (other, done_tx) = (Arc::clone(&other), done_tx.clone());
+        std::thread::spawn(move || {
+            other.set_exec_inbox(tx);
+            let _done = done_tx.send(());
         });
-        let (hub_deliver, barrier_deliver) = (Arc::clone(&hub), Arc::clone(&barrier));
-        let delivering = std::thread::spawn(move || {
-            barrier_deliver.wait();
-            hub_deliver.set_exec_inbox(tx);
+    }));
+    hub.send_exec(exec("run"));
+    assert!(
+        held_rx.recv_timeout(WAIT).unwrap(),
+        "the buffer choice holds the hub lock"
+    );
+    done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the racing deliver_to to return");
+    assert_eq!(received(&rx).as_deref(), Some("run"), "the run was flushed");
+    assert!(hub.lock().exec_buffer.is_empty(), "nothing is stranded");
+}
+
+/// A run ending against `deliver_to`, paused where `set_exec_inbox` has
+/// taken the buffer but not flushed it: the hub lock is still held, so the
+/// run started there is sent only after the buffered one, in end order.
+#[test]
+fn a_run_ending_at_a_flush_follows_the_buffered_runs() {
+    let hub = Hub::new(FakeClock::new());
+    hub.send_exec(exec("first"));
+    let (tx, rx) = mpsc::channel();
+    let (held_tx, held_rx) = mpsc::channel();
+    let (done_tx, done_rx) = mpsc::channel();
+    let started = std::sync::Mutex::new(false);
+    let other = Arc::clone(&hub);
+    hub.pause_at_windows(Arc::new(move |hub, at| {
+        if at != Window::Flushing || std::mem::replace(&mut *started.lock().unwrap(), true) {
+            return;
+        }
+        let _held = held_tx.send(locked(hub));
+        let (other, done_tx) = (Arc::clone(&other), done_tx.clone());
+        std::thread::spawn(move || {
+            other.send_exec(exec("second"));
+            let _done = done_tx.send(());
         });
-        sending.join().expect("the run thread joins");
-        delivering.join().expect("the deliver thread joins");
-        // Either order leaves the run received: buffered-then-flushed,
-        // or sent direct to the inbox. Stranded is an empty inbox with
-        // the run still buffered.
-        let got = received(&rx).as_deref() == Some(tag.as_str());
-        let stranded = !got && !hub.lock().exec_buffer.is_empty();
-        assert!(!stranded, "iteration {i}: the racing run was stranded");
-        assert!(got, "iteration {i}: the racing run was lost");
+    }));
+    hub.set_exec_inbox(tx);
+    assert!(
+        held_rx.recv_timeout(WAIT).unwrap(),
+        "the flush holds the hub lock"
+    );
+    done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the racing run to be sent");
+    assert_eq!(received(&rx).as_deref(), Some("first"));
+    assert_eq!(received(&rx).as_deref(), Some("second"));
+}
+
+fn timer(firing: bool) -> Timer {
+    Timer {
+        id: 0,
+        every: Some(Duration::from_millis(50)),
+        due: FakeClock::new().now(),
+        timeout: Duration::from_millis(100),
+        cancelled: false,
+        firing,
     }
+}
+
+/// Cancelling a firing timer marks it and leaves it to end its firing;
+/// twice changes nothing. Cancelling an idle one removes it and lists it
+/// once for its Lua function to be freed; twice is a no-op.
+#[test]
+fn cancel_twice_is_a_no_op() {
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().timers.insert(0, timer(true));
+    hub.cancel_timer(0);
+    hub.cancel_timer(0);
+    {
+        let shared = hub.lock();
+        assert!(shared.timers.get(&0).unwrap().cancelled);
+        assert!(
+            shared.timer_cleanup.is_empty(),
+            "a firing frees nothing yet"
+        );
+    }
+    hub.lock().timers.insert(0, timer(false));
+    hub.cancel_timer(0);
+    hub.cancel_timer(0);
+    let shared = hub.lock();
+    assert!(shared.timers.is_empty(), "an idle cancel removes it");
+    assert_eq!(shared.timer_cleanup, vec![0], "listed once to be freed");
+}
+
+/// `take_timer_cleanup` hands over what is listed and empties the list.
+#[test]
+fn take_timer_cleanup_takes_the_list() {
+    let hub = Hub::new(FakeClock::new());
+    hub.lock().timer_cleanup.extend([3, 5]);
+    assert_eq!(hub.take_timer_cleanup(), vec![3, 5]);
+    assert!(hub.take_timer_cleanup().is_empty());
 }

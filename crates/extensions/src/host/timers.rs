@@ -47,10 +47,8 @@ fn register(
     args: MultiValue,
 ) -> mlua::Result<Table> {
     let fail = |why: String| mlua::Error::RuntimeError(format!("{call}: {why}"));
-    let mut args = args.into_vec();
-    while args.len() < 3 {
-        args.push(LuaValue::Nil);
-    }
+    // A missing argument is `None` below, which each check refuses.
+    let args = args.into_vec();
     let Some(LuaValue::Integer(ms)) = args.first() else {
         return Err(fail(
             "`ms` must be a whole number of milliseconds, 0 or above".into(),

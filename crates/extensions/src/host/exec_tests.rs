@@ -244,9 +244,9 @@ fn cancel_sends_term_then_kill_after_800_ms() {
         clock.await_parked(running_until, DEADLINE),
         "waited {DEADLINE:?} for the run to park while running"
     );
+    // The run polls its cancel every `GROUP_POLL` of real time, so it sees
+    // the drop without a clock move; the stop starts at the frozen now.
     drop(cancel);
-    // Wake the parked run so it sees the drop; the stop starts here.
-    clock.advance(Duration::from_millis(1));
     let kill_at = clock.now() + Duration::from_millis(800);
     assert!(
         clock.await_parked(kill_at, DEADLINE),
@@ -282,8 +282,8 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
         clock.await_parked(running_until, DEADLINE),
         "waited {DEADLINE:?} for the run to park while running"
     );
+    // The run sees the drop on its own poll, at the frozen now.
     drop(cancel);
-    clock.advance(Duration::from_millis(1));
     // The shell dies on TERM; the escaped grandchild holds stdout open, so
     // the run drains until the 2 s bound.
     let drain_until = clock.now() + Duration::from_secs(2);
@@ -304,8 +304,51 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
     watchdog.stand_down(DEADLINE);
 }
 
+/// The child's marker: set, a test that signals every listed group runs its
+/// body in this process, which holds no other test's group.
+const CHILD: &str = "FIBER_EXTENSIONS_EXEC_TEST_CHILD";
+
+/// Runs the test `name` of this module alone in a child process and asserts
+/// it passed: `kill_every_group` reaches every group this process lists,
+/// so it runs where no other test's group is listed.
+fn in_child(name: &str) {
+    let module = module_path!().split_once("::").unwrap().1;
+    let child = std::process::Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{module}::{name}"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env(CHILD, "1")
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
+    let Ok(output) = rx.recv_timeout(DEADLINE) else {
+        drop(fakes::kill_pid(pid, "KILL"));
+        panic!("waited {DEADLINE:?} for the child running {name}");
+    };
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        output.status.success(),
+        "{name} failed in its child: {stdout}"
+    );
+    assert!(
+        stdout.contains("1 passed"),
+        "the child ran exactly {name}: {stdout}"
+    );
+}
+
 #[test]
 fn kill_every_group_kills_a_listed_live_group() {
+    if std::env::var_os(CHILD).is_none() {
+        in_child("kill_every_group_kills_a_listed_live_group");
+        return;
+    }
     use std::os::unix::process::CommandExt as _;
     let mut child = std::process::Command::new("sleep")
         .arg("60")
@@ -324,6 +367,163 @@ fn kill_every_group_kills_a_listed_live_group() {
         .unwrap();
     use std::os::unix::process::ExitStatusExt as _;
     assert_eq!(status.signal(), Some(9));
+    watchdog.stand_down(DEADLINE);
+}
+
+/// Group ids no process can have (above `i32::MAX`): never signalled, so a
+/// test may list them freely.
+const NO_GROUP_A: u32 = 0x9000_0001;
+const NO_GROUP_B: u32 = 0x9000_0002;
+
+#[test]
+fn finished_unlists_only_its_own_group_once_seen_empty() {
+    super::groups::register(NO_GROUP_A);
+    super::groups::register(NO_GROUP_B);
+    super::finished(NO_GROUP_A, false);
+    assert!(
+        super::groups::listed().contains(&NO_GROUP_A),
+        "a group not seen empty stays listed"
+    );
+    super::finished(NO_GROUP_A, true);
+    let listed = super::groups::listed();
+    assert!(!listed.contains(&NO_GROUP_A), "a seen-empty group leaves");
+    assert!(listed.contains(&NO_GROUP_B), "another group stays");
+    super::finished(NO_GROUP_B, true);
+}
+
+#[test]
+fn output_of_exactly_the_cap_returns_and_one_byte_more_is_refused() {
+    let (_dir, cwd) = dir("fiber-exec-cap-edge");
+    let clock = FakeClock::new();
+    let cap = 100;
+    let (_cancel, done) = spawn(
+        sh("head -c 100 /dev/zero | tr '\\0' x", cwd.clone(), cap),
+        Arc::clone(&clock),
+        None,
+    );
+    let ran = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the run at the cap")
+        .expect("output of exactly the cap returns");
+    assert_eq!(ran.stdout.len(), cap, "every byte up to the cap is kept");
+    let (_cancel, done) = spawn(
+        sh("head -c 101 /dev/zero | tr '\\0' x", cwd, cap),
+        Arc::clone(&clock),
+        None,
+    );
+    let err = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the run one byte past the cap")
+        .expect_err("one byte past the cap is refused");
+    assert_eq!(
+        err.message,
+        format!("host.exec: sh: output passed the extension's memory cap of {cap} bytes")
+    );
+}
+
+/// Spawns `script` under `sh` in its own listed group, as `run` does, with
+/// no pipes: the startup abort below has no reader to wait for.
+fn spawned(script: &str, cwd: &std::path::Path) -> std::process::Child {
+    use std::os::unix::process::CommandExt as _;
+    let mut cmd = std::process::Command::new("sh");
+    cmd.args(["-c", script])
+        .current_dir(cwd)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .process_group(0);
+    super::spawn(&mut cmd).unwrap()
+}
+
+/// Runs `abort_startup` on a worker, its answer on the receiver.
+fn abort(
+    child: std::process::Child,
+    cwd: PathBuf,
+    clock: Arc<FakeClock>,
+) -> mpsc::Receiver<super::ExecError> {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let req = sh("startup", cwd, CAP);
+        let shared = super::Shared::default();
+        let pgid = child.id();
+        let clock_ref: Arc<dyn contract::clock::Clock> = clock;
+        let err = super::abort_startup(
+            &req,
+            pgid,
+            child,
+            &shared,
+            clock_ref.as_ref(),
+            [false, false],
+            std::io::Error::other("no reader thread"),
+        );
+        let _sent = tx.send(err);
+    });
+    rx
+}
+
+#[test]
+fn a_startup_abort_kills_only_after_the_800_ms_grace() {
+    let (_dir, cwd) = dir("fiber-exec-abort-grace");
+    let clock = FakeClock::new();
+    let ready = fakes::children::Ready::new(&cwd);
+    let script = format!(
+        "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let child = spawned(&script, &cwd);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let kill_at = clock.now() + Duration::from_millis(800);
+    let done = abort(child, cwd, Arc::clone(&clock));
+    assert!(
+        clock.await_parked(kill_at, DEADLINE),
+        "waited {DEADLINE:?} for the abort to park for the 800 ms grace"
+    );
+    assert!(
+        fakes::kill_group(pgid, "0").unwrap(),
+        "SIGTERM leaves the ignoring group alive through the grace"
+    );
+    assert!(
+        super::groups::listed().contains(&pgid),
+        "a live group stays listed"
+    );
+    clock.advance(Duration::from_millis(800));
+    let err = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the aborted run");
+    assert_eq!(err.message, "host.exec: sh: no reader thread");
+    let ran = err.ran.expect("a started run is logged");
+    assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
+    assert!(
+        !super::groups::listed().contains(&pgid),
+        "the group leaves the list once seen empty"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+#[test]
+fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
+    let (_dir, cwd) = dir("fiber-exec-abort-term");
+    let clock = FakeClock::new();
+    let ready = fakes::children::Ready::new(&cwd);
+    let script = format!(
+        "echo $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let child = spawned(&script, &cwd);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let done = abort(child, cwd, Arc::clone(&clock));
+    // No clock move: the group ends on SIGTERM inside the grace.
+    let err = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the aborted run");
+    let ran = err.ran.expect("a started run is logged");
+    assert_eq!(ran.signal.as_deref(), Some("SIGTERM"));
+    assert!(
+        !super::groups::listed().contains(&pgid),
+        "the group leaves the list once seen empty"
+    );
     watchdog.stand_down(DEADLINE);
 }
 

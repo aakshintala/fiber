@@ -152,6 +152,8 @@ pub(crate) fn run(
             pgid,
             child,
             &shared,
+            clock,
+            [false, false],
             std::io::Error::other("host.exec pipes missing"),
         ));
     };
@@ -160,14 +162,30 @@ pub(crate) fn run(
         .name("exec stdout".into())
         .spawn(move || read_into(out, &out_shared, true))
     {
-        return Err(abort_startup(req, pgid, child, &shared, source));
+        return Err(abort_startup(
+            req,
+            pgid,
+            child,
+            &shared,
+            clock,
+            [false, false],
+            source,
+        ));
     }
     let err_shared = Arc::clone(&shared);
     if let Err(source) = std::thread::Builder::new()
         .name("exec stderr".into())
         .spawn(move || read_into(err, &err_shared, false))
     {
-        return Err(abort_startup(req, pgid, child, &shared, source));
+        return Err(abort_startup(
+            req,
+            pgid,
+            child,
+            &shared,
+            clock,
+            [true, false],
+            source,
+        ));
     }
     // The waiter takes the child through a handoff, so a spawn failure
     // keeps it here for the stop and the reap instead of dropping it in
@@ -182,7 +200,15 @@ pub(crate) fn run(
             }
         })
     {
-        return Err(abort_startup(req, pgid, child, &shared, source));
+        return Err(abort_startup(
+            req,
+            pgid,
+            child,
+            &shared,
+            clock,
+            [true, true],
+            source,
+        ));
     }
     if let Err(send) = wait_tx.send(child) {
         return Err(abort_startup(
@@ -190,6 +216,8 @@ pub(crate) fn run(
             pgid,
             send.0,
             &shared,
+            clock,
+            [true, true],
             std::io::Error::other("host.exec waiter gone"),
         ));
     }
@@ -292,29 +320,83 @@ pub(crate) fn run(
     }
 }
 
-/// Stops a group that started but whose readers or waiter never did: the
-/// stop sequence, then the reap. The run started, so its end is still
-/// logged; the call raises the spawn error.
+/// Stops a group that started but whose readers or waiter never did, by
+/// the same sequence as a cancel: SIGTERM, SIGKILL after [`GRACE`] on the
+/// injected clock while a member lives, then output read for at most
+/// [`DRAIN`]. `reading` names the streams whose reader thread started; a
+/// stream with none never reaches EOF. The group leaves the list only once
+/// it is seen empty. The run started, so its end is still logged; the call
+/// raises the startup error.
 fn abort_startup(
     req: &ExecRequest,
     pgid: u32,
     mut child: Child,
     shared: &Shared,
+    clock: &dyn Clock,
+    reading: [bool; 2],
     source: std::io::Error,
 ) -> ExecError {
-    signal_group(pgid, Signal::TERM);
-    signal_group(pgid, Signal::KILL);
-    let status = child.wait().ok();
     {
         let mut inner = lock(&shared.inner);
-        inner.discard = true;
-        if !inner.reaped {
-            inner.reaped = true;
-            inner.status = status;
-        }
+        let [out, err] = reading;
+        inner.stdout_eof |= !out;
+        inner.stderr_eof |= !err;
     }
-    let ran = ran_of(shared, lock(&shared.inner).status, false);
-    finished(pgid, true);
+    // Unreaped, the child holds the group's id, so no other process can
+    // have it yet.
+    signal_group(pgid, Signal::TERM);
+    let kill_at = add(clock.now(), GRACE);
+    let mut status = None;
+    let mut reaped = false;
+    let mut killed = false;
+    let mut seen_empty = false;
+    let mut drain_until: Option<Instant> = None;
+    loop {
+        let (seen_seq, eof) = {
+            let inner = lock(&shared.inner);
+            (inner.seq, inner.stdout_eof && inner.stderr_eof)
+        };
+        if !reaped {
+            match child.try_wait() {
+                Ok(Some(ended)) => {
+                    reaped = true;
+                    status = Some(ended);
+                }
+                Ok(None) => {}
+                // Nothing left to reap: no status to report.
+                Err(_) => reaped = true,
+            }
+        }
+        if reaped && !group_alive(pgid) {
+            seen_empty = true;
+        }
+        let now = clock.now();
+        // Unreaped, the id is still ours; reaped, a member was alive just
+        // above (`tools` accepts the same window).
+        if !seen_empty && !killed && now >= kill_at {
+            signal_group(pgid, Signal::KILL);
+            killed = true;
+        }
+        if seen_empty || killed {
+            let until = *drain_until.get_or_insert_with(|| add(now, DRAIN));
+            if (seen_empty && eof) || now >= until {
+                break;
+            }
+        }
+        park(
+            clock,
+            shared,
+            seen_seq,
+            Some(drain_until.unwrap_or(kill_at)),
+        );
+    }
+    if !reaped {
+        // Only after the SIGKILL: the child is dead or dying.
+        status = child.wait().ok();
+    }
+    lock(&shared.inner).discard = true;
+    let ran = ran_of(shared, status, false);
+    finished(pgid, seen_empty);
     ExecError {
         message: format!("host.exec: {}: {source}", req.program),
         ran: Some(ran),
@@ -530,6 +612,12 @@ mod groups {
     #[cfg(test)]
     pub(super) fn register(pgid: u32) {
         live().push(pgid);
+    }
+
+    /// The groups listed now.
+    #[cfg(test)]
+    pub(super) fn listed() -> Vec<u32> {
+        live().clone()
     }
 
     pub(crate) fn finished(pgid: u32, seen_empty: bool) {

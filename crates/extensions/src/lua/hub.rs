@@ -31,7 +31,23 @@ pub(crate) struct Hub {
     shared: Mutex<Shared>,
     changed: Condvar,
     clock: Arc<dyn Clock>,
+    /// A test's pause inside the hub lock where a run's delivery is routed.
+    #[cfg(test)]
+    window: Mutex<Option<WindowHook>>,
 }
+
+/// Where a test may pause a `host.exec` delivery, inside the hub lock:
+/// `send_exec` has chosen the sender or the buffer, or `set_exec_inbox` has
+/// set the sender and taken the buffer but not yet flushed it.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Window {
+    Selected,
+    Flushing,
+}
+
+#[cfg(test)]
+type WindowHook = Arc<dyn Fn(&Hub, Window) + Send + Sync>;
 
 impl Hub {
     /// The hub every waiter and the extension's thread share, subscribed to
@@ -41,6 +57,8 @@ impl Hub {
             shared: Mutex::new(Shared::default()),
             changed: Condvar::new(),
             clock: Arc::clone(&clock),
+            #[cfg(test)]
+            window: Mutex::new(None),
         });
         let cloned = Arc::clone(&hub);
         let wake: Arc<dyn Wake> = cloned;
@@ -115,6 +133,24 @@ impl Hub {
         done(&guard)
     }
 
+    /// Runs `hook` at each delivery window from now on.
+    #[cfg(test)]
+    pub(super) fn pause_at_windows(&self, hook: WindowHook) {
+        *self.window.lock().unwrap_or_else(PoisonError::into_inner) = Some(hook);
+    }
+
+    #[cfg(test)]
+    fn at_window(&self, at: Window) {
+        let hook = self
+            .window
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone();
+        if let Some(hook) = hook {
+            hook(self, at);
+        }
+    }
+
     /// Records `result` for the call `id`, if its caller still waits.
     pub(super) fn finish(&self, id: u64, result: Result<Value, Error>) {
         self.lock().finish(id, result);
@@ -145,6 +181,8 @@ impl Hub {
         let mut shared = self.lock();
         shared.exec_inbox = Some(inbox.clone());
         let buffered = std::mem::take(&mut shared.exec_buffer);
+        #[cfg(test)]
+        self.at_window(Window::Flushing);
         for exec in buffered {
             // `send` on an `mpsc` Sender never blocks; held under the hub
             // lock so a concurrent `send_exec` cannot interleave.
@@ -186,12 +224,14 @@ impl Hub {
     /// does not fire again. Unknown or finished ids are a no-op.
     pub(crate) fn cancel_timer(&self, id: u64) {
         let mut shared = self.lock();
+        // A listed timer is never both cancelled and idle: an idle cancel
+        // removes it, and a cancelled firing leaves at its end.
         let remove = match shared.timers.get_mut(&id) {
-            Some(timer) if !timer.cancelled => {
+            Some(timer) => {
                 timer.cancelled = true;
                 !timer.firing
             }
-            Some(_) | None => false,
+            None => false,
         };
         if remove {
             shared.timers.remove(&id);
@@ -224,7 +264,10 @@ impl Hub {
     /// strand the run.
     pub(super) fn send_exec(&self, exec: ExtensionExec) {
         let mut shared = self.lock();
-        if let Some(inbox) = shared.exec_inbox.clone() {
+        let inbox = shared.exec_inbox.clone();
+        #[cfg(test)]
+        self.at_window(Window::Selected);
+        if let Some(inbox) = inbox {
             // `send` on an `mpsc` Sender never blocks; held under the hub
             // lock so sender choice, buffering and flushing serialize.
             match inbox.send(Delivery::ExtensionExec(exec)) {

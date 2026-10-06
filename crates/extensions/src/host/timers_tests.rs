@@ -56,6 +56,19 @@ fn after_needs_a_whole_ms_at_or_above_0() {
     assert!(hub.lock().timers.is_empty(), "nothing registered");
 }
 
+/// The boundaries: 0 ms is due at once, and a 1 ms timeout is the least.
+#[test]
+fn zero_ms_and_a_1_ms_timeout_are_accepted() {
+    let (lua, hub, clock) = installed();
+    lua.load("h = host.after(0, function() end, {timeout = 1})")
+        .exec()
+        .unwrap();
+    let shared = hub.lock();
+    let timer = shared.timers.values().next().unwrap();
+    assert_eq!(timer.due, clock.now(), "0 ms is due at its set time");
+    assert_eq!(timer.timeout, Duration::from_millis(1));
+}
+
 #[test]
 fn after_needs_a_function() {
     let (lua, _, _) = installed();
@@ -75,6 +88,7 @@ fn after_needs_a_whole_timeout_above_0() {
         ("after", "10, function() end, {timeout = 0}"),
         ("after", "10, function() end, {timeout = -5}"),
         ("after", "10, function() end, {timeout = 1.5}"),
+        ("after", "10, function() end, 5000"),
         ("every", "10, function() end, {timeout = 0}"),
     ] {
         let message = raised(&lua, call, args);
