@@ -237,9 +237,9 @@ fn hits(haystack: &str, needle: &str) -> (usize, usize) {
     }
 }
 
-/// Fold used by the second pass. Trailing spaces and tabs are dropped after
-/// Unicode spaces have become ASCII spaces, so a trailing NBSP is ignored
-/// too. The origin vector maps each folded byte back to the LF view.
+/// Fold used by the second pass. Trailing spaces are dropped after Unicode
+/// spaces have become ASCII spaces, so a trailing NBSP is ignored too. The
+/// origin vector maps each folded byte back to the LF view.
 fn fold_view(text: &str) -> (String, Vec<usize>) {
     let mut out = String::with_capacity(text.len());
     let mut origin = Vec::with_capacity(text.len() + 1);
@@ -260,7 +260,7 @@ fn fold_view(text: &str) -> (String, Vec<usize>) {
             }
             folded.push(mapped);
         }
-        let kept = folded.trim_end_matches([' ', '\t']);
+        let kept = folded.trim_end_matches(' ');
         out.push_str(kept);
         origin.extend(folded_origin.into_iter().take(kept.len()));
         input += line.len();
