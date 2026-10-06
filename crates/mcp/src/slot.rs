@@ -99,7 +99,14 @@ impl Slot {
         version: &str,
         cached: Vec<Value>,
     ) -> Arc<Self> {
-        Self::new(spec, workspace, cache, clock, version, State::NotStarted { cached })
+        Self::new(
+            spec,
+            workspace,
+            cache,
+            clock,
+            version,
+            State::NotStarted { cached },
+        )
     }
 
     /// A slot for a server [`Server::start`] already runs, holding its full

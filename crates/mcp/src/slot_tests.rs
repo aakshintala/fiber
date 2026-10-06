@@ -442,9 +442,11 @@ fn an_annotation_only_change_rewrites_the_cache() {
     let tool = setup.tool(&started, "mcp__fx__echo");
     let output = setup.run(&tool);
     assert!(output.error.is_none());
-    let after =
-        std::fs::read_to_string(setup.cache().join("fx.json")).expect("cache");
-    assert_ne!(before, after, "an annotation-only change rewrites the cache");
+    let after = std::fs::read_to_string(setup.cache().join("fx.json")).expect("cache");
+    assert_ne!(
+        before, after,
+        "an annotation-only change rewrites the cache"
+    );
     assert!(
         after.contains("idempotentHint"),
         "the cache holds the raw entry: {after:?}",

@@ -178,8 +178,7 @@ pub fn start(
         );
         let link: Weak<Slot> = Arc::downgrade(&slot);
         slots.push(slot);
-        let listed: Vec<ListedTool> =
-            cached.iter().map(ListedTool::read).collect();
+        let listed: Vec<ListedTool> = cached.iter().map(ListedTool::read).collect();
         tools.extend(declare(&spec, &listed, &link).into_iter().map(|tool| {
             let info = info(&tool);
             let registered_by = tool.registered_by.clone();
