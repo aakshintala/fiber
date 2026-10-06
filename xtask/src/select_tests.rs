@@ -207,12 +207,12 @@ fn uncompiled_docs_in_a_mixed_diff_do_not_add_crates() {
     }
 }
 
-fn jobs(lint: bool, test: bool, mutants: bool, bug_base: bool) -> BTreeMap<&'static str, bool> {
+fn jobs(lint: bool, test: bool, mutants: bool, bug_red: bool) -> BTreeMap<&'static str, bool> {
     BTreeMap::from([
         ("lint", lint),
         ("test", test),
         ("mutants", mutants),
-        ("bug_base", bug_base),
+        ("bug_red", bug_red),
     ])
 }
 
@@ -395,15 +395,6 @@ fn there_is_no_ticket_without_a_closing_keyword() {
     }
 }
 
-fn declared(declared_in: &[(String, String)]) -> Vec<(&str, &str)> {
-    declared_in
-        .iter()
-        .map(|(p, d)| (p.as_str(), d.as_str()))
-        .collect()
-}
-
-const PLAIN: &str = "#[cfg(test)]\nmod tests;";
-
 #[test]
 fn test_files_map_to_their_tests() {
     let files = strings(&[
@@ -419,7 +410,7 @@ fn test_files_map_to_their_tests() {
         "crates/log/build_tests.rs",
         "docs/events.md",
     ]);
-    let (expression, packages, tests) = test_filter(&files, &members());
+    let (expression, packages) = test_filter(&files, &members());
     assert_eq!(
         expression.split(" | ").collect::<Vec<_>>(),
         [
@@ -434,79 +425,20 @@ fn test_files_map_to_their_tests() {
         ]
     );
     assert_eq!(packages, strings(&["log", "loop"]));
-    let paths: Vec<&str> = tests.iter().map(|t| t.path.as_str()).collect();
-    assert_eq!(paths, files.get(..8).unwrap());
-    let all: Vec<Vec<(&str, &str)>> = tests.iter().map(|t| declared(&t.declared_in)).collect();
-    assert_eq!(
-        all,
-        [
-            vec![
-                (
-                    "crates/log/src/writer.rs",
-                    "#[cfg(test)]\n#[path = \"writer_tests.rs\"]\nmod tests;"
-                ),
-                (
-                    "crates/log/src/writer/mod.rs",
-                    "#[cfg(test)]\n#[path = \"../writer_tests.rs\"]\nmod tests;"
-                ),
-            ],
-            vec![
-                ("crates/log/src/fold.rs", PLAIN),
-                ("crates/log/src/fold/mod.rs", PLAIN)
-            ],
-            vec![
-                ("crates/log/src/lib.rs", PLAIN),
-                ("crates/log/src/main.rs", PLAIN)
-            ],
-            vec![],
-            vec![],
-            vec![
-                (
-                    "crates/log/src/fold/inner.rs",
-                    "#[cfg(test)]\n#[path = \"inner_tests.rs\"]\nmod tests;"
-                ),
-                (
-                    "crates/log/src/fold/inner/mod.rs",
-                    "#[cfg(test)]\n#[path = \"../inner_tests.rs\"]\nmod tests;"
-                ),
-            ],
-            vec![(
-                "crates/log/src/lib.rs",
-                "#[cfg(test)]\n#[path = \"lib_tests.rs\"]\nmod tests;"
-            )],
-            vec![(
-                "crates/loop/src/main.rs",
-                "#[cfg(test)]\n#[path = \"main_tests.rs\"]\nmod tests;"
-            )],
-        ]
-    );
 }
 
 #[test]
 fn only_a_crate_root_file_is_a_crate_root() {
-    let (expression, _, tests) =
+    let (expression, _) =
         test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members());
     assert_eq!(expression, "(package(log) & test(/^fold::lib::tests::/))");
-    assert_eq!(
-        declared(&tests.first().unwrap().declared_in),
-        [
-            (
-                "crates/log/src/fold/lib.rs",
-                "#[cfg(test)]\n#[path = \"lib_tests.rs\"]\nmod tests;"
-            ),
-            (
-                "crates/log/src/fold/lib/mod.rs",
-                "#[cfg(test)]\n#[path = \"../lib_tests.rs\"]\nmod tests;"
-            ),
-        ]
-    );
 }
 
 #[test]
 fn no_test_files_give_an_empty_filter() {
     assert_eq!(
         test_filter(&strings(&["crates/log/src/writer.rs"]), &members()),
-        (String::new(), vec![], vec![])
+        (String::new(), vec![])
     );
 }
 

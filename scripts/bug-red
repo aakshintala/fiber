@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+# Runs a pull request's new and changed tests at its red commit, and passes
+# only if at least one of them fails there (docs/testing.md, "Proving a test
+# bites"). The red commit is the pull request's first commit after the merge
+# base: it holds the reproducing test and any new signature or test seam the
+# test needs, but not the fix. A test counts as changed when its test file
+# changed between the merge base and the pull request's head.
+#
+# Usage: scripts/bug-red BASE [HEAD]
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+base=$1
+prhead=${2:-HEAD}
+if ! git cat-file -e "$prhead^{commit}" 2>/dev/null; then
+  echo "bug-red: $prhead is not a commit in this checkout"
+  exit 1
+fi
+merge_base=$(git merge-base "$base" "$prhead")
+red=$(git rev-list --reverse --topo-order --no-merges "$merge_base..$prhead" | sed -n '1p')
+if [ -z "$red" ] || [ "$red" = "$prhead" ]; then
+  echo "bug-red: the pull request has one commit; push the reproducing test and the fix as separate commits, the test first"
+  exit 1
+fi
+# shellcheck disable=SC2046
+plan=$(cargo xtask bug-filter $(git diff --name-only --diff-filter=AM "$merge_base" "$prhead"))
+filter=$(sed -n 's/^filter\t//p' <<<"$plan")
+if [ -z "$filter" ]; then
+  echo "bug-red: the pull request changes no test file, so no test shows the bug"
+  exit 1
+fi
+
+tree=$(mktemp -d)
+git worktree add --quiet --detach "$tree" "$red"
+trap 'git worktree remove --force "$tree"' EXIT
+
+package_args=()
+while IFS=$'\t' read -r -a fields; do
+  kind=${fields[0]:-}
+  if [ "$kind" = package ]; then
+    package_args+=(-p "${fields[1]}")
+  fi
+done <<<"$plan"
+
+echo "bug-red: running $filter at $red"
+status=0
+(cd "$tree" && cargo nextest run --no-fail-fast "${package_args[@]}" -E "$filter") || status=$?
+
+# nextest-metadata's exit codes: 100 when a test failed, 101 when the build
+# failed and 4 when no test matched. Only a failed test shows the bug.
+case $status in
+  100) echo "bug-red: ok, a new or changed test fails at the red commit" ;;
+  0) echo "bug-red: every new and changed test passes at the red commit, so none shows the bug"; exit 1 ;;
+  101) echo "bug-red: the red commit $red does not build; it must build without the fix"; exit 1 ;;
+  4) echo "bug-red: no new or changed test runs at the red commit"; exit 1 ;;
+  *) echo "bug-red: nextest exited $status at the red commit"; exit 1 ;;
+esac

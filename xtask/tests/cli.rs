@@ -216,7 +216,7 @@ fn plan_prints_the_jobs_and_shards() {
     assert_eq!(code, 0);
     assert_eq!(
         out,
-        "jobs={\"bug_base\":true,\"lint\":true,\"mutants\":true,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
+        "jobs={\"bug_red\":true,\"lint\":true,\"mutants\":true,\"test\":true}\nshards=[0,1,2,3,4,5]\nshard_total=6\n"
     );
     let bad = [
         "plan",
@@ -342,7 +342,7 @@ fn ticket_fails_when_the_label_lookup_fails() {
 }
 
 #[test]
-fn bug_filter_prints_the_filter_packages_and_declarations() {
+fn bug_filter_prints_the_filter_and_packages() {
     let dir = workspace();
     let args = [
         "bug-filter",
@@ -355,11 +355,7 @@ fn bug_filter_prints_the_filter_packages_and_declarations() {
     assert_eq!(
         out,
         "filter\t(package(b) & test(/^fold::tests::/)) | binary_id(a::t)\n\
-         package\ta\npackage\tb\n\
-         file\tcrates/b/src/fold_tests.rs\
-         \tcrates/b/src/fold.rs\t#[cfg(test)] #[path = \"fold_tests.rs\"] mod tests;\
-         \tcrates/b/src/fold/mod.rs\t#[cfg(test)] #[path = \"../fold_tests.rs\"] mod tests;\n\
-         file\tcrates/a/tests/t.rs\n"
+         package\ta\npackage\tb\n"
     );
 }
 

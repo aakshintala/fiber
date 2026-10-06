@@ -379,7 +379,7 @@ pub(crate) fn plan(mode: &str, packages: &[String], event: &str, bug: bool) -> P
         // The backstop on `main` compiles the whole workspace on every push.
         ("test", !pr || !packages.is_empty()),
         ("mutants", shards > 0),
-        ("bug_base", pr && code && bug),
+        ("bug_red", pr && code && bug),
     ]);
     Plan { jobs, shards }
 }
@@ -465,77 +465,23 @@ pub(crate) fn is_test_file(rel: &str) -> bool {
     name == "tests.rs" || name.ends_with("_tests.rs") || rel.starts_with("tests/")
 }
 
-/// A test file the bug-fix check runs at the base commit, and how its
-/// parent module declares it there when the file is new.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct TestFile {
-    pub(crate) path: String,
-    /// The module files that may declare it, relative to the repository, in
-    /// the order to try them, each with the declaration that file needs.
-    /// Empty for a file under a crate's `tests/`, which Cargo finds on its
-    /// own.
-    pub(crate) declared_in: Vec<(String, String)>,
-}
-
-/// For a unit-test file `stem`.rs in `dir`: the module its tests sit in,
-/// when that is not `dir`'s own, and the files that may declare it with the
-/// declaration each needs (`docs/code-quality.md`, "Size"). A `#[path]` is
-/// relative to the declaring file's directory. `root` says `dir` is the
-/// crate's `src`.
-fn declarations<'a>(
-    dir: &str,
-    root: bool,
-    stem: &'a str,
-) -> (Option<&'a str>, Vec<(String, String)>) {
-    let plain = || "#[cfg(test)]\nmod tests;".to_owned();
-    let with_path = |path: &str| format!("#[cfg(test)]\n#[path = \"{path}\"]\nmod tests;");
+/// The extra module segment a unit-test file's tests sit in, when that is
+/// not its directory's own module (`docs/code-quality.md`, "Size"):
+/// `foo_tests.rs` holds `foo::tests`, while `tests.rs` and, at the crate
+/// root, `lib_tests.rs` and `main_tests.rs` hold `tests`.
+fn test_module<'a>(root: bool, stem: &'a str) -> Option<&'a str> {
     match stem.strip_suffix("_tests") {
-        None if root => (
-            None,
-            vec![
-                (format!("{dir}/lib.rs"), plain()),
-                (format!("{dir}/main.rs"), plain()),
-            ],
-        ),
-        None => (
-            None,
-            vec![
-                (format!("{dir}.rs"), plain()),
-                (format!("{dir}/mod.rs"), plain()),
-            ],
-        ),
-        Some(crate_root @ ("lib" | "main")) if root => (
-            None,
-            vec![(
-                format!("{dir}/{crate_root}.rs"),
-                with_path(&format!("{stem}.rs")),
-            )],
-        ),
-        Some(module) => (
-            Some(module),
-            vec![
-                (
-                    format!("{dir}/{module}.rs"),
-                    with_path(&format!("{stem}.rs")),
-                ),
-                (
-                    format!("{dir}/{module}/mod.rs"),
-                    with_path(&format!("../{stem}.rs")),
-                ),
-            ],
-        ),
+        None => None,
+        Some("lib" | "main") if root => None,
+        Some(module) => Some(module),
     }
 }
 
 /// The nextest filter selecting every test in the test files among
-/// `files`, the packages that own them, and those test files.
-pub(crate) fn test_filter(
-    files: &[String],
-    members: &Members,
-) -> (String, Vec<String>, Vec<TestFile>) {
+/// `files`, and the packages that own them.
+pub(crate) fn test_filter(files: &[String], members: &Members) -> (String, Vec<String>) {
     let mut terms = Vec::new();
     let mut packages = BTreeSet::new();
-    let mut tests = Vec::new();
     for path in files.iter().filter(|p| p.ends_with(".rs")) {
         let Some(name) = owner(path, members) else {
             continue;
@@ -548,19 +494,14 @@ pub(crate) fn test_filter(
             continue;
         }
         let parts: Vec<&str> = rel.split('/').collect();
-        let (term, declared_in) = match parts.as_slice() {
+        let term = match parts.as_slice() {
             ["tests", binary, ..] => {
                 let binary = binary.strip_suffix(".rs").unwrap_or(binary);
-                (format!("binary_id({name}::{binary})"), vec![])
+                format!("binary_id({name}::{binary})")
             }
             ["src", modules @ .., file] => {
                 let stem = file.strip_suffix(".rs").unwrap_or(file);
-                let dir = format!(
-                    "{}/src{}",
-                    member.dir,
-                    modules.iter().map(|m| format!("/{m}")).collect::<String>()
-                );
-                let (module, declared_in) = declarations(&dir, modules.is_empty(), stem);
+                let module = test_module(modules.is_empty(), stem);
                 let prefix: String = modules
                     .iter()
                     .copied()
@@ -568,21 +509,14 @@ pub(crate) fn test_filter(
                     .chain(["tests"])
                     .map(|m| format!("{m}::"))
                     .collect();
-                (
-                    format!("(package({name}) & test(/^{prefix}/))"),
-                    declared_in,
-                )
+                format!("(package({name}) & test(/^{prefix}/))")
             }
             _ => continue,
         };
         terms.push(term);
         packages.insert(name.to_owned());
-        tests.push(TestFile {
-            path: path.clone(),
-            declared_in,
-        });
     }
-    (terms.join(" | "), packages.into_iter().collect(), tests)
+    (terms.join(" | "), packages.into_iter().collect())
 }
 
 #[cfg(test)]

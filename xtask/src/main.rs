@@ -17,8 +17,8 @@
 //!   if every selected job passed and every other job was skipped
 //! - `ticket`: the resolved issue the pull request body on stdin prints: the
 //!   only one, or with several the first one labelled `bug`, else the first
-//! - `bug-filter FILE...`: the nextest filter, packages and test files among
-//!   FILE, with how each is declared, as tab-separated lines
+//! - `bug-filter FILE...`: the nextest filter and packages for the test files among FILE,
+//!   as tab-separated lines
 //! - `line-cap`, `unsafe-table`, `signal-sites`, `compiled-in`, `dependency-list`, `image-isolation`, `check-docs`: the checks
 
 #![allow(
@@ -161,20 +161,10 @@ fn run(args: &[String]) -> Result<bool, String> {
             Ok(true)
         }
         "bug-filter" => {
-            let (filter, packages, files) = select::test_filter(rest, &workspace_members()?);
+            let (filter, packages) = select::test_filter(rest, &workspace_members()?);
             println!("filter\t{filter}");
             for package in packages {
                 println!("package\t{package}");
-            }
-            for file in files {
-                let candidates: String = file
-                    .declared_in
-                    .iter()
-                    .map(|(parent, declaration)| {
-                        format!("\t{parent}\t{}", declaration.replace('\n', " "))
-                    })
-                    .collect();
-                println!("file\t{}{candidates}", file.path);
             }
             Ok(true)
         }
