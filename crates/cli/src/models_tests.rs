@@ -19,7 +19,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use serde_json::{Value, json};
 
-use super::{Spawner, run};
+use super::{refresh_named, run};
 
 /// `fiber models` never writes a file, so its lock runs every call straight
 /// through.
@@ -94,7 +94,7 @@ impl Setup {
         &self,
         search: Option<&str>,
         json: bool,
-        spawner: &dyn Spawner,
+        spawn: &dyn Fn(Vec<String>) -> std::io::Result<()>,
         clock: std::sync::Arc<dyn contract::clock::Clock>,
     ) -> (Result<(), Failure>, String, String) {
         let mut out = Vec::new();
@@ -117,7 +117,7 @@ impl Setup {
                     locks,
                 )
             },
-            spawner,
+            spawn,
             clock.as_ref(),
         );
         (
@@ -197,7 +197,7 @@ fn two_provider_setup() -> Setup {
 #[test]
 fn the_text_table_marks_exactly_the_default_row() {
     let setup = two_provider_setup();
-    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -211,7 +211,7 @@ fn the_text_table_marks_exactly_the_default_row() {
 #[test]
 fn json_prints_the_same_rows_in_the_same_order() {
     let setup = two_provider_setup();
-    let (result, out, err) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, true, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -230,7 +230,7 @@ fn the_search_matches_provider_slash_model_without_regard_to_case() {
         let (result, out, err) = setup.run(
             Some(search),
             false,
-            &NoSpawn,
+            &no_spawn,
             fakes::clock::FakeClock::new(),
         );
         result.unwrap();
@@ -243,8 +243,12 @@ fn the_search_matches_provider_slash_model_without_regard_to_case() {
             "{search}: {out:?}"
         );
     }
-    let (result, out, err) =
-        setup.run(Some("acme"), true, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(
+        Some("acme"),
+        true,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(out.lines().count(), 1);
@@ -258,7 +262,7 @@ fn a_search_with_no_match_prints_nothing() {
         let (result, out, err) = setup.run(
             Some("nothing-matches-this"),
             json,
-            &NoSpawn,
+            &no_spawn,
             fakes::clock::FakeClock::new(),
         );
         result.unwrap();
@@ -271,7 +275,7 @@ fn a_search_with_no_match_prints_nothing() {
 fn a_bare_id_as_the_default_marks_the_providers_row() {
     let setup = two_provider_setup();
     setup.write_config(&json!({"model": "big"}));
-    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert!(
@@ -279,7 +283,7 @@ fn a_bare_id_as_the_default_marks_the_providers_row() {
             .any(|line| line == "* acme/big        200000   3       15"),
         "{out:?}"
     );
-    let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, _) = setup.run(None, true, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert!(out.contains("\"default\":true"), "{out:?}");
 }
@@ -289,12 +293,12 @@ fn a_default_that_does_not_resolve_marks_no_row_and_is_not_an_error() {
     for model in [json!({"model": "acme/missing"}), json!({})] {
         let setup = two_provider_setup();
         setup.write_config(&model);
-        let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+        let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
         result.unwrap();
         assert_eq!(err, "");
         assert!(!out.lines().any(|line| line.starts_with('*')), "{out:?}");
         assert_eq!(out.lines().count(), 3, "{out:?}");
-        let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
+        let (result, out, _) = setup.run(None, true, &no_spawn, fakes::clock::FakeClock::new());
         result.unwrap();
         assert!(!out.contains("\"default\":true"), "{out:?}");
     }
@@ -304,7 +308,7 @@ fn a_default_that_does_not_resolve_marks_no_row_and_is_not_an_error() {
 fn with_no_provider_it_names_extension_install_on_stderr() {
     let setup = Setup::new();
     for json in [false, true] {
-        let (result, out, err) = setup.run(None, json, &NoSpawn, fakes::clock::FakeClock::new());
+        let (result, out, err) = setup.run(None, json, &no_spawn, fakes::clock::FakeClock::new());
         result.unwrap();
         assert_eq!(out, "", "json={json}");
         assert_eq!(
@@ -339,7 +343,7 @@ fn a_tiered_model_shows_its_base_prices() {
         }]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
-    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -347,7 +351,7 @@ fn a_tiered_model_shows_its_base_prices() {
         "  model     context  in $/M  out $/M\n\
          * acme/big  1000     1.25    0.3\n"
     );
-    let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, _) = setup.run(None, true, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(
         out,
@@ -380,7 +384,7 @@ fn a_model_listed_twice_prints_two_rows_and_marks_only_the_first() {
         ]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
-    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -389,7 +393,7 @@ fn a_model_listed_twice_prints_two_rows_and_marks_only_the_first() {
          * acme/big  7        1       2\n\
          \x20 acme/big  7        1       2\n"
     );
-    let (result, out, _) = setup.run(None, true, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, _) = setup.run(None, true, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(
         out,
@@ -518,7 +522,7 @@ fn padding_counts_characters_not_bytes() {
         ]),
     );
     setup.write_config(&json!({"model": "acme/big"}));
-    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert_eq!(
@@ -538,7 +542,7 @@ fn a_lua_providers_discovered_models_are_listed_with_no_cached_copy() {
         "{ { id = \"m\", protocol = \"openai-responses\", \
          base_url = \"http://127.0.0.1:1/v1\", context_window = 8000 } }",
     );
-    let (result, out, err) = setup.run(None, false, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(None, false, &no_spawn, fakes::clock::FakeClock::new());
     result.unwrap();
     assert_eq!(err, "");
     assert!(
@@ -546,8 +550,12 @@ fn a_lua_providers_discovered_models_are_listed_with_no_cached_copy() {
             .any(|line| line.contains("acme/m") && line.contains("8000")),
         "{out:?}"
     );
-    let (result, out, err) =
-        setup.run(Some("acme"), true, &NoSpawn, fakes::clock::FakeClock::new());
+    let (result, out, err) = setup.run(
+        Some("acme"),
+        true,
+        &no_spawn,
+        fakes::clock::FakeClock::new(),
+    );
     result.unwrap();
     assert_eq!(err, "");
     assert!(out.contains("\"model\":\"acme/m\""), "{out:?}");
@@ -572,7 +580,7 @@ impl Recorder {
     }
 }
 
-impl Spawner for Recorder {
+impl Recorder {
     fn spawn(&self, providers: Vec<String>) -> std::io::Result<()> {
         self.calls.lock().unwrap().push(providers);
         if self.fail {
@@ -583,16 +591,12 @@ impl Spawner for Recorder {
     }
 }
 
-/// A spawner for the tests that never refresh: recording the call is
-/// enough, since none of them starts one.
-struct NoSpawn;
-
-impl Spawner for NoSpawn {
-    fn spawn(&self, providers: Vec<String>) -> std::io::Result<()> {
-        Err(std::io::Error::other(format!(
-            "must not refresh: {providers:?}"
-        )))
-    }
+/// A spawner for the tests that never refresh: none of them starts one,
+/// so any call is a failure.
+fn no_spawn(providers: Vec<String>) -> std::io::Result<()> {
+    Err(std::io::Error::other(format!(
+        "must not refresh: {providers:?}"
+    )))
 }
 
 /// Writes the cached list of `name` and backdates it, so its age reads
@@ -628,7 +632,7 @@ fn a_stale_list_prints_at_once_and_spawns_its_refresh() {
         clock.wall(),
     );
     let spawner = Recorder::fresh();
-    let (result, out, err) = setup.run(None, false, &spawner, clock);
+    let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
     result.unwrap();
     assert_eq!(err, "");
     assert!(out.contains("acme/old"), "{out:?}");
@@ -649,7 +653,7 @@ fn a_fresh_list_prints_at_once_and_spawns_nothing() {
     )
     .unwrap();
     let spawner = Recorder::fresh();
-    let (result, out, err) = setup.run(None, false, &spawner, clock);
+    let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
     result.unwrap();
     assert_eq!(err, "");
     assert!(out.contains("acme/old"), "{out:?}");
@@ -672,9 +676,54 @@ fn a_spawn_that_fails_still_prints_from_the_cache() {
         calls: std::sync::Mutex::new(Vec::new()),
         fail: true,
     };
-    let (result, out, err) = setup.run(None, false, &spawner, clock);
+    let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
     result.unwrap();
     assert_eq!(err, "");
     assert!(out.contains("acme/old"), "{out:?}");
     assert_eq!(spawner.calls(), [vec!["acme".to_owned()]]);
+}
+
+#[test]
+fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
+    // A named stale provider beside an unrelated credentialed provider
+    // with no cache: only the named one refreshes, and nothing runs the
+    // other's `models()` synchronously outside the refresh lock. Its list
+    // would land in the cache if it ran, so no cache file means no call.
+    let setup = Setup::new();
+    setup.install_lua("stale-ext", "stale", &lua_list("new"));
+    setup.install_lua("other-ext", "other", &lua_list("other-model"));
+    let clock = fakes::clock::FakeClock::new();
+    write_stale_cache(
+        &setup.home(),
+        "stale",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        clock.wall(),
+    );
+    let home = setup.home();
+    let (_, project) = crate::project_of(&home, &setup.workspace()).unwrap();
+    let config = config::Config::load(config::Sources {
+        home: home.clone(),
+        workspace: setup.workspace(),
+        project,
+        overrides: Vec::new(),
+    })
+    .unwrap();
+    let (providers, _) = extensions::Providers::load(&home).unwrap();
+    let loaded = extensions::SessionExtensions::load(
+        &home,
+        &config,
+        clock.clone(),
+        std::sync::Arc::new(NoLock),
+    );
+    refresh_named(&["stale".to_owned()], &providers, &loaded, &config);
+    let stale: Vec<config::ModelData> = config::read_model_cache(&home, "stale").unwrap().unwrap();
+    assert_eq!(
+        stale.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["new"]
+    );
+    assert!(
+        config::read_model_cache(&home, "other").unwrap().is_none(),
+        "the unnamed provider's `models()` must not run"
+    );
 }

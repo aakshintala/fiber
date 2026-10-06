@@ -42,7 +42,7 @@ pub use secret::{
 };
 pub use write::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
 
-pub use keys::parse_duration;
+pub use keys::{parse_duration, refresh_after};
 
 use home::{parse, plain, read, read_bytes};
 

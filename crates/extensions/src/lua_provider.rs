@@ -48,7 +48,7 @@ impl LuaProvider {
     }
 
     /// The provider's name, as `fiber.provider` registered it.
-    pub(crate) fn name(&self) -> &str {
+    pub fn name(&self) -> &str {
         &self.name
     }
 
@@ -119,7 +119,9 @@ impl LuaProvider {
 
     /// Calls `models()` on its own thread, unless `max_age` names one and
     /// the cached list is no older than it; `None` then, and no `models()`
-    /// call. `None` for `max_age` always runs, whatever the cache holds.
+    /// call. A provider that did not register `models` never starts: no
+    /// lock, no thread, no call. `None` for `max_age` always runs, whatever
+    /// the cache holds.
     /// Across the processes sharing a Fiber home a provider refreshes once:
     /// an exclusive lock on its lock file is held for the whole refresh,
     /// and a provider already refreshing is not started again. The age is
@@ -130,6 +132,9 @@ impl LuaProvider {
         self: &Arc<Self>,
         max_age: Option<Duration>,
     ) -> Option<JoinHandle<Result<Vec<ModelData>, Error>>> {
+        if !self.registers("models").unwrap_or(false) {
+            return None;
+        }
         if self.fresh(max_age) {
             return None;
         }

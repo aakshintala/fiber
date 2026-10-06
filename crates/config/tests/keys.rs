@@ -666,7 +666,17 @@ fn model_lists_refresh_after_accepts_durations_and_refuses_the_rest() {
             "{good}"
         );
     }
-    for bad in [json!("0h"), json!("24"), json!("1w"), json!(""), json!(24)] {
+    for bad in [
+        json!("0h"),
+        json!("24"),
+        json!("1w"),
+        json!(""),
+        json!(24),
+        // No byte slice of these is a duration: each must refuse, never panic.
+        json!("é"),
+        json!("5é"),
+        json!("٣h"),
+    ] {
         let setup = Setup::new();
         setup.write(
             &setup.global(),

@@ -69,14 +69,7 @@ pub fn model_cache_age(
 /// included: a crash leaves the file, and the lock it held dies with the
 /// process (`docs/model-routing.md`, "Model discovery").
 pub fn model_cache_lock_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {
-    if !one_file_name(provider) {
-        return Err(ConfigError::WrongType {
-            source_name: "a provider's name".into(),
-            key: provider.into(),
-            expected: "one file name in cache/models/".into(),
-        });
-    }
-    Ok(home.join("cache/models").join(format!("{provider}.lock")))
+    cache_file(home, provider).map(|path| path.with_extension("lock"))
 }
 
 fn cache_file(home: &Path, provider: &str) -> Result<PathBuf, ConfigError> {

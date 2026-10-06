@@ -585,6 +585,31 @@ fn lua_bare(
     extensions::LuaProvider::new(extension, provider)
 }
 
+/// A Lua provider with a `credential` function but no `models` function:
+/// the refresh gate never starts it, so no lock, thread or call follows.
+fn lua_no_models(
+    setup: &Setup,
+    dir: &str,
+    provider: &str,
+) -> std::sync::Arc<extensions::LuaProvider> {
+    let ext = setup.home().join(dir);
+    write(
+        &ext.join("init.lua"),
+        &format!(
+            "fiber.provider(\"{provider}\", {{ \
+             credential = {{ timeout = 1000, run = function() \
+             return {{ token = \"test-token\", expires_at = 1893456000 }} end }} }})\n"
+        ),
+    );
+    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
+        "acme-ext",
+        ext,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
+    extensions::LuaProvider::new(extension, provider)
+}
+
 fn lua_list(ids: &[&str]) -> String {
     let models: Vec<String> = ids
         .iter()
@@ -1112,6 +1137,22 @@ fn refresh_lists_starts_only_the_stale_provider_with_a_credential() {
 }
 
 #[test]
+fn refresh_skips_a_provider_that_did_not_register_models() {
+    let setup = Setup::new();
+    let home = setup.home();
+    stale(&home, "nomodels", &["old"]);
+    let lua = lua_no_models(&setup, "ext", "nomodels");
+    // A credential is there, and the list is stale, yet nothing starts:
+    // no lock, no thread, no `models()` call.
+    assert!(lua.refresh(None).is_none());
+    assert!(lua.refresh(Some(DAY)).is_none());
+    let config = config(&setup, &[]);
+    let started = extensions::refresh_lists(&[lua], &Providers::default(), &config, None);
+    assert!(started.is_empty());
+    assert_eq!(cached_ids(&home, "nomodels"), ["old"]);
+}
+
+#[test]
 fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
     let setup = Setup::new();
     let home = setup.home();
@@ -1127,23 +1168,4 @@ fn add_lua_without_a_cache_or_a_credential_runs_no_models() {
         config::read_model_cache(&home, "acme").unwrap().is_none(),
         "no discovery ran, so no copy was written"
     );
-}
-
-#[test]
-fn retain_lua_drops_every_lua_provider_but_keeps_the_models() {
-    let setup = Setup::new();
-    let mut providers = Providers::default();
-    let config = config(&setup, &[]);
-    let a = lua_named(&setup, "a", "a", &lua_list(&["m"]));
-    let b = lua_named(&setup, "b", "b", &lua_list(&["m"]));
-    providers.add_lua("a-ext", &a, &config);
-    providers.add_lua("b-ext", &b, &config);
-    assert!(providers.lua("a").is_some());
-    assert!(providers.lua("b").is_some());
-    providers.retain_lua(&["a"]);
-    assert!(providers.lua("a").is_some());
-    assert!(providers.lua("b").is_none());
-    // The installed models stay: only the signer and token go.
-    assert!(providers.resolve("a/m").is_ok());
-    assert!(providers.resolve("b/m").is_ok());
 }

@@ -299,10 +299,24 @@ fn walk(
     Ok(kept)
 }
 
+/// How old a provider's cached model list must be before it refreshes in
+/// the background (`docs/configuration.md`, `model_lists.refresh_after`).
+/// Configuration validation holds every layer to the duration grammar, so
+/// a value that does not parse falls back to the default.
+pub fn refresh_after(config: &crate::Config) -> Duration {
+    config
+        .get("model_lists.refresh_after", None)
+        .and_then(|(value, _)| value.as_str().and_then(parse_duration))
+        .unwrap_or(Duration::from_secs(24 * 60 * 60))
+}
+
 /// Reads a duration string such as `"7d"`: a whole number of 1 or more and a
 /// unit, `s`, `m`, `h` or `d` (`docs/configuration.md`,
 /// `model_lists.refresh_after`). Anything else is `None`.
 pub fn parse_duration(text: &str) -> Option<Duration> {
+    if !text.is_ascii() {
+        return None;
+    }
     let (number, unit) = text.split_at(text.len().checked_sub(1)?);
     let count: u64 = number.parse().ok()?;
     if count == 0 || !number.bytes().all(|b| b.is_ascii_digit()) {

@@ -5,7 +5,6 @@
 //! request through the signing seam.
 
 use std::sync::Arc;
-use std::time::Duration;
 
 use config::{Config, ProviderData, Secret};
 use contract::shapes::Failure;
@@ -43,20 +42,9 @@ pub(crate) fn add_lua(extensions: &SessionExtensions, providers: &mut Providers,
             .collect::<Vec<_>>(),
         providers,
         config,
-        Some(max_age(config)),
+        Some(config::refresh_after(config)),
     );
     let _detached = started;
-}
-
-/// How old a provider's cached model list must be before it refreshes in
-/// the background (`docs/configuration.md`, `model_lists.refresh_after`).
-/// Configuration validation holds every layer to the duration grammar, so
-/// a value that does not parse falls back to the default.
-fn max_age(config: &Config) -> Duration {
-    config
-        .get("model_lists.refresh_after", None)
-        .and_then(|(value, _)| value.as_str().and_then(config::parse_duration))
-        .unwrap_or(Duration::from_secs(24 * 60 * 60))
 }
 
 /// The session's key and signer for `provider`: no key when it registered

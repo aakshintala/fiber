@@ -316,7 +316,7 @@ impl Providers {
 
     /// The installed data of `name`: the data file's, else one naming only
     /// the provider, as [`LuaProvider::has_credential`] reads it.
-    fn data(&self, name: &str) -> ProviderData {
+    pub fn data(&self, name: &str) -> ProviderData {
         self.by_name.get(name).cloned().unwrap_or(ProviderData {
             name: name.to_owned(),
             models: Vec::new(),
@@ -325,14 +325,6 @@ impl Providers {
             headers: BTreeMap::new(),
             reviewer_model: None,
         })
-    }
-
-    /// Drops every Lua provider except those in `keep`, by provider name:
-    /// what unloads a refreshed provider the session does not use
-    /// (`docs/model-routing.md`, "Model discovery"). The installed models
-    /// stay: only the signer and token go.
-    pub fn retain_lua(&mut self, keep: &[&str]) {
-        self.lua.retain(|name, _| keep.contains(&name.as_str()));
     }
 
     /// The Lua provider `name`, for its signer and token, if an extension
@@ -442,9 +434,10 @@ impl Providers {
 pub type StartedRefresh = (String, JoinHandle<Result<Vec<ModelData>, crate::Error>>);
 
 /// Refreshes one provider, or all providers that have a credential, with
-/// or without the age check: every provider in `lua` with a credential
-/// whose cached list `max_age` lets through (`None` runs whatever the
-/// cache holds). One entry per provider started, in `lua` order. A refresh
+/// or without the age check: every provider in `lua` that registered
+/// `models` and has a credential, whose cached list `max_age` lets through
+/// (`None` runs whatever the cache holds). One entry per provider started,
+/// in `lua` order. A refresh
 /// writes only the cache file and the provider's in-memory list, never this
 /// `Providers`: a running session's tool definitions never change, and
 /// nothing here schedules a later refresh (`docs/model-routing.md`, "Model
