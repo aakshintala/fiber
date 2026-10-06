@@ -151,8 +151,8 @@ Notes:
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
   x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search and
   similar rows were measured on September 26, 2026.
-- The html5ever, encoding_rs and together rows were measured on October 5,
-  2026.
+- The html5ever, encoding_rs and together rows were measured on macOS on
+  October 5, 2026, and on Linux on October 6, 2026.
 - html5ever's figure is a generated 64 KiB page through the tokenizer alone,
   counting tokens in the sink, as the converter does without a tree.
 - encoding_rs's figure is decoding a 64 KiB windows-1252 page by its declared
