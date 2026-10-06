@@ -1807,6 +1807,29 @@ fn assert_blocked_by_reviewer(run: &Run, server: &ProviderServer) {
     assert_eq!(server.requests().len(), 4);
 }
 
+#[test]
+fn a_command_credential_runs_once_per_process_with_a_same_provider_reviewer() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    let counter = setup.home().join("counter");
+    let probe = format!("echo run >> '{}'; echo k", counter.display());
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "reviewer": {"model": "fake/m"},
+            "providers": {"fake": {"credentials": {"default": {"command": ["sh", "-c", probe]}}}}}),
+    );
+
+    let run = setup.run(&["ask", "hello"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let runs = fs::read_to_string(&counter)
+        .unwrap_or_default()
+        .lines()
+        .count();
+    assert_eq!(runs, 1, "the command ran {runs} times");
+}
+
 /// Points the session's reviewer at the fake server, beside the session's
 /// own model.
 fn with_reviewer(setup: &Setup) {
