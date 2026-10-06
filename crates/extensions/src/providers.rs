@@ -41,6 +41,74 @@ impl Model<'_> {
     }
 }
 
+/// Removes every model whose `web_search` its protocol does not read or
+/// whose `extra_body` names a field Fiber builds, returning one
+/// `model_invalid` notice per reason, in model order. A model it keeps is
+/// unchanged.
+pub fn leave_out_invalid(
+    provider: &str,
+    extension: &str,
+    models: &mut Vec<ModelData>,
+) -> Vec<Notice> {
+    let mut notices = Vec::new();
+    let mut kept = Vec::new();
+    for model in models.drain(..) {
+        let mut invalid = false;
+        if let Some(kind) = model.web_search.as_deref()
+            && !model.protocol.reads_web_search(kind)
+        {
+            notices.push(Notice {
+                code: ErrorCode::ModelInvalid,
+                message: format!(
+                    "The model `{provider}/{}` names `{kind}` as its `web_search` type, \
+                     which its protocol does not read.",
+                    model.id
+                ),
+                extension: Some(extension.to_owned()),
+            });
+            invalid = true;
+        }
+        let reserved: Vec<&str> = model
+            .protocol
+            .reserved_body_fields()
+            .iter()
+            .filter(|field| model.extra_body.contains_key(**field))
+            .copied()
+            .collect();
+        if !reserved.is_empty() {
+            let fields = reserved
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            let message = if reserved.len() == 1 {
+                format!(
+                    "The model `{provider}/{}` names {fields} in its `extra_body`, \
+                     a field Fiber builds itself.",
+                    model.id
+                )
+            } else {
+                format!(
+                    "The model `{provider}/{}` names {fields} in its `extra_body`, \
+                     fields Fiber builds itself.",
+                    model.id
+                )
+            };
+            notices.push(Notice {
+                code: ErrorCode::ModelInvalid,
+                message,
+                extension: Some(extension.to_owned()),
+            });
+            invalid = true;
+        }
+        if !invalid {
+            kept.push(model);
+        }
+    }
+    *models = kept;
+    notices
+}
+
 impl Providers {
     /// Reads every extension in `extensions/` in Fiber home. One written for
     /// another extension API is left out, with a notice naming it and both
@@ -81,22 +149,11 @@ impl Providers {
                 continue;
             }
             for mut data in config::read_providers(&dir)? {
-                data.models
-                    .retain(|model| match model.web_search.as_deref() {
-                        Some(kind) if !model.protocol.reads_web_search(kind) => {
-                            notices.push(Notice {
-                                code: ErrorCode::ModelInvalid,
-                                message: format!(
-                                    "The model `{}/{}` names `{kind}` as its `web_search` type, \
-                                 which its protocol does not read.",
-                                    data.name, model.id
-                                ),
-                                extension: Some(manifest.name.clone()),
-                            });
-                            false
-                        }
-                        _ => true,
-                    });
+                notices.extend(leave_out_invalid(
+                    &data.name,
+                    &manifest.name,
+                    &mut data.models,
+                ));
                 providers.by_name.insert(data.name.clone(), data);
             }
         }

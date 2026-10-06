@@ -8,9 +8,9 @@
 mod common;
 
 use common::{Setup, install, manifest, provider, write};
-use config::{Config, ProjectKey, Sources};
+use config::{Config, ModelData, ProjectKey, Sources};
 use contract::ErrorCode;
-use extensions::{Error, Providers};
+use extensions::{Error, Providers, leave_out_invalid};
 use serde_json::json;
 
 fn installed(setup: &Setup, extensions: &[(&str, serde_json::Value)]) -> Providers {
@@ -279,5 +279,184 @@ fn a_model_whose_web_search_its_protocol_does_not_read_is_left_out() {
             .iter()
             .any(|m| m.contains("acme/wrong") && m.contains("web_search_20250305")),
         "{messages:?}"
+    );
+}
+
+fn reserved_case(protocol: &str, reserved: &[&str]) {
+    let setup = Setup::new();
+    let mut models = Vec::new();
+    for field in reserved {
+        models.push(json!({
+            "id": format!("bad-{field}"),
+            "protocol": protocol,
+            "base_url": "http://127.0.0.1:1/v1",
+            "extra_body": { (*field): 1 }
+        }));
+    }
+    models.push(json!({
+        "id": "ok", "protocol": protocol,
+        "base_url": "http://127.0.0.1:1/v1",
+        "extra_body": { "max_tokens": 1 }
+    }));
+    let data = json!({ "name": "acme", "models": models });
+    let source = setup.source("acme", &manifest("acme"), std::slice::from_ref(&data));
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/ok").is_ok());
+    for field in reserved {
+        let id = format!("acme/bad-{field}");
+        assert!(
+            matches!(
+                providers.resolve(&id).unwrap_err(),
+                Error::UnknownModel { .. }
+            ),
+            "{id}"
+        );
+    }
+    assert_eq!(notices.len(), reserved.len(), "{notices:?}");
+    for (notice, field) in notices.iter().zip(reserved.iter()) {
+        assert_eq!(notice.code, ErrorCode::ModelInvalid);
+        assert_eq!(notice.extension.as_deref(), Some("acme"));
+        assert!(
+            notice.message.contains(&format!("acme/bad-{field}"))
+                && notice.message.contains(&format!("`{field}`")),
+            "{}",
+            notice.message
+        );
+    }
+}
+
+#[test]
+fn anthropic_reserved_extra_body_fields_leave_the_model_out() {
+    reserved_case(
+        "anthropic-messages",
+        &[
+            "model",
+            "system",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream",
+        ],
+    );
+}
+
+#[test]
+fn completions_reserved_extra_body_fields_leave_the_model_out() {
+    reserved_case(
+        "openai-completions",
+        &["model", "messages", "tools", "tool_choice", "stream"],
+    );
+}
+
+#[test]
+fn responses_reserved_extra_body_fields_leave_the_model_out() {
+    reserved_case(
+        "openai-responses",
+        &[
+            "model",
+            "instructions",
+            "input",
+            "tools",
+            "tool_choice",
+            "stream",
+        ],
+    );
+}
+
+#[test]
+fn google_reserved_extra_body_fields_leave_the_model_out() {
+    reserved_case(
+        "google-generative-ai",
+        &["systemInstruction", "contents", "tools", "toolConfig"],
+    );
+}
+
+#[test]
+fn bedrock_reserved_extra_body_fields_leave_the_model_out() {
+    reserved_case("bedrock-converse", &["system", "messages", "toolConfig"]);
+}
+
+#[test]
+fn extra_body_matching_is_exact_and_top_level_only() {
+    let setup = Setup::new();
+    let data = json!({
+        "name": "acme",
+        "models": [{
+            "id": "ok", "protocol": "google-generative-ai",
+            "base_url": "http://127.0.0.1:1/v1",
+            "extra_body": {
+                "Tools": [],
+                "generationConfig": { "tools": 1 }
+            }
+        }]
+    });
+    let source = setup.source("acme", &manifest("acme"), std::slice::from_ref(&data));
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/ok").is_ok());
+    assert!(notices.is_empty(), "{notices:?}");
+}
+
+#[test]
+fn a_model_with_two_reserved_fields_and_an_unread_search_gets_two_notices() {
+    let setup = Setup::new();
+    let data = json!({
+        "name": "acme",
+        "models": [{
+            "id": "bad", "protocol": "anthropic-messages",
+            "base_url": "http://127.0.0.1:1/v1",
+            "web_search": "web_search_20260209",
+            "extra_body": { "tools": 1, "system": 1 }
+        }]
+    });
+    let source = setup.source("acme", &manifest("acme"), std::slice::from_ref(&data));
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(notices.len(), 2, "{notices:?}");
+    for notice in &notices {
+        assert_eq!(notice.code, ErrorCode::ModelInvalid);
+        assert_eq!(notice.extension.as_deref(), Some("acme"));
+    }
+    let messages: Vec<&str> = notices.iter().map(|n| n.message.as_str()).collect();
+    assert!(
+        messages.iter().any(|m| m.contains("acme/bad")
+            && m.contains("`system`, `tools`")
+            && m.contains("extra_body")),
+        "{messages:?}"
+    );
+    assert!(
+        messages
+            .iter()
+            .any(|m| m.contains("acme/bad") && m.contains("web_search_20260209")),
+        "{messages:?}"
+    );
+}
+
+#[test]
+fn leave_out_invalid_filters_a_model_list_like_models_returns() {
+    let list = json!([
+        {"id": "bad", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "extra_body": { "tools": 1 }},
+        {"id": "ok", "protocol": "anthropic-messages",
+         "base_url": "http://127.0.0.1:1/v1", "extra_body": { "max_tokens": 1 }}
+    ]);
+    let mut models: Vec<ModelData> = serde_json::from_value(list).unwrap();
+    let notices = leave_out_invalid("acme", "acme", &mut models);
+    assert_eq!(
+        models.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["ok"]
+    );
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+    assert!(
+        notices[0].message.contains("acme/bad") && notices[0].message.contains("`tools`"),
+        "{}",
+        notices[0].message
     );
 }
