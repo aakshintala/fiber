@@ -292,8 +292,14 @@ fn two_sessions_setting_at_once_lose_no_key() {
     };
     writer(1, done_a);
     writer(2, done_b);
-    done_rx_a.recv_timeout(DEADLINE).unwrap();
-    done_rx_b.recv_timeout(DEADLINE).unwrap();
+    assert!(
+        done_rx_a.recv_timeout(DEADLINE).is_ok(),
+        "the first session's set did not finish within {DEADLINE:?}"
+    );
+    assert!(
+        done_rx_b.recv_timeout(DEADLINE).is_ok(),
+        "the second session's set did not finish within {DEADLINE:?}"
+    );
     let merged = setup
         .load(&[])
         .extension_setting(EXTENSION, &[], "slot1")
