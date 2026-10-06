@@ -1621,3 +1621,180 @@ fn web_search_requests_in_usage_become_the_reply_count() {
     ]));
     assert_eq!(reply.unwrap().web_searches, None);
 }
+
+fn search_call(index: u64, id: &str) -> Vec<Value> {
+    vec![
+        json!({"type": "content_block_start", "index": index, "content_block":
+            {"type": "server_tool_use", "id": id, "name": "web_search", "input": {}}}),
+        json!({"type": "content_block_delta", "index": index, "delta":
+            {"type": "input_json_delta", "partial_json": "{\"query\":"}}),
+        json!({"type": "content_block_delta", "index": index, "delta":
+            {"type": "input_json_delta", "partial_json": "\"rust 1.90\"}"}}),
+        stopped(index),
+    ]
+}
+
+fn search_result(index: u64, tool_use_id: &str, content: Value) -> Vec<Value> {
+    vec![
+        json!({"type": "content_block_start", "index": index, "content_block":
+            {"type": "web_search_tool_result", "tool_use_id": tool_use_id, "content": content}}),
+        stopped(index),
+    ]
+}
+
+fn two_results() -> Value {
+    json!([
+        {"type": "web_search_result", "url": "https://blog.rust-lang.org/",
+         "title": "Rust Blog", "encrypted_content": "Eq", "page_age": null},
+        {"type": "web_search_result", "url": "https://doc.rust-lang.org/",
+         "title": "Docs", "encrypted_content": "Er", "page_age": "May 1, 2026"}
+    ])
+}
+
+fn citation(url: &str) -> Value {
+    json!({"type": "web_search_result_location", "url": url, "title": "T",
+        "encrypted_index": "Eo", "cited_text": "c"})
+}
+
+fn hosted_stream(parts: Vec<Vec<Value>>) -> Vec<u8> {
+    let mut events = vec![started()];
+    events.extend(parts.into_iter().flatten());
+    events.extend(finished("end_turn"));
+    stream(&events)
+}
+
+#[test]
+fn a_hosted_search_decodes_with_its_result_and_the_citing_text_around_it() {
+    let mut events = search_call(0, "srvtoolu_01");
+    events.extend(search_result(1, "srvtoolu_01", two_results()));
+    events.push(json!({"type": "content_block_start", "index": 2,
+        "content_block": {"type": "text", "text": ""}}));
+    events.push(json!({"type": "content_block_delta", "index": 2,
+        "delta": {"type": "text_delta", "text": "Rust 1.90 is out."}}));
+    for url in ["https://blog.rust-lang.org/", "https://doc.rust-lang.org/"] {
+        events.push(json!({"type": "content_block_delta", "index": 2,
+            "delta": {"type": "citations_delta", "citation": citation(url)}}));
+    }
+    events.push(stopped(2));
+    let (reply, deltas) = decoded(&hosted_stream(vec![events]));
+    let reply = reply.unwrap();
+    assert!(
+        deltas
+            .iter()
+            .all(|d| !matches!(d, Delta::ToolCallArguments(_))),
+        "a hosted call streams no arguments"
+    );
+    let [ReplyAction::Hosted(hosted), ReplyAction::Text(text)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(hosted.call.name, "web_search");
+    assert_eq!(hosted.call.arguments, json!({"query": "rust 1.90"}));
+    assert_eq!(
+        hosted.call.provider_id,
+        Some(ProviderCallId("srvtoolu_01".into()))
+    );
+    assert_eq!(
+        hosted.call.provider_item,
+        Some(json!({"type": "server_tool_use", "id": "srvtoolu_01",
+            "name": "web_search", "input": {"query": "rust 1.90"}}))
+    );
+    assert_eq!(
+        hosted.completed.status,
+        contract::events::CallStatus::Completed
+    );
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: "https://blog.rust-lang.org/\nhttps://doc.rust-lang.org/".into()
+        }]
+    );
+    assert_eq!(
+        hosted.completed.provider_item,
+        Some(
+            json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+            "content": two_results()})
+        )
+    );
+    assert_eq!(text.text, "Rust 1.90 is out.");
+    assert_eq!(
+        text.provider_item,
+        Some(
+            json!({"type": "text", "text": "Rust 1.90 is out.", "citations": [
+            citation("https://blog.rust-lang.org/"), citation("https://doc.rust-lang.org/")]})
+        )
+    );
+    assert_eq!(reply.text(), "Rust 1.90 is out.");
+}
+
+#[test]
+fn a_hosted_search_that_failed_completes_failed_with_the_vendors_code() {
+    let mut events = search_call(0, "srvtoolu_01");
+    let error = json!({"type": "web_search_tool_result_error", "error_code": "max_uses_exceeded"});
+    events.extend(search_result(1, "srvtoolu_01", error.clone()));
+    let (reply, _) = decoded(&hosted_stream(vec![events]));
+    let reply = reply.unwrap();
+    let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    let done = &hosted.completed;
+    assert_eq!(done.status, contract::events::CallStatus::Failed);
+    let failure = done.error.as_ref().unwrap();
+    assert_eq!(failure.code, ErrorCode::ToolError);
+    assert_eq!(
+        failure.message,
+        "The provider's search failed: max_uses_exceeded."
+    );
+    assert_eq!(
+        done.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: failure.message.clone()
+        }]
+    );
+    assert_eq!(
+        done.provider_item,
+        Some(
+            json!({"type": "web_search_tool_result", "tool_use_id": "srvtoolu_01",
+            "content": error})
+        )
+    );
+}
+
+#[test]
+fn a_hosted_call_with_no_result_and_a_result_with_no_call_are_left_out() {
+    // No result by `message_stop`: no search ran.
+    let (reply, _) = decoded(&hosted_stream(vec![search_call(0, "srvtoolu_01")]));
+    assert!(reply.unwrap().actions.is_empty());
+    // A result whose call is unknown.
+    let (reply, _) = decoded(&hosted_stream(vec![search_result(
+        0,
+        "srvtoolu_99",
+        two_results(),
+    )]));
+    assert!(reply.unwrap().actions.is_empty());
+    // A result pairs with its own call by id, not by position.
+    let mut events = search_call(0, "srvtoolu_01");
+    events.extend(search_call(1, "srvtoolu_02"));
+    events.extend(search_result(2, "srvtoolu_02", two_results()));
+    let (reply, _) = decoded(&hosted_stream(vec![events]));
+    let reply = reply.unwrap();
+    let [ReplyAction::Hosted(hosted)] = reply.actions.as_slice() else {
+        panic!("{:?}", reply.actions);
+    };
+    assert_eq!(
+        hosted.call.provider_id,
+        Some(ProviderCallId("srvtoolu_02".into()))
+    );
+}
+
+#[test]
+fn a_text_block_without_citations_keeps_no_provider_item() {
+    let (reply, _) = decoded(&hosted_stream(vec![
+        text_block(0, "plain").to_vec(),
+        vec![stopped(0)],
+    ]));
+    let reply = reply.unwrap();
+    assert!(matches!(
+        reply.actions.as_slice(),
+        [ReplyAction::Text(part)] if part.text == "plain" && part.provider_item.is_none()
+    ));
+}

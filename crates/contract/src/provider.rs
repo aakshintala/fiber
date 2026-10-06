@@ -230,6 +230,10 @@ impl Reply {
 }
 
 /// A durable action in a reply.
+#[allow(
+    clippy::large_enum_variant,
+    reason = "a reply holds a few actions for one step; boxing would allocate on each"
+)]
 #[derive(Debug, Clone, PartialEq)]
 pub enum ReplyAction {
     /// `text_completed`.
