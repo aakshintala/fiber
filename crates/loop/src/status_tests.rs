@@ -1002,11 +1002,30 @@ fn stop_returns_after_the_observer_folded_what_was_written() {
         None,
     )
     .unwrap();
-    // The observer is released as `stop` is called: a `stop` that returned
-    // at once would leave the last status as it was.
-    let releaser = std::thread::spawn(move || release.send(()).unwrap());
-    status.stop();
-    releaser.join().unwrap();
+    // `stop` runs on a worker so the test can prove it waited: the flag is
+    // set only after the worker is about to stop, and `stop` cannot return
+    // while the observer is still held.
+    let (about_to_stop_tx, about_to_stop) = std::sync::mpsc::channel::<()>();
+    let (done_tx, done) = std::sync::mpsc::channel::<bool>();
+    let released_flag = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let released_flag_worker = Arc::clone(&released_flag);
+    let _stopper = std::thread::spawn(move || {
+        about_to_stop_tx.send(()).unwrap();
+        status.stop();
+        done_tx
+            .send(released_flag_worker.load(std::sync::atomic::Ordering::SeqCst))
+            .unwrap();
+    });
+    about_to_stop
+        .recv_timeout(DEADLINE)
+        .expect("the worker is about to stop");
+    released_flag.store(true, std::sync::atomic::Ordering::SeqCst);
+    release.send(()).unwrap();
+    let released_first = done.recv_timeout(DEADLINE).expect("stop returned");
+    assert!(
+        released_first,
+        "stop returned before the observer was released"
+    );
     let last = log.latest("session_status").expect("a session_status");
     assert_eq!(last.payload["state"], "idle");
     assert_eq!(last.payload["name"], "go");
