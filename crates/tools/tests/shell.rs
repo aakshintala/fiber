@@ -293,6 +293,43 @@ fn bash_env_is_not_read() {
 }
 
 #[test]
+fn exported_functions_are_not_carried() {
+    const PROBE: &str = "FIBER_SHELL_BASH_FUNC_PROBE";
+    if std::env::var(PROBE).is_ok() {
+        let dir = fakes::TempDir::new("fiber-shell-bash-func-child");
+        let output = run(dir.path(), "fiber_probe; true");
+        assert!(output.error.is_none(), "{}", text(&output));
+        assert!(!text(&output).contains("carried"), "{}", text(&output));
+        return;
+    }
+    // How bash exports a function: `export -f fiber_probe` sets this.
+    let child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            "exported_functions_are_not_carried",
+            "--nocapture",
+        ])
+        .env(PROBE, "1")
+        .env("BASH_FUNC_fiber_probe%%", "() {  echo carried\n}")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait_with_output()).unwrap());
+    let output = match finished.recv_timeout(DEADLINE) {
+        Ok(output) => output.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for the BASH_FUNC probe"),
+    };
+    assert!(
+        output.status.success(),
+        "stdout:\n{}\nstderr:\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
 fn the_call_waits_until_the_group_is_empty() {
     let dir = fakes::TempDir::new("fiber-shell-group");
     let ready = Ready::new(dir.path());
