@@ -143,7 +143,7 @@ impl ModelCall for Call {
 /// more than 20 strict tools (probed 2026-10-01 on `claude-sonnet-5-5`:
 /// "The maximum number of strict tools supported is 20"), so past 20 the
 /// rest are sent `strict: false`, in name order. This is the tools Fiber
-/// builds, before `extra_body` is merged (see #509).
+/// builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
@@ -240,7 +240,7 @@ pub(crate) const MAX_STRICT_TOOLS: usize = 20;
 pub(crate) const MAX_MARKERS: usize = 4;
 
 /// Removes cache markers past [`MAX_MARKERS`], counted across `tools`,
-/// `system` and `messages` after `extra_body` is merged. The ones kept are
+/// `system` and `messages`. The ones kept are
 /// in the order `docs/prompt-cache.md` lists: the system prompt's, then the
 /// previous end's, then the new end's (the last block of all), which is
 /// body order through `system` and then `messages`; markers on tools come
@@ -767,3 +767,7 @@ fn index(event: &Value) -> u64 {
 fn str_at<'a>(value: &'a Value, key: &str) -> &'a str {
     value.get(key).and_then(Value::as_str).unwrap_or("")
 }
+
+#[cfg(test)]
+#[path = "anthropic_messages_tests.rs"]
+mod tests;
