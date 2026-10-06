@@ -10,6 +10,7 @@ use config::{Config, Sources};
 use contract::ErrorCode;
 use contract::shapes::Failure;
 use extensions::Providers;
+use serde::Serialize;
 
 use crate::{fail, failed, project_of};
 
@@ -17,11 +18,15 @@ use crate::{fail, failed, project_of};
 const NO_PROVIDER: &str =
     "No provider is installed. Run `fiber extension install <name>` to install one.";
 
-/// One printed row: the `provider/model` reference and what its columns show.
+/// One printed row: the `provider/model` reference and what its columns
+/// show. `--json` prints it as is, its fields in this order.
+#[derive(Serialize)]
 struct Row {
     /// The model as a session names it, `provider/model`.
+    #[serde(rename = "model")]
     reference: String,
     /// Its context window, in tokens.
+    #[serde(rename = "context_window")]
     context: Option<u64>,
     /// Its base input price, in US dollars per million tokens.
     input: Option<f64>,
@@ -31,47 +36,9 @@ struct Row {
     default: bool,
 }
 
-/// Pads `cell` with spaces to `width`, counted in `char`s.
-fn pad(cell: &str, width: usize) -> String {
-    let len = cell.chars().count();
-    if len >= width {
-        cell.to_owned()
-    } else {
-        let mut padded = String::with_capacity(cell.len() + (width - len));
-        padded.push_str(cell);
-        for _ in len..width {
-            padded.push(' ');
-        }
-        padded
-    }
-}
-
 /// The missing-cell mark.
 fn missing() -> String {
     "-".to_owned()
-}
-
-/// One `--json` line: the keys in `model`, `context_window`, `input`,
-/// `output`, `default` order, `null` for a missing value.
-fn json_line(row: &Row) -> String {
-    let model = serde_json::to_string(&row.reference).unwrap_or_else(|_| "\"\"".to_owned());
-    let context = row
-        .context
-        .map(|tokens| tokens.to_string())
-        .unwrap_or_else(|| "null".to_owned());
-    let input = row
-        .input
-        .map(|price| serde_json::to_string(&price).unwrap_or_else(|_| "null".to_owned()))
-        .unwrap_or_else(|| "null".to_owned());
-    let output = row
-        .output
-        .map(|price| serde_json::to_string(&price).unwrap_or_else(|_| "null".to_owned()))
-        .unwrap_or_else(|| "null".to_owned());
-    format!(
-        "{{\"model\":{model},\"context_window\":{context},\
-         \"input\":{input},\"output\":{output},\"default\":{}}}",
-        row.default
-    )
 }
 
 /// The text table: a header row, then one row per model. Every line starts
@@ -102,11 +69,8 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
     let mut widths = [0_usize; 4];
     for cells in &table {
         for (index, cell) in cells.iter().enumerate() {
-            let len = cell.chars().count();
-            if let Some(width) = widths.get_mut(index)
-                && len > *width
-            {
-                *width = len;
+            if let Some(width) = widths.get_mut(index) {
+                *width = (*width).max(cell.chars().count());
             }
         }
     }
@@ -124,7 +88,8 @@ fn text_lines(rows: &[Row]) -> Vec<String> {
             if index > 0 {
                 line.push_str("  ");
             }
-            line.push_str(&pad(cell, widths.get(index).copied().unwrap_or(0)));
+            let width = widths.get(index).copied().unwrap_or(0);
+            line.push_str(&format!("{cell:<width$}"));
         }
         while line.ends_with(' ') {
             line.pop();
@@ -194,7 +159,9 @@ fn run(
     }
     if json {
         for row in &rows {
-            writeln!(out, "{}", json_line(row))
+            let line = serde_json::to_string(row)
+                .map_err(|e| failed(ErrorCode::IoFailed, format!("a model row: {e}")))?;
+            writeln!(out, "{line}")
                 .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
         }
         return Ok(());

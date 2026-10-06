@@ -12,6 +12,7 @@ doors = { path = "../doors" }
 extensions = { path = "../extensions" }
 log = { path = "../log" }
 rustix.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 signal-hook = "0.3"
 
