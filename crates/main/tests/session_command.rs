@@ -799,8 +799,9 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     let first = until(&client, "the first turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
-    let started = first
+    let started = attached
         .iter()
+        .chain(&first)
         .find(|line| line["kind"] == "turn_started")
         .expect("the queued prompt started a turn");
     assert_eq!(started["payload"]["input"][0]["content"][0]["text"], "hi");
