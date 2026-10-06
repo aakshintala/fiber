@@ -11,7 +11,7 @@ use std::net::Shutdown;
 use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -26,7 +26,7 @@ use crate::start::{self, Outcome};
 
 /// What the hub shares across its connections: home, the version it
 /// reports, how it starts sessions, the clock, the diagnostic log, and the
-/// open-connection count `status` answers with.
+/// open connections `status` answers with.
 pub(crate) struct Hub {
     /// Fiber home: `run/<session_id>` is resolved under it.
     pub(crate) home: PathBuf,
@@ -36,7 +36,6 @@ pub(crate) struct Hub {
     /// The injected clock, for `ts` and `start`'s deadline.
     pub(crate) clock: Arc<dyn Clock>,
     pub(crate) diag: Diag,
-    clients: AtomicUsize,
     next_client: AtomicU64,
     /// Every connection the idle wait counts, and its shutdown handle.
     conns: Mutex<Vec<(u64, UnixStream)>>,
@@ -68,7 +67,6 @@ impl Hub {
             starter,
             clock: Arc::clone(&clock),
             diag: Diag::open(home, clock),
-            clients: AtomicUsize::new(0),
             next_client: AtomicU64::new(0),
             conns: Mutex::new(Vec::new()),
             activity: AtomicU64::new(0),
@@ -79,12 +77,60 @@ impl Hub {
 
     /// The open client connections, this connection's asker included.
     pub(crate) fn clients(&self) -> usize {
-        self.clients.load(Ordering::SeqCst)
+        lock(&self.conns).len()
     }
 
     /// Every arrival and departure, in order.
     pub(crate) fn activity(&self) -> u64 {
         self.activity.load(Ordering::SeqCst)
+    }
+
+    /// Counts a connection the accept loop holds: under the connection
+    /// lock, so the idle exit's check and claim see it. `None` once the hub
+    /// is exiting: the caller drops the stream unanswered, EOF with no
+    /// `hub_hello`, and the client retries.
+    pub(crate) fn poll_accept(&self, stream: &UnixStream, stop: &AtomicBool) -> Option<u64> {
+        let mut conns = lock(&self.conns);
+        if stop.load(Ordering::SeqCst) {
+            return None;
+        }
+        Some(self.register_locked(stream, &mut conns))
+    }
+
+    /// Counts one connection, for a caller with no exit to check.
+    #[cfg(test)]
+    pub(crate) fn register(&self, stream: &UnixStream) -> u64 {
+        let mut conns = lock(&self.conns);
+        self.register_locked(stream, &mut conns)
+    }
+
+    fn register_locked(&self, stream: &UnixStream, conns: &mut Vec<(u64, UnixStream)>) -> u64 {
+        let n = self.next_client.fetch_add(1, Ordering::SeqCst) + 1;
+        if let Ok(shutdown) = stream.try_clone() {
+            conns.push((n, shutdown));
+        }
+        self.activity.fetch_add(1, Ordering::SeqCst);
+        self.tick.wake();
+        n
+    }
+
+    /// Whether no client is connected and none arrived since `seen`.
+    pub(crate) fn quiet(&self, seen: u64) -> bool {
+        self.activity.load(Ordering::SeqCst) == seen && lock(&self.conns).is_empty()
+    }
+
+    /// Claims the idle exit under the connection lock: no client connected
+    /// and none arrived since `seen`. An accept racing the claim either
+    /// counts first, and the claim fails, or sees the claim, and its
+    /// stream is dropped unanswered.
+    pub(crate) fn claim_exit(&self, stop: &AtomicBool, seen: u64) -> bool {
+        let conns = lock(&self.conns);
+        if self.activity.load(Ordering::SeqCst) == seen && conns.is_empty() {
+            stop.store(true, Ordering::SeqCst);
+            true
+        } else {
+            false
+        }
     }
 
     /// Parks until `until` on `clock`, woken early by client arrivals and
@@ -163,15 +209,16 @@ struct Relay {
 /// Serves one client connection: `hub_hello`, then one acknowledgement per
 /// hub command, and a relay thread per session commanded on it. Returning
 /// shuts down every relay stream of the connection, so each session sees
-/// this client leave.
+/// this client leave. Tests only: production counts through
+/// [`Hub::poll_accept`], then serves here.
+#[cfg(test)]
 pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
-    let n = hub.next_client.fetch_add(1, Ordering::SeqCst) + 1;
-    hub.clients.fetch_add(1, Ordering::SeqCst);
-    hub.activity.fetch_add(1, Ordering::SeqCst);
-    if let Ok(shutdown) = stream.try_clone() {
-        lock(&hub.conns).push((n, shutdown));
-    }
-    hub.tick.wake();
+    let n = hub.register(&stream);
+    serve_counted(stream, hub, n);
+}
+
+/// Serves an accepted connection already counted by [`Hub::poll_accept`].
+pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     hub.diag
         .info("client_connected", &format!("Client {n} connected."));
     let writer = match stream.try_clone() {
@@ -198,12 +245,7 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                while buf
-                    .last()
-                    .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-                {
-                    buf.pop();
-                }
+                strip_line(&mut buf);
                 on_command(&buf, &hub, &writer, &relays);
             }
         }
@@ -218,13 +260,25 @@ pub(crate) fn serve_connection(stream: UnixStream, hub: Arc<Hub>) {
     disconnect(&hub, n);
 }
 
+/// Drops the line ending, so the parse sees the object alone. Stripping
+/// changes nothing the parse keeps: JSON ignores trailing whitespace, so
+/// a mutant here is exempt.
+#[cfg_attr(false, mutants::skip)]
+fn strip_line(buf: &mut Vec<u8>) {
+    while buf
+        .last()
+        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
+    {
+        buf.pop();
+    }
+}
+
 fn disconnect(hub: &Hub, n: u64) {
     let mut conns = lock(&hub.conns);
     if let Some(at) = conns.iter().position(|(id, _)| *id == n) {
         conns.remove(at);
     }
     drop(conns);
-    hub.clients.fetch_sub(1, Ordering::SeqCst);
     hub.activity.fetch_add(1, Ordering::SeqCst);
     hub.tick.wake();
     hub.diag
@@ -337,9 +391,12 @@ fn on_start(
         return;
     };
     match start::run(hub, workspace, model, content) {
-        Outcome::Accepted { session_id } => {
-            accept(writer, hub, id, Value::String(session_id.0), "session_id")
-        }
+        Outcome::Accepted { session_id } => accept_result(
+            writer,
+            hub,
+            id,
+            serde_json::json!({"session_id": session_id.0}),
+        ),
         Outcome::Rejected { code, message } => {
             reject(writer, hub, Some(id), &code, &message);
         }
@@ -352,7 +409,7 @@ fn on_status(
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
 ) {
-    if contains_null(&Value::Object(args.clone())) || !args.is_empty() {
+    if !args.is_empty() {
         reject(
             writer,
             hub,
@@ -362,17 +419,12 @@ fn on_status(
         );
         return;
     }
-    let mut result = Map::new();
-    result.insert(
-        "clients".to_owned(),
-        Value::from(hub.clients.load(Ordering::SeqCst)),
+    accept_result(
+        writer,
+        hub,
+        id,
+        serde_json::json!({"clients": hub.clients(), "fiber_version": hub.fiber_version, "running": true}),
     );
-    result.insert(
-        "fiber_version".to_owned(),
-        Value::String(hub.fiber_version.clone()),
-    );
-    result.insert("running".to_owned(), Value::Bool(true));
-    accept_result(writer, hub, id, Value::Object(result));
 }
 
 /// `start`'s `args`: `workspace` (required string), `model` (optional
@@ -397,6 +449,19 @@ fn start_args(args: &Map<String, Value>) -> Option<(&str, Option<&str>, Option<&
     Some((workspace, model, args.get("content")))
 }
 
+/// Whether `session` names a session the hub can reach: `s_` plus 16
+/// lowercase hex digits, the shape the hub mints and `parse_session_id`
+/// accepts. Anything else names no session, so it is rejected without
+/// touching the filesystem: an absolute path or `..` never escapes `run/`,
+/// and `"hub"` never routes back to the hub.
+fn valid_session_id(session: &str) -> bool {
+    let hex = session.strip_prefix("s_").unwrap_or("");
+    hex.len() == 16
+        && hex
+            .bytes()
+            .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+}
+
 /// Passes the line to the session's socket without the `session_id` key. A
 /// session the hub cannot reach is rejected `session_not_found`.
 fn relay_command(
@@ -407,6 +472,10 @@ fn relay_command(
     writer: &Arc<Mutex<UnixStream>>,
     relays: &Arc<Mutex<Vec<Relay>>>,
 ) {
+    if !valid_session_id(session) {
+        not_found(writer, hub, id, session);
+        return;
+    }
     let Some(object) = value.as_object() else {
         return;
     };
@@ -444,7 +513,7 @@ fn relay_command(
                 }
             };
             let mut entries = lock(relays);
-            let epoch = entries.iter().map(|entry| entry.epoch).max().unwrap_or(0) + 1;
+            let epoch = next_epoch(&entries);
             // The thread may run before its entry is pushed: on session
             // EOF it only removes an entry it finds.
             let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
@@ -465,6 +534,12 @@ fn relay_command(
         }
         Err(_) => not_found(writer, hub, id, session),
     }
+}
+
+/// One more than the highest relay epoch in use, so a stale relay thread
+/// never removes a fresh entry.
+fn next_epoch(entries: &[Relay]) -> u64 {
+    entries.iter().map(|entry| entry.epoch).max().unwrap_or(0) + 1
 }
 
 fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session: &str) {
@@ -502,18 +577,17 @@ fn relay(
         }
     }
     let mut relays = lock(relays);
-    if let Some(at) = relays
-        .iter()
-        .position(|entry| entry.session == session && entry.epoch == epoch)
-    {
+    if let Some(at) = relay_slot(&relays, session, epoch) {
         relays.remove(at);
     }
 }
 
-fn accept(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, value: Value, key: &str) {
-    let mut result = Map::new();
-    result.insert(key.to_owned(), value);
-    accept_result(writer, hub, id, Value::Object(result));
+/// The entry a finished relay thread drops: its own session and epoch, so
+/// a stale thread never drops a reconnect's entry.
+fn relay_slot(entries: &[Relay], session: &str, epoch: u64) -> Option<usize> {
+    entries
+        .iter()
+        .position(|entry| entry.session == session && entry.epoch == epoch)
 }
 
 fn accept_result(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, result: Value) {

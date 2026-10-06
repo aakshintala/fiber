@@ -16,6 +16,7 @@ use std::thread;
 use std::time::Duration;
 
 use contract::ErrorCode;
+use contract::clock::Clock;
 use serde_json::{Value, json};
 
 use super::*;
@@ -25,10 +26,16 @@ use crate::fake::{FakeStarter, Handshake, failure};
 /// One named deadline per wait: `start` answers before it.
 const DEADLINE: Duration = Duration::from_secs(30);
 
+/// The handshake tests' wall-clock deadline: under ten seconds, below the
+/// twenty a stuck acknowledgement would hang, so a mutant that never
+/// matches the ack fails here instead of at the harness.
+const HANDSHAKE_DEADLINE: Duration = Duration::from_secs(10);
+
 struct Temp {
     dir: PathBuf,
     #[expect(dead_code, reason = "Drop removes the directory")]
     held: fakes::TempDir,
+    clock: Arc<fakes::clock::FakeClock>,
 }
 
 impl Temp {
@@ -36,16 +43,17 @@ impl Temp {
         let held = fakes::TempDir::new("hs");
         let dir = held.path().join("h");
         fs::create_dir_all(&dir).unwrap();
-        Self { dir, held }
+        Self {
+            dir,
+            held,
+            clock: fakes::clock::FakeClock::new(),
+        }
     }
 
     fn hub(&self, starter: FakeStarter) -> Hub {
-        Hub::new(
-            &self.dir,
-            "0.0.0",
-            Arc::new(starter),
-            fakes::clock::FakeClock::new(),
-        )
+        let clock = Arc::clone(&self.clock);
+        let timed: Arc<dyn Clock> = clock;
+        Hub::new(&self.dir, "0.0.0", Arc::new(starter), timed)
     }
 
     fn workspace(&self) -> String {
@@ -64,6 +72,16 @@ fn is_hex_id(id: &str) -> bool {
 /// Runs `start` on a thread: calling code that blocks is a wait, so the
 /// test receives its result with a wall-clock deadline.
 fn started(hub: Hub, workspace: String, model: Option<String>, content: Option<Value>) -> Outcome {
+    started_before(hub, workspace, model, content, DEADLINE)
+}
+
+fn started_before(
+    hub: Hub,
+    workspace: String,
+    model: Option<String>,
+    content: Option<Value>,
+    deadline: Duration,
+) -> Outcome {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
         .name("hub-test-start".to_owned())
@@ -73,7 +91,7 @@ fn started(hub: Hub, workspace: String, model: Option<String>, content: Option<V
         })
         .unwrap();
     done_rx
-        .recv_timeout(DEADLINE)
+        .recv_timeout(deadline)
         .expect("start answers before its deadline")
 }
 
@@ -146,6 +164,42 @@ fn a_session_that_neither_binds_nor_exits_is_rejected_io_failed() {
         panic!("the start is rejected");
     };
     assert_eq!(code, ErrorCode::IoFailed);
+    // The waitout lasts the whole deadline: returning at once would fail
+    // the start before the session could bind.
+    assert!(temp.clock.now() >= temp.clock.origin() + START_DEADLINE);
+}
+
+#[test]
+fn an_unreachable_socket_error_fails_without_retrying() {
+    let temp = Temp::new();
+    // `run/` is a file, so connecting fails before any bind: not a missing
+    // socket, so there is nothing to wait for.
+    fs::write(temp.dir.join("run"), b"x").unwrap();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let workspace = temp.workspace();
+    let outcome = started(hub, workspace, None, None);
+    let Outcome::Rejected { code, .. } = outcome else {
+        panic!("the start is rejected");
+    };
+    assert_eq!(code, ErrorCode::IoFailed);
+    assert!(temp.clock.now() < temp.clock.origin() + START_DEADLINE);
+}
+
+#[test]
+fn a_failed_start_logs_the_code_and_a_fixed_sentence() {
+    let temp = Temp::new();
+    let exited = failure(ErrorCode::NoModel, "No model is configured.");
+    let hub = temp.hub(FakeStarter::exit_with(&temp.dir, exited));
+    let workspace = temp.workspace();
+    let outcome = started(hub, workspace, None, None);
+    let Outcome::Rejected { code, message } = outcome else {
+        panic!("the start is rejected");
+    };
+    assert_eq!(code, ErrorCode::NoModel);
+    assert_eq!(message, "No model is configured.");
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("\"code\":\"no_model\""));
+    assert!(!log.contains("No model is configured."));
 }
 
 #[test]
@@ -162,7 +216,13 @@ fn content_is_delivered_as_the_first_prompt_and_accepted() {
     let hub = temp.hub(starter.clone());
     let workspace = temp.workspace();
     let content = json!([{"type": "text", "text": "hi"}]);
-    let outcome = started(hub, workspace, None, Some(content.clone()));
+    let outcome = started_before(
+        hub,
+        workspace,
+        None,
+        Some(content.clone()),
+        HANDSHAKE_DEADLINE,
+    );
     let Outcome::Accepted { .. } = outcome else {
         panic!("the start is accepted");
     };
@@ -193,10 +253,39 @@ fn a_rejected_first_prompt_rejects_the_start_with_its_code() {
     let hub = temp.hub(starter);
     let workspace = temp.workspace();
     let content = json!([{"type": "text", "text": "hi"}]);
-    let outcome = started(hub, workspace, None, Some(content));
+    let outcome = started_before(hub, workspace, None, Some(content), HANDSHAKE_DEADLINE);
     let Outcome::Rejected { code, message } = outcome else {
         panic!("the start is rejected");
     };
     assert_eq!(code, ErrorCode::InvalidArguments);
     assert_eq!(message, "The prompt is empty.");
+}
+
+#[test]
+fn a_rejected_first_prompt_keeps_session_text_out_of_the_log() {
+    const SECRET: &str = "the-volume-of-the-meeting-room";
+    let temp = Temp::new();
+    let starter = FakeStarter::with_handshake(
+        &temp.dir,
+        Handshake {
+            accept: false,
+            code: "invalid_arguments".to_owned(),
+            message: format!("The prompt {SECRET} is empty."),
+        },
+    );
+    let hub = temp.hub(starter);
+    let workspace = temp.workspace();
+    let content = json!([{"type": "text", "text": SECRET}]);
+    let outcome = started_before(hub, workspace, None, Some(content), HANDSHAKE_DEADLINE);
+    let Outcome::Rejected { code, message } = outcome else {
+        panic!("the start is rejected");
+    };
+    assert_eq!(code, ErrorCode::InvalidArguments);
+    assert!(
+        message.contains(SECRET),
+        "the client keeps what the session said"
+    );
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(!log.contains(SECRET), "no prompt text in the log");
+    assert!(log.contains("\"code\":\"invalid_arguments\""));
 }

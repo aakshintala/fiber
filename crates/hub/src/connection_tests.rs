@@ -467,3 +467,144 @@ fn a_closing_client_shuts_down_every_relay_stream() {
 fn guard<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+/// Waits, at most one deadline, for the hub to count `n` connections.
+fn until_clients(hub: &Arc<Hub>, n: usize, what: &str) {
+    let (done_tx, done_rx) = mpsc::channel();
+    thread::Builder::new()
+        .name("hub-test-clients".to_owned())
+        .spawn({
+            let hub = Arc::clone(hub);
+            move || {
+                while hub.clients() != n {
+                    std::thread::yield_now();
+                }
+                done_tx.send(()).unwrap_or(());
+            }
+        })
+        .unwrap();
+    done_rx
+        .recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("the hub counts {n} connections {what}"));
+}
+
+#[test]
+fn session_ids_outside_the_minted_shape_are_session_not_found() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    // Planted live sockets the hub must never touch: `run/hub` for `"hub"`,
+    // `home/x` for `"../x"`, and an absolute path outside `run/`.
+    let run = temp.dir.join("run");
+    fs::create_dir_all(&run).unwrap();
+    let hub_socket = UnixListener::bind(run.join("hub")).unwrap();
+    let escape = UnixListener::bind(temp.dir.join("x")).unwrap();
+    let outside = UnixListener::bind(temp.dir.join("outside.sock")).unwrap();
+    for listener in [&hub_socket, &escape, &outside] {
+        listener.set_nonblocking(true).unwrap();
+    }
+    let outside_id = temp.dir.join("outside.sock").to_string_lossy().into_owned();
+    assert!(outside_id.starts_with('/'));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    for (id, session) in [
+        ("c_1", outside_id),
+        ("c_2", "../x".to_owned()),
+        ("c_3", "hub".to_owned()),
+        ("c_4", "/absent/fiber-hub-test".to_owned()),
+        ("c_5", "s_ABCDEF0123456789".to_owned()),
+        ("c_6", "s_0123456789abcde".to_owned()),
+    ] {
+        client.send(&json!({
+            "id": id,
+            "session_id": session,
+            "command": "subscribe",
+            "args": {"level": "full"},
+        }));
+        let (code, echoed, _) = rejected(&client.next("the rejection"));
+        assert_eq!(code, "session_not_found", "{session}");
+        assert_eq!(echoed.as_deref(), Some(id));
+    }
+    // None of the planted sockets saw a connection.
+    for listener in [&hub_socket, &escape, &outside] {
+        assert!(listener.accept().is_err());
+    }
+}
+
+#[test]
+fn relay_epochs_increase_past_every_entry_in_use() {
+    fn entry(epoch: u64) -> Relay {
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: "s_0123456789abcdef".to_owned(),
+            epoch,
+            writer,
+        }
+    }
+    assert_eq!(next_epoch(&[]), 1);
+    assert_eq!(next_epoch(&[entry(5)]), 6);
+    assert_eq!(next_epoch(&[entry(2), entry(5), entry(3)]), 6);
+}
+
+#[test]
+fn relay_slots_drop_only_their_own_entry() {
+    fn entry(session: &str, epoch: u64) -> Relay {
+        let (writer, _) = UnixStream::pair().unwrap();
+        Relay {
+            session: session.to_owned(),
+            epoch,
+            writer,
+        }
+    }
+    let entries = [
+        entry("s_aaaaaaaaaaaaaaaa", 1),
+        entry("s_bbbbbbbbbbbbbbbb", 2),
+    ];
+    assert_eq!(relay_slot(&entries, "s_aaaaaaaaaaaaaaaa", 1), Some(0));
+    assert_eq!(relay_slot(&entries, "s_bbbbbbbbbbbbbbbb", 2), Some(1));
+    assert_eq!(relay_slot(&entries, "s_aaaaaaaaaaaaaaaa", 2), None);
+    assert_eq!(relay_slot(&entries, "s_bbbbbbbbbbbbbbbb", 1), None);
+    assert_eq!(relay_slot(&entries, "s_cccccccccccccccc", 1), None);
+    assert_eq!(relay_slot(&[], "s_aaaaaaaaaaaaaaaa", 1), None);
+}
+
+#[test]
+fn activity_counts_arrivals_and_departures_in_order() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    assert_eq!(hub.activity(), 0);
+    let client = Client::connect(&hub);
+    until_clients(&hub, 1, "after the arrival");
+    assert_eq!(hub.activity(), 1);
+    drop(client);
+    until_clients(&hub, 0, "after the departure");
+    assert_eq!(hub.activity(), 2);
+}
+
+#[test]
+fn client_numbers_start_at_one() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut first = Client::connect(&hub);
+    first.hello();
+    let mut second = Client::connect(&hub);
+    second.hello();
+    let log = fs::read_to_string(temp.dir.join("logs").join("hub.log")).unwrap();
+    assert!(log.contains("Client 1 connected."));
+    assert!(log.contains("Client 2 connected."));
+}
+
+#[test]
+fn start_with_null_content_is_invalid_arguments() {
+    let temp = Temp::new();
+    let hub = temp.hub(FakeStarter::hang(&temp.dir));
+    let mut client = Client::connect(&hub);
+    client.hello();
+    let workspace = temp.workspace();
+    client.send(&command(
+        "c_1",
+        "start",
+        json!({"workspace": workspace, "content": Value::Null}),
+    ));
+    let (code, _, _) = rejected(&client.next("the rejection"));
+    assert_eq!(code, "invalid_arguments");
+}

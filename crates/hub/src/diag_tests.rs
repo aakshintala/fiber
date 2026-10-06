@@ -9,6 +9,8 @@
 )]
 
 use std::fs::{self, File};
+use std::sync::{Arc, Barrier};
+use std::thread;
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
@@ -152,6 +154,52 @@ fn prune_deletes_files_older_than_30_days_and_keeps_the_boundary() {
     assert!(!old.exists());
     assert!(edge.exists());
     assert!(fresh.exists());
+}
+
+#[test]
+fn concurrent_writes_past_the_limit_lose_no_records() {
+    const WRITERS: usize = 8;
+    const EACH: usize = 50;
+    let temp = Temp::new();
+    // Fill `hub.log` to just under the limit with countable lines, so the
+    // run below rotates exactly once.
+    fs::create_dir_all(temp.dir.join("logs")).unwrap();
+    let line = "{\"ts\":1700000000000,\"level\":\"info\",\"process\":\"hub\",\
+         \"code\":\"hub_started\",\"message\":\"The hub started.\"}\n";
+    let prefill = (10 * 1024 * 1024 - 4096) / line.len();
+    fs::write(temp.log(), line.repeat(prefill)).unwrap();
+    let diag = Arc::new(temp.diag());
+    let barrier = Arc::new(Barrier::new(WRITERS));
+    let mut threads = Vec::new();
+    for _ in 0..WRITERS {
+        let (diag, barrier) = (Arc::clone(&diag), Arc::clone(&barrier));
+        threads.push(
+            thread::Builder::new()
+                .name("hub-test-diag".to_owned())
+                .spawn(move || {
+                    barrier.wait();
+                    for _ in 0..EACH {
+                        diag.info("hub_started", "The hub started.");
+                    }
+                })
+                .unwrap(),
+        );
+    }
+    for thread in threads {
+        thread.join().unwrap();
+    }
+    // One rotation: every record is in one of the two files, and parses.
+    let previous = temp.dir.join("logs").join("hub.log.1");
+    assert!(previous.exists());
+    let mut lines = 0;
+    for file in [temp.log(), previous] {
+        let text = fs::read_to_string(&file).unwrap();
+        for line in text.lines() {
+            serde_json::from_str::<serde_json::Value>(line).expect("a log line parses");
+            lines += 1;
+        }
+    }
+    assert_eq!(lines, prefill + WRITERS * EACH);
 }
 
 #[test]

@@ -9,6 +9,7 @@
 )]
 
 use std::fs;
+use std::io::ErrorKind;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
@@ -92,6 +93,48 @@ fn a_live_socket_means_no_bind() {
     assert!(UnixStream::connect(temp.socket()).is_ok());
     drop(live);
     fs::remove_file(temp.socket()).unwrap();
+}
+
+#[test]
+fn a_socket_path_at_the_limit_binds() {
+    let temp = Temp::new();
+    // `home/run/hub` is 8 bytes past `home`: pad `home` to the limit.
+    let pad = SOCKET_PATH_MAX - temp.dir.to_string_lossy().len() - 1 - 8;
+    let home = temp.dir.join("p".repeat(pad));
+    assert_eq!(
+        home.join("run").join("hub").as_os_str().len(),
+        SOCKET_PATH_MAX
+    );
+    let held = listen(&home).unwrap().expect("at the limit binds");
+    assert!(UnixStream::connect(home.join("run").join("hub")).is_ok());
+    held.stop();
+}
+
+#[test]
+fn a_socket_path_past_the_limit_is_invalid_input() {
+    let temp = Temp::new();
+    let pad = SOCKET_PATH_MAX - temp.dir.to_string_lossy().len() - 1 - 8 + 1;
+    let home = temp.dir.join("p".repeat(pad));
+    let Err(error) = listen(&home) else {
+        panic!("past the limit is refused");
+    };
+    assert_eq!(error.kind(), ErrorKind::InvalidInput);
+}
+
+#[test]
+fn a_symlink_at_the_socket_path_is_not_replaced() {
+    let temp = Temp::new();
+    fs::create_dir_all(temp.dir.join("run")).unwrap();
+    fs::write(temp.dir.join("plain"), b"x").unwrap();
+    // A symlink may lead to a live session, so the hub binds nothing.
+    std::os::unix::fs::symlink(temp.dir.join("plain"), temp.socket()).unwrap();
+    assert!(listen(&temp.dir).is_err());
+    assert!(
+        fs::symlink_metadata(temp.socket())
+            .unwrap()
+            .file_type()
+            .is_symlink()
+    );
 }
 
 #[test]

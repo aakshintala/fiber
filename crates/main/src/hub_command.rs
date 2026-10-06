@@ -6,7 +6,7 @@ use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, mpsc};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread;
 
 use contract::shapes::Failure;
@@ -89,41 +89,36 @@ impl hub::Starter for SpawnStarter {
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
             .process_group(0);
-        // The drain thread starts first, so a spawn failure strands
-        // nothing: dropping `tx` ends its wait.
-        let (tx, rx) = mpsc::channel::<Child>();
+        // The child starts first, then the drain thread takes it: a thread
+        // that never starts leaves the child behind, so it is killed and
+        // reaped here.
+        let child = command.spawn()?;
         let state = Arc::new(Mutex::new(State {
             exited: false,
             failure: None,
         }));
+        let child = Arc::new(Mutex::new(child));
         let watch = Arc::clone(&state);
-        thread::Builder::new()
-            .name("hub-drain".to_owned())
-            .spawn(move || {
-                let Ok(child) = rx.recv() else {
-                    return;
-                };
-                drain(child, &watch);
-            })
-            .map_err(|error| std::io::Error::new(error.kind(), format!("hub drain: {error}")))?;
-        let child = command.spawn()?;
-        match tx.send(child) {
-            Ok(()) => Ok(Box::new(Spawned {
+        match thread::Builder::new().name("hub-drain".to_owned()).spawn({
+            let child = Arc::clone(&child);
+            move || drain(&child, &watch)
+        }) {
+            Ok(_) => Ok(Box::new(Spawned {
                 id: id.clone(),
                 state,
             })),
-            Err(failed) => {
-                let mut child = failed.0;
+            Err(error) => {
+                let mut child = lock(&child);
                 match child.kill() {
                     Ok(()) | Err(_) => {}
                 }
                 match child.wait() {
                     Ok(_) | Err(_) => {}
                 }
-                Err(std::io::Error::other(format!(
-                    "session {} never started draining",
-                    id.0
-                )))
+                Err(std::io::Error::new(
+                    error.kind(),
+                    format!("hub drain: {error}"),
+                ))
             }
         }
     }
@@ -160,7 +155,8 @@ impl hub::Started for Spawned {
 
 /// Reads the session's stdout to EOF, keeping the `fiber_exited` line
 /// printed last, then reaps the child.
-fn drain(mut child: Child, state: &Arc<Mutex<State>>) {
+fn drain(child: &Arc<Mutex<Child>>, state: &Arc<Mutex<State>>) {
+    let mut child = lock(child);
     if let Some(stdout) = child.stdout.take() {
         let mut read = BufReader::new(stdout);
         let mut buf = String::new();
@@ -202,3 +198,7 @@ fn fiber_exited_error(line: &str) -> Option<Failure> {
 fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
+
+#[cfg(test)]
+#[path = "hub_command_tests.rs"]
+mod tests;

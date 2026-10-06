@@ -145,6 +145,29 @@ fn without_a_hub_that_binds_connect_fails_past_its_deadline() {
 }
 
 #[test]
+fn an_unexpected_connect_error_fails_without_starting() {
+    let temp = Temp::new();
+    let run = temp.run();
+    fs::write(temp.dir.join("plain"), b"x").unwrap();
+    // A symlink may lead to a live session: the client starts nothing.
+    std::os::unix::fs::symlink(temp.dir.join("plain"), run.join("hub")).unwrap();
+    let calls = Arc::new(AtomicUsize::new(0));
+    let failed = run_connect(
+        temp.dir.clone(),
+        {
+            let calls = Arc::clone(&calls);
+            move || {
+                calls.fetch_add(1, Ordering::SeqCst);
+                Ok(())
+            }
+        },
+        fakes::clock::FakeClock::new(),
+    );
+    assert!(failed.is_err());
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+}
+
+#[test]
 fn eof_before_hello_retries_the_whole_connect_once() {
     let temp = Temp::new();
     let listener = UnixListener::bind(temp.run().join("hub")).unwrap();

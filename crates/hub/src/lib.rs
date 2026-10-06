@@ -19,7 +19,6 @@ use std::io;
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::AtomicI32;
-#[cfg(not(test))]
 use std::thread;
 use std::time::Duration;
 
@@ -76,9 +75,8 @@ pub fn serve(
 }
 
 /// Arms SIGTERM, SIGINT and SIGHUP to end the hub through `got`. Tests
-/// simulate signals through the flag, so nothing process-wide is installed
-/// there.
-#[cfg(not(test))]
+/// simulate signals through the flag; one test raises a real signal at
+/// itself to prove the arm records it.
 fn arm(got: &Arc<AtomicI32>) {
     use signal_hook::consts::{SIGHUP, SIGINT, SIGTERM};
     use std::sync::atomic::Ordering;
@@ -98,6 +96,6 @@ fn arm(got: &Arc<AtomicI32>) {
     if spawned.is_err() {}
 }
 
-/// No process-wide handlers under test: signals arrive through the flag.
 #[cfg(test)]
-fn arm(_got: &Arc<AtomicI32>) {}
+#[path = "lib_tests.rs"]
+mod tests;

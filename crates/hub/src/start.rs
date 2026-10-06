@@ -63,24 +63,14 @@ pub(crate) fn run(
     let started = match hub.starter.start(&id, workspace_path, model) {
         Ok(started) => started,
         Err(error) => {
-            let message = format!("Session {} could not start: {error}.", id.0);
-            hub.diag.warn_session(&id, "io_failed", &message);
-            return Outcome::Rejected {
-                code: ErrorCode::IoFailed,
-                message,
-            };
+            return io_failed(hub, &id, &format!("{error}."));
         }
     };
     let socket = hub.home.join("run").join(&id.0);
     let deadline = hub.clock.now() + START_DEADLINE;
     let stream = loop {
-        if let Some(failure) = started.exited() {
-            hub.diag
-                .warn_session(&id, &code_name(&failure.code), &failure.message);
-            return Outcome::Rejected {
-                code: failure.code,
-                message: failure.message,
-            };
+        if started.exited().is_some() {
+            return exited_or_io(hub, &id, started.as_ref());
         }
         match UnixStream::connect(&socket) {
             Ok(stream) => break stream,
@@ -91,22 +81,12 @@ pub(crate) fn run(
                 ) =>
             {
                 if hub.clock.now() >= deadline {
-                    let message = format!("Session {} did not bind its socket.", id.0);
-                    hub.diag.warn_session(&id, "io_failed", &message);
-                    return Outcome::Rejected {
-                        code: ErrorCode::IoFailed,
-                        message,
-                    };
+                    return io_failed(hub, &id, "it did not bind its socket.");
                 }
                 hub.clock.sleep(START_POLL);
             }
             Err(error) => {
-                let message = format!("Session {} could not start: {error}.", id.0);
-                hub.diag.warn_session(&id, "io_failed", &message);
-                return Outcome::Rejected {
-                    code: ErrorCode::IoFailed,
-                    message,
-                };
+                return io_failed(hub, &id, &format!("{error}."));
             }
         }
     };
@@ -208,7 +188,14 @@ fn acknowledge(
                     .and_then(Value::as_str)
                     .unwrap_or("The session rejected its first prompt.")
                     .to_owned();
-                hub.diag.warn_session(id, &code_name(&code), &message);
+                // The log keeps the code and a fixed sentence: the session's
+                // message may hold prompt or model text. The rejection keeps
+                // what the session said.
+                hub.diag.warn_session(
+                    id,
+                    &code_name(&code),
+                    &format!("Session {} rejected its first prompt.", id.0),
+                );
                 return Err(Outcome::Rejected { code, message });
             }
             _ => continue,
@@ -217,12 +204,17 @@ fn acknowledge(
 }
 
 /// The session exited first with a failure, or `io_failed` naming it when
-/// there is none.
+/// there is none. The log keeps the code and a fixed sentence: a failure's
+/// message may hold prompt or model text. The rejection keeps what the
+/// session said.
 fn exited_or_io(hub: &Hub, id: &SessionId, started: &dyn crate::Started) -> Outcome {
     match started.exited() {
         Some(failure) => {
-            hub.diag
-                .warn_session(id, &code_name(&failure.code), &failure.message);
+            hub.diag.warn_session(
+                id,
+                &code_name(&failure.code),
+                &format!("Session {} exited before it answered.", id.0),
+            );
             Outcome::Rejected {
                 code: failure.code,
                 message: failure.message,

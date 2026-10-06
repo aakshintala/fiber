@@ -17,7 +17,7 @@ use std::time::Duration;
 
 use contract::clock::Clock;
 
-use crate::connection::{Hub, serve_connection};
+use crate::connection::{Hub, serve_counted};
 use crate::listen::Held;
 
 /// How the hub stopped.
@@ -59,16 +59,21 @@ pub(crate) fn run(
             loop {
                 match accept.accept() {
                     Ok((stream, _)) => {
-                        // A connection racing the exit gets EOF; the
-                        // client retries.
-                        if stop.load(Ordering::SeqCst) {
-                            return;
+                        // Counted before its thread starts, under the same
+                        // lock the exit claim takes: a connection racing the
+                        // exit is either counted, and the claim fails, or
+                        // dropped here unanswered, EOF with no `hub_hello`,
+                        // and the client retries.
+                        match hub.poll_accept(&stream, &stop) {
+                            Some(n) => {
+                                let hub = Arc::clone(&hub);
+                                let spawned = thread::Builder::new()
+                                    .name("hub-conn".to_owned())
+                                    .spawn(move || serve_counted(stream, hub, n));
+                                if spawned.is_err() {}
+                            }
+                            None => return,
                         }
-                        let hub = Arc::clone(&hub);
-                        let spawned = thread::Builder::new()
-                            .name("hub-conn".to_owned())
-                            .spawn(move || serve_connection(stream, hub));
-                        if spawned.is_err() {}
                     }
                     Err(_) => {
                         if stop.load(Ordering::SeqCst) {
@@ -96,9 +101,8 @@ pub(crate) fn run(
             return Exit::Signal(signal);
         }
         let now = clock.now();
-        let quiet = hub.clients() == 0 && hub.activity() == seen;
-        if quiet && now >= idle_since + idle_exit {
-            stop.store(true, Ordering::SeqCst);
+        let quiet = hub.quiet(seen);
+        if quiet && now >= idle_since + idle_exit && hub.claim_exit(&stop, seen) {
             wake(&socket);
             match acceptor.join() {
                 Ok(()) | Err(_) => {}

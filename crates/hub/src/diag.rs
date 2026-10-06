@@ -11,7 +11,7 @@
 use std::fs::{self, DirBuilder};
 use std::os::unix::fs::DirBuilderExt;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, SystemTime};
 
 use contract::SessionId;
@@ -30,10 +30,13 @@ const PRUNE_AFTER: Duration = Duration::from_secs(30 * 24 * 60 * 60);
 /// (`docs/state.md`, "Bounds").
 const PRUNE_KEEP: usize = 100;
 
-/// The hub's diagnostic log. One writer, as a session log has.
+/// The hub's diagnostic log. One writer, as a session log has: a single
+/// lock serializes rotation and append, so concurrent connections never
+/// lose records to two rotations.
 pub(crate) struct Diag {
     log: PathBuf,
     clock: Arc<dyn Clock>,
+    lock: Mutex<()>,
 }
 
 impl Diag {
@@ -51,6 +54,7 @@ impl Diag {
         Self {
             log: logs.join("hub.log"),
             clock,
+            lock: Mutex::new(()),
         }
     }
 
@@ -70,7 +74,9 @@ impl Diag {
     }
 
     fn write(&self, level: &str, session: Option<&SessionId>, code: &str, message: &str) {
-        // A log write failure never stops the hub.
+        // A log write failure never stops the hub. Rotation and append hold
+        // one lock: two rotations cannot swap the retained log away.
+        let _guard = lock(&self.lock);
         rotate(&self.log);
         let line = Line {
             ts: wall_ms(self.clock.wall()),
@@ -116,6 +122,10 @@ fn rotate(log: &Path) {
     let mut previous = log.as_os_str().to_owned();
     previous.push(".1");
     fs::rename(log, Path::new(&previous)).unwrap_or(());
+}
+
+fn lock<'a, T>(mutex: &'a Mutex<T>) -> MutexGuard<'a, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
 fn append(log: &Path, bytes: &[u8]) {
