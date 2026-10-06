@@ -192,7 +192,8 @@ _Avoid_: prefix, header
 ### Opening message
 
 The first message of a session's conversation, written by Fiber: the
-environment, the project's instruction files and the skills listing. It is
+environment, the project's instruction files, extension sections and the
+skills listing. It is
 logged once and written again after each handoff. See `docs/system-prompt.md`.
 _Avoid_: environment context, session context
 
@@ -202,6 +203,25 @@ An `AGENTS.md`, or a `CLAUDE.md` in a directory with no `AGENTS.md`, that a
 project or a person writes for the model. It applies to its directory and
 everything below it.
 _Avoid_: context file, project doc, memory file
+
+### Memory
+
+What agents keep from one session to the next: a store of linked memory pages,
+one per machine, with a memory index for the machine and one per project. Kept
+by the first-party `memory` extension. See `docs/memory.md`.
+_Avoid_: knowledge base, notes, recall
+
+### Memory page
+
+One Markdown file in the memory store, named by its file name, with a one-line
+`description` and `[[name]]` links to other pages.
+_Avoid_: memory, note, entry
+
+### Memory index
+
+A hand-written list of memory pages that reaches the model in the opening
+message: one for the machine, one for each project.
+_Avoid_: table of contents, catalog
 
 ### Skill
 

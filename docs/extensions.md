@@ -59,6 +59,9 @@ An extension is one directory. Its manifest, `extension.json`, states
   as `https://{workspace}/ai-gateway/anthropic`, and the setting that fills it
   (`docs/model-routing.md`, "A per-account host"). So what an install or an
   offer shows is everything the extension can take over
+- the files in its data directories whose text goes in the opening message,
+  and their byte budget (`opening`; `docs/system-prompt.md`, "Extension
+  sections")
 
 Beside the manifest it may hold:
 
@@ -1087,17 +1090,19 @@ runs at session start ("Loading, and cost when nothing is loaded").
 
 ### A fresh install
 
-A fresh install has every first-party extension: the eleven providers and
-`hooks`. They arrive in the release's extensions archive, which `install.sh`
+A fresh install has every first-party extension: the eleven providers,
+`hooks` and `memory` (`docs/memory.md`). They arrive in the release's extensions archive, which `install.sh`
 installs beside the binary (`docs/releasing.md`), so a first run needs no
 `git` and no network beyond the download. They are ordinary extensions,
 recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.
 
-A first-party extension costs nothing in a session that does not use it. A
+A provider or `hooks` costs nothing in a session that does not use it. A
 provider that is pure data is only read, a Lua provider first runs when a
 session uses one of its models, and `hooks` loads only when configuration has
-a `hooks` key.
+a `hooks` key. `memory` starts in every session it is enabled for, because its
+`after_tool` hook must be registered; its opening-message section adds nothing
+while the store is empty.
 
 A person who removed a provider can install it again with
 `fiber extension install <name>`, or by choosing it in the terminal's model
