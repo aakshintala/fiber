@@ -96,6 +96,8 @@ struct Fixed {
     bound: Bound,
     effects: Vec<Effect>,
     cancel: Option<Arc<TurnCancel>>,
+    /// Starts a shutdown on this signal while the call runs.
+    shutdown: Option<Arc<TurnCancel>>,
 }
 
 fn fixed(output: Output) -> Fixed {
@@ -104,6 +106,7 @@ fn fixed(output: Output) -> Fixed {
         bound: Bound::DEFAULT,
         effects: vec![Effect::Reads],
         cancel: None,
+        shutdown: None,
     }
 }
 
@@ -133,6 +136,9 @@ impl Tool for Fixed {
     fn run(&self, _: &Map<String, Value>, _: &dyn Cancel, _: &dyn Emit) -> Output {
         if let Some(cancel) = &self.cancel {
             assert!(cancel.cancel());
+        }
+        if let Some(cancel) = &self.shutdown {
+            cancel.shutdown(143);
         }
         self.output.clone()
     }
@@ -913,4 +919,66 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
         "mcp_server_unavailable"
     );
     assert_eq!(streamed[1].payload["code"], "repository_code_skipped");
+}
+
+/// Runs one `probe` call that starts a shutdown while it runs and returns
+/// `output`, cut to 4 + 4 bytes, under hooks that would rewrite it.
+fn shut_down_during(output: Output) -> (Ran, Arc<FakeHooks>) {
+    let hooks = FakeHooks::new(
+        changed(Some("rewritten"), None, None),
+        &["acme"],
+        Vec::new(),
+    );
+    let cancel = Arc::new(TurnCancel::default());
+    let ran = run(
+        Fixed {
+            shutdown: Some(Arc::clone(&cancel)),
+            bound: Bound { start: 4, end: 4 },
+            ..fixed(output)
+        },
+        script("probe", json!({})),
+        Some(Arc::clone(&hooks)),
+        cancel,
+    );
+    (ran, hooks)
+}
+
+#[test]
+fn a_call_shaped_under_a_shutdown_calls_no_hook_and_keeps_no_output() {
+    let (ran, hooks) = shut_down_during(Output {
+        details: Some(json!({"secret": true})),
+        ..text("partial secret, long enough to be cut")
+    });
+    assert!(hooks.seen().is_empty());
+    let completed = ran.completed();
+    assert_eq!(completed.payload["status"], "cancelled");
+    assert_eq!(completed.payload["content"], json!([]));
+    assert_eq!(completed.payload.get("details"), None);
+    assert_eq!(completed.payload.get("artifact"), None);
+    assert_eq!(completed.payload.get("changed_by"), None);
+    assert!(!ran.on_disk().contains("partial secret"));
+    assert_eq!(
+        ran.turn.as_ref().unwrap(),
+        &Some(contract::events::TurnOutcome::Interrupted)
+    );
+    // The shutdown sends no further request.
+    assert_eq!(ran.requests.len(), 1);
+}
+
+#[test]
+fn a_failed_call_shaped_under_a_shutdown_keeps_no_output() {
+    let (ran, hooks) = shut_down_during(Output {
+        error: Some(Failure {
+            code: ErrorCode::ToolError,
+            message: "failed with a secret".into(),
+            retry_after: None,
+            provider: None,
+        }),
+        ..text("failed with a secret, long enough to be cut")
+    });
+    assert!(hooks.seen().is_empty());
+    let completed = ran.completed();
+    assert_eq!(completed.payload["content"], json!([]));
+    assert_eq!(completed.payload.get("artifact"), None);
+    assert!(!ran.on_disk().contains("with a secret, long"));
 }

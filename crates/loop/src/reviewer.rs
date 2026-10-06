@@ -500,10 +500,10 @@ impl Loop {
             // A cancel is neither a reviewer allow nor a person's answer, so
             // the run of consecutive blocks stands (`docs/permissions.md`,
             // "What happens on a block").
-            Asked::Cancelled => Ok(Err(crate::cancel::never_ran())),
+            Asked::Cancelled => Ok(Err(self.cancelled_before_ran())),
             // The idle delay passed. `idle_left` is set; the caller writes
             // nothing for this call.
-            Asked::Idle => Ok(Err(crate::cancel::never_ran())),
+            Asked::Idle => Ok(Err(self.cancelled_before_ran())),
             Asked::Closed(request_id) => {
                 let completed =
                     self.reviewer_deny(under.id, under.turn, Some(request_id), reason, reviewer)?;
@@ -610,7 +610,7 @@ impl Loop {
             turn,
             Some(id),
         )?;
-        Ok(Err(crate::cancel::never_ran()))
+        Ok(Err(self.cancelled_before_ran()))
     }
 
     /// Denies the call as the reviewer, with no `permission_requested`: no

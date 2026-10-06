@@ -316,6 +316,7 @@ dependencies = [
  "fakes",
  "log 0.0.0",
  "serde_json",
+ "signal-hook",
 ]
 
 [[package]]
@@ -779,6 +780,7 @@ dependencies = [
  "contract",
  "fakes",
  "ring",
+ "rustix",
  "serde_json",
  "thiserror",
 ]

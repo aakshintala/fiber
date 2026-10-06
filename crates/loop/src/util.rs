@@ -79,3 +79,25 @@ pub(crate) fn write(
     }
     Ok(())
 }
+
+impl crate::Loop {
+    /// Writes `event` and renders it into the conversation.
+    pub(crate) fn append(
+        &mut self,
+        event: &Event,
+        turn: &TurnId,
+        action: Option<&ActionId>,
+    ) -> Result<(), crate::Error> {
+        write(
+            &self.log,
+            &mut self.conversation,
+            &mut self.reviewed,
+            &self.model.reference,
+            event,
+            Some(turn),
+            action,
+            &mut self.changes.had,
+            &mut self.handoff.carry,
+        )
+    }
+}

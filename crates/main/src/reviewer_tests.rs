@@ -6,7 +6,7 @@
     reason = "test code; a failure is the test's"
 )]
 
-use super::block_limits;
+use crate::settings::block_limits;
 
 fn config(overrides: Vec<String>) -> config::Config {
     let root = fakes::TempDir::new("fiber-reviewer-limits");

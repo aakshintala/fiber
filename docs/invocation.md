@@ -688,7 +688,9 @@ knows and exits.
 flight `cancelled`, and the turn `turn_completed { outcome: interrupted }`. Two
 things differ from a cancel: a pending approval or question stays pending, so
 resuming raises it again (below), and queued steering messages start no turn. They
-were never logged, so they are gone.
+were never logged, so they are gone. A request already answered when the signal
+arrives was not pending: its answer stands, and a call it allowed completes
+`cancelled` without running.
 Nothing is written for a call before it has stopped. Then `fiber_exited`
 with the exit code and no final message, the socket is unlinked, the lock is
 released, and the process exits.

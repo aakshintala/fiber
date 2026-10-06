@@ -23,6 +23,9 @@ struct Inner {
     armed: bool,
     /// A cancel landed since `arm`.
     cancelled: bool,
+    /// The exit code of the signal that started a shutdown
+    /// (`docs/invocation.md`, "Shutdown"). Set once; never cleared.
+    shutdown: Option<i32>,
     /// Woken once on the cancel, outside the lock.
     subscribers: Vec<Weak<dyn Wake>>,
 }
@@ -45,13 +48,71 @@ impl TurnCancel {
         true
     }
 
+    /// Starts a shutdown with exit code `code` (`docs/invocation.md`,
+    /// "Shutdown"): the running turn is cancelled as [`Self::cancel`]
+    /// cancels it, and no later turn arms. The first code stays.
+    pub fn shutdown(&self, code: i32) {
+        let wakers = {
+            let mut inner = lock(&self.inner);
+            inner.shutdown.get_or_insert(code);
+            if inner.armed {
+                inner.cancelled = true;
+            }
+            std::mem::take(&mut inner.subscribers)
+        };
+        for waker in wakers.into_iter().filter_map(|waker| waker.upgrade()) {
+            waker.wake();
+        }
+    }
+
+    /// The exit code of the shutdown, once one started.
+    pub fn shutdown_code(&self) -> Option<i32> {
+        lock(&self.inner).shutdown
+    }
+
+    /// The signal's state, read once under its lock. A shutdown wins over
+    /// a cancel: it sets `cancelled` too.
+    pub(crate) fn state(&self) -> SignalState {
+        let inner = lock(&self.inner);
+        if inner.shutdown.is_some() {
+            SignalState::Shutdown
+        } else if inner.cancelled {
+            SignalState::Cancelled
+        } else {
+            SignalState::Live
+        }
+    }
+
     /// Arms the signal for a turn that is about to start: running, not
-    /// cancelled, subscribers cleared.
-    pub(crate) fn arm(&self) {
+    /// cancelled, subscribers cleared. False, arming nothing, once a
+    /// shutdown started.
+    #[cfg(test)]
+    pub(crate) fn arm(&self) -> bool {
+        self.commit(Commit::Arm, || ()).is_some()
+    }
+
+    /// Runs `f` under the signal's lock when `mode` allows it, so a
+    /// shutdown lands either before the write `f` makes (`None`, nothing
+    /// written) or after it. `f` must call no method of this signal: the
+    /// lock is not reentrant.
+    pub(crate) fn commit<R>(&self, mode: Commit, f: impl FnOnce() -> R) -> Option<R> {
         let mut inner = lock(&self.inner);
-        inner.armed = true;
-        inner.cancelled = false;
-        inner.subscribers.clear();
+        match mode {
+            Commit::Arm => {
+                if inner.shutdown.is_some() {
+                    return None;
+                }
+                inner.armed = true;
+                inner.cancelled = false;
+                inner.subscribers.clear();
+            }
+            Commit::Step => {
+                if inner.cancelled || inner.shutdown.is_some() {
+                    return None;
+                }
+            }
+        }
+        Some(f())
     }
 
     /// Disarms the signal in one locked step, just before `turn_completed`
@@ -66,9 +127,32 @@ impl TurnCancel {
     }
 }
 
+/// What one read of the signal found ([`TurnCancel::state`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SignalState {
+    /// No cancel and no shutdown since `arm`.
+    Live,
+    /// A cancel landed since `arm`; no shutdown started.
+    Cancelled,
+    /// A shutdown started.
+    Shutdown,
+}
+
+/// What [`TurnCancel::commit`] checks before it runs its write.
+#[derive(Debug, Clone, Copy)]
+pub(crate) enum Commit {
+    /// Arms the turn; refused once a shutdown started.
+    Arm,
+    /// A step's start; refused once the turn is cancelled.
+    Step,
+}
+
 impl contract::tool::Cancel for TurnCancel {
+    /// True once a cancel landed since `arm`, and for the rest of the
+    /// process once a shutdown started.
     fn is_cancelled(&self) -> bool {
-        lock(&self.inner).cancelled
+        let inner = lock(&self.inner);
+        inner.cancelled || inner.shutdown.is_some()
     }
 
     fn subscribe(&self, waker: Weak<dyn Wake>) {
@@ -96,6 +180,11 @@ impl crate::Loop {
     pub(crate) fn turn_cancelled(&self) -> bool {
         self.cancel.is_cancelled()
     }
+
+    /// Whether a shutdown started (`docs/invocation.md`, "Shutdown").
+    pub(crate) fn shutting_down(&self) -> bool {
+        self.cancel.shutdown_code().is_some()
+    }
 }
 
 /// The completion of a call the cancel reached before it ran: `cancelled`,
@@ -106,6 +195,24 @@ pub(crate) fn never_ran() -> Box<ToolCallCompleted> {
         status: CallStatus::Cancelled,
         ..crate::completion::completed("Cancelled before it ran.".to_owned(), None)
     })
+}
+
+impl crate::Loop {
+    /// The completion of a call the cancel reached before it ran. Under a
+    /// shutdown no `after_tool` hook runs to redact output, so the
+    /// completion carries no content and no artifact
+    /// (`docs/invocation.md`, "Shutdown"); an ordinary cancel tells the
+    /// model it never started.
+    pub(crate) fn cancelled_before_ran(&self) -> Box<ToolCallCompleted> {
+        if self.shutting_down() {
+            Box::new(ToolCallCompleted {
+                status: CallStatus::Cancelled,
+                ..crate::completion::completed(String::new(), None)
+            })
+        } else {
+            never_ran()
+        }
+    }
 }
 
 /// Wakes `call`'s `cancel` when the turn is cancelled.

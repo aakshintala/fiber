@@ -11,6 +11,7 @@ mod attach;
 mod client;
 mod session;
 mod shell;
+mod signals;
 
 use std::collections::hash_map::RandomState;
 use std::hash::BuildHasher;
@@ -23,6 +24,7 @@ use contract::{ErrorCode, PreSessionExit};
 
 pub use attach::attach;
 pub use session::Session;
+pub use signals::{Signals, signal_code};
 
 /// A failure with Fiber's own sentence and nothing from a provider.
 pub fn failure(code: ErrorCode, message: impl Into<String>) -> Failure {

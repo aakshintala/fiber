@@ -12,6 +12,7 @@ mod start;
 mod tool;
 
 pub use effects::Hints;
+pub use server::kill_every_server;
 pub use start::{
     DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, Servers, Started, start,
 };

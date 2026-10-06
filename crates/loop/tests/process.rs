@@ -54,7 +54,12 @@ impl Session {
 
     /// Writes `fiber_exited` and returns its exit code and payload.
     fn exit(&self, ran: Result<(), Failure>) -> (i32, Value) {
-        let code = fiber_exited(&self.log, &self.dir, ran).unwrap();
+        self.exit_on(ran, None)
+    }
+
+    /// As [`Self::exit`], under a shutdown whose exit code is `signal`.
+    fn exit_on(&self, ran: Result<(), Failure>, signal: Option<i32>) -> (i32, Value) {
+        let code = fiber_exited(&self.log, &self.dir, ran, signal).unwrap();
         let lines = log::read(&self.dir).unwrap();
         let last = lines.last().unwrap();
         assert_eq!(last.kind, "fiber_exited");
@@ -515,4 +520,96 @@ fn kinds(session: &Session) -> Vec<String> {
         .into_iter()
         .map(|line| line.kind)
         .collect()
+}
+
+#[test]
+fn a_signal_exits_with_its_code_and_no_final_message() {
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.append(&usage("g1", 3, Some(0.5), None), Some("a_1"));
+    session.append(&text_part("Hello."), Some("a_1"));
+    session.append(&message(), Some("a_1"));
+    session.append(&turn_completed(TurnOutcome::Interrupted, None), None);
+
+    let (code, exited) = session.exit_on(Ok(()), Some(130));
+
+    assert_eq!(code, 130);
+    assert_eq!(exited["exit_code"], 130);
+    assert_eq!(exited.get("text"), None);
+    assert_eq!(exited.get("final_action_id"), None);
+    assert_eq!(exited.get("error"), None);
+    assert_eq!(exited["usage"]["tokens"]["output"], 3);
+}
+
+#[test]
+fn a_signal_drops_the_error_the_loop_returned() {
+    let session = Session::new();
+    session.append(&turn_started(), None);
+    session.append(
+        &turn_completed(
+            TurnOutcome::Failed,
+            Some(failure(ErrorCode::ProviderUnavailable, "the turn failed")),
+        ),
+        None,
+    );
+
+    let (code, exited) = session.exit_on(
+        Err(failure(ErrorCode::IoFailed, "the loop failed")),
+        Some(143),
+    );
+
+    assert_eq!(code, 143);
+    assert_eq!(exited["exit_code"], 143);
+    assert_eq!(exited.get("error"), None);
+}
+
+#[test]
+fn a_signal_keeps_the_request_this_process_left_pending() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_1"), Some("a_1"));
+
+    let (code, exited) = session.exit_on(Ok(()), Some(129));
+
+    assert_eq!(code, 129);
+    assert_eq!(exited["suspended_on"], "r_1");
+}
+
+#[test]
+fn a_signal_names_a_request_from_the_previous_process() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+
+    let (_, exited) = session.exit_on(Ok(()), Some(143));
+
+    assert_eq!(exited["suspended_on"], "r_old");
+}
+
+#[test]
+fn a_signal_does_not_name_a_request_resolved_since() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    session.append(&permission("r_old"), Some("a_1"));
+    session.append(&resolved("r_old"), Some("a_1"));
+
+    let (_, exited) = session.exit_on(Ok(()), Some(143));
+
+    assert_eq!(exited.get("suspended_on"), None);
+}
+
+#[test]
+fn a_signal_reports_only_this_process_usage() {
+    let session = Session::new();
+    fiber_started(&session.log, "1.2.3", false).unwrap();
+    session.append(&usage("g1", 3, Some(0.5), None), Some("a_1"));
+    fiber_started(&session.log, "1.2.3", true).unwrap();
+    session.append(&usage("g2", 5, Some(0.25), None), Some("a_2"));
+
+    let (_, exited) = session.exit_on(Ok(()), Some(143));
+
+    assert_eq!(exited["usage"]["tokens"]["output"], 5);
 }

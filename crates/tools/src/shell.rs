@@ -23,6 +23,9 @@ mod background;
 #[path = "shell/command.rs"]
 mod command;
 
+#[path = "shell/groups.rs"]
+mod groups;
+
 #[path = "shell/monitor.rs"]
 mod monitor;
 
@@ -43,6 +46,7 @@ mod classify;
 
 use classify::classify;
 use command::{Finished, StopKind};
+pub use groups::kill_every_group;
 
 /// The default when the model gives no `timeout_ms`: 10 minutes.
 const DEFAULT_TIMEOUT_MS: u64 = 600_000;

@@ -82,6 +82,7 @@ fn signal_sites_ignores_each_pattern_inside_the_allowlist() {
         let line = signal_line(pattern, needs_kill);
         for (krate, rel) in [
             ("fakes", "src/process_group.rs"),
+            ("mcp", "src/server.rs"),
             ("tools", "src/shell/command.rs"),
         ] {
             let files = [file(krate, rel, line.clone())];

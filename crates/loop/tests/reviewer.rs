@@ -1708,3 +1708,73 @@ fn a_reviewer_reply_reporting_searches_records_their_count() {
     assert_eq!(recorded.len(), 1);
     assert!(recorded[0].payload.get("web_searches").is_none());
 }
+
+#[test]
+fn a_remembered_allow_taken_before_the_shutdown_stands_and_the_call_never_runs() {
+    let tool = shell(Some("npm test"), Some("npm"));
+    let mut session =
+        Session::with_tools(paired_turns(3), None, vec![tool.clone() as Arc<dyn Tool>]);
+    let _reviewer = session.reviewer(vec![
+        Scripted::text("check"),
+        Scripted::text("block one"),
+        Scripted::text("check"),
+        Scripted::text("block two"),
+        Scripted::text("check"),
+        Scripted::text("block three"),
+    ]);
+    go(&mut session);
+    go(&mut session);
+    let (answers, answer) = mpsc::channel();
+    let answered = on_request(&session, {
+        let inbox = session.inbox.clone();
+        let cancel = Arc::clone(&session.cancel);
+        move |id| {
+            let remember = ReplyAnswer::Approval {
+                decision: Decision::Allow,
+                feedback: None,
+                remember: Some(Remember {
+                    scope: RememberScope::Session,
+                    prefix: "npm test".into(),
+                }),
+            };
+            // The shutdown lands as the reply is applied: after the wait's
+            // one read of the signal found it live.
+            let ack = contract::inbox::Ack(Box::new(move |result| {
+                answers.send(result.is_ok()).unwrap();
+                cancel.shutdown(143);
+            }));
+            inbox
+                .send(Delivery::Reply(
+                    Reply {
+                        request_id: id,
+                        answer: remember,
+                    },
+                    ack,
+                ))
+                .unwrap();
+        }
+    });
+    session.inbox.send(delivery("go")).unwrap();
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    answered.join().unwrap();
+    assert!(
+        answer
+            .recv_timeout(support::DEADLINE)
+            .expect("the reply's answer"),
+        "the reply was accepted"
+    );
+    let lines = session.lines();
+    let resolved = line(&lines, "permission_resolved");
+    assert_eq!(resolved.payload["decision"], "allow");
+    assert_eq!(resolved.payload["decided_by"], "person");
+    assert_eq!(
+        resolved.payload["grant"],
+        json!({"tool": "shell", "prefix": "npm test"})
+    );
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "cancelled");
+    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert_eq!(lines.last().unwrap().kind, "turn_completed");
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}

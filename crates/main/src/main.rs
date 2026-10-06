@@ -21,6 +21,8 @@ mod mcp_servers;
 mod prompt_files;
 mod resume;
 mod session_extensions;
+mod settings;
+mod shutdown;
 
 #[cfg(test)]
 #[path = "live_tests.rs"]
@@ -361,6 +363,12 @@ fn ask(
     dash: bool,
     clock: Arc<dyn contract::clock::Clock>,
 ) -> i32 {
+    // First: a signal while the prompt is read exits at once
+    // (`docs/invocation.md`, "Shutdown").
+    let signals = match doors::Signals::install(Arc::clone(&clock)) {
+        Ok(signals) => signals,
+        Err(e) => return ask_failed(failed(ErrorCode::IoFailed, format!("signals: {e}"))),
+    };
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     let prompt = match doors::prompt(arg, dash, &mut stdin.lock(), terminal) {
@@ -368,13 +376,18 @@ fn ask(
         Err(e) => return ask_failed(e),
     };
     match resume {
-        Some(selector) => resume::ask_resume(selector, model, prompt, clock),
-        None => ask_new(model, prompt, clock),
+        Some(selector) => resume::ask_resume(selector, model, prompt, clock, &signals),
+        None => ask_new(model, prompt, clock, &signals),
     }
 }
 
 /// `fiber ask` on a new session.
-fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock::Clock>) -> i32 {
+fn ask_new(
+    model: Option<String>,
+    prompt: String,
+    clock: Arc<dyn contract::clock::Clock>,
+    signals: &doors::Signals,
+) -> i32 {
     let mut parts = match parts_with(model, None, None, Arc::clone(&clock)) {
         Ok(parts) => parts,
         Err(e) => return ask_failed(e),
@@ -404,6 +417,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         web_search,
     } = parts;
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
+    shutdown::arm(signals);
     // Before the log exists: a failure here, such as not finding the running
     // binary, leaves no session line; every server starts with the session too.
     let (tools, infos, driver, session_servers) = match mcp_servers::session_tools(
@@ -442,7 +456,14 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
     };
     session.shell(driver);
     session.jobs(jobs.clone());
-    let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    // A signal while armed: nothing was written, so nothing more is.
+    if let Some(code) = shutdown::start(signals, &cancel, &session, jobs.clone()) {
+        session_servers.servers.stop();
+        session.close(log);
+        return code;
+    }
+    let code = run_turn(&session, &log, &dir, prompt, cancel, |inbox, cancel| {
         finish(
             // `Loop::start` writes `session_started`, which `fiber_started`
             // follows (`docs/events.md`).
@@ -523,23 +544,26 @@ fn finish(
 /// Runs one turn of the session `session` writes to `log`, once its log,
 /// model and prompt are known, shared by new and resumed sessions: sends
 /// the prompt, closes, and writes `fiber_exited` for what ran. One cancel
-/// signal serves the door and the loop, so a `cancel` ends the turn the
-/// prompt starts.
+/// signal, `cancel`, serves the door and the loop, so a `cancel` ends the
+/// turn the prompt starts; a shutdown's code on it is the exit code.
 fn run_turn(
     session: &Session,
     log: &Arc<Log>,
     dir: &Path,
     prompt: String,
+    cancel: Arc<r#loop::TurnCancel>,
     run: impl FnOnce(Receiver<Delivery>, Arc<r#loop::TurnCancel>) -> Result<(), Failure>,
 ) -> i32 {
-    let cancel = Arc::new(r#loop::TurnCancel::default());
     let door = Arc::clone(&cancel);
+    let turn = Arc::clone(&cancel);
     let ran = session.ask(prompt, Arc::new(move || door.cancel()), |inbox| {
-        run(inbox, cancel)
+        run(inbox, turn)
     });
+    // `fiber_exited` is the last line: nothing on the door side follows it.
+    session.quiesce();
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
-    r#loop::fiber_exited(log, dir, ran).unwrap_or(1)
+    r#loop::fiber_exited(log, dir, ran, cancel.shutdown_code()).unwrap_or(1)
 }
 
 /// Stops the servers, then fails before any session line.
@@ -589,10 +613,10 @@ fn parts_with(
         credential::session_credential(&config, model.provider, recorded_credential)?;
     let provider = connect(model, key.expose().to_owned())?;
     let reviewer = choose_reviewer(&providers, &config, &model, &label);
-    let limits = block_limits(&config);
-    let retry = retry_policy(&config);
+    let limits = settings::block_limits(&config);
+    let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
-    let idle = idle_exit(&config);
+    let idle = settings::idle_exit(&config);
     let extensions = extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock));
     // debt: extension prompt texts and the model's addendum arrive empty;
     // filled by #510.
@@ -636,17 +660,6 @@ fn parts_with(
     })
 }
 
-/// How long an idle session waits before it exits, from
-/// `session.idle_exit_ms` (`docs/configuration.md`). `0` exits at the first
-/// empty wait. A missing value is 30 minutes.
-pub(crate) fn idle_exit(config: &Config) -> Option<Duration> {
-    let ms = config
-        .get("session.idle_exit_ms", None)
-        .and_then(|(value, _)| value.as_u64())
-        .unwrap_or(1_800_000);
-    Some(Duration::from_millis(ms))
-}
-
 /// Who judges step 7's calls: `reviewer.model` when set, else the session
 /// model's provider's reviewer model, else no reviewer at all. A failure to
 /// resolve the model or to read its credential is not a startup error: the
@@ -684,38 +697,6 @@ fn choose_reviewer(
     })
 }
 
-/// When a reviewer block hands the call to a person, from configuration
-/// with the documented defaults (`docs/configuration.md`).
-fn block_limits(config: &Config) -> r#loop::BlockLimits {
-    let limit = |key: &str, default: u64| {
-        config
-            .get(key, None)
-            .and_then(|(value, _)| value.as_u64())
-            .unwrap_or(default)
-    };
-    r#loop::BlockLimits {
-        consecutive: limit("reviewer.block_limits.consecutive", 3),
-        session: limit("reviewer.block_limits.session", 20),
-    }
-}
-
-/// How a failed model call is retried, from configuration with the
-/// documented defaults (`docs/configuration.md`). `attempts` is clamped
-/// to `u32`, so a huge configured count never overflows the loop.
-fn retry_policy(config: &Config) -> r#loop::Retry {
-    let count = |key: &str, default: u64| {
-        config
-            .get(key, None)
-            .and_then(|(value, _)| value.as_u64())
-            .unwrap_or(default)
-    };
-    r#loop::Retry {
-        attempts: u32::try_from(count("retry.attempts", 3)).unwrap_or(u32::MAX),
-        initial: Duration::from_millis(count("retry.initial_delay_ms", 2000)),
-        max: Duration::from_millis(count("retry.max_delay_ms", 60000)),
-    }
-}
-
 fn usage(message: impl Into<String>) -> Failure {
     failure(ErrorCode::Usage, message)
 }
@@ -727,11 +708,3 @@ fn failed(code: ErrorCode, e: impl Display) -> Failure {
 fn ask_failed(e: Failure) -> i32 {
     doors::exit_before_session(e, &mut io::stdout(), &mut io::stderr())
 }
-
-#[cfg(test)]
-#[path = "idle_tests.rs"]
-mod idle_tests;
-
-#[cfg(test)]
-#[path = "retry_policy_tests.rs"]
-mod retry_policy_tests;

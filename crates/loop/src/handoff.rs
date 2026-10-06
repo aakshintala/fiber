@@ -637,11 +637,8 @@ impl Loop {
         let note = reply_note(&reply);
         let (calls, finish) = self.write_reply(reply, reasoning, turn, &message)?;
         for (id, _) in calls {
-            self.append(
-                &Event::ToolCallCompleted(*crate::cancel::never_ran()),
-                turn,
-                Some(&id),
-            )?;
+            let completed = self.cancelled_before_ran();
+            self.append(&Event::ToolCallCompleted(*completed), turn, Some(&id))?;
         }
         if finish == Finish::OutputLimit {
             return Ok(Noted::Failed(failure(

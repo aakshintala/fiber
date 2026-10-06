@@ -169,6 +169,7 @@ pub(crate) fn unsafe_mismatches(
 /// less before anything runs: group -1 reaches every process the user owns.
 const SIGNAL_ALLOWLIST: &[&str] = &[
     "crates/fakes/src/process_group.rs",
+    "crates/mcp/src/server.rs",
     "crates/tools/src/shell/command.rs",
 ];
 

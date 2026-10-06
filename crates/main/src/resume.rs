@@ -23,6 +23,7 @@ pub(crate) fn ask_resume(
     model: Option<String>,
     prompt: String,
     clock: Arc<dyn contract::clock::Clock>,
+    signals: &doors::Signals,
 ) -> i32 {
     let home = match config::fiber_home_from_env() {
         Ok(home) => home,
@@ -114,6 +115,7 @@ pub(crate) fn ask_resume(
         Arc::clone(&clock),
         Arc::clone(&log) as _,
     );
+    crate::shutdown::arm(signals);
     let (tools, infos, driver, session_servers) = match crate::mcp_servers::session_tools(
         Path::new(&folded.workspace),
         &dir.join("artifacts"),
@@ -136,6 +138,13 @@ pub(crate) fn ask_resume(
     };
     session.shell(driver);
     session.jobs(jobs.clone());
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    // A signal while armed: the log stays as it was.
+    if let Some(code) = crate::shutdown::start(signals, &cancel, &session, jobs.clone()) {
+        session_servers.servers.stop();
+        session.close(log);
+        return code;
+    }
     if let Err(e) = r#loop::fiber_started(&log, env!("CARGO_PKG_VERSION"), true)
         .and_then(|()| crate::session_extensions::written(&log, &extensions))
         .and_then(|()| r#loop::mcp_servers_started(&log, session_servers.failed, mcp.notices))
@@ -144,7 +153,7 @@ pub(crate) fn ask_resume(
         session.close(log);
         return ask_failed(failed(e.code(), e));
     }
-    let code = run_turn(&session, &log, &dir, prompt, |inbox, cancel| {
+    let code = run_turn(&session, &log, &dir, prompt, cancel, |inbox, cancel| {
         crate::finish(
             Loop::resume(
                 Arc::clone(&log),
