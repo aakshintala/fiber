@@ -626,6 +626,7 @@ fn parts_with(
     prompt.extension_sections = extensions.sections(&project);
     prompt.skills_disabled = config.union_list("skills.disabled");
     prompt.credential = Some(label);
+    prompt.cache_lifetime = settings::cache_lifetime(&config, &model.reference());
     Ok(Parts {
         sessions,
         home,

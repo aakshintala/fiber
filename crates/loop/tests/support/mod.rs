@@ -21,7 +21,8 @@ use std::time::Duration;
 use contract::clock::Wake;
 use contract::emit::Emit;
 use contract::events::{
-    Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested, TurnOutcome,
+    CacheLifetime, Event, ReasoningCompleted, TextDelta, ToolCallArgumentsDelta, ToolCallRequested,
+    TurnOutcome,
 };
 use contract::inbox::{Ack, Delivery, Message};
 use contract::provider::{
@@ -739,6 +740,23 @@ impl Session {
         Self::open(script, during, Vec::new(), unpriced())
     }
 
+    /// As [`Session::new`], with the preamble's cache lifetime set to
+    /// `lifetime` (`docs/prompt-cache.md`, "Cache lifetime").
+    pub(crate) fn with_cache_lifetime(script: Vec<Scripted>, lifetime: CacheLifetime) -> Self {
+        let scripted = Arc::new(ScriptedProvider::new(script));
+        Self::assemble_with(
+            Arc::clone(&scripted) as Arc<dyn Provider>,
+            Vec::new(),
+            Vec::new(),
+            unpriced(),
+            scripted,
+            Arc::new(TurnCancel::default()),
+            (FakeClock::new(), 0),
+            Vec::new(),
+            lifetime,
+        )
+    }
+
     /// As [`Session::with_tools`], reaching `model`. `during` is sent, in
     /// order, when the first model call is made.
     pub(crate) fn open(
@@ -877,6 +895,7 @@ impl Session {
             cancel,
             (FakeClock::new(), 0),
             sections,
+            CacheLifetime::OneHour,
         )
     }
 
@@ -901,6 +920,7 @@ impl Session {
             Arc::new(TurnCancel::default()),
             (clock, 0),
             Vec::new(),
+            CacheLifetime::OneHour,
         )
     }
 
@@ -917,6 +937,7 @@ impl Session {
             Arc::new(TurnCancel::default()),
             (FakeClock::new(), window),
             Vec::new(),
+            CacheLifetime::OneHour,
         )
     }
 
@@ -933,6 +954,7 @@ impl Session {
         cancel: Arc<TurnCancel>,
         (clock, window): (Arc<FakeClock>, u64),
         sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
+        cache_lifetime: CacheLifetime,
     ) -> Self {
         let home = TempDir::new();
         let workspace = home.0.join("workspace");
@@ -966,6 +988,7 @@ impl Session {
                 prompt.credential = Some("work".into());
                 prompt.context_window = (window != 0).then_some(window);
                 prompt.extension_sections = sections;
+                prompt.cache_lifetime = cache_lifetime;
                 prompt
             },
             rx,

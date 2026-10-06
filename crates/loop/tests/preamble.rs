@@ -454,3 +454,38 @@ fn over_budget_ends_the_section_with_the_prune_line_and_under_does_not() {
         }
     }
 }
+
+#[test]
+fn a_five_minute_input_reaches_the_preamble_and_the_requests() {
+    let mut session =
+        Session::with_cache_lifetime(vec![Scripted::text("Done.")], CacheLifetime::FiveMinutes);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
+    assert_eq!(built.payload["cache_lifetime"], "5m");
+    // Every request sends the input's lifetime, and `preamble_built`
+    // records it.
+    let requests = session.requests();
+    assert!(!requests.is_empty());
+    for request in &requests {
+        assert_eq!(request.cache_lifetime, CacheLifetime::FiveMinutes);
+    }
+}
