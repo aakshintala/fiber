@@ -486,16 +486,20 @@ fn a_path_declared_test_file_maps_to_its_declaring_module() {
 
 #[test]
 fn a_path_declared_test_file_inside_a_path_declared_module_resolves_recursively() {
+    // The intermediate module's declared name (`background`) differs from
+    // its file stem (`background_impl`), so the conventional answer
+    // (`shell::background_impl::tests::`) differs: resolving only one level
+    // would fail this test.
     let files = strings(&["crates/log/src/shell/background_tests.rs"]);
     let sources = vec![
         decl(
             "log",
             "crates/log/src/shell.rs",
-            "#[path = \"shell/background.rs\"] mod background;",
+            "#[path = \"shell/background_impl.rs\"] mod background;",
         ),
         decl(
             "log",
-            "crates/log/src/shell/background.rs",
+            "crates/log/src/shell/background_impl.rs",
             "#[cfg(test)] #[path = \"background_tests.rs\"] mod tests;",
         ),
     ];
@@ -561,6 +565,190 @@ fn a_path_attribute_on_a_non_mod_item_registers_nothing() {
     )];
     let (expression, _) = test_filter(&files, &members(), &sources);
     assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_pending_path_does_not_survive_a_semicolon() {
+    // The `use` item's `;` ends the attribute run, so the later `mod`
+    // without its own attribute registers nothing.
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[path = \"idle_tests.rs\"] use crate::idle;\nmod idle_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_pending_path_does_not_survive_a_braced_item() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[path = \"idle_tests.rs\"] fn f() {}\nmod idle_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn an_inline_module_after_a_path_attribute_registers_nothing() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[path = \"idle_tests.rs\"] mod idle_tests {}",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_visibility_between_a_path_attribute_and_its_mod_still_registers() {
+    // A paren group is `pub(crate)`: only brace groups clear a pending
+    // `#[path]`.
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[path = \"idle_tests.rs\"] pub(crate) mod idle_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(
+        expression,
+        "(package(main) & test(/^settings::idle_tests::/))"
+    );
+}
+
+#[test]
+fn a_hash_before_a_paren_group_registers_nothing() {
+    // Only a bracket group after `#` starts an attribute.
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#(path = \"idle_tests.rs\")\nmod idle_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn an_inner_attribute_registers_nothing() {
+    // `#![...]`: the `#` is not followed by the bracket group, and the
+    // bracket group alone starts no attribute.
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#![path = \"idle_tests.rs\"]\nmod idle_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_lone_hash_registers_nothing() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#\nmod idle_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_mod_without_a_trailing_semicolon_registers_nothing() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[path = \"idle_tests.rs\"] mod idle_tests !",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(main) & test(/^idle::tests::/))");
+}
+
+#[test]
+fn a_test_file_declared_in_lib_rs_maps_to_the_crate_root() {
+    let files = strings(&["crates/log/src/foo_tests.rs"]);
+    let sources = vec![decl(
+        "log",
+        "crates/log/src/lib.rs",
+        "#[path = \"foo_tests.rs\"] mod foo_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^foo_tests::/))");
+}
+
+#[test]
+fn a_test_file_declared_in_main_rs_maps_to_the_crate_root() {
+    let files = strings(&["crates/log/src/foo_tests.rs"]);
+    let sources = vec![decl(
+        "log",
+        "crates/log/src/main.rs",
+        "#[path = \"foo_tests.rs\"] mod foo_tests;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^foo_tests::/))");
+}
+
+#[test]
+fn a_test_file_declared_in_a_nested_file_chains_through_it() {
+    // The declarer `src/a/b.rs` is a non-`mod` nested file: `a::b`.
+    let files = strings(&["crates/log/src/c_tests.rs"]);
+    let sources = vec![decl(
+        "log",
+        "crates/log/src/a/b.rs",
+        "#[path = \"../c_tests.rs\"] mod c;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^a::b::c::/))");
+}
+
+#[test]
+fn a_test_file_declared_in_a_mod_rs_chains_through_it() {
+    let files = strings(&["crates/log/src/d_tests.rs"]);
+    let sources = vec![decl(
+        "log",
+        "crates/log/src/a/mod.rs",
+        "#[path = \"../d_tests.rs\"] mod d;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^a::d::/))");
+}
+
+#[test]
+fn a_test_file_declared_in_a_top_level_file_chains_through_it() {
+    let files = strings(&["crates/log/src/bar_tests.rs"]);
+    let sources = vec![decl(
+        "log",
+        "crates/log/src/foo.rs",
+        "#[path = \"bar_tests.rs\"] mod bar;",
+    )];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^foo::bar::/))");
+}
+
+#[test]
+fn a_declaration_cycle_falls_back_to_convention() {
+    // `a.rs` declares `b.rs` and `b.rs` declares `a.rs`: resolving the
+    // test file through them must terminate at the conventional filter.
+    let files = strings(&["crates/log/src/cycle_tests.rs"]);
+    let sources = vec![
+        decl(
+            "log",
+            "crates/log/src/a.rs",
+            "#[path = \"b.rs\"] mod b;\n#[path = \"cycle_tests.rs\"] mod cycle_tests;",
+        ),
+        decl("log", "crates/log/src/b.rs", "#[path = \"a.rs\"] mod a;"),
+    ];
+    let (expression, _) = test_filter(&files, &members(), &sources);
+    assert_eq!(expression, "(package(log) & test(/^cycle::tests::/))");
 }
 
 #[test]

@@ -478,13 +478,10 @@ fn test_module(root: bool, stem: &str) -> Option<&str> {
 }
 
 /// A top-level `#[path = "<lit>"] mod <ident>;` declaration: the file the
-/// literal resolves to (relative to the repository, `/` separators), the
-/// file that declares it, and the declared module name.
-struct PathDecl {
-    target: String,
-    declarer: String,
-    ident: String,
-}
+/// literal resolves to (relative to the repository, `/` separators), with
+/// the file that declares it and the declared module name.
+type DeclarerIdent = (String, String);
+type PathDecl = (String, DeclarerIdent);
 
 /// The `<lit>` of a `path = <lit>` item in an attribute's tokens, if it
 /// holds one. Other attributes, and items without a literal, give nothing.
@@ -518,61 +515,67 @@ fn path_decls(path: &str, source: &str) -> Vec<PathDecl> {
         Err(_) => return Vec::new(),
     };
     let dir = Path::new(path).parent().unwrap_or(Path::new(""));
-    let tokens: Vec<TokenTree> = stream.into_iter().collect();
+    let mut tokens = stream.into_iter().peekable();
     let mut decls = Vec::new();
     let mut pending: Option<String> = None;
-    let mut i = 0;
-    while let Some(tree) = tokens.get(i) {
+    // A token the `mod` lookahead consumed but did not use: the loop
+    // reprocesses it next, so `mod mod x;` still sees its second `mod`.
+    let mut pushback: Option<TokenTree> = None;
+    loop {
+        let tree = pushback.take().or_else(|| tokens.next());
+        let Some(tree) = tree else {
+            break;
+        };
         match tree {
-            TokenTree::Punct(hash) if hash.as_char() == '#' => match tokens.get(i + 1) {
+            TokenTree::Punct(hash) if hash.as_char() == '#' => match tokens.peek() {
                 Some(TokenTree::Group(group))
                     if group.delimiter() == proc_macro2::Delimiter::Bracket =>
                 {
-                    if let Some(lit) = path_attr(group.stream()) {
+                    if let Some(TokenTree::Group(group)) = tokens.next()
+                        && let Some(lit) = path_attr(group.stream())
+                    {
                         pending = Some(lit);
                     }
-                    i += 2;
                 }
-                None | Some(_) => i += 1,
+                None | Some(_) => {}
             },
-            TokenTree::Ident(keyword) if keyword == "mod" => {
-                match (tokens.get(i + 1), tokens.get(i + 2)) {
-                    (Some(TokenTree::Ident(ident)), Some(TokenTree::Punct(semi)))
-                        if semi.as_char() == ';' =>
-                    {
+            TokenTree::Ident(keyword) if keyword == "mod" => match tokens.next() {
+                Some(TokenTree::Ident(ident)) => match tokens.peek() {
+                    Some(TokenTree::Punct(semi)) if semi.as_char() == ';' => {
+                        tokens.next();
                         if let Some(lit) = pending.take() {
-                            decls.push(PathDecl {
-                                target: crate::docs::join(dir, &lit)
+                            decls.push((
+                                crate::docs::join(dir, &lit)
                                     .to_string_lossy()
                                     .replace('\\', "/"),
-                                declarer: path.to_owned(),
-                                ident: ident.to_string(),
-                            });
+                                (path.to_owned(), ident.to_string()),
+                            ));
                         }
-                        i += 3;
                     }
-                    (None, _) | (Some(_), None) | (Some(_), Some(_)) => {
+                    None | Some(_) => {
                         pending = None;
-                        i += 1;
+                        pushback = Some(TokenTree::Ident(ident));
                     }
+                },
+                other => {
+                    pending = None;
+                    pushback = other;
                 }
-            }
+            },
             // Any other item ends the attribute run a pending `#[path]`
             // belonged to, so a `#[path]` on a non-`mod` item registers
             // nothing. Only brace groups clear it: a paren group is
             // `pub(crate)` between the attribute and its `mod`.
             TokenTree::Punct(semi) if semi.as_char() == ';' => {
                 pending = None;
-                i += 1;
             }
             TokenTree::Group(body) if body.delimiter() == proc_macro2::Delimiter::Brace => {
                 pending = None;
-                i += 1;
             }
             TokenTree::Group(_)
             | TokenTree::Ident(_)
             | TokenTree::Punct(_)
-            | TokenTree::Literal(_) => i += 1,
+            | TokenTree::Literal(_) => {}
         }
     }
     decls
@@ -610,7 +613,7 @@ fn conventional_module(path: &str, members: &Members) -> Option<String> {
 fn module_path(
     path: &str,
     members: &Members,
-    by_target: &BTreeMap<String, Vec<(String, String)>>,
+    by_target: &BTreeMap<String, Vec<DeclarerIdent>>,
     stack: &mut Vec<String>,
 ) -> Option<String> {
     if stack.iter().any(|seen| seen == path) {
@@ -644,13 +647,10 @@ pub(crate) fn test_filter(
     members: &Members,
     sources: &[RustFile],
 ) -> (String, Vec<String>) {
-    let mut by_target: BTreeMap<String, Vec<(String, String)>> = BTreeMap::new();
+    let mut by_target: BTreeMap<String, Vec<DeclarerIdent>> = BTreeMap::new();
     for f in sources {
-        for decl in path_decls(&f.path, &f.source) {
-            by_target
-                .entry(decl.target)
-                .or_default()
-                .push((decl.declarer, decl.ident));
+        for (target, declarer) in path_decls(&f.path, &f.source) {
+            by_target.entry(target).or_default().push(declarer);
         }
     }
     let mut terms = Vec::new();
@@ -677,18 +677,10 @@ pub(crate) fn test_filter(
             }
             ["src", modules @ .., file] => {
                 let declared = match by_target.get(path).map(Vec::as_slice) {
-                    Some([(declarer, ident)]) => {
-                        let (declarer, ident) = (declarer.clone(), ident.clone());
+                    Some([_]) => {
                         let mut stack = Vec::new();
-                        module_path(declarer.as_str(), members, &by_target, &mut stack).map(
-                            |parent| {
-                                if parent.is_empty() {
-                                    format!("{ident}::")
-                                } else {
-                                    format!("{parent}::{ident}::")
-                                }
-                            },
-                        )
+                        module_path(path, members, &by_target, &mut stack)
+                            .map(|module| format!("{module}::"))
                     }
                     _ => None,
                 };
