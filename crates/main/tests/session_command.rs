@@ -184,9 +184,18 @@ impl Setup {
         thread::spawn(move || done.send(child.wait_with_output()).unwrap());
         let output = match finished.recv_timeout(DEADLINE) {
             Ok(output) => output.unwrap(),
-            Err(_) => {
+            Err(mpsc::RecvTimeoutError::Timeout) => {
                 fakes::kill_group(group, "KILL").unwrap();
-                let reaped = finished.recv_timeout(DEADLINE).is_ok();
+                let reaped = match finished.recv_timeout(DEADLINE) {
+                    Ok(_) => true,
+                    Err(mpsc::RecvTimeoutError::Timeout) => false,
+                    Err(mpsc::RecvTimeoutError::Disconnected) => {
+                        panic!(
+                            "the `fiber {}` wait thread ended without an exit after the kill",
+                            args.join(" ")
+                        )
+                    }
+                };
                 assert!(
                     !group_alive(group),
                     "`fiber` left a process in its group behind"
@@ -195,6 +204,12 @@ impl Setup {
                     "waited {DEADLINE:?} for `fiber {}` to exit (reaped after the kill: {reaped})",
                     args.join(" ")
                 );
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                panic!(
+                    "the `fiber {}` wait thread ended before it exited",
+                    args.join(" ")
+                )
             }
         };
         assert!(
@@ -833,6 +848,73 @@ fn a_session_started_with_a_prompt_keeps_serving_after_that_turn() {
     assert_eq!(exited["payload"]["exit_code"], 0);
     assert!(!setup.socket(&id).exists());
     assert_eq!(server.requests().len(), 2);
+    let mut stream = vec![sub];
+    stream.extend(first);
+    stream.extend(second);
+    stream.extend(tail);
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "clients",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "clients",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
 }
 
 #[test]
