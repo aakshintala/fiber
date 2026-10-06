@@ -24,8 +24,9 @@ use crate::{fail, failed, project_of};
 /// Starts the detached refresh of stale model lists: the running binary
 /// re-run as its hidden refresh child: its own process group, nothing on
 /// any pipe, never waited on. `exe` is the binary to re-run: the real call
-/// passes `current_exe()`, a test passes its stub.
-fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<()> {
+/// passes `current_exe()`, a test passes its stub. The caller drops the
+/// returned child: dropping it neither waits on nor kills it.
+fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<std::process::Child> {
     let mut command = std::process::Command::new(exe);
     command.arg("refresh-model-lists").args(&providers);
     command
@@ -37,7 +38,7 @@ fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<()> {
         use std::os::unix::process::CommandExt;
         command.process_group(0);
     }
-    command.spawn().map(|_| ())
+    command.spawn()
 }
 
 /// The providers due a background refresh: a credential and a cached list
@@ -278,7 +279,11 @@ pub fn models(
                 &|config: &Config| {
                     SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
                 },
-                &|providers| std::env::current_exe().and_then(|exe| spawn_refresh(&exe, providers)),
+                &|providers| {
+                    std::env::current_exe()
+                        .and_then(|exe| spawn_refresh(&exe, providers))
+                        .map(drop)
+                },
                 clock.as_ref(),
             )
         });

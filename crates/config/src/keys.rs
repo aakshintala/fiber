@@ -307,7 +307,7 @@ pub fn refresh_after(config: &crate::Config) -> Duration {
     config
         .get("model_lists.refresh_after", None)
         .and_then(|(value, _)| value.as_str().and_then(parse_duration))
-        .unwrap_or(Duration::from_secs(24 * 60 * 60))
+        .unwrap_or(Duration::from_secs(86_400))
 }
 
 /// Reads a duration string such as `"7d"`: a whole number of 1 or more and a

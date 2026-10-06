@@ -788,8 +788,7 @@ fn a_list_exactly_refresh_after_old_spawns_nothing() {
 fn spawn_refresh_runs_the_stub_with_the_refresh_arguments() {
     // The subject is direct execution, so the stub stays an executable
     // file (`docs/testing.md`, "Waits and timeouts"): a shell script
-    // recording its arguments, run by its shebang. A body replaced with
-    // `Ok(())` never spawns, so the record never lands and the wait fails.
+    // recording its arguments, run by its shebang.
     use std::os::unix::fs::PermissionsExt;
     let dir = fakes::TempDir::new("fiber-spawn-refresh");
     let record = dir.path().join("args");
@@ -800,26 +799,17 @@ fn spawn_refresh_runs_the_stub_with_the_refresh_arguments() {
     )
     .unwrap();
     std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
-    super::spawn_refresh(&stub, vec!["acme".to_owned()]).unwrap();
-    // A file existing is not the proof the child ran: the shell creates
-    // it before `printf` writes, so wait for the argument line itself.
+    let mut child = super::spawn_refresh(&stub, vec!["acme".to_owned()]).unwrap();
+    // The stub writes its arguments and exits, so its exit is the proof it
+    // ran; waiting on it fails fast where polling the record would not.
+    let pid = child.id();
     let (done, finished) = mpsc::channel();
-    let waited = record.clone();
-    thread::spawn(move || {
-        loop {
-            if let Ok(args) = std::fs::read_to_string(&waited)
-                && args.contains("refresh-model-lists")
-            {
-                break;
-            }
-            thread::yield_now();
-        }
-        done.send(()).unwrap();
-    });
-    assert!(
-        finished.recv_timeout(SPAWN_DEADLINE).is_ok(),
-        "waited {SPAWN_DEADLINE:?} for the refresh child to record its arguments"
-    );
+    thread::spawn(move || done.send(child.wait().unwrap()));
+    let Ok(status) = finished.recv_timeout(SPAWN_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {SPAWN_DEADLINE:?} for the refresh child to exit");
+    };
+    assert!(status.success(), "{status}");
     let args = std::fs::read_to_string(&record).unwrap();
     assert!(
         args.contains("refresh-model-lists") && args.contains("acme"),
@@ -866,6 +856,61 @@ fn the_refresh_entry_refreshes_a_stale_list() {
         .unwrap();
     assert_eq!(
         stale.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["new"]
+    );
+}
+
+#[test]
+fn the_hidden_refresh_child_refreshes_a_stale_list() {
+    // The public entry, run in a child whose `FIBER_HOME` and directory
+    // hold a stale Lua provider: the cache holds the new list after it
+    // exits. A body replaced with `()` leaves the old list.
+    if std::env::var_os(CHILD).is_some() {
+        super::refresh_model_lists(
+            &["stale".to_owned()],
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+        );
+        std::process::exit(0);
+    }
+    let setup = Setup::new();
+    setup.install_lua("stale-ext", "stale", &lua_list("new"));
+    write_stale_cache(
+        &setup.home(),
+        "stale",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        fakes::clock::FakeClock::new().wall(),
+    );
+    let name = module_path!().split_once("::").unwrap().1;
+    let mut child = Command::new(std::env::current_exe().unwrap())
+        .args([
+            "--exact",
+            &format!("{name}::the_hidden_refresh_child_refreshes_a_stale_list"),
+            "--nocapture",
+            "--test-threads=1",
+        ])
+        .env("FIBER_HOME", setup.home())
+        .env(CHILD, "1")
+        .current_dir(setup.workspace())
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let pid = child.id();
+    let (tx, rx) = mpsc::channel();
+    thread::spawn(move || tx.send(child.wait().unwrap()));
+    let Ok(status) = rx.recv_timeout(CHILD_DEADLINE) else {
+        fakes::kill_pid(pid, "KILL").unwrap();
+        panic!("waited {CHILD_DEADLINE:?} for the refresh child to exit");
+    };
+    assert!(status.success(), "{status}");
+    let refreshed: Vec<config::ModelData> = config::read_model_cache(&setup.home(), "stale")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        refreshed.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
         ["new"]
     );
 }
