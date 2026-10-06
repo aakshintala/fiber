@@ -2,6 +2,8 @@
 //! the whole process (`docs/invocation.md`, "Shutdown"): a second SIGTERM or
 //! SIGINT during a shutdown, or the shutdown's bound, kills them all at once.
 
+use std::io;
+use std::process::{Child, Command};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
 use rustix::process::Signal;
@@ -15,7 +17,18 @@ fn live() -> MutexGuard<'static, Vec<u32>> {
     LIVE.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Lists `pgid`, a command's group that was just spawned.
+/// Spawns `cmd`, the leader of its own group, and lists the group. The list
+/// stays locked across the spawn, so no kill or read of the list can see the
+/// child before its group is listed.
+pub(super) fn spawn(cmd: &mut Command) -> io::Result<Child> {
+    let mut live = live();
+    let child = cmd.spawn()?;
+    live.push(child.id());
+    Ok(child)
+}
+
+/// Lists `pgid`, a group spawned outside [`spawn`].
+#[cfg(test)]
 pub(super) fn register(pgid: u32) {
     live().push(pgid);
 }
