@@ -616,7 +616,8 @@ Fiber looks for the session's credential at startup, before the session
 starts. A run with none fails there with `credential_missing`
 (`docs/errors.md`, "Before a session exists"). A credential that is stored but
 cannot be used, or a `credential()` call that errors, fails with
-`credential_failed`. Neither is retried.
+`credential_failed`, except a failed OAuth refresh ("Keys, tokens and OAuth").
+Neither is retried.
 
 ### Keys, tokens and OAuth
 
@@ -645,7 +646,9 @@ extension (`docs/delegates.md`).
 The refresh lock is native. A refresh takes a lock on the credential file,
 re-reads it, and refreshes once, so two sessions never refresh the same token
 twice. If the refresh fails, the stored credential stays in place, and the call
-fails with an auth error. Logging in again is the fix.
+fails with `authentication_failed`, or `connection_failed` when the token
+endpoint could not be reached. Logging in again is the fix for a rejected
+refresh.
 
 A headless run whose credential has expired and cannot be refreshed fails with
 `authentication_failed`. It never prompts, because nobody is there to answer.

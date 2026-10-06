@@ -120,7 +120,7 @@ impl Browser for SystemBrowser {
 /// table, the yield tag and a function that says whether the entry script is
 /// running, which can wait on nothing.
 const LUA: &str = r#"
-local host, tag, in_entry = ...
+local host, tag, in_entry, refresh_failed = ...
 local oauth = host.oauth
 local yield, resume, status = coroutine.yield, coroutine.resume, coroutine.status
 -- The armed `coroutine.create` the prelude installed.
@@ -138,6 +138,23 @@ local function run(f, ...)
     if not r[1] then return false, r[2] end
     if status(co) == "dead" then return true, r[2] end
     args = pack(yield(unpack(r, 2, r.n)))
+  end
+end
+
+-- Runs the refresh function `f` the way `run` does, and sees each `host.http`
+-- yield and its answer. A function that raises fails the refresh, and the host
+-- is told whether the last request got no reply at all.
+local function attempt(f, ...)
+  local co = create(f)
+  local args = pack(...)
+  local unreached = false
+  while true do
+    local r = pack(resume(co, unpack(args, 1, args.n)))
+    if not r[1] then refresh_failed(not unreached, tostring(r[2])) end
+    if status(co) == "dead" then return r[2] end
+    local http = r[2] == tag and r[3] == "http"
+    args = pack(yield(unpack(r, 2, r.n)))
+    if http then unreached = args[1] == nil end
   end
 end
 
@@ -210,7 +227,7 @@ function oauth.refresh(fn)
   local ok, result = run(function()
     local stored = held:read()
     if stored ~= nil and not held:due(stored) then return stored end
-    local fresh = fn(stored)
+    local fresh = attempt(fn, stored)
     held:write(fresh)
     return fresh
   end)
@@ -248,9 +265,26 @@ pub(crate) fn install(
     )?;
     host.set("oauth", oauth)?;
     let in_entry = lua.create_function(move |_, ()| Ok(entry.get()))?;
-    lua.load(LUA)
-        .set_name("=host.oauth")
-        .call::<()>((host.clone(), tag.clone(), in_entry))
+    let refresh_failed = lua.create_function(|_, (reached, message): (bool, String)| {
+        Err::<(), _>(mlua::Error::external(RefreshFailed { reached, message }))
+    })?;
+    lua.load(LUA).set_name("=host.oauth").call::<()>((
+        host.clone(),
+        tag.clone(),
+        in_entry,
+        refresh_failed,
+    ))
+}
+
+/// What the refresh function's failure carries out of Lua: whether the token
+/// endpoint was reached, so the host can tell a rejection from a network
+/// failure. `reached` is false when the last `host.http` call the function
+/// made before it raised got no reply.
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
+pub(crate) struct RefreshFailed {
+    pub(crate) reached: bool,
+    pub(crate) message: String,
 }
 
 /// 32 random bytes as base64url without padding, 43 characters (RFC 7636,
