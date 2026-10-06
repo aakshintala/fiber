@@ -23,28 +23,40 @@ pub const SHORT_NAMES: [&str; 11] = [
     "azure",
 ];
 
-/// What a person typed as a full extension name: a short name becomes
-/// `github.com/aakshintala/fiber/providers/<short>`.
+/// The first-party extensions under `extensions/` with short names.
+const EXTENSION_SHORT_NAMES: [&str; 2] = ["hooks", "memory"];
+
+/// What a person typed as a full extension name: a provider short name
+/// becomes `github.com/aakshintala/fiber/providers/<short>`, and an
+/// extension short name becomes
+/// `github.com/aakshintala/fiber/extensions/<short>`.
 pub fn full_name(typed: &str) -> String {
     if SHORT_NAMES.contains(&typed) {
         format!("github.com/aakshintala/fiber/providers/{typed}")
+    } else if EXTENSION_SHORT_NAMES.contains(&typed) {
+        format!("github.com/aakshintala/fiber/extensions/{typed}")
     } else {
         typed.to_owned()
     }
 }
 
-/// The name a person types: the short name for a first-party provider,
-/// else the name.
+/// The name a person types: the short name for a first-party provider or
+/// a first-party extension, else the name.
 ///
 /// The inverse of [`full_name`]:
 /// `github.com/aakshintala/fiber/providers/opencode` shows as `opencode`;
+/// `github.com/aakshintala/fiber/extensions/memory` shows as `memory`;
 /// any other name shows whole, so a `remove` command naming it works.
 pub(crate) fn short_name(name: &str) -> &str {
-    const PREFIX: &str = "github.com/aakshintala/fiber/providers/";
-    match name.strip_prefix(PREFIX) {
-        Some(short) if SHORT_NAMES.contains(&short) => short,
-        Some(_) | None => name,
-    }
+    const PROVIDERS: &str = "github.com/aakshintala/fiber/providers/";
+    const EXTENSIONS: &str = "github.com/aakshintala/fiber/extensions/";
+    name.strip_prefix(PROVIDERS)
+        .filter(|s| SHORT_NAMES.contains(s))
+        .or_else(|| {
+            name.strip_prefix(EXTENSIONS)
+                .filter(|s| EXTENSION_SHORT_NAMES.contains(s))
+        })
+        .unwrap_or(name)
 }
 
 /// Whether `typed` names a directory rather than an extension.
@@ -209,8 +221,29 @@ mod tests {
     }
 
     #[test]
+    fn memory_and_hooks_are_short_for_the_first_party_extensions() {
+        assert_eq!(
+            full_name("memory"),
+            "github.com/aakshintala/fiber/extensions/memory"
+        );
+        assert_eq!(
+            full_name("hooks"),
+            "github.com/aakshintala/fiber/extensions/hooks"
+        );
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/extensions/memory"),
+            "memory"
+        );
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/extensions/hooks"),
+            "hooks"
+        );
+    }
+
+    #[test]
     fn a_full_name_is_left_alone() {
         assert_eq!(full_name("github.com/acme/x"), "github.com/acme/x");
+        assert_eq!(full_name("other"), "other");
     }
 
     #[test]
@@ -225,6 +258,18 @@ mod tests {
             "github.com/aakshintala/fiber/providers/notashort"
         );
         assert_eq!(short_name("acme"), "acme");
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/extensions/other"),
+            "github.com/aakshintala/fiber/extensions/other"
+        );
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/providers/memory"),
+            "github.com/aakshintala/fiber/providers/memory"
+        );
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/extensions/muse"),
+            "github.com/aakshintala/fiber/extensions/muse"
+        );
     }
 
     #[test]
