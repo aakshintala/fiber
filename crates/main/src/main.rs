@@ -186,12 +186,21 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
         Ok(home) => home,
         Err(e) => return fail(failed(e.code(), e)),
     };
-    let installed = match extensions::list(&home, clock) {
+    let listing = match extensions::list(&home, clock) {
         Ok(list) => list,
         Err(e) => return fail(failed(e.code(), e)),
     };
-    for ext in installed.iter().filter(|i| i.requested) {
-        let code = install(Request::Update(ext.name.clone()), clock);
+    // Each damaged directory is named once here; the per-extension
+    // installs it runs stay silent about them.
+    for hit in &listing.damaged {
+        eprintln!("fiber: {}", hit.skipped());
+    }
+    for ext in listing.installed.iter().filter(|i| i.requested) {
+        let plan = match plan_request(Request::Update(ext.name.clone()), clock) {
+            Ok(plan) => plan,
+            Err(e) => return fail(e),
+        };
+        let code = report_install(commit_plan(plan));
         if code != 0 {
             return code;
         }
@@ -204,7 +213,22 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
 fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
-    match install_request(request, clock) {
+    let plan = match plan_request(request, clock) {
+        Ok(plan) => plan,
+        Err(e) => return fail(e),
+    };
+    // The plan's damaged directories are named before approval, so a
+    // declined or failed install still names them.
+    for hit in plan.damaged() {
+        eprintln!("fiber: {}", hit.skipped());
+    }
+    report_install(commit_plan(plan))
+}
+
+/// Prints what an approved install did: each name installed, or that
+/// nothing was installed.
+fn report_install(result: Result<Option<Vec<String>>, Failure>) -> i32 {
+    match result {
         Ok(Some(names)) => {
             for name in names {
                 eprintln!("fiber: installed {name}");
@@ -215,28 +239,29 @@ fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
             eprintln!("fiber: nothing was installed.");
             1
         }
-        Err(e) => {
-            eprintln!("fiber: {}", e.message);
-            doors::exit_code(&e)
-        }
+        Err(e) => fail(e),
     }
 }
 
-/// Installs what `request` needs once approved; `None` when the person
-/// declined.
-fn install_request(
+/// Fetches and checks what `request` and its dependencies need.
+fn plan_request(
     request: Request,
     clock: &dyn contract::clock::Clock,
-) -> Result<Option<Vec<String>>, Failure> {
+) -> Result<extensions::Plan, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let plan = extensions::plan(
+    extensions::plan(
         &home,
         &request,
         env!("CARGO_PKG_VERSION"),
         &Origin::github(),
         clock,
     )
-    .map_err(|e| failed(e.code(), e))?;
+    .map_err(|e| failed(e.code(), e))
+}
+
+/// Shows what `plan` registers, asks when stdin is a terminal, and
+/// installs once approved; `None` when the person declined.
+fn commit_plan(plan: extensions::Plan) -> Result<Option<Vec<String>>, Failure> {
     let summaries: Vec<doors::InstallSummary> = plan
         .items()
         .map(|item| doors::InstallSummary {
@@ -319,9 +344,14 @@ fn list(clock: &dyn contract::clock::Clock) -> i32 {
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| extensions::list(&home, clock).map_err(|e| failed(e.code(), e)));
     match listed {
-        Ok(installed) => {
+        Ok(listing) => {
             let mut out = io::stdout().lock();
-            for i in installed {
+            // Each damaged directory first, one line each, then the
+            // healthy rows.
+            for hit in &listing.damaged {
+                writeln!(out, "{hit}").unwrap_or(());
+            }
+            for i in listing.installed {
                 let commit = match &i.provenance {
                     Provenance::Git { commit } => commit.as_str(),
                     Provenance::Path(_) => "local",

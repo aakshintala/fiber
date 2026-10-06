@@ -16,6 +16,7 @@ use contract::events::{LoadedExtension, Notice};
 use contract::hook::{AfterToolAnswer, AfterToolCall, AfterToolOutcome, Hooks};
 use serde_json::{Map, Value};
 
+use crate::git::short_name;
 use crate::lua::{DeclaredHooks, HookPhase, LuaExtension};
 use crate::{API, Error};
 
@@ -66,13 +67,23 @@ impl SessionExtensions {
             home: home.to_path_buf(),
             ..Self::default()
         };
-        let installed = match crate::list(home, clock.as_ref()) {
-            Ok(installed) => installed,
+        let listing = match crate::list(home, clock.as_ref()) {
+            Ok(listing) => listing,
             Err(e) => {
                 session.notices.push(notice(e.code(), e.to_string(), None));
                 return session;
             }
         };
+        // A damaged directory is skipped, with a notice naming it and
+        // the fix, and the rest load.
+        for hit in &listing.damaged {
+            session.notices.push(notice(
+                ErrorCode::ExtensionFailed,
+                hit.to_string(),
+                Some(short_name(&hit.name)),
+            ));
+        }
+        let installed = listing.installed;
         let mut chain = Vec::new();
         // debt: entry scripts load one after another, each up to its load
         // timeout; start every VM before waiting on any if session start
