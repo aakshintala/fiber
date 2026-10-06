@@ -45,6 +45,7 @@ mod resume;
 mod retry;
 mod reviewer;
 mod schema;
+mod skill_header;
 mod usage;
 mod util;
 
