@@ -300,7 +300,11 @@ until the next code change in that crate runs mutants against it.
 ## Running tests
 
 Tests run under cargo-nextest. Each test runs in its own process and is killed
-past its timeout. That does not contain what the test starts: a binary-level
+past its timeout. `cargo test` is not a substitute: it runs a crate's tests as
+threads of one process, and a child process one test spawns holds the file
+locks another test holds until the child execs, so lock-release and
+extension-load tests fail there and pass under nextest. A process per test
+does not contain what the test starts: a binary-level
 test runs Fiber in its own process group, and at the end it asserts that no
 child of its own remains, including after a timeout. A watchdog the test
 starts beside Fiber kills Fiber's process group when the test process dies.
