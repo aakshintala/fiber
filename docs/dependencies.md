@@ -124,9 +124,9 @@ only that crate, in KiB; the empty program is 323 KiB.
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit") and an instruction file's diff (`docs/system-prompt.md`, "When something changes"), and a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships") | ~0 | 380 | ~0 | 1 | 389 |
-| html5ever | `web_fetch`'s tokenizer, without its tree builder | TBD | TBD | 480 | 19 | TBD |
-| encoding_rs | `web_fetch`'s decoding by the declared character set | TBD | TBD | 272 | 5 | TBD |
-| all of the above together | | TBD | TBD | 4,720 | TBD | TBD |
+| html5ever | `web_fetch`'s tokenizer, without its tree builder | 808 | 960 | 480 | 19 | 1,058 |
+| encoding_rs | `web_fetch`'s decoding by the declared character set | 224 | 332 | 272 | 5 | 490 |
+| all of the above together | | 7,616 | 6,864 | 4,720 | 150 | 7,150 |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
 Notes:
@@ -149,10 +149,10 @@ Notes:
   `regex`) and the matcher trait that gives each match's span for `-o`
   (`grep-matcher`, already in the tree through the other two), measured together walking the probe's own tree and searching every
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
-  x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search,
-  similar and together rows were measured on September 26, 2026.
-- The html5ever and encoding_rs rows, and the together row's macOS figure,
-  were measured on October 5, 2026; their Linux figures are not measured yet.
+  x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search and
+  similar rows were measured on September 26, 2026.
+- The html5ever, encoding_rs and together rows were measured on October 5,
+  2026.
 - html5ever's figure is a generated 64 KiB page through the tokenizer alone,
   counting tokens in the sink, as the converter does without a tree.
 - encoding_rs's figure is decoding a 64 KiB windows-1252 page by its declared
