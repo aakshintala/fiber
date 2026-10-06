@@ -34,6 +34,43 @@ struct Entry<'a> {
     rest: Vec<&'a str>,
 }
 
+/// The skill's body: the text after the header's closing `---` line,
+/// with blank lines at either end removed. `None` when there is no header
+/// (no opening or closing `---`). Everything after the closing fence is
+/// the body, including a later `---` line.
+pub(crate) fn body(text: &str) -> Option<String> {
+    // The fences, read like `parse` reads them: exactly `---`, down to
+    // the `\r` of a CRLF ending.
+    let mut consumed = 0;
+    let mut rest = None;
+    for (index, line) in text.split_inclusive('\n').enumerate() {
+        consumed += line.len();
+        let without_newline = line.strip_suffix('\n').unwrap_or(line);
+        let stripped = without_newline
+            .strip_suffix('\r')
+            .unwrap_or(without_newline);
+        if stripped == "---" {
+            if index > 0 {
+                rest = Some(&text[consumed..]);
+                break;
+            }
+        } else if index == 0 {
+            return None;
+        }
+    }
+    let rest = rest?;
+    let lines: Vec<&str> = rest.lines().collect();
+    let start = lines
+        .iter()
+        .position(|line| !line.trim().is_empty())
+        .unwrap_or(lines.len());
+    let end = lines
+        .iter()
+        .rposition(|line| !line.trim().is_empty())
+        .map_or(start, |last| last + 1);
+    Some(lines.get(start..end)?.join("\n"))
+}
+
 /// Parses the header at the start of `text`.
 pub(crate) fn parse(text: &str) -> Result<Header, Invalid> {
     let mut lines = text

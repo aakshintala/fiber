@@ -13,9 +13,10 @@ use std::sync::Arc;
 
 use contract::ErrorCode;
 use contract::events::{SkillListed, SkillSource};
+use contract::shapes::ContentPart;
 use fakes::clock::FakeClock;
 
-use super::{Found, discover, entry, listing, size_notice};
+use super::{Found, discover, entry, expand, listing, size_notice, split_command};
 use crate::prompt::PromptInputs;
 
 /// A temporary tree: `top` is the repository's top level, `home` is
@@ -750,4 +751,192 @@ fn both_shipped_texts_parse_with_the_name_of_their_directory() {
         assert!(header.model_invocable);
         assert!(!header.description.is_empty());
     }
+}
+
+/// Writes the `review-pr` skill with body `Review it.` into the
+/// repository's `.agents/skills/`.
+fn review_skill(tree: &Tree) {
+    write(
+        &tree.top().join(".agents/skills"),
+        "review-pr",
+        "---\nname: review-pr\ndescription: Reviews.\n---\nReview it.\n",
+    );
+}
+
+fn text_only(text: &str) -> Vec<ContentPart> {
+    vec![ContentPart::Text { text: text.into() }]
+}
+
+fn expand_text(
+    tree: &Tree,
+    inputs: &PromptInputs,
+    content: &[ContentPart],
+) -> Option<Vec<ContentPart>> {
+    expand(inputs, &tree.top(), content)
+}
+
+fn expanded(content: &[ContentPart]) -> &str {
+    let [ContentPart::Text { text }, ..] = content else {
+        panic!("the first part is text: {content:?}");
+    };
+    text
+}
+
+#[test]
+fn a_slash_command_expands_to_the_body_then_the_arguments() {
+    let tree = Tree::new();
+    review_skill(&tree);
+    let out = expand_text(&tree, &tree.inputs(), &text_only("/review-pr 42")).unwrap();
+    assert_eq!(expanded(&out), "Review it.\n\n42");
+}
+
+#[test]
+fn a_bare_slash_command_sends_the_body_alone() {
+    let tree = Tree::new();
+    review_skill(&tree);
+    for prompt in ["/review-pr", "/review-pr   "] {
+        let out = expand_text(&tree, &tree.inputs(), &text_only(prompt)).unwrap();
+        assert_eq!(expanded(&out), "Review it.", "{prompt:?}");
+    }
+}
+
+#[test]
+fn leading_whitespace_is_skipped_and_arguments_span_lines() {
+    let tree = Tree::new();
+    review_skill(&tree);
+    let out = expand_text(&tree, &tree.inputs(), &text_only("  /review-pr\n42 more")).unwrap();
+    assert_eq!(expanded(&out), "Review it.\n\n42 more");
+    // Tabs are whitespace too, not only spaces.
+    let out = expand_text(&tree, &tree.inputs(), &text_only("\t/review-pr\t42")).unwrap();
+    assert_eq!(expanded(&out), "Review it.\n\n42");
+}
+
+#[test]
+fn a_prompt_naming_no_skill_expands_nothing() {
+    let tree = Tree::new();
+    review_skill(&tree);
+    let inputs = tree.inputs();
+    for prompt in [
+        "/nope x",
+        "/",
+        "/ x",
+        "review-pr 42",
+        "/Review-pr 42",
+        "",
+        "   ",
+    ] {
+        assert_eq!(
+            expand_text(&tree, &inputs, &text_only(prompt)),
+            None,
+            "{prompt:?}"
+        );
+    }
+}
+
+#[test]
+fn the_split_names_no_command_without_a_slash_or_a_name() {
+    assert_eq!(split_command("/review-pr 42"), Some(("review-pr", "42")));
+    assert_eq!(
+        split_command("  /review-pr\n42 more"),
+        Some(("review-pr", "42 more"))
+    );
+    assert_eq!(split_command("/review-pr"), Some(("review-pr", "")));
+    assert_eq!(split_command("/review-pr   "), Some(("review-pr", "")));
+    assert_eq!(split_command("/"), None);
+    assert_eq!(split_command("/ x"), None);
+    assert_eq!(split_command("review-pr 42"), None);
+    assert_eq!(split_command(""), None);
+}
+
+#[test]
+fn a_prompt_template_expands() {
+    let tree = Tree::new();
+    write(
+        &tree.top().join(".agents/skills"),
+        "template",
+        "---\nname: template\ndescription: d\ndisable-model-invocation: true\n---\nFill this in.\n",
+    );
+    let out = expand_text(&tree, &tree.inputs(), &text_only("/template 42")).unwrap();
+    assert_eq!(expanded(&out), "Fill this in.\n\n42");
+}
+
+#[test]
+fn an_extension_prompt_expands() {
+    let tree = Tree::new();
+    let extension = tree.root.join("ext/acme");
+    write(
+        &extension.join("prompts"),
+        "deploy",
+        "---\nname: deploy\ndescription: d\n---\nDeploy it.\n",
+    );
+    let mut inputs = tree.inputs();
+    inputs.extension_dirs = vec![("acme".into(), extension)];
+    let out = expand_text(&tree, &inputs, &text_only("/deploy now")).unwrap();
+    assert_eq!(expanded(&out), "Deploy it.\n\nnow");
+}
+
+#[test]
+fn a_switched_off_skill_does_not_expand() {
+    let tree = Tree::new();
+    review_skill(&tree);
+    let mut inputs = tree.inputs();
+    inputs.skills_disabled = vec!["review-pr".into()];
+    assert_eq!(
+        expand_text(&tree, &inputs, &text_only("/review-pr 42")),
+        None
+    );
+}
+
+#[test]
+fn a_shared_name_expands_the_winner() {
+    let tree = Tree::new();
+    write(
+        &tree.top().join(".agents/skills"),
+        "a",
+        "---\nname: same\ndescription: d\n---\nRepository body.\n",
+    );
+    write(
+        &tree.home().join("skills"),
+        "a",
+        "---\nname: same\ndescription: d\n---\nHome body.\n",
+    );
+    let out = expand_text(&tree, &tree.inputs(), &text_only("/same 42")).unwrap();
+    assert_eq!(expanded(&out), "Repository body.\n\n42");
+}
+
+#[test]
+fn only_the_first_text_part_expands_and_the_rest_is_kept() {
+    let tree = Tree::new();
+    review_skill(&tree);
+    // A first part that is no text expands nothing.
+    let image = ContentPart::Image {
+        path: "artifacts/shot.png".into(),
+        mime_type: "image/png".into(),
+        width: 1,
+        height: 1,
+    };
+    assert_eq!(
+        expand_text(&tree, &tree.inputs(), std::slice::from_ref(&image)),
+        None
+    );
+    // Later parts stay as they are, in order.
+    let content = vec![
+        ContentPart::Text {
+            text: "/review-pr 42".into(),
+        },
+        ContentPart::Text {
+            text: "kept".into(),
+        },
+        image.clone(),
+    ];
+    let out = expand_text(&tree, &tree.inputs(), &content).unwrap();
+    assert_eq!(out.len(), 3);
+    assert_eq!(expanded(&out), "Review it.\n\n42");
+    assert_eq!(
+        out[1],
+        ContentPart::Text {
+            text: "kept".into()
+        }
+    );
+    assert_eq!(out[2], image);
 }
