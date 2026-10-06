@@ -294,3 +294,38 @@ fn latest_is_the_newest_line_of_each_kind_with_no_watcher() {
     );
     assert!(reopened.latest("session_status").is_none());
 }
+
+/// `try_recv` waits for nothing: with no line it is `None`, with queued
+/// lines it returns them in order, and a watcher that overflowed its queue
+/// gets every durable line it missed, re-read from the log, then `None`.
+#[test]
+fn try_recv_returns_what_is_available_including_the_catch_up_and_never_waits() {
+    let sessions = fakes::TempDir::new("log-unit-try-recv");
+    let log = Log::create(
+        sessions.path(),
+        SessionId("s_1".into()),
+        fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    let mut watcher = log.watch();
+    assert!(watcher.try_recv().unwrap().is_none());
+    let first = log.append(&step(), None, None).unwrap();
+    let ephemeral = log.append(&delta(), None, None).unwrap();
+    assert_eq!(watcher.try_recv().unwrap(), Some(first));
+    assert_eq!(watcher.try_recv().unwrap(), Some(ephemeral));
+    assert!(watcher.try_recv().unwrap().is_none());
+
+    // Overflow the queue: nothing was read, so the queue holds `CAPACITY`
+    // lines and the rest were dropped.
+    let total = crate::read::CAPACITY + 100;
+    for _ in 0..total {
+        log.append(&step(), None, None).unwrap();
+    }
+    let mut seqs = Vec::new();
+    while let Some(line) = watcher.try_recv().unwrap() {
+        seqs.extend(line.seq.map(|seq| seq.0));
+    }
+    let expected: Vec<u64> = (1..=u64::try_from(total).unwrap()).collect();
+    assert_eq!(seqs, expected);
+    assert!(watcher.try_recv().unwrap().is_none());
+}

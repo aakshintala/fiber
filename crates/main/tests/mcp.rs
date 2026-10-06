@@ -196,11 +196,19 @@ struct Run {
     stderr: String,
 }
 
+/// A `session_status` line: ephemeral, and written by an observer thread, so
+/// where it falls among the loop's own lines is not what these tests pin.
+/// `tests/socket.rs` reads it.
+fn is_status(line: &str) -> bool {
+    line.contains(r#""kind":"session_status""#)
+}
+
 impl From<Output> for Run {
     fn from(output: Output) -> Self {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let lines = stdout
             .lines()
+            .filter(|l| !is_status(l))
             .map(|line| serde_json::from_str(line).unwrap_or(Value::Null))
             .collect();
         Self {

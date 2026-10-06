@@ -49,7 +49,7 @@ pub(crate) fn complete_len(bytes: &[u8]) -> usize {
 // wait in it. The busy-session memory budget (`docs/performance.md`) and a
 // slow watcher's measured lag would set it.
 /// How many events a watcher's queue holds before it falls behind.
-const CAPACITY: usize = 1024;
+pub(crate) const CAPACITY: usize = 1024;
 
 /// One watcher's bounded queue, shared by the log that fills it and the
 /// watcher that drains it. The log holds it weakly, so a dropped watcher's
@@ -217,23 +217,42 @@ impl Watcher {
     /// dropped and every event written before that has been returned; an
     /// error, after those events, if the log stopped on a failed write.
     pub fn recv(&mut self) -> Result<Option<Envelope>, Error> {
+        self.next_line(true)
+    }
+
+    /// The next event if one is available now, without waiting: queued
+    /// lines first, then, when the watcher fell behind, the durable lines
+    /// it missed, re-read from the log. `None` when nothing is available.
+    pub fn try_recv(&mut self) -> Result<Option<Envelope>, Error> {
+        self.next_line(false)
+    }
+
+    fn next_line(&mut self, wait: bool) -> Result<Option<Envelope>, Error> {
         loop {
             let line = match self.backlog.pop_front() {
                 Some(line) => line,
-                None => match self.take() {
-                    Taken::Line(line) => line,
-                    Taken::CatchUp => {
-                        // debt: re-reads the whole log to find the lines it
-                        // missed; a read from an offset by `seq` when logs grow
-                        // large enough for a lagging watcher to notice.
-                        self.backlog = read(&self.dir)?.into();
-                        continue;
+                None => {
+                    let taken = if wait {
+                        Some(self.take())
+                    } else {
+                        poll(&mut self.queue.lock())
+                    };
+                    match taken {
+                        None => return Ok(None),
+                        Some(Taken::Line(line)) => line,
+                        Some(Taken::CatchUp) => {
+                            // debt: re-reads the whole log to find the lines it
+                            // missed; a read from an offset by `seq` when logs grow
+                            // large enough for a lagging watcher to notice.
+                            self.backlog = read(&self.dir)?.into();
+                            continue;
+                        }
+                        Some(Taken::End(End::Failed { session, cause })) => {
+                            return Err(Error::Poisoned { session, cause });
+                        }
+                        Some(Taken::End(End::Open | End::Closed)) => return Ok(None),
                     }
-                    Taken::End(End::Failed { session, cause }) => {
-                        return Err(Error::Poisoned { session, cause });
-                    }
-                    Taken::End(End::Open | End::Closed) => return Ok(None),
-                },
+                }
             };
             match line.seq {
                 // Already returned, from the queue or from the log.
@@ -256,16 +275,8 @@ impl Watcher {
     fn take(&self) -> Taken {
         let mut state = self.queue.lock();
         loop {
-            if let Some(line) = state.queue.pop_front() {
-                return Taken::Line(line);
-            }
-            if state.lagged {
-                state.lagged = false;
-                return Taken::CatchUp;
-            }
-            match std::mem::replace(&mut state.end, End::Closed) {
-                End::Open => state.end = End::Open,
-                end @ (End::Closed | End::Failed { .. }) => return Taken::End(end),
+            if let Some(taken) = poll(&mut state) {
+                return taken;
             }
             state = self
                 .queue
@@ -273,5 +284,24 @@ impl Watcher {
                 .wait(state)
                 .unwrap_or_else(PoisonError::into_inner);
         }
+    }
+}
+
+/// What is available now, in [`Watcher::take`]'s order; `None` when nothing
+/// is and the log is open.
+fn poll(state: &mut State) -> Option<Taken> {
+    if let Some(line) = state.queue.pop_front() {
+        return Some(Taken::Line(line));
+    }
+    if state.lagged {
+        state.lagged = false;
+        return Some(Taken::CatchUp);
+    }
+    match std::mem::replace(&mut state.end, End::Closed) {
+        End::Open => {
+            state.end = End::Open;
+            None
+        }
+        end @ (End::Closed | End::Failed { .. }) => Some(Taken::End(end)),
     }
 }

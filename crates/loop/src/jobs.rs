@@ -54,7 +54,7 @@ pub(crate) enum Queued {
 pub(crate) struct Ending {
     /// The session's jobs. `None`: no job ever runs, and the loop ends as
     /// it would without jobs.
-    jobs: Option<Arc<dyn Jobs>>,
+    pub(crate) jobs: Option<Arc<dyn Jobs>>,
     /// The ending notice was given. It is given once per process.
     notified: bool,
     /// A turn started after `close` was taken: it, and every later turn,

@@ -396,3 +396,96 @@ fn two_clients_see_the_log_while_ask_is_held() {
     drop(first);
     drop(second);
 }
+
+#[test]
+fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    server.hold();
+    setup.provider(&server);
+    let running = start(&setup);
+    let started = first_line(&running.stdout);
+    let session_id = started["session_id"].as_str().unwrap().to_owned();
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "the held response was requested"
+    );
+
+    let client = Client::connect(&setup.home().join("run").join(&session_id)).unwrap();
+    send(
+        &client,
+        r#"{"id":"c_sum","command":"subscribe","args":{"level":"summary"}}"#,
+    );
+    // The reply is held, so the turn is streaming: the subscriber is sent
+    // that status at once, whenever it was written.
+    let held = until(&client, "a streaming session_status", |line| {
+        line["kind"] == "session_status" && line["payload"]["state"] == "streaming"
+    });
+    // A summary subscriber reads the latest `session_status` and
+    // `extensions_loaded`, and the acknowledgement of its own command.
+    assert!(held.iter().all(|line| matches!(
+        line["kind"].as_str(),
+        Some("session_status" | "extensions_loaded" | "command_accepted")
+    )));
+    assert!(
+        held.iter()
+            .filter(|line| line["kind"] == "session_status")
+            .all(|line| line.get("seq").is_none())
+    );
+    let streaming = held.last().unwrap();
+    assert_eq!(streaming["payload"]["name"], "hi");
+    assert_eq!(streaming["payload"]["model"], "fake/m");
+    assert_eq!(streaming["session_id"], session_id);
+    server.release();
+    let rest = until(&client, "the idle session_status", |line| {
+        line["kind"] == "session_status" && line["payload"]["state"] == "idle"
+    });
+    // `extensions_loaded` follows the first status on subscribe.
+    assert!(rest.iter().all(|line| matches!(
+        line["kind"].as_str(),
+        Some("session_status" | "extensions_loaded")
+    )));
+    assert!(
+        rest.iter()
+            .filter(|line| line["kind"] == "session_status")
+            .all(|line| line.get("seq").is_none())
+    );
+    let idle = rest.last().unwrap();
+    assert_eq!(idle["payload"]["name"], "hi");
+    assert_eq!(idle["payload"]["jobs"], 0);
+    assert_eq!(idle["payload"]["delegates"], 0);
+    assert!(
+        idle["payload"]["since"].as_u64().unwrap()
+            >= streaming["payload"]["since"].as_u64().unwrap()
+    );
+
+    // `fiber_exited` is the last line on stdout, and the status before it
+    // reads idle.
+    let mut out = Vec::new();
+    loop {
+        let line: Value = serde_json::from_str(
+            &running
+                .stdout
+                .recv_timeout(DEADLINE)
+                .expect("waited for fiber_exited"),
+        )
+        .unwrap();
+        let last = line["kind"] == "fiber_exited";
+        out.push(line);
+        if last {
+            break;
+        }
+    }
+    assert_eq!(
+        running.stdout.recv_timeout(DEADLINE),
+        Err(mpsc::RecvTimeoutError::Disconnected),
+        "nothing follows fiber_exited"
+    );
+    let last_status = out
+        .iter()
+        .rfind(|line| line["kind"] == "session_status")
+        .expect("a session_status on stdout");
+    assert_eq!(last_status["payload"]["state"], "idle");
+    finish(running);
+    drop(client);
+}
