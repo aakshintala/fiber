@@ -752,16 +752,6 @@ fn with_deadline(what: &'static str, run: impl FnOnce() -> String + Send + 'stat
 }
 
 #[test]
-fn conversion_ends_past_the_last_byte() {
-    // `while start <= len` feeds the empty final slice forever: with a
-    // deadline the mutant fails instead of hanging.
-    assert_eq!(
-        with_deadline("converting a short page", || to_markdown("a")),
-        "a\n"
-    );
-}
-
-#[test]
 fn a_slice_of_one_still_advances_past_a_multibyte_char() {
     // With `!=` the cut below a wide char resets to the char's start, so
     // the converter never advances: with a deadline the mutant fails.

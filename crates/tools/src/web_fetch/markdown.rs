@@ -40,7 +40,8 @@ fn convert(html: &str, slice: usize) -> String {
     let queue = BufferQueue::default();
     let bytes = html.as_bytes();
     let mut start = 0;
-    while start < bytes.len() {
+    // `end` never passes the length, so the cuts land on it exactly.
+    while start != bytes.len() {
         let mut end = bytes.len().min(start.saturating_add(slice));
         // Cutting on a boundary cuts nothing (`floor` returns it), so the
         // cut runs unconditionally: one less check a mutant could flip.
