@@ -12,7 +12,6 @@
 mod support;
 
 use std::sync::Arc;
-use std::sync::mpsc;
 use std::thread;
 
 use contract::commands::{Reply, ReplyAnswer};
@@ -84,21 +83,14 @@ fn on_request(
 ) -> thread::JoinHandle<()> {
     let mut watcher = session.log.watch();
     thread::spawn(move || {
-        // The watcher blocks without a deadline, so its lines cross an mpsc
-        // channel, as in `Session::open`, and the wait below carries the
-        // deadline instead.
-        let (forward, waiting) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                if forward.send(line).is_err() {
-                    return;
-                }
-            }
-        });
         loop {
-            let line = waiting
+            let line = watcher
                 .recv_timeout(support::DEADLINE)
-                .expect("a permission_requested line");
+                .expect("a permission_requested line in time")
+                .expect("the log outlives the request");
+            let Some(line) = line else {
+                panic!("the log ended before permission_requested");
+            };
             if line.kind == "permission_requested" {
                 send(RequestId(
                     line.payload["request_id"].as_str().unwrap().into(),

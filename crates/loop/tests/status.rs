@@ -21,34 +21,23 @@ use contract::inbox::Delivery;
 use contract::provider::Provider;
 use contract::tool::Tool;
 use fakes::Scripted;
-use log::Log;
+use log::Watcher;
 use r#loop::{Loop, Model};
 
 use support::{DEADLINE, MODEL, Session, TestTool, delivery, ignore, tool_call_reply};
 
-/// Every line the log emits from now on, on a channel: the watcher blocks
-/// without a deadline, so each receive below carries [`DEADLINE`].
-fn tap(log: &Log) -> Receiver<Envelope> {
-    let mut watcher = log.watch();
-    let (forward, lines) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
-            if forward.send(line).is_err() {
-                return;
-            }
-        }
-    });
-    lines
-}
-
-/// The `session_status` lines on `lines`, up to and including the first one
-/// `until` accepts.
-fn statuses_until(lines: &Receiver<Envelope>, until: impl Fn(&Envelope) -> bool) -> Vec<Envelope> {
+/// The `session_status` lines from now on, up to and including the first one
+/// `until` accepts. Each wait carries [`DEADLINE`].
+fn statuses_until(watcher: &mut Watcher, until: impl Fn(&Envelope) -> bool) -> Vec<Envelope> {
     let mut found = Vec::new();
     loop {
-        let line = lines
+        let line = watcher
             .recv_timeout(DEADLINE)
-            .expect("a session_status the test waits for");
+            .expect("a session_status the test waits for in time")
+            .expect("the log outlives the status");
+        let Some(line) = line else {
+            panic!("the log ended before the awaited session_status");
+        };
         if line.kind != "session_status" {
             continue;
         }
@@ -86,10 +75,10 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
         None,
         vec![weather as Arc<dyn Tool>],
     );
-    let lines = tap(&session.log);
+    let mut watcher = session.log.watch();
     session.inbox.send(delivery("say hi")).unwrap();
     let finished = run(session.looped.take().unwrap());
-    let seen = statuses_until(&lines, idle_named("say hi"));
+    let seen = statuses_until(&mut watcher, idle_named("say hi"));
     // The first status is the one written at the start: nothing has run.
     assert_eq!(seen[0].payload["state"], "idle");
     assert_eq!(seen[0].payload["name"], "");
@@ -132,10 +121,10 @@ fn a_running_session_writes_its_status_at_the_start_and_at_each_change() {
 #[test]
 fn no_status_follows_the_line_written_after_run_returns() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
-    let lines = tap(&session.log);
+    let mut watcher = session.log.watch();
     session.inbox.send(delivery("go")).unwrap();
     let finished = run(session.looped.take().unwrap());
-    let seen = statuses_until(&lines, idle_named("go"));
+    let seen = statuses_until(&mut watcher, idle_named("go"));
     assert_eq!(seen.last().unwrap().payload["state"], "idle");
     session.inbox.send(Delivery::Close(ignore())).unwrap();
     finished
@@ -145,7 +134,13 @@ fn no_status_follows_the_line_written_after_run_returns() {
     // As `fiber ask` does: `fiber_exited` after `run` returns.
     r#loop::fiber_exited(&session.log, &session.dir, Ok(())).unwrap();
     loop {
-        let line = lines.recv_timeout(DEADLINE).expect("fiber_exited arrives");
+        let line = watcher
+            .recv_timeout(DEADLINE)
+            .expect("fiber_exited arrives in time")
+            .expect("the log outlives fiber_exited");
+        let Some(line) = line else {
+            panic!("the log ended before fiber_exited");
+        };
         assert_ne!(
             line.kind, "session_status",
             "no status after the loop ended"
@@ -154,16 +149,19 @@ fn no_status_follows_the_line_written_after_run_returns() {
             break;
         }
     }
-    assert!(lines.try_recv().is_err(), "fiber_exited is the last line");
+    assert!(
+        watcher.try_recv().unwrap().is_none(),
+        "fiber_exited is the last line"
+    );
 }
 
 #[test]
 fn a_resumed_session_writes_one_status_for_its_history() {
     let mut session = Session::new(vec![Scripted::text("Hi.")], None);
-    let first = tap(&session.log);
+    let mut first = session.log.watch();
     session.inbox.send(delivery("say hi")).unwrap();
     let finished = run(session.looped.take().unwrap());
-    statuses_until(&first, idle_named("say hi"));
+    statuses_until(&mut first, idle_named("say hi"));
     session.inbox.send(Delivery::Close(ignore())).unwrap();
     finished
         .recv_timeout(DEADLINE)
@@ -171,7 +169,7 @@ fn a_resumed_session_writes_one_status_for_its_history() {
         .unwrap();
 
     let history = log::read(&session.dir).unwrap();
-    let lines = tap(&session.log);
+    let mut lines = session.log.watch();
     let (inbox, rx) = mpsc::channel::<Delivery>();
     let clock: Arc<dyn contract::clock::Clock> = fakes::clock::FakeClock::new();
     let resumed = Loop::resume(
@@ -199,7 +197,7 @@ fn a_resumed_session_writes_one_status_for_its_history() {
     )
     .unwrap();
     let finished = run(resumed);
-    let seen = statuses_until(&lines, |_| true);
+    let seen = statuses_until(&mut lines, |_| true);
     assert_eq!(seen[0].payload["name"], "say hi");
     assert_eq!(seen[0].payload["state"], "idle");
     drop(inbox);
@@ -208,5 +206,14 @@ fn a_resumed_session_writes_one_status_for_its_history() {
         .expect("the loop ended with its inbox")
         .unwrap();
     // One status for the whole history, and none after it.
-    assert!(lines.try_iter().all(|line| line.kind != "session_status"));
+    loop {
+        match lines.try_recv() {
+            Ok(Some(line)) => assert_ne!(
+                line.kind, "session_status",
+                "only one status for the whole history"
+            ),
+            Ok(None) => break,
+            Err(e) => panic!("the resumed watcher failed: {e}"),
+        }
+    }
 }

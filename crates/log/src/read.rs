@@ -7,6 +7,7 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, Weak};
+use std::time::Duration;
 
 use contract::Envelope;
 
@@ -183,6 +184,18 @@ enum Taken {
     End(End),
 }
 
+/// How long [`Watcher::next_line`] waits for its queue.
+#[derive(Clone, Copy)]
+enum Wait {
+    /// Until a line, the need to catch up, or the end arrives.
+    Forever,
+    /// Not at all: only what is already available.
+    Now,
+    /// Until `Duration` passes with nothing arriving in the queue. Each
+    /// wait on the queue gets the full duration again.
+    For(Duration),
+}
+
 impl Watcher {
     pub(crate) fn new(queue: Arc<Queue>, dir: PathBuf, next: u64) -> Self {
         Self {
@@ -217,40 +230,69 @@ impl Watcher {
     /// dropped and every event written before that has been returned; an
     /// error, after those events, if the log stopped on a failed write.
     pub fn recv(&mut self) -> Result<Option<Envelope>, Error> {
-        self.next_line(true)
+        // A wait without a deadline always resolves; a timeout would mean
+        // it gave up, which it never does, so the loop runs once.
+        loop {
+            if let Some(result) = self.next_line(Wait::Forever) {
+                return result;
+            }
+        }
     }
 
     /// The next event if one is available now, without waiting: queued
     /// lines first, then, when the watcher fell behind, the durable lines
     /// it missed, re-read from the log. `None` when nothing is available.
     pub fn try_recv(&mut self) -> Result<Option<Envelope>, Error> {
-        self.next_line(false)
+        // Waiting for nothing now always resolves, as above.
+        loop {
+            if let Some(result) = self.next_line(Wait::Now) {
+                return result;
+            }
+        }
     }
 
-    fn next_line(&mut self, wait: bool) -> Result<Option<Envelope>, Error> {
+    /// What [`Watcher::recv`] would return, if it returns before `timeout`
+    /// passes with nothing arriving in this watcher's queue; `None` if it
+    /// does not. A timeout consumes nothing: the next call carries on.
+    pub fn recv_timeout(&mut self, timeout: Duration) -> Option<Result<Option<Envelope>, Error>> {
+        self.next_line(Wait::For(timeout))
+    }
+
+    fn next_line(&mut self, wait: Wait) -> Option<Result<Option<Envelope>, Error>> {
         loop {
             let line = match self.backlog.pop_front() {
                 Some(line) => line,
                 None => {
-                    let taken = if wait {
-                        Some(self.take())
-                    } else {
-                        poll(&mut self.queue.lock())
+                    let taken = match wait {
+                        Wait::Forever => Some(self.take()),
+                        Wait::Now => poll(&mut self.queue.lock()),
+                        Wait::For(timeout) => self.take_timeout(timeout),
                     };
                     match taken {
-                        None => return Ok(None),
+                        None => {
+                            return match wait {
+                                // A timeout consumes nothing.
+                                Wait::For(_) => None,
+                                Wait::Forever | Wait::Now => Some(Ok(None)),
+                            };
+                        }
                         Some(Taken::Line(line)) => line,
                         Some(Taken::CatchUp) => {
                             // debt: re-reads the whole log to find the lines it
                             // missed; a read from an offset by `seq` when logs grow
                             // large enough for a lagging watcher to notice.
-                            self.backlog = read(&self.dir)?.into();
-                            continue;
+                            match read(&self.dir) {
+                                Ok(lines) => {
+                                    self.backlog = lines.into();
+                                    continue;
+                                }
+                                Err(e) => return Some(Err(e)),
+                            }
                         }
                         Some(Taken::End(End::Failed { session, cause })) => {
-                            return Err(Error::Poisoned { session, cause });
+                            return Some(Err(Error::Poisoned { session, cause }));
                         }
-                        Some(Taken::End(End::Open | End::Closed)) => return Ok(None),
+                        Some(Taken::End(End::Open | End::Closed)) => return Some(Ok(None)),
                     }
                 }
             };
@@ -259,9 +301,9 @@ impl Watcher {
                 Some(seq) if seq.0 < self.next => {}
                 Some(seq) => {
                     self.next = seq.0 + 1;
-                    return Ok(Some(line));
+                    return Some(Ok(Some(line)));
                 }
-                None => return Ok(Some(line)),
+                None => return Some(Ok(Some(line))),
             }
         }
     }
@@ -285,6 +327,23 @@ impl Watcher {
                 .unwrap_or_else(PoisonError::into_inner);
         }
     }
+
+    /// What [`Watcher::take`] would return, if it returns before `timeout`
+    /// passes with nothing arriving in this watcher's queue; `None` if it
+    /// does not. Gives up when `timeout` passes with nothing arriving in
+    /// its queue: the backlog drain and a catch-up re-read are not waits,
+    /// and a wait after a catch-up that yielded nothing new gets the full
+    /// `timeout` again. A catch-up re-read error is returned at once by
+    /// the caller, as [`Watcher::recv`] does.
+    fn take_timeout(&self, timeout: Duration) -> Option<Taken> {
+        let state = self.queue.lock();
+        let (mut state, _wait) = self
+            .queue
+            .ready
+            .wait_timeout_while(state, timeout, |state| !pending(state))
+            .unwrap_or_else(PoisonError::into_inner);
+        poll(&mut state)
+    }
 }
 
 /// What is available now, in [`Watcher::take`]'s order; `None` when nothing
@@ -304,4 +363,12 @@ fn poll(state: &mut State) -> Option<Taken> {
         }
         end @ (End::Closed | End::Failed { .. }) => Some(Taken::End(end)),
     }
+}
+
+/// Whether [`poll`] would return something: a queued line, the need to
+/// catch up, or the end. An end already handed over reads as closed, so it
+/// still counts. The [`Watcher::take_timeout`] predicate, in [`poll`]'s
+/// order, without consuming anything.
+fn pending(state: &State) -> bool {
+    !state.queue.is_empty() || state.lagged || !matches!(state.end, End::Open)
 }

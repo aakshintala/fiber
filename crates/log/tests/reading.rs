@@ -148,6 +148,119 @@ fn a_watcher_that_falls_behind_rereads_durable_lines_from_the_log() {
 }
 
 #[test]
+fn recv_timeout_returns_an_available_line_without_waiting() {
+    let tmp = TestDir::new("recv-timeout-ready");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let mut watcher = log.watch();
+    let written = log.append(&session_started(), None, None).unwrap();
+    let got = watcher
+        .recv_timeout(Duration::ZERO)
+        .expect("an available line needs no wait")
+        .unwrap()
+        .expect("the line written before the call");
+    assert_eq!(got, written);
+}
+
+#[test]
+fn recv_timeout_times_out_without_losing_the_next_line() {
+    let tmp = TestDir::new("recv-timeout-empty");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let mut watcher = log.watch();
+    assert!(
+        watcher.recv_timeout(Duration::ZERO).is_none(),
+        "nothing written yet"
+    );
+    let written = log.append(&session_started(), None, None).unwrap();
+    let got = watcher
+        .recv_timeout(DEADLINE)
+        .expect("a line written after the timeout")
+        .unwrap()
+        .expect("the line written after the timeout");
+    assert_eq!(got, written);
+}
+
+#[test]
+fn recv_timeout_returns_a_line_written_while_it_waits() {
+    let tmp = TestDir::new("recv-timeout-wait");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let mut watcher = log.watch();
+    thread::scope(|s| {
+        let waiting = s.spawn(|| {
+            watcher
+                .recv_timeout(DEADLINE)
+                .expect("a line written while waiting")
+        });
+        let written = log.append(&session_started(), None, None).unwrap();
+        let got = waiting.join().unwrap().unwrap().expect("the waited line");
+        assert_eq!(got, written);
+    });
+}
+
+#[test]
+fn recv_timeout_ends_with_its_log_once_it_has_every_line() {
+    let tmp = TestDir::new("recv-timeout-end");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let mut watcher = log.watch();
+    let written = [
+        log.append(&session_started(), None, None).unwrap(),
+        log.append(&delta("a"), None, None).unwrap(),
+    ];
+    drop(log);
+    for line in written {
+        let got = watcher
+            .recv_timeout(DEADLINE)
+            .expect("a line written before the end")
+            .unwrap()
+            .expect("a line written before the end");
+        assert_eq!(got, line);
+    }
+    let end = watcher
+        .recv_timeout(DEADLINE)
+        .expect("the end after every line")
+        .unwrap();
+    assert!(end.is_none(), "the end after every line");
+}
+
+#[test]
+fn a_watcher_that_falls_behind_catches_up_through_recv_timeout() {
+    let tmp = TestDir::new("recv-timeout-lag");
+    let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();
+    let mut watcher = log.watch();
+    // Past any bounded queue while nobody receives, ending on a durable line.
+    let durable: Vec<Envelope> = (0..600)
+        .map(|_| {
+            log.append(&delta("x"), None, None).unwrap();
+            log.append(&empty("step_started"), None, None).unwrap()
+        })
+        .collect();
+    let mut got = Vec::new();
+    let mut ephemeral = 0;
+    while got.len() < durable.len() {
+        let line = watcher
+            .recv_timeout(DEADLINE)
+            .expect("a catch-up line before the deadline")
+            .unwrap()
+            .expect("a catch-up line before the end");
+        if line.is_durable() {
+            got.push(line);
+        } else {
+            ephemeral += 1;
+        }
+    }
+    assert_eq!(got, durable);
+    // The queue is bounded: the ephemeral lines it had no room for are gone.
+    assert!(ephemeral < durable.len(), "{ephemeral} ephemeral lines");
+    // Once caught up, lines arrive as they are written.
+    let live = log.append(&delta("live"), None, None).unwrap();
+    let got = watcher
+        .recv_timeout(DEADLINE)
+        .expect("a live line before the deadline")
+        .unwrap()
+        .expect("a live line after the catch-up");
+    assert_eq!(got, live);
+}
+
+#[test]
 fn a_dropped_watcher_does_not_stop_the_log() {
     let tmp = TestDir::new("watch-drop");
     let log = Log::create(tmp.path(), id("s_1"), fakes::clock::FakeClock::new()).unwrap();

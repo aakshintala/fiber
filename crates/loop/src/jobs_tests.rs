@@ -34,7 +34,7 @@ use contract::tool::{Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, ErrorCode, JobId, RequestId, SessionId};
 use fakes::jobs::FakeJobs;
 use fakes::{Scripted, ScriptedProvider};
-use log::Log;
+use log::{Log, Watcher};
 use serde_json::{Map, Value, json};
 
 use super::{line_text, notice_text};
@@ -273,7 +273,7 @@ struct World {
     provider: Arc<ScriptedProvider>,
     looped: Option<Loop>,
     /// Every line written, ephemeral ones too, from the loop's start.
-    watched: mpsc::Receiver<Envelope>,
+    watched: Watcher,
     clock: Arc<fakes::clock::FakeClock>,
 }
 
@@ -293,19 +293,7 @@ impl World {
         let log = Arc::new(
             Log::create(home.path(), SessionId("s_test".into()), Arc::clone(&clock)).unwrap(),
         );
-        // The watcher blocks without a deadline, so its lines cross a
-        // channel and [`World::watched`] carries the deadline.
-        let mut watcher = log.watch();
-        let (forward, watched) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                // `run` starts the status observer, whose lines race the
-                // loop's own and are not what these tests pin.
-                if line.kind != "session_status" && forward.send(line).is_err() {
-                    return;
-                }
-            }
-        });
+        let watched = log.watch();
         let provider = Arc::new(ScriptedProvider::new(script));
         let (inbox, rx) = mpsc::channel();
         let during = During {
@@ -362,7 +350,16 @@ impl World {
             let line = self
                 .watched
                 .recv_timeout(DEADLINE)
-                .expect("a turn_completed line");
+                .expect("a turn_completed line in time")
+                .expect("the log outlives the turn");
+            let Some(line) = line else {
+                panic!("the log ended before turn_completed");
+            };
+            // `run` starts the status observer, whose lines race the
+            // loop's own and are not what these tests pin.
+            if line.kind == "session_status" {
+                continue;
+            }
             let done = line.kind == "turn_completed";
             lines.push(line);
             if done {
@@ -889,20 +886,14 @@ fn a_notice_during_the_final_reply_continues_the_turn() {
 fn on_request(log: &Log, send: impl FnOnce(RequestId) + Send + 'static) -> thread::JoinHandle<()> {
     let mut watcher = log.watch();
     thread::spawn(move || {
-        // The watcher blocks without a deadline, so its lines cross a
-        // channel and the wait below carries the deadline.
-        let (forward, waiting) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                if forward.send(line).is_err() {
-                    return;
-                }
-            }
-        });
         loop {
-            let line = waiting
+            let line = watcher
                 .recv_timeout(DEADLINE)
-                .expect("a permission_requested line");
+                .expect("a permission_requested line in time")
+                .expect("the log outlives the request");
+            let Some(line) = line else {
+                panic!("the log ended before permission_requested");
+            };
             if line.kind == "permission_requested" {
                 send(RequestId(
                     line.payload["request_id"].as_str().unwrap().into(),
