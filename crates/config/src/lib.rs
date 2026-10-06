@@ -40,7 +40,7 @@ pub use secret::{
     CredentialSource, Secret, credential_labels, delete_credential, delete_credential_held,
     read_credential, read_secret, store_credential, store_secret,
 };
-pub use write::{Scope, remove_extension_settings, set_global, set_global_if_unset};
+pub use write::{Layer, Scope, remove_extension_settings, set, set_global, set_global_if_unset};
 
 use home::{parse, plain, read, read_bytes};
 
@@ -366,6 +366,12 @@ impl Config {
             .insert(file, cached.to_string().into_bytes());
         Ok(())
     }
+}
+
+/// Whether `key` names a row of `docs/configuration.md`, "Keys", as
+/// `fiber config get` checks it: any other key is a usage error.
+pub fn known_key(key: &str) -> bool {
+    path::parse(key).is_some_and(|segments| keys::leaf(&segments).is_some())
 }
 
 /// An extension package a repository ships: one entry of

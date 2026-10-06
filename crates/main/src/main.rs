@@ -40,7 +40,7 @@ use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
-use config::{Config, Sources};
+use config::{Config, Layer, Sources};
 use connect::connect;
 use contract::inbox::Delivery;
 use contract::provider::Provider;
@@ -144,6 +144,24 @@ fn run() -> i32 {
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
+        cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
+            cli::ConfigCommands::Get { key } => ::cli::config_get(&key),
+            cli::ConfigCommands::Set {
+                project,
+                repo,
+                key,
+                value,
+            } => {
+                let layer = if repo {
+                    Layer::Repository
+                } else if project {
+                    Layer::Project
+                } else {
+                    Layer::Global
+                };
+                ::cli::config_set(layer, &key, &value)
+            }
+        },
         cli::Invocation::Run(Some(cli::Commands::Login(args))) => {
             ::cli::run_login(args.provider.as_deref(), args.label.as_deref())
         }

@@ -32,6 +32,10 @@ Extensions:
   extension list                    List installed extensions: name, version and commit
   approve [--yes]                   Show what this repository ships and approve it
 
+Configuration:
+  config get <key>                              Print the effective value and the layer it came from
+  config set [--project | --repo] <key> <value>  Write one key in one layer's file
+
 Flags:
   -h, --help     Print this menu
   -v, --version  Print the version
@@ -92,6 +96,9 @@ pub(crate) enum Commands {
     Extension(ExtensionCommands),
     /// Show what this repository ships and approve it
     Approve(ApproveArgs),
+    /// Print a configuration value, or write one
+    #[command(subcommand, arg_required_else_help = false)]
+    Config(ConfigCommands),
     /// Store a provider's key
     Login(LoginArgs),
     /// Delete a provider's stored key
@@ -180,6 +187,32 @@ pub(crate) enum ExtensionCommands {
     },
     /// List installed extensions: name, version and commit
     List,
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
+pub(crate) enum ConfigCommands {
+    /// Print the effective value and the layer it came from
+    Get {
+        /// The dotted key, such as `model` or `handoff.tokens`.
+        #[arg(value_name = "key")]
+        key: String,
+    },
+    /// Write one key in one layer's file
+    Set {
+        /// Write the per-project file in Fiber home.
+        #[arg(long, conflicts_with = "repo")]
+        project: bool,
+        /// Write the repository's `.fiber/config.json`.
+        #[arg(long, conflicts_with = "project")]
+        repo: bool,
+        /// The dotted key, such as `model`.
+        #[arg(value_name = "key")]
+        key: String,
+        /// The value as JSON, or a bare string when it does not parse as JSON.
+        #[arg(value_name = "value")]
+        value: String,
+    },
 }
 
 #[derive(Debug, clap::Args)]

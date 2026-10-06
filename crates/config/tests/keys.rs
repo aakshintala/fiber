@@ -600,3 +600,36 @@ fn with_no_files_the_configuration_is_the_built_in_defaults() {
         Some((json!(400000), Source::Default))
     );
 }
+
+#[test]
+fn set_refuses_a_key_at_the_wrong_layer_naming_the_key() {
+    let setup = Setup::new();
+    let e = config::set(
+        &setup.home(),
+        &setup.workspace(),
+        &common::key(),
+        config::Layer::Global,
+        "repository_extensions",
+        json!([{"path": "pkg"}]),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert!(e.to_string().contains("`repository_extensions`"), "{e}");
+    assert!(
+        e.to_string()
+            .contains("only a repository's own file may set it"),
+        "{e}"
+    );
+    let e = config::set(
+        &setup.home(),
+        &setup.workspace(),
+        &common::key(),
+        config::Layer::Repository,
+        "session.idle_exit_ms",
+        json!(60000),
+    )
+    .unwrap_err();
+    assert_eq!(e.code(), ErrorCode::Usage);
+    assert!(e.to_string().contains("`session.idle_exit_ms`"), "{e}");
+    assert!(e.to_string().contains("a repository may not set it"), "{e}");
+}

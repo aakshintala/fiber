@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use clap::error::ContextValue;
 
 use super::{
-    Commands, ExtensionCommands, Invocation, MENU, SessionsCommands, command, parse_from,
-    usage_sentence, version_line,
+    Commands, ConfigCommands, ExtensionCommands, Invocation, MENU, SessionsCommands, command,
+    parse_from, usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -598,6 +598,7 @@ fn the_search_subcommands_stay_hidden_but_parse_everything_after() {
             "models",
             "extension",
             "approve",
+            "config",
             "login",
             "logout",
             "version",
@@ -660,6 +661,7 @@ fn the_image_subcommand_is_hidden_and_passes_its_arguments_through() {
             "models",
             "extension",
             "approve",
+            "config",
             "login",
             "logout",
             "version",
@@ -812,4 +814,105 @@ fn a_session_usage_error_fails_before_any_session_like_ask() {
     ]);
     assert!(ask);
     assert!(bad_id.contains("session id"), "{bad_id}");
+}
+
+#[test]
+fn config_get_takes_a_key() {
+    let Invocation::Run(Some(Commands::Config(ConfigCommands::Get { key }))) =
+        parse_from(["fiber", "config", "get", "model"])
+    else {
+        panic!("config get model");
+    };
+    assert_eq!(key, "model");
+}
+
+#[test]
+fn config_set_takes_scopes_a_key_and_a_value() {
+    let Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
+        project,
+        repo,
+        key,
+        value,
+    }))) = parse_from(["fiber", "config", "set", "model", "a/b"])
+    else {
+        panic!("config set model a/b");
+    };
+    assert!(!project);
+    assert!(!repo);
+    assert_eq!(key, "model");
+    assert_eq!(value, "a/b");
+    let Invocation::Run(Some(Commands::Config(ConfigCommands::Set {
+        project,
+        repo,
+        key,
+        value,
+    }))) = parse_from([
+        "fiber",
+        "config",
+        "set",
+        "--project",
+        "handoff.tokens",
+        "200000",
+    ])
+    else {
+        panic!("config set --project");
+    };
+    assert!(project);
+    assert!(!repo);
+    assert_eq!(key, "handoff.tokens");
+    assert_eq!(value, "200000");
+    let Invocation::Run(Some(Commands::Config(ConfigCommands::Set { repo, .. }))) =
+        parse_from(["fiber", "config", "set", "--repo", "model", "a/b"])
+    else {
+        panic!("config set --repo");
+    };
+    assert!(repo);
+}
+
+#[test]
+fn config_set_with_both_scopes_is_a_usage_error() {
+    assert!(
+        sentence(&[
+            "fiber",
+            "config",
+            "set",
+            "--project",
+            "--repo",
+            "model",
+            "a/b"
+        ])
+        .contains("--project"),
+        "{}",
+        sentence(&[
+            "fiber",
+            "config",
+            "set",
+            "--project",
+            "--repo",
+            "model",
+            "a/b"
+        ])
+    );
+}
+
+#[test]
+fn config_set_without_a_value_names_it() {
+    assert!(
+        sentence(&["fiber", "config", "set", "model"]).contains("<value>"),
+        "{}",
+        sentence(&["fiber", "config", "set", "model"])
+    );
+}
+
+#[test]
+fn the_menu_lists_config_get_and_set_under_configuration() {
+    assert!(
+        menu().contains(
+            "Configuration:\n\
+             \x20\x20config get <key>                              Print the effective value and the layer it came from\n\
+             \x20\x20config set [--project | --repo] <key> <value>  Write one key in one layer's file\n"
+        ),
+        "{}",
+        menu()
+    );
 }

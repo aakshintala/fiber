@@ -48,6 +48,17 @@ pub enum ConfigError {
         /// The argument as given, up to any `=`.
         arg: String,
     },
+    /// A `fiber config set` key that may not be written to the layer's file:
+    /// unknown, or a layer the key may not be set in.
+    #[error("`{key}` cannot be set in {}: {why}.", file.display())]
+    Refused {
+        /// The key as typed.
+        key: String,
+        /// The file it would have written.
+        file: PathBuf,
+        /// Why, never a value.
+        why: &'static str,
+    },
     /// A repository file, or a credential, that is a symbolic link or not a
     /// regular file or directory.
     #[error("{} is a symbolic link or not a regular file, so Fiber does not read it.", file.display())]
@@ -110,7 +121,7 @@ impl ConfigError {
             Self::CredentialMissing { .. } => ErrorCode::CredentialMissing,
             Self::CredentialFailed { .. } => ErrorCode::CredentialFailed,
             Self::Io { .. } => ErrorCode::IoFailed,
-            Self::FiberHome(_) | Self::Override { .. } => ErrorCode::Usage,
+            Self::FiberHome(_) | Self::Override { .. } | Self::Refused { .. } => ErrorCode::Usage,
             Self::ProjectKey { .. } | Self::SecretName { .. } => ErrorCode::InvalidArguments,
         }
     }
