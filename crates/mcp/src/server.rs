@@ -14,7 +14,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
-use rustix::process::{Pid, Signal, WaitOptions};
+use rustix::process::{Pid, Signal};
 use serde_json::Value;
 
 use crate::effects::Hints;
@@ -36,29 +36,19 @@ const MAX_LINE: usize = 4 * 1024 * 1024;
 const GRACE: Duration = Duration::from_millis(800);
 
 /// Every server child's pid, from its spawn until its reap: what
-/// [`kill_every_server`] kills and reaps.
+/// [`kill_every_server`] reaches.
 static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-/// Sends SIGKILL to every server child not yet reaped and reaps each one,
-/// at once (`docs/invocation.md`, "Shutdown": the bound). A pid of 1 or
-/// less is never signalled nor waited on: when this returns, no listed
-/// server exists.
+/// Sends SIGKILL to every server child not yet reaped, at once
+/// (`docs/invocation.md`, "Shutdown": the bound). A pid of 1 or less is
+/// never signalled.
 pub fn kill_every_server() {
-    // Held across the signals and the reaps: a reap unlists its pid under
-    // this lock before it waits, so every pid signalled here is still
-    // unreaped and cannot have been reused, and no other thread starts
-    // waiting on one.
-    let mut live = lock(&LIVE);
+    // Held while `kill` runs: a reap unlists its pid under this lock before
+    // it waits, so every pid signalled here is still unreaped and cannot
+    // have been reused.
+    let live = lock(&LIVE);
     before_signal();
     signal(&live, Signal::KILL);
-    // Blocking: the SIGKILL above already has the child dying, so the wait
-    // ends as soon as the kernel reports it, leaving no zombie behind for
-    // a process that exits right after.
-    for raw in live.iter().copied().collect::<Vec<_>>() {
-        reap_pid(raw);
-    }
-    // Every signalled pid is reaped above: only refused ones stay listed.
-    live.retain(|listed| refused(*listed));
 }
 
 /// Runs while a signaller holds the lock that keeps its pids unreaped, just
@@ -99,26 +89,6 @@ fn signal(pids: &[u32], signal: Signal) {
 /// as a function, so a mutant of it signals nothing.
 fn refused(pid: u32) -> bool {
     pid <= 1
-}
-
-/// Reaps one server pid, blocking until it is gone. A refused pid is never
-/// waited on, and a pid outside `Pid`'s range cannot be a child. A wait cut
-/// short by a signal retries; any other error (notably ECHILD when another
-/// thread reaped first) means nothing is left to reap.
-fn reap_pid(raw: u32) {
-    if refused(raw) {
-        return;
-    }
-    let Some(pid) = i32::try_from(raw).ok().and_then(Pid::from_raw) else {
-        return;
-    };
-    loop {
-        match rustix::process::waitpid(Some(pid), WaitOptions::empty()) {
-            Ok(_) => return,
-            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => {}
-            Err(_) => return,
-        }
-    }
 }
 
 /// One tool the server lists: its name, description, schema and hints, as
@@ -458,8 +428,6 @@ impl Server {
             let pid = child.id();
             before_lock("live");
             lock(&LIVE).retain(|listed| *listed != pid);
-            // The shutdown bound may have reaped the child already: its
-            // wait then reports ECHILD, which is as done as a status.
             match child.wait() {
                 Ok(_) | Err(_) => {}
             }

@@ -3,7 +3,6 @@
 //! proves the caller is waiting on it.
 
 use std::collections::BTreeMap;
-use std::process::{Command, Stdio};
 use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
@@ -858,76 +857,6 @@ fn kill_every_server_kills_one_that_ignores_sigterm() {
     stopped
         .recv_timeout(WITHIN)
         .expect("the stop returned once the server was killed");
-}
-
-/// The child's marker: set, the test starts one server, runs
-/// [`super::kill_every_server`] and exits with its code, so the kill never
-/// touches servers other tests own when tests share a process.
-const CHILD: &str = "FIBER_MCP_KILL_TEST_CHILD";
-
-/// How long the child may run before the parent kills it and fails.
-const CHILD_DEADLINE: Duration = Duration::from_secs(60);
-
-/// What the [`CHILD`] side runs: one server, killed and reaped by
-/// [`super::kill_every_server`], then a stop and drop of the already
-/// reaped child. Exits 0; a failed assert exits nonzero through the
-/// harness.
-fn child_kill_and_reap() {
-    let setup = Setup::tools(&json!([{"name": "hang"}]));
-    let opened = setup.start(Duration::from_secs(5));
-    let pid = setup.pid();
-    assert!(
-        fakes::kill_pid(pid, "0").expect("probe"),
-        "the server runs before the kill",
-    );
-    super::kill_every_server();
-    // At once, with no poll and no clock move: the reap already happened,
-    // so signal 0 fails with ESRCH. Without the reap the child is a zombie
-    // here and still answers the probe, failing this line every run.
-    assert!(
-        !fakes::kill_pid(pid, "0").expect("probe"),
-        "pid {pid} still answers signal 0 after kill_every_server: killed but not reaped",
-    );
-    assert!(
-        super::lock(&super::LIVE).is_empty(),
-        "kill_every_server leaves no listed server",
-    );
-    // A later stop and drop of the already reaped child must not panic:
-    // its wait reports ECHILD, which the reap ignores.
-    opened.server.stop();
-}
-
-#[test]
-fn kill_every_server_kills_and_reaps_at_once() {
-    if std::env::var_os(CHILD).is_some() {
-        child_kill_and_reap();
-        std::process::exit(0);
-    }
-    let name = module_path!().split_once("::").unwrap().1;
-    let mut child = Command::new(std::env::current_exe().unwrap())
-        .args([
-            "--exact",
-            &format!("{name}::kill_every_server_kills_and_reaps_at_once"),
-            "--nocapture",
-            "--test-threads=1",
-        ])
-        .env(CHILD, "1")
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .unwrap();
-    let pid = child.id();
-    let (done, waited) = mpsc::channel();
-    thread::spawn(move || done.send(child.wait().unwrap()));
-    let Ok(status) = waited.recv_timeout(CHILD_DEADLINE) else {
-        fakes::kill_pid(pid, "KILL").unwrap();
-        panic!("waited {CHILD_DEADLINE:?} for the kill_every_server child to exit");
-    };
-    assert!(
-        status.success(),
-        "the kill_every_server child exits 0: {status}",
-    );
 }
 
 #[test]
