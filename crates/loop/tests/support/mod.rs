@@ -900,6 +900,10 @@ impl Session {
         (session, blocking)
     }
 
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the one assembly takes each session input; tests pass thinking through it"
+    )]
     fn assemble(
         provider: Arc<dyn Provider>,
         during: Vec<Delivery>,
