@@ -1313,6 +1313,55 @@ fn run_sends_the_jobs_ends_to_the_loops_inbox() {
     close_within(opened.session, opened.log);
 }
 
+/// Hooks that hand the inbox `deliver_to` gives them to the test.
+struct InboxHooks(Mutex<Option<mpsc::Sender<mpsc::Sender<Delivery>>>>);
+
+impl contract::hook::Hooks for InboxHooks {
+    fn after_tool(
+        &self,
+        _call: &contract::hook::AfterToolCall<'_>,
+    ) -> contract::hook::AfterToolAnswer {
+        contract::hook::AfterToolAnswer {
+            outcome: contract::hook::AfterToolOutcome::Unchanged,
+            changed_by: Vec::new(),
+            notices: Vec::new(),
+        }
+    }
+
+    fn deliver_to(&self, inbox: mpsc::Sender<Delivery>) {
+        if let Some(tx) = self.0.lock().unwrap().as_ref() {
+            let _sent = tx.send(inbox);
+        }
+    }
+}
+
+#[test]
+fn run_hands_the_hooks_the_loops_inbox() {
+    let opened = open();
+    let (given_tx, given_rx) = mpsc::channel();
+    opened
+        .session
+        .hooks(Arc::new(InboxHooks(Mutex::new(Some(given_tx)))));
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), move |inbox| {
+            let given = given_rx
+                .recv_timeout(DEADLINE)
+                .expect("waited for the hooks to be handed the inbox");
+            given.send(Delivery::Cancelled).unwrap();
+            let delivery = inbox
+                .recv_timeout(DEADLINE)
+                .expect("waited for the hooks' send to reach the loop's inbox");
+            assert!(
+                matches!(delivery, Delivery::Cancelled),
+                "the hooks' sender feeds the loop's inbox: {delivery:?}"
+            );
+            Ok(())
+        })
+        .unwrap();
+    close_within(opened.session, opened.log);
+}
+
 /// A driver shell that reports its start, then its cancel, and returns only
 /// once the test releases it.
 struct HeldShell {

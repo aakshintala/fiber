@@ -390,6 +390,31 @@ end })
     );
 }
 
+/// A session's `deliver_to` reaches each loaded extension: a hook's run is
+/// logged on the sender the session was given.
+#[test]
+fn a_session_hooks_run_reaches_the_inbox_deliver_to_gave() {
+    let setup = Setup::new();
+    installed(
+        &setup,
+        "deliv",
+        "fiber.hook(\"after_tool\", { timeout = 5000, on_failure = \"blocking\",\n\
+           run = function(call) host.exec(\"sh\", {\"-c\", \"true\"}) end })\n",
+    );
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock);
+    let (tx, inbox) = mpsc::channel();
+    session.deliver_to(tx);
+    let answered = ask(&session);
+    match answered.recv_timeout(WAIT) {
+        Ok(answer) => assert_eq!(answer.outcome, AfterToolOutcome::Unchanged),
+        Err(_) => panic!("the hook did not return within {WAIT:?}"),
+    }
+    let exec = next_exec(&inbox);
+    assert_eq!(exec.extension, "fiber.test/deliv");
+    assert_eq!(exec.program, "sh");
+}
+
 // Timers (`docs/extensions.md`, "Host calls"): `host.after` and `host.every`
 // fire in the gaps of the session's stream, on the extension's injected
 // clock, and stop on `:cancel()`.

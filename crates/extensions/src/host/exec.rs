@@ -86,6 +86,10 @@ struct Shared {
 }
 
 impl contract::clock::Wake for Shared {
+    // Latency only: `park` never blocks past `GROUP_POLL`, so a clock move
+    // this misses is seen on the next poll with the same outcome, and no
+    // test can tell the difference without reading the real clock.
+    #[cfg_attr(false, mutants::skip)]
     fn wake(&self) {
         self.cv.notify_all();
     }
@@ -95,6 +99,10 @@ fn lock(inner: &Mutex<Inner>) -> MutexGuard<'_, Inner> {
     inner.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
+// Latency only: `park` never blocks past `GROUP_POLL`, so a change this
+// does not announce is seen on the next poll with the same outcome, and no
+// test can tell the difference without reading the real clock.
+#[cfg_attr(false, mutants::skip)]
 fn bump(inner: &mut Inner, shared: &Shared) {
     inner.seq = inner.seq.wrapping_add(1);
     shared.cv.notify_all();
@@ -222,8 +230,24 @@ pub(crate) fn run(
         ));
     }
 
+    supervise(req, pgid, &shared, clock, deadline, &cancel, &mut || {})
+}
+
+/// Watches a started run until its group is empty and its output read,
+/// stopping it at the cap, the `deadline` or the `cancel` sender's drop:
+/// SIGTERM, SIGKILL [`GRACE`] later while a member lives, then output read
+/// for at most [`DRAIN`] more. `reap` runs first on every pass, for a caller
+/// that reaps the child itself instead of a waiter thread.
+fn supervise(
+    req: &ExecRequest,
+    pgid: u32,
+    shared: &Shared,
+    clock: &dyn Clock,
+    deadline: Option<Instant>,
+    cancel: &mpsc::Receiver<()>,
+    reap: &mut dyn FnMut(),
+) -> Result<Ran, ExecError> {
     let mut seen_empty = false;
-    let mut sent_term = false;
     let mut timed_out = false;
     let mut capped = false;
     // `None` while running; set when the stop starts.
@@ -231,6 +255,7 @@ pub(crate) fn run(
     let mut drain_until: Option<Instant> = None;
 
     loop {
+        reap();
         let (seen_seq, out_len, err_len, out_eof, err_eof, reaped, status) = {
             let inner = lock(&shared.inner);
             (
@@ -250,18 +275,16 @@ pub(crate) fn run(
         let now = clock.now();
         let cancelled = matches!(cancel.try_recv(), Err(mpsc::TryRecvError::Disconnected));
         let deadline_due = deadline.is_some_and(|at| now >= at);
-
-        // The cap fires once, on the first pass past it. No signal to a
-        // group already seen empty: its id may be reused.
-        if !capped && (out_len > req.cap || err_len > req.cap) {
+        if out_len > req.cap || err_len > req.cap {
             capped = true;
-            sent_term = send_term(pgid, sent_term, seen_empty);
-            kill_at = Some(add(now, GRACE));
         }
-        // A stop starts once: the cap, the deadline, or the drop.
-        if kill_at.is_none() && (deadline_due || cancelled) {
+        // A stop starts once: the cap, the deadline, or the drop. No signal
+        // to a group already seen empty: its id may be reused.
+        if kill_at.is_none() && (capped || deadline_due || cancelled) {
             timed_out = deadline_due;
-            sent_term = send_term(pgid, sent_term, seen_empty);
+            if !seen_empty {
+                signal_group(pgid, Signal::TERM);
+            }
             kill_at = Some(add(now, GRACE));
         }
 
@@ -271,19 +294,21 @@ pub(crate) fn run(
                     drain_until = Some(add(clock.now(), DRAIN));
                 }
             } else if clock.now() >= kill_at {
+                // Unreaped, the child holds the id; reaped, a member was
+                // alive just above (`tools` accepts the same window).
                 signal_group(pgid, Signal::KILL);
                 if drain_until.is_none() {
                     drain_until = Some(add(clock.now(), DRAIN));
                 }
                 // One SIGKILL: fall through to the drain below.
             } else {
-                park(clock, &shared, seen_seq, Some(kill_at));
+                park(clock, shared, seen_seq, Some(kill_at));
                 continue;
             }
         } else if seen_empty && eof {
             // A quiet end: no stop, no drain. Nothing more is retained:
             // an escaped descendant holding the pipe past here is dropped.
-            let ran = ran_of(&shared, status, false);
+            let ran = ran_of(shared, status, false);
             lock(&shared.inner).discard = true;
             finished(pgid, seen_empty);
             return Ok(ran);
@@ -292,17 +317,17 @@ pub(crate) fn run(
             // Always a concrete `until` so a test can wait for the park.
             let poll = add(clock.now(), GROUP_POLL);
             let until = Some(deadline.map_or(poll, |d| d.min(poll)));
-            park(clock, &shared, seen_seq, until);
+            park(clock, shared, seen_seq, until);
             continue;
         }
 
         // Draining after a stop: every byte until the bound, then what was read.
         let until = drain_until.unwrap_or_else(|| add(clock.now(), DRAIN));
         if (eof && seen_empty) || clock.now() >= until {
+            let ran = ran_of(shared, status, timed_out);
+            lock(&shared.inner).discard = true;
+            finished(pgid, seen_empty);
             if capped {
-                let ran = ran_of(&shared, status, timed_out);
-                lock(&shared.inner).discard = true;
-                finished(pgid, seen_empty);
                 return Err(ExecError {
                     message: format!(
                         "host.exec: {}: output passed the extension's memory cap of {} bytes",
@@ -311,22 +336,17 @@ pub(crate) fn run(
                     ran: Some(ran),
                 });
             }
-            let ran = ran_of(&shared, status, timed_out);
-            lock(&shared.inner).discard = true;
-            finished(pgid, seen_empty);
             return Ok(ran);
         }
-        park(clock, &shared, seen_seq, Some(until));
+        park(clock, shared, seen_seq, Some(until));
     }
 }
 
 /// Stops a group that started but whose readers or waiter never did, by
-/// the same sequence as a cancel: SIGTERM, SIGKILL after [`GRACE`] on the
-/// injected clock while a member lives, then output read for at most
-/// [`DRAIN`]. `reading` names the streams whose reader thread started; a
-/// stream with none never reaches EOF. The group leaves the list only once
-/// it is seen empty. The run started, so its end is still logged; the call
-/// raises the startup error.
+/// [`supervise`]'s stop sequence, reaping the child itself. `reading` names
+/// the streams whose reader thread started; a stream with none never
+/// reaches EOF. The run started, so its end is still logged; the call raises
+/// the startup error.
 fn abort_startup(
     req: &ExecRequest,
     pgid: u32,
@@ -342,75 +362,35 @@ fn abort_startup(
         inner.stdout_eof |= !out;
         inner.stderr_eof |= !err;
     }
-    // Unreaped, the child holds the group's id, so no other process can
-    // have it yet.
-    signal_group(pgid, Signal::TERM);
-    let kill_at = add(clock.now(), GRACE);
-    let mut status = None;
-    let mut reaped = false;
-    let mut killed = false;
-    let mut seen_empty = false;
-    let mut drain_until: Option<Instant> = None;
-    loop {
-        let (seen_seq, eof) = {
-            let inner = lock(&shared.inner);
-            (inner.seq, inner.stdout_eof && inner.stderr_eof)
-        };
-        if !reaped {
-            match child.try_wait() {
-                Ok(Some(ended)) => {
-                    reaped = true;
-                    status = Some(ended);
-                }
-                Ok(None) => {}
-                // Nothing left to reap: no status to report.
-                Err(_) => reaped = true,
-            }
-        }
-        if reaped && !group_alive(pgid) {
-            seen_empty = true;
-        }
-        let now = clock.now();
-        // Unreaped, the id is still ours; reaped, a member was alive just
-        // above (`tools` accepts the same window).
-        if !seen_empty && !killed && now >= kill_at {
-            signal_group(pgid, Signal::KILL);
-            killed = true;
-        }
-        if seen_empty || killed {
-            let until = *drain_until.get_or_insert_with(|| add(now, DRAIN));
-            if (seen_empty && eof) || now >= until {
-                break;
-            }
-        }
-        park(
-            clock,
-            shared,
-            seen_seq,
-            Some(drain_until.unwrap_or(kill_at)),
-        );
-    }
-    if !reaped {
-        // Only after the SIGKILL: the child is dead or dying.
-        status = child.wait().ok();
-    }
-    lock(&shared.inner).discard = true;
-    let ran = ran_of(shared, status, false);
-    finished(pgid, seen_empty);
+    // A dropped sender: the stop starts on the first pass.
+    let (_, stopped) = mpsc::channel::<()>();
+    let ended = supervise(req, pgid, shared, clock, None, &stopped, &mut || {
+        reap_now(&mut child, shared);
+    });
+    // The drain after a SIGKILL may end before the reap; the child is dead
+    // or dying, and a reaped one answers at once.
+    drop(child.wait());
+    let ran = match ended {
+        Ok(ran) => Some(ran),
+        Err(capped) => capped.ran,
+    };
     ExecError {
         message: format!("host.exec: {}: {source}", req.program),
-        ran: Some(ran),
+        ran,
     }
 }
 
-/// Sends SIGTERM once, never to a group already seen empty: its id may be
-/// reused by an unrelated process.
-fn send_term(pgid: u32, sent: bool, seen_empty: bool) -> bool {
-    if sent || seen_empty {
-        return sent;
-    }
-    signal_group(pgid, Signal::TERM);
-    true
+/// Records the child's end once it has one; an error means nothing is left
+/// to reap, so there is no status to report.
+fn reap_now(child: &mut Child, shared: &Shared) {
+    let status = match child.try_wait() {
+        Ok(None) => return,
+        Ok(Some(status)) => Some(status),
+        Err(_) => None,
+    };
+    let mut inner = lock(&shared.inner);
+    inner.reaped = true;
+    inner.status = status;
 }
 
 fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
@@ -435,6 +415,10 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
 /// Parks until the shared state moves or `until` on the injected clock.
 /// The condvar always times out at `GROUP_POLL`: a clock move whose wake
 /// lands between the register and the wait still surfaces within one poll.
+// Latency only: every caller re-reads the state and the clock after it
+// returns, and it never blocks past `GROUP_POLL`, so a mutant that waits
+// too long or not at all changes when a pass runs, never what it decides.
+#[cfg_attr(false, mutants::skip)]
 fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     let mut slot = Some(lock(&shared.inner));
     clock.wait_until(until, &mut |bound| {
@@ -475,14 +459,13 @@ fn read_into(mut read: impl Read, shared: &Shared, stdout: bool) {
                     } else {
                         inner.stderr.len()
                     };
+                    // No room keeps an empty slice.
                     let room = inner.cap.saturating_add(1).saturating_sub(len);
-                    if room > 0 {
-                        let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
-                        if stdout {
-                            inner.stdout.extend_from_slice(kept);
-                        } else {
-                            inner.stderr.extend_from_slice(kept);
-                        }
+                    let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
+                    if stdout {
+                        inner.stdout.extend_from_slice(kept);
+                    } else {
+                        inner.stderr.extend_from_slice(kept);
                     }
                 }
                 bump(&mut inner, shared);

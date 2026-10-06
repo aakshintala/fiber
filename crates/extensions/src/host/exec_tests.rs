@@ -391,34 +391,133 @@ fn finished_unlists_only_its_own_group_once_seen_empty() {
     super::finished(NO_GROUP_B, true);
 }
 
+/// Each stream is bounded on its own: exactly the cap returns, one byte
+/// more is refused. Each run writes one stream only, so its length alone
+/// decides; the cap check reads the length the run ended with, so the
+/// result does not depend on how the pipe splits the bytes into reads.
 #[test]
 fn output_of_exactly_the_cap_returns_and_one_byte_more_is_refused() {
     let (_dir, cwd) = dir("fiber-exec-cap-edge");
     let clock = FakeClock::new();
     let cap = 100;
-    let (_cancel, done) = spawn(
-        sh("head -c 100 /dev/zero | tr '\\0' x", cwd.clone(), cap),
-        Arc::clone(&clock),
-        None,
+    for (stream, redirect) in [("stdout", ""), ("stderr", " >&2")] {
+        let (_cancel, done) = spawn(
+            sh(
+                &format!("head -c 100 /dev/zero | tr '\\0' x{redirect}"),
+                cwd.clone(),
+                cap,
+            ),
+            Arc::clone(&clock),
+            None,
+        );
+        let ran = done
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for the {stream} run at the cap"))
+            .unwrap_or_else(|e| panic!("{stream} of exactly the cap returns: {}", e.message));
+        let kept = if stream == "stdout" {
+            ran.stdout.len()
+        } else {
+            ran.stderr.len()
+        };
+        assert_eq!(kept, cap, "every {stream} byte up to the cap is kept");
+        let (_cancel, done) = spawn(
+            sh(
+                &format!("head -c 101 /dev/zero | tr '\\0' x{redirect}"),
+                cwd.clone(),
+                cap,
+            ),
+            Arc::clone(&clock),
+            None,
+        );
+        let err = done
+            .recv_timeout(DEADLINE)
+            .unwrap_or_else(|_| {
+                panic!("waited {DEADLINE:?} for the {stream} run one byte past the cap")
+            })
+            .expect_err("one byte past the cap is refused");
+        assert_eq!(
+            err.message,
+            format!("host.exec: sh: output passed the extension's memory cap of {cap} bytes"),
+            "{stream}"
+        );
+    }
+}
+
+/// A member left in the group after the leader exits keeps the run going:
+/// the group is not empty, so a cancel still sends SIGTERM and, past the
+/// grace, SIGKILL, and the run returns only once the member is gone. The
+/// member writes to neither pipe, so both streams reach EOF while it lives.
+#[test]
+fn a_member_outliving_the_leader_is_stopped_with_its_group() {
+    let (_dir, cwd) = dir("fiber-exec-member");
+    let clock = FakeClock::new();
+    let ready = fakes::children::Ready::new(&cwd);
+    let ready_path = ready.path().display().to_string();
+    let script = format!(
+        "echo $$ > '{ready_path}'\n\
+         sh -c 'trap \"\" TERM HUP; echo $$ >> \"$1\"; while :; do :; done' _ '{ready_path}' \
+           >/dev/null 2>&1 &\n\
+         exit 0\n"
     );
-    let ran = done
-        .recv_timeout(DEADLINE)
-        .expect("waited {DEADLINE:?} for the run at the cap")
-        .expect("output of exactly the cap returns");
-    assert_eq!(ran.stdout.len(), cap, "every byte up to the cap is kept");
-    let (_cancel, done) = spawn(
-        sh("head -c 101 /dev/zero | tr '\\0' x", cwd, cap),
-        Arc::clone(&clock),
-        None,
+    let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    let _member = ready.wait(DEADLINE);
+    drop(cancel);
+    let kill_at = clock.now() + Duration::from_millis(800);
+    assert!(
+        clock.await_parked(kill_at, DEADLINE),
+        "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
-    let err = done
-        .recv_timeout(DEADLINE)
-        .expect("waited {DEADLINE:?} for the run one byte past the cap")
-        .expect_err("one byte past the cap is refused");
-    assert_eq!(
-        err.message,
-        format!("host.exec: sh: output passed the extension's memory cap of {cap} bytes")
+    assert!(
+        fakes::kill_group(pgid, "0").unwrap(),
+        "the member ignores SIGTERM, so the group lives through the grace"
     );
+    clock.advance(Duration::from_millis(800));
+    done.recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the stopped run")
+        .expect("the stopped run returns");
+    assert!(
+        !fakes::kill_group(pgid, "0").unwrap(),
+        "the run returned only once the group was empty"
+    );
+    watchdog.stand_down(DEADLINE);
+}
+
+/// A stream still open keeps a stopped run draining although the group is
+/// empty: an escaped process holds stdout while stderr is closed, so the
+/// run reads until the 2 s bound, not until one stream ends.
+#[test]
+fn one_stream_still_open_keeps_the_drain_to_its_bound() {
+    let (_dir, cwd) = dir("fiber-exec-one-open");
+    let clock = FakeClock::new();
+    let ready = fakes::children::Ready::new(&cwd);
+    let ready_path = ready.path().display().to_string();
+    let script = format!(
+        "echo $$ > '{ready_path}'\n\
+         perl -MPOSIX -e 'POSIX::setsid(); $SIG{{HUP}} = \"IGNORE\"; $SIG{{TERM}} = \"IGNORE\"; \
+           open my $f, \">>\", $ARGV[0] or die $!; print $f \"$$\\n\"; close $f; \
+           sleep 3600 while 1' '{ready_path}' 2>/dev/null &\n\
+         exit 0\n"
+    );
+    let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
+    let pgid = ready.wait(DEADLINE)[0];
+    let escaped = ready.wait(DEADLINE);
+    let watchdog = fakes::Watchdog::group(pgid);
+    drop(cancel);
+    let drain_until = clock.now() + Duration::from_secs(2);
+    assert!(
+        clock.await_parked(drain_until, DEADLINE),
+        "waited {DEADLINE:?} for the run to park for the 2 s drain"
+    );
+    clock.advance(Duration::from_secs(2));
+    done.recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the drained run")
+        .expect("the drained run returns");
+    for pid in escaped {
+        drop(fakes::kill_pid(pid, "KILL"));
+    }
+    watchdog.stand_down(DEADLINE);
 }
 
 /// Spawns `script` under `sh` in its own listed group, as `run` does, with
