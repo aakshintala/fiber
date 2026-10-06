@@ -391,18 +391,14 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                 park(&mut out, &mut signature);
                 let found = calls.get(action_id).copied();
                 let call = found.map(|(call, _)| call);
+                let prepared =
+                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
                 // A result whose call another model reference made goes as
                 // plain text (`docs/model-routing.md`, "Google Generative
                 // AI wire facts"). An orphan keeps today's native rendering.
                 if let Some((made, made_model)) = found
                     && *made_model != reference
                 {
-                    let prepared = crate::images::prepare(
-                        text,
-                        images,
-                        &request.session_dir,
-                        endpoint.text_only,
-                    );
                     let line = if *is_error { "failed" } else { "returned" };
                     push(
                         &mut out,
@@ -418,8 +414,6 @@ fn contents(endpoint: &Endpoint, request: &ModelRequest) -> Vec<Value> {
                     }
                     continue;
                 }
-                let prepared =
-                    crate::images::prepare(text, images, &request.session_dir, endpoint.text_only);
                 // A failed call sends the documented `error` key in place
                 // of `output` (googleapis
                 // `google/ai/generativelanguage/v1beta/content.proto`,

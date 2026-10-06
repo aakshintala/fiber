@@ -341,8 +341,7 @@ impl Rendered {
 /// Adds what `event`, about `action`, puts in the conversation. `model` is
 /// the model reference in force, which produced any reasoning, text part or
 /// tool call.
-// debt: the model reference is the session's one model, which produced any
-// reasoning, text part or tool call, until `/model`
+// debt: the model reference is the session's one model until `/model`
 // switches it; then it comes from the log's `model_changed`. A text part's
 // `provider_item` is stamped with that same reference.
 pub(crate) fn render(
