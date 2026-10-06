@@ -18,7 +18,9 @@ page only when it needs it, and saves or edits pages with its ordinary file
 tools. Pages are plain files a person can read, edit and delete.
 
 Memory is on while the `memory` extension is installed and enabled. A fresh
-install has it ("Distribution"). There is no other switch.
+install has it ("Distribution"). Setting `extensions."memory".enabled` to
+false, with `/settings` or `fiber config set`, pauses memory and keeps the
+store; there is no other switch.
 
 ## The store
 
