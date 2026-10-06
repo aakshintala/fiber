@@ -133,7 +133,9 @@ Before the process aborts, a panic hook:
 3. Prints the same report and the file's path to stderr.
 
 The hook runs on the thread that panicked and needs no other thread, so it
-works when the log's own thread is the one that failed. It takes no lock.
+works when the log's own thread is the one that failed. It takes no lock of
+Fiber's. The only locks it touches are the standard library's, for capturing
+the backtrace and for writing to stderr.
 
 A crash file describes a bug in Fiber, not the session. Nothing reads it to
 decide anything: a session's log with no `fiber_exited` is what records that
