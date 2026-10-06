@@ -341,6 +341,7 @@ fn classify_with(
                 .iter()
                 .filter_map(move |(p, krate)| (*p == f.as_str()).then_some(*krate))
         })
+        .filter(|name| members.contains_key(*name))
         .map(str::to_owned)
         .collect();
     // Docs files do not own a crate; listed files run their crate without
