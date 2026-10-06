@@ -11,6 +11,10 @@
 #   --shared-only    only the platform-independent checks: what CI runs on
 #                    Linux x86_64 alone
 set -euo pipefail
+# The last line says pass or fail, so a caller reading only the tail of the
+# output (`| tail`) cannot mistake a failure for a pass.
+log=
+trap 'rc=$?; rm -f "$log"; if [ $rc -eq 0 ]; then echo "scripts/check: PASS"; else echo "scripts/check: FAIL (exit $rc)"; fi' EXIT
 cd "$(git rev-parse --show-toplevel)"
 
 base=origin/main
@@ -42,7 +46,6 @@ package_spec_args=()
 for p in $package_specs; do package_spec_args+=(-p "$p"); done
 
 log=$(mktemp)
-trap 'rm -f "$log"' EXIT
 # Sums the numbers in every match of $1 in the last command's output, with
 # colour codes removed (CI sets CARGO_TERM_COLOR=always). No match is an error.
 count() {
@@ -76,7 +79,9 @@ if [ "$scope" != shared ] && [ ${#package_args[@]} -gt 0 ]; then
   echo "== cargo clippy --all-targets -- -D warnings"
   cargo clippy --all-targets "${package_spec_args[@]}" -- -D warnings
   echo "== cargo nextest run"
-  cargo nextest run "${package_spec_args[@]}" 2>&1 | tee "$log"
+  # One timing flake must not hide the other tests' results: a failed run
+  # reports every failure, so a rerun is not needed to see them.
+  cargo nextest run --no-fail-fast "${package_spec_args[@]}" 2>&1 | tee "$log"
   nextest=$(count '[0-9]+ tests? run')
   # A crate with no library has no doc-tests, and cargo refuses to look.
   doctests=0
