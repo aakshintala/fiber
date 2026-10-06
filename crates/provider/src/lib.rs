@@ -7,6 +7,7 @@
 //! which arrives as an [`Endpoint`].
 
 pub mod anthropic_messages;
+mod anthropic_messages_decode;
 mod error;
 pub mod google_generative_ai;
 mod http;
