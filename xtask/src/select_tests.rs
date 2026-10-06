@@ -410,7 +410,7 @@ fn test_files_map_to_their_tests() {
         "crates/log/build_tests.rs",
         "docs/events.md",
     ]);
-    let (expression, packages) = test_filter(&files, &members());
+    let (expression, packages) = test_filter(&files, &members(), &[]);
     assert_eq!(
         expression.split(" | ").collect::<Vec<_>>(),
         [
@@ -418,7 +418,6 @@ fn test_files_map_to_their_tests() {
             "(package(log) & test(/^fold::tests::/))",
             "(package(log) & test(/^tests::/))",
             "binary_id(loop::turns)",
-            "binary_id(loop::support)",
             "(package(log) & test(/^fold::inner::tests::/))",
             "(package(log) & test(/^tests::/))",
             "(package(loop) & test(/^tests::/))",
@@ -429,16 +428,96 @@ fn test_files_map_to_their_tests() {
 
 #[test]
 fn only_a_crate_root_file_is_a_crate_root() {
-    let (expression, _) = test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members());
+    let (expression, _) =
+        test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members(), &[]);
     assert_eq!(expression, "(package(log) & test(/^fold::lib::tests::/))");
 }
 
 #[test]
 fn no_test_files_give_an_empty_filter() {
     assert_eq!(
-        test_filter(&strings(&["crates/log/src/writer.rs"]), &members()),
+        test_filter(&strings(&["crates/log/src/writer.rs"]), &members(), &[]),
         (String::new(), vec![])
     );
+}
+
+fn decl(krate: &str, path: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: krate.to_owned(),
+        path: path.to_owned(),
+        rel: path
+            .strip_prefix(&format!("crates/{krate}/"))
+            .unwrap_or(path)
+            .to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+#[test]
+fn support_files_under_tests_add_no_filter_term() {
+    let files = strings(&[
+        "crates/loop/tests/support/mod.rs",
+        "crates/loop/tests/support/fake.rs",
+    ]);
+    assert_eq!(
+        test_filter(&files, &members(), &[]),
+        (String::new(), vec![])
+    );
+}
+
+#[test]
+fn a_path_declared_test_file_maps_to_its_declaring_module() {
+    let files = strings(&["crates/main/src/idle_tests.rs"]);
+    let sources = vec![decl(
+        "main",
+        "crates/main/src/settings.rs",
+        "#[cfg(test)]\n#[path = \"idle_tests.rs\"]\nmod idle_tests;",
+    )];
+    let (expression, packages) = test_filter(&files, &members(), &sources);
+    assert_eq!(
+        expression,
+        "(package(main) & test(/^settings::idle_tests::/))"
+    );
+    assert_eq!(packages, strings(&["main"]));
+}
+
+#[test]
+fn a_path_declared_test_file_inside_a_path_declared_module_resolves_recursively() {
+    let files = strings(&["crates/log/src/shell/background_tests.rs"]);
+    let sources = vec![
+        decl(
+            "log",
+            "crates/log/src/shell.rs",
+            "#[path = \"shell/background.rs\"] mod background;",
+        ),
+        decl(
+            "log",
+            "crates/log/src/shell/background.rs",
+            "#[cfg(test)] #[path = \"background_tests.rs\"] mod tests;",
+        ),
+    ];
+    let (expression, packages) = test_filter(&files, &members(), &sources);
+    assert_eq!(
+        expression,
+        "(package(log) & test(/^shell::background::tests::/))"
+    );
+    assert_eq!(packages, strings(&["log"]));
+}
+
+#[test]
+fn a_path_declaration_in_a_mod_rs_file_resolves_beside_it() {
+    let files = strings(&["crates/log/src/fold/fold_extra_tests.rs"]);
+    let sources = vec![decl(
+        "log",
+        "crates/log/src/fold/mod.rs",
+        "#[path = \"fold_extra_tests.rs\"] mod extra;",
+    )];
+    let (expression, packages) = test_filter(&files, &members(), &sources);
+    assert_eq!(
+        expression,
+        "(package(log) & test(/^fold::extra::/))"
+    );
+    assert_eq!(packages, strings(&["log"]));
 }
 
 #[test]

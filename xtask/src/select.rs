@@ -479,7 +479,12 @@ fn test_module(root: bool, stem: &str) -> Option<&str> {
 
 /// The nextest filter selecting every test in the test files among
 /// `files`, and the packages that own them.
-pub(crate) fn test_filter(files: &[String], members: &Members) -> (String, Vec<String>) {
+pub(crate) fn test_filter(
+    files: &[String],
+    members: &Members,
+    sources: &[RustFile],
+) -> (String, Vec<String>) {
+    let _ = sources;
     let mut terms = Vec::new();
     let mut packages = BTreeSet::new();
     for path in files.iter().filter(|p| p.ends_with(".rs")) {
