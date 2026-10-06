@@ -1,6 +1,7 @@
 //! What is installed, and `fiber extension remove` (`docs/extensions.md`, "Installing").
 
 use std::collections::BTreeMap;
+use std::fmt;
 use std::fs::{self, File, TryLockError};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,7 +9,7 @@ use std::time::Duration;
 use contract::clock::Clock;
 
 use crate::Error;
-use crate::git::full_name;
+use crate::git::{full_name, short_name};
 use crate::install::{Provenance, Record, io, recover, remove, slug};
 
 /// An installed extension.
@@ -66,13 +67,63 @@ pub(crate) fn lock(home: &Path, clock: &dyn Clock) -> Result<Lock, Error> {
     Err(Error::Busy)
 }
 
-/// The installed extensions, by name. A manifest or record that cannot be
-/// read is an error naming the file. A commit that stopped halfway is
-/// finished first, under the same lock every other operation takes.
-pub fn list(home: &Path, clock: &dyn Clock) -> Result<Vec<Installed>, Error> {
+/// An `extensions/<dir>/` whose install record is missing or unreadable.
+///
+/// Any failure of the record's read is damage: a missing file, an I/O
+/// error, invalid JSON, or a missing or mistyped key. The record is read
+/// before the manifest, so a damaged directory never surfaces a manifest
+/// error.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Damaged {
+    /// The manifest's name, or the directory's name when the manifest
+    /// does not read.
+    pub name: String,
+    /// The directory's file name (its slug).
+    pub(crate) dir: String,
+}
+
+impl fmt::Display for Damaged {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let shown = short_name(&self.name);
+        write!(
+            f,
+            "`{shown}` is damaged; run `fiber extension remove {shown}`, then install it again."
+        )
+    }
+}
+
+impl Damaged {
+    /// The skip line, without the `fiber: ` prefix: a damaged extension's
+    /// dependency minimums are unknown, so the versions chosen did not
+    /// count them.
+    pub fn skipped(&self) -> String {
+        let shown = short_name(&self.name);
+        format!(
+            "`{shown}` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove {shown}`, then install it again."
+        )
+    }
+}
+
+/// What is installed: the healthy extensions and the damaged directories.
+/// A manifest that cannot be read beside a healthy record stays a hard
+/// error, as today.
+#[derive(Debug, Default)]
+pub struct Listing {
+    /// The healthy extensions, sorted by name, as today.
+    pub installed: Vec<Installed>,
+    /// The damaged directories, sorted by name.
+    pub damaged: Vec<Damaged>,
+}
+
+/// The installed extensions, by name. A directory whose install record is
+/// missing or cannot be read is listed as damaged instead of failing the
+/// command. A manifest that cannot be read beside a healthy record is an
+/// error naming the file. A commit that stopped halfway is finished
+/// first, under the same lock every other operation takes.
+pub fn list(home: &Path, clock: &dyn Clock) -> Result<Listing, Error> {
     let root = home.join("extensions");
     if !root.try_exists().map_err(io(&root))? {
-        return Ok(Vec::new());
+        return Ok(Listing::default());
     }
     let _lock = lock(home, clock)?;
     read(home)
@@ -80,23 +131,37 @@ pub fn list(home: &Path, clock: &dyn Clock) -> Result<Vec<Installed>, Error> {
 
 /// The installed extensions, without taking the lock. The caller holds it
 /// and has already finished any commit that stopped halfway.
-pub(crate) fn read(home: &Path) -> Result<Vec<Installed>, Error> {
+pub(crate) fn read(home: &Path) -> Result<Listing, Error> {
     let root = home.join("extensions");
     let entries = match fs::read_dir(&root) {
         Ok(entries) => entries,
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Listing::default()),
         Err(e) => return Err(io(&root)(e)),
     };
-    let mut found = Vec::new();
+    let mut installed = Vec::new();
+    let mut damaged = Vec::new();
     for entry in entries {
         let entry = entry.map_err(io(&root))?;
         let dir = entry.path();
-        if entry.file_name().to_string_lossy().starts_with('.') || !dir.is_dir() {
+        let dir_name = entry.file_name().to_string_lossy().into_owned();
+        if dir_name.starts_with('.') || !dir.is_dir() {
             continue;
         }
+        let record = match Record::read(&dir) {
+            Ok(record) => record,
+            Err(_) => {
+                let name = config::read_manifest(&dir)
+                    .map(|manifest| manifest.name)
+                    .unwrap_or_else(|_| dir_name.clone());
+                damaged.push(Damaged {
+                    name,
+                    dir: dir_name,
+                });
+                continue;
+            }
+        };
         let manifest = config::read_manifest(&dir)?;
-        let record = Record::read(&dir)?;
-        found.push(Installed {
+        installed.push(Installed {
             name: manifest.name,
             version: record.version,
             provenance: record.provenance,
@@ -104,8 +169,9 @@ pub(crate) fn read(home: &Path) -> Result<Vec<Installed>, Error> {
             depends: manifest.depends,
         });
     }
-    found.sort_by(|a, b| a.name.cmp(&b.name));
-    Ok(found)
+    installed.sort_by(|a, b| a.name.cmp(&b.name));
+    damaged.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(Listing { installed, damaged })
 }
 
 /// What `fiber extension remove` will delete, worked out under the lock. Dropping it
@@ -162,7 +228,23 @@ fn present(path: &Path) -> Result<bool, Error> {
 pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, Error> {
     let lock = lock(home, clock)?;
     let name = full_name(typed);
-    let mut left = read(home)?;
+    let listing = read(home)?;
+    // A damaged directory is removed by its directory name, without
+    // reading its record, so removal always works.
+    if let Some(hit) = listing
+        .damaged
+        .iter()
+        .find(|hit| slug(&name).is_ok_and(|mine| mine == hit.dir))
+    {
+        let layers = layers(home)?;
+        return Ok(Removal {
+            names: vec![hit.name.clone()],
+            data: existing_data(&layers, &hit.dir)?,
+            dirs: vec![home.join("extensions").join(&hit.dir)],
+            _lock: lock,
+        });
+    }
+    let mut left = listing.installed;
     if !left.iter().any(|i| i.name == name) {
         return Err(Error::NotInstalled { name });
     }
@@ -176,6 +258,25 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
             .find(|i| !i.requested && !left.iter().any(|other| other.depends.contains_key(&i.name)))
             .map(|i| i.name.clone());
     }
+    let layers = layers(home)?;
+    let mut dirs = Vec::new();
+    let mut data = Vec::new();
+    for name in &names {
+        let dir = slug(name)?;
+        dirs.push(home.join("extensions").join(&dir));
+        data.extend(existing_data(&layers, &dir)?);
+    }
+    Ok(Removal {
+        names,
+        data,
+        dirs,
+        _lock: lock,
+    })
+}
+
+/// Fiber home and each project in it: the layers a removal reads data
+/// and settings from.
+fn layers(home: &Path) -> Result<Vec<PathBuf>, Error> {
     let mut layers = vec![home.to_path_buf()];
     let projects = home.join("projects");
     match fs::read_dir(&projects) {
@@ -187,28 +288,24 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
         Err(e) => return Err(io(&projects)(e)),
     }
-    let mut dirs = Vec::new();
+    Ok(layers)
+}
+
+/// The data directories and settings files that exist for the extension
+/// directory `dir`.
+fn existing_data(layers: &[PathBuf], dir: &str) -> Result<Vec<PathBuf>, Error> {
     let mut data = Vec::new();
-    for name in &names {
-        let slug = slug(name)?;
-        dirs.push(home.join("extensions").join(&slug));
-        for layer in &layers {
-            for path in [
-                layer.join("data").join(&slug),
-                layer.join("config").join(format!("{slug}.json")),
-            ] {
-                if present(&path)? {
-                    data.push(path);
-                }
+    for layer in layers {
+        for path in [
+            layer.join("data").join(dir),
+            layer.join("config").join(format!("{dir}.json")),
+        ] {
+            if present(&path)? {
+                data.push(path);
             }
         }
     }
-    Ok(Removal {
-        names,
-        data,
-        dirs,
-        _lock: lock,
-    })
+    Ok(data)
 }
 
 #[cfg(test)]
@@ -221,7 +318,9 @@ mod tests {
     #[test]
     fn a_missing_extensions_directory_lists_nothing() {
         let home = fakes::TempDir::new("fiber-read-missing");
-        assert!(read(home.path()).unwrap().is_empty());
+        let listing = read(home.path()).unwrap();
+        assert!(listing.installed.is_empty());
+        assert!(listing.damaged.is_empty());
     }
 
     #[test]

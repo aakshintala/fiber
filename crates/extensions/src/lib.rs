@@ -28,10 +28,10 @@ use std::path::PathBuf;
 use config::ConfigError;
 use contract::ErrorCode;
 
-pub use git::{Origin, SHORT_NAMES, full_name, is_path};
+pub use git::{Origin, SHORT_NAMES, full_name, is_path, short_name};
 pub use hooks::SessionExtensions;
 pub use install::Provenance;
-pub use installed::{Installed, Removal, list, removal};
+pub use installed::{Damaged, Installed, Listing, Removal, list, removal};
 pub use lua::{LuaExtension, MEMORY_CAP};
 pub use lua_provider::{LuaProvider, REFRESH_BEFORE};
 pub use manage::{Item, Plan, Request, plan};
@@ -171,6 +171,10 @@ pub enum Error {
         /// The name.
         name: String,
     },
+    /// An extension whose install record is missing or unreadable: remove
+    /// it, then install it again (`docs/extensions.md`, "Installing").
+    #[error("{0}")]
+    Damaged(Damaged),
     /// An install record that is missing or does not read.
     #[error("{}: {why}", path.display())]
     BadRecord {
@@ -393,7 +397,8 @@ impl Error {
             }
             Self::BadVersion { .. } | Self::BadName { .. } => ErrorCode::ConfigInvalid,
             Self::ProviderMissing { .. } | Self::ModelMissing { .. } => ErrorCode::ExtensionMissing,
-            Self::Lua { .. }
+            Self::Damaged(_)
+            | Self::Lua { .. }
             | Self::Timeout { .. }
             | Self::Abandoned { .. }
             | Self::UnknownCallback { .. }

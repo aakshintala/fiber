@@ -14,7 +14,7 @@ use contract::clock::Clock;
 use crate::Error;
 use crate::git::{Origin, full_name, split};
 use crate::install::{Paths, Provenance, Record, commit_all, io, remove, slug, stage};
-use crate::installed::{Installed, Lock, lock, read};
+use crate::installed::{Damaged, Installed, Lock, lock, read};
 use crate::prepare::prepare;
 use crate::resolve::{meets, newest, pick, root_meets};
 
@@ -115,6 +115,7 @@ pub(crate) fn carries(dir: &Path, manifest: &Manifest) -> Vec<String> {
 pub struct Plan {
     root: String,
     items: BTreeMap<String, Item>,
+    damaged: Vec<Damaged>,
     scratch: PathBuf,
     _lock: Lock,
 }
@@ -123,6 +124,12 @@ impl Plan {
     /// The extensions to install, the one asked for and its dependencies.
     pub fn items(&self) -> impl Iterator<Item = &Item> {
         self.items.values()
+    }
+
+    /// The damaged directories the plan skipped: their dependency
+    /// minimums are unknown, so the versions chosen did not count them.
+    pub fn damaged(&self) -> &[Damaged] {
+        &self.damaged
     }
 
     /// Puts every extension in place, then runs each install step and
@@ -172,7 +179,7 @@ pub fn plan(
     clock: &dyn Clock,
 ) -> Result<Plan, Error> {
     let lock = lock(home, clock)?;
-    let installed = read(home)?;
+    let listing = read(home)?;
     let id = NEXT.fetch_add(1, Ordering::Relaxed);
     let scratch = std::env::temp_dir().join(format!("fiber-fetch-{}-{id}", std::process::id()));
     remove(&scratch)?;
@@ -180,6 +187,7 @@ pub fn plan(
     let mut plan = Plan {
         root: String::new(),
         items: BTreeMap::new(),
+        damaged: listing.damaged,
         scratch,
         _lock: lock,
     };
@@ -188,7 +196,7 @@ pub fn plan(
         home,
         fiber_version,
         origin,
-        installed: &installed,
+        installed: &listing.installed,
     };
     plan.root = match request {
         Request::Path(path) => ctx.add_path(&mut plan, path, None)?,
@@ -199,7 +207,10 @@ pub fn plan(
         }
         Request::Update(typed) => {
             let name = full_name(typed);
-            let Some(have) = installed.iter().find(|i| i.name == name) else {
+            if let Some(hit) = plan.damaged.iter().find(|d| is_damaged(d, &name)) {
+                return Err(Error::Damaged(hit.clone()));
+            }
+            let Some(have) = listing.installed.iter().find(|i| i.name == name) else {
                 return Err(Error::NotInstalled { name });
             };
             match &have.provenance {
@@ -229,9 +240,13 @@ impl Ctx<'_> {
     }
 
     /// Refuses a name whose directory another name already has, in Fiber
-    /// home or in this plan.
+    /// home or in this plan. A directory slug a damaged extension holds
+    /// fails as [`Error::Damaged`]: remove it, then install it again.
     fn slug_free(&self, plan: &Plan, name: &str) -> Result<(), Error> {
         let mine = slug(name)?;
+        if let Some(hit) = plan.damaged.iter().find(|hit| is_damaged(hit, name)) {
+            return Err(Error::Damaged(hit.clone()));
+        }
         let others = self
             .installed
             .iter()
@@ -456,13 +471,18 @@ impl Ctx<'_> {
         Ok(())
     }
 
-    /// Stages the lowest tag of `dep` that meets `wants`.
+    /// Stages the lowest tag of `dep` that meets `wants`. A slug a
+    /// damaged directory holds fails before any fetch: remove it, then
+    /// install it again.
     fn stage_dep(
         &mut self,
         plan: &mut Plan,
         dep: &str,
         wants: &BTreeMap<String, String>,
     ) -> Result<(), Error> {
+        if let Some(hit) = plan.damaged.iter().find(|hit| is_damaged(hit, dep)) {
+            return Err(Error::Damaged(hit.clone()));
+        }
         let (repo, _) = split(dep)?;
         let tag = pick(dep, wants, &self.origin.tags(repo)?)?;
         self.add_git(plan, dep, Some(tag), false)
@@ -502,6 +522,12 @@ impl Ctx<'_> {
         }
         wants
     }
+}
+
+/// Whether `name` is the damaged directory `hit`: its manifest's name,
+/// or its directory's slug.
+fn is_damaged(hit: &Damaged, name: &str) -> bool {
+    hit.name == name || slug(name).is_ok_and(|mine| mine == hit.dir)
 }
 
 /// The names reachable from the request through the staged manifests,

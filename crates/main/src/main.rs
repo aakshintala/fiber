@@ -169,10 +169,10 @@ fn extension(cmd: cli::ExtensionCommands, clock: &dyn contract::clock::Clock) ->
             } else {
                 Request::Install(name_or_path)
             };
-            install(request, clock)
+            install(request, clock, false)
         }
         cli::ExtensionCommands::Update { name: Some(name) } => {
-            install(Request::Update(name), clock)
+            install(Request::Update(name), clock, false)
         }
         cli::ExtensionCommands::Update { name: None } => update_all(clock),
         cli::ExtensionCommands::Remove { name } => remove(&name, clock),
@@ -186,12 +186,17 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
         Ok(home) => home,
         Err(e) => return fail(failed(e.code(), e)),
     };
-    let installed = match extensions::list(&home, clock) {
+    let listing = match extensions::list(&home, clock) {
         Ok(list) => list,
         Err(e) => return fail(failed(e.code(), e)),
     };
-    for ext in installed.iter().filter(|i| i.requested) {
-        let code = install(Request::Update(ext.name.clone()), clock);
+    // Each damaged directory is named once here; the per-extension
+    // installs it runs stay silent about them.
+    for hit in &listing.damaged {
+        eprintln!("fiber: {}", hit.skipped());
+    }
+    for ext in listing.installed.iter().filter(|i| i.requested) {
+        let code = install(Request::Update(ext.name.clone()), clock, true);
         if code != 0 {
             return code;
         }
@@ -203,8 +208,8 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
-fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
-    match install_request(request, clock) {
+fn install(request: Request, clock: &dyn contract::clock::Clock, quiet_damaged: bool) -> i32 {
+    match install_request(request, clock, quiet_damaged) {
         Ok(Some(names)) => {
             for name in names {
                 eprintln!("fiber: installed {name}");
@@ -227,6 +232,7 @@ fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
 fn install_request(
     request: Request,
     clock: &dyn contract::clock::Clock,
+    quiet_damaged: bool,
 ) -> Result<Option<Vec<String>>, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let plan = extensions::plan(
@@ -237,6 +243,14 @@ fn install_request(
         clock,
     )
     .map_err(|e| failed(e.code(), e))?;
+    // A damaged extension's dependency minimums are unknown, so the
+    // versions chosen did not count them. Before approval, while the
+    // plan still holds what was skipped.
+    if !quiet_damaged {
+        for hit in plan.damaged() {
+            eprintln!("fiber: {}", hit.skipped());
+        }
+    }
     let summaries: Vec<doors::InstallSummary> = plan
         .items()
         .map(|item| doors::InstallSummary {
@@ -319,9 +333,14 @@ fn list(clock: &dyn contract::clock::Clock) -> i32 {
         .map_err(|e| failed(e.code(), e))
         .and_then(|home| extensions::list(&home, clock).map_err(|e| failed(e.code(), e)));
     match listed {
-        Ok(installed) => {
+        Ok(listing) => {
             let mut out = io::stdout().lock();
-            for i in installed {
+            // Each damaged directory first, one line each, then the
+            // healthy rows exactly as before.
+            for hit in &listing.damaged {
+                writeln!(out, "{hit}").unwrap_or(());
+            }
+            for i in listing.installed {
                 let commit = match &i.provenance {
                     Provenance::Git { commit } => commit.as_str(),
                     Provenance::Path(_) => "local",

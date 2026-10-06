@@ -461,6 +461,7 @@ fn again(name: &str, e: &Error) -> Error {
             extension: extension.clone(),
             message: message.clone(),
         },
+        Error::Damaged(inner) => Error::Damaged(inner.clone()),
         Error::Timeout {
             extension,
             callback,

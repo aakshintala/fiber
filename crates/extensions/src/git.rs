@@ -33,6 +33,20 @@ pub fn full_name(typed: &str) -> String {
     }
 }
 
+/// The name a person types: the short name for a first-party provider,
+/// else the name.
+///
+/// The inverse of [`full_name`]:
+/// `github.com/aakshintala/fiber/providers/opencode` shows as `opencode`;
+/// any other name shows whole, so a `remove` command naming it works.
+pub fn short_name(name: &str) -> &str {
+    const PREFIX: &str = "github.com/aakshintala/fiber/providers/";
+    match name.strip_prefix(PREFIX) {
+        Some(short) if SHORT_NAMES.contains(&short) => short,
+        Some(_) | None => name,
+    }
+}
+
 /// Whether `typed` names a directory rather than an extension.
 pub fn is_path(typed: &str) -> bool {
     typed.starts_with(['.', '/', '~']) || Path::new(typed).join("extension.json").is_file()
@@ -180,7 +194,7 @@ impl Origin {
 
 #[cfg(test)]
 mod tests {
-    use super::{SHORT_NAMES, full_name, is_path, split};
+    use super::{SHORT_NAMES, full_name, is_path, short_name, split};
     use crate::Error;
 
     #[test]
@@ -197,6 +211,16 @@ mod tests {
     #[test]
     fn a_full_name_is_left_alone() {
         assert_eq!(full_name("github.com/acme/x"), "github.com/acme/x");
+    }
+
+    #[test]
+    fn a_first_party_full_name_shows_short_and_any_other_name_shows_whole() {
+        assert_eq!(
+            short_name("github.com/aakshintala/fiber/providers/opencode"),
+            "opencode"
+        );
+        assert_eq!(short_name("github.com/acme/lint"), "github.com/acme/lint");
+        assert_eq!(short_name("acme"), "acme");
     }
 
     #[test]

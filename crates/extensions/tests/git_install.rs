@@ -136,6 +136,7 @@ fn install(setup: &Setup, repos: &Repos, name: &str) -> Result<Vec<String>, Erro
 fn versions(setup: &Setup) -> BTreeMap<String, String> {
     list(&setup.home(), &*fakes::clock::FakeClock::new())
         .unwrap()
+        .installed
         .into_iter()
         .map(|i| (i.name, i.version))
         .collect()
@@ -162,7 +163,9 @@ fn an_install_fetches_the_newest_tag_and_records_its_commit() {
     repos.tag(LIB, "", "v1.0.0", &manifest(LIB), &[("old.txt", "x")]);
     repos.tag(LIB, "", "v1.1.0", &manifest(LIB), &[]);
     assert_eq!(install(&setup, &repos, LIB).unwrap(), [LIB]);
-    let installed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let installed = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     assert_eq!(installed.len(), 1);
     assert_eq!(installed[0].version, "v1.1.0");
     assert_eq!(commit(&installed[0]).unwrap(), repos.commit(LIB, "v1.1.0"));
@@ -206,7 +209,9 @@ fn a_git_marker_names_a_repository_inside_subgroups() {
         .home()
         .join("extensions/gitlab.com-group-subgroup-repo.git-ext");
     assert!(dir.join("extension.json").is_file());
-    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     assert_eq!(listed.len(), 1);
     assert_eq!(listed[0].name, name);
     assert_eq!(uninstall(&setup.home(), name).unwrap(), [name]);
@@ -263,6 +268,7 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
     assert!(
         !list(&setup.home(), &*fakes::clock::FakeClock::new())
             .unwrap()
+            .installed
             .iter()
             .find(|i| i.name == dep)
             .unwrap()
@@ -282,7 +288,9 @@ fn a_dependency_gets_the_lowest_version_meeting_every_minimum() {
     assert_eq!(moved[0].changes, None);
     p.commit().unwrap();
     assert_eq!(versions(&setup)[dep], "v1.4.0");
-    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     let requested: Vec<_> = listed
         .iter()
         .map(|i| (i.name.as_str(), i.requested))
@@ -310,7 +318,9 @@ fn a_dependency_asked_for_by_name_stays_requested_when_it_moves_up() {
     let top = "example.com/acme/top";
     repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.6")]), &[]);
     install(&setup, &repos, top).unwrap();
-    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     let dep_row = listed.iter().find(|i| i.name == dep).unwrap();
     assert_eq!(
         (dep_row.version.as_str(), dep_row.requested),
@@ -375,6 +385,7 @@ fn an_installed_dependency_that_meets_the_minimum_is_not_changed() {
     assert!(
         list(&setup.home(), &*fakes::clock::FakeClock::new())
             .unwrap()
+            .installed
             .iter()
             .find(|i| i.name == dep)
             .unwrap()
@@ -520,7 +531,9 @@ fn an_update_moves_to_the_newest_tag_and_shows_what_changed() {
     .unwrap();
     assert!(record.contains(&first), "{record}");
     p.commit().unwrap();
-    let now = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let now = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     assert_eq!(now[0].version, "v1.1.0");
     assert_eq!(commit(&now[0]).unwrap(), repos.commit(LIB, "v1.1.0"));
 }
@@ -585,6 +598,7 @@ fn a_remove_deletes_the_extension_and_the_dependencies_nothing_else_uses() {
     assert!(
         list(&setup.home(), &*fakes::clock::FakeClock::new())
             .unwrap()
+            .installed
             .is_empty()
     );
     let err = uninstall(&setup.home(), b).unwrap_err();
@@ -628,7 +642,9 @@ fn a_local_install_lists_its_manifest_version_and_no_commit() {
     let setup = Setup::new();
     let source = setup.source("local", &manifest("local"), &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
-    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     assert_eq!(listed[0].version, "v1.0.0");
     assert!(matches!(&listed[0].provenance, Provenance::Path(p) if p.is_absolute()));
 }
@@ -724,6 +740,7 @@ fn a_record_link_in_a_package_is_replaced_never_written_through() {
     assert_eq!(
         list(&setup.home(), &*fakes::clock::FakeClock::new())
             .unwrap()
+            .installed
             .len(),
         1
     );
@@ -1069,7 +1086,9 @@ fn a_local_record_holds_the_absolute_path_and_an_update_checks_the_name() {
     let source = setup.source("local", &manifest("acme"), &[]);
     let roundabout = source.join("../local");
     common::install(&setup.home(), &roundabout, FIBER).unwrap();
-    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    let listed = list(&setup.home(), &*fakes::clock::FakeClock::new())
+        .unwrap()
+        .installed;
     assert_eq!(
         listed[0].provenance,
         Provenance::Path(fs::canonicalize(&source).unwrap())
@@ -1108,31 +1127,290 @@ fn a_local_record_holds_the_absolute_path_and_an_update_checks_the_name() {
 }
 
 #[test]
-fn a_listing_names_the_file_it_cannot_read() {
+fn a_missing_or_unreadable_record_lists_the_extension_as_damaged() {
+    for damage in [
+        None,
+        Some("{"),
+        Some(r#"{"name":"acme","version":"v1","requested":true,"source":{}}"#),
+        Some(r#"{"name":"acme","version":"v1.0.0","source":{"path":"/tmp/x"}}"#),
+    ] {
+        let setup = Setup::new();
+        let healthy = setup.source("healthy", &manifest("example.com/acme/healthy"), &[]);
+        let broken = setup.source("broken", &manifest("example.com/acme/broken"), &[]);
+        common::install(&setup.home(), &healthy, FIBER).unwrap();
+        common::install(&setup.home(), &broken, FIBER).unwrap();
+        let dir = setup.home().join("extensions/example.com-acme-broken");
+        match damage {
+            None => fs::remove_file(dir.join(".fiber.json")).unwrap(),
+            Some(text) => write(&dir.join(".fiber.json"), text),
+        }
+        let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+        assert_eq!(
+            listing
+                .installed
+                .iter()
+                .map(|i| i.name.as_str())
+                .collect::<Vec<_>>(),
+            ["example.com/acme/healthy"],
+            "{damage:?}"
+        );
+        assert_eq!(listing.damaged.len(), 1, "{damage:?}");
+        assert_eq!(
+            listing.damaged[0].name, "example.com/acme/broken",
+            "{damage:?}"
+        );
+        let shown = listing.damaged[0].to_string();
+        assert!(shown.contains("example.com/acme/broken"), "{shown}");
+        assert!(!shown.contains(".fiber.json"), "{shown}");
+    }
+}
+
+#[test]
+fn a_damaged_extension_without_a_manifest_is_named_by_its_directory() {
+    let setup = Setup::new();
+    let healthy = setup.source("healthy", &manifest("example.com/acme/healthy"), &[]);
+    common::install(&setup.home(), &healthy, FIBER).unwrap();
+    let dir = setup.home().join("extensions/some-dir");
+    fs::create_dir_all(&dir).unwrap();
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(listing.installed.len(), 1);
+    assert_eq!(listing.damaged.len(), 1);
+    assert_eq!(listing.damaged[0].name, "some-dir");
+}
+
+#[test]
+fn a_damaged_messages_name_the_extension_and_the_fix() {
+    let setup = Setup::new();
+    let name = "github.com/aakshintala/fiber/providers/opencode";
+    let source = setup.source("broken", &manifest(name), &[]);
+    common::install(&setup.home(), &source, FIBER).unwrap();
+    let dir = setup
+        .home()
+        .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+    fs::remove_file(dir.join(".fiber.json")).unwrap();
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(listing.damaged.len(), 1);
+    assert_eq!(listing.damaged[0].name, name);
+    assert_eq!(
+        listing.damaged[0].to_string(),
+        "`opencode` is damaged; run `fiber extension remove opencode`, then install it again."
+    );
+    let shown = listing.damaged[0].to_string();
+    assert!(!shown.contains(setup.home().to_str().unwrap()), "{shown}");
+    assert!(!shown.contains("os error"), "{shown}");
+    assert_eq!(
+        listing.damaged[0].skipped(),
+        "`opencode` is damaged, so its dependency minimums are unknown and the versions chosen did not count them; run `fiber extension remove opencode`, then install it again."
+    );
+}
+
+#[test]
+fn damaged_extensions_list_sorted_by_name() {
+    let setup = Setup::new();
+    for (dir, name) in [
+        ("b-src", "example.com/acme/b"),
+        ("a-src", "example.com/acme/a"),
+    ] {
+        let source = setup.source(dir, &manifest(name), &[]);
+        common::install(&setup.home(), &source, FIBER).unwrap();
+    }
+    for slug in ["example.com-acme-a", "example.com-acme-b"] {
+        fs::remove_file(setup.home().join(format!("extensions/{slug}/.fiber.json"))).unwrap();
+    }
+    let listing = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap();
+    assert!(listing.installed.is_empty());
+    assert_eq!(
+        listing
+            .damaged
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>(),
+        ["example.com/acme/a", "example.com/acme/b"]
+    );
+}
+
+#[test]
+fn a_healthy_record_with_an_unreadable_manifest_is_still_a_hard_error() {
     let setup = Setup::new();
     let source = setup.source("local", &manifest("acme"), &[]);
     common::install(&setup.home(), &source, FIBER).unwrap();
     let dir = setup.home().join("extensions/acme");
-    for (file, text, code) in [
-        (".fiber.json", "{", ErrorCode::IoFailed),
-        (
-            ".fiber.json",
-            r#"{"name":"acme","version":"v1","requested":true,"source":{}}"#,
-            ErrorCode::IoFailed,
-        ),
-        ("extension.json", "{", ErrorCode::ConfigInvalid),
-    ] {
-        let kept = fs::read_to_string(dir.join(file)).unwrap();
-        write(&dir.join(file), text);
-        let err = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap_err();
-        assert_eq!(err.code(), code, "{err}");
-        assert!(err.to_string().contains(file), "{err}");
-        write(&dir.join(file), &kept);
-    }
-    fs::remove_file(dir.join(".fiber.json")).unwrap();
+    let kept = fs::read_to_string(dir.join("extension.json")).unwrap();
+    write(&dir.join("extension.json"), "{");
     let err = list(&setup.home(), &*fakes::clock::FakeClock::new()).unwrap_err();
-    assert!(matches!(err, Error::BadRecord { .. }), "{err}");
-    assert!(err.to_string().contains(".fiber.json"), "{err}");
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{err}");
+    write(&dir.join("extension.json"), &kept);
+}
+
+#[test]
+fn installing_another_extension_with_a_damaged_one_present_succeeds_and_names_it() {
+    let setup = Setup::new();
+    let keeper = setup.source("keeper", &manifest("example.com/acme/keeper"), &[]);
+    let broken = setup.source("broken", &manifest("example.com/acme/broken"), &[]);
+    common::install(&setup.home(), &keeper, FIBER).unwrap();
+    common::install(&setup.home(), &broken, FIBER).unwrap();
+    fs::remove_file(
+        setup
+            .home()
+            .join("extensions/example.com-acme-broken/.fiber.json"),
+    )
+    .unwrap();
+    let fresh = setup.source("fresh", &manifest("example.com/acme/fresh"), &[]);
+    let p = plan(
+        &setup.home(),
+        &Request::Path(fresh),
+        FIBER,
+        &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap();
+    assert_eq!(
+        p.damaged()
+            .iter()
+            .map(|d| d.name.as_str())
+            .collect::<Vec<_>>(),
+        ["example.com/acme/broken"]
+    );
+    p.commit().unwrap();
+    assert_eq!(
+        versions(&setup).keys().cloned().collect::<Vec<_>>(),
+        ["example.com/acme/fresh", "example.com/acme/keeper"]
+    );
+    assert!(
+        setup
+            .home()
+            .join("extensions/example.com-acme-broken")
+            .is_dir()
+    );
+}
+
+#[test]
+fn install_or_update_of_a_damaged_name_fails_as_damaged() {
+    for damaged_record in [true, false] {
+        let setup = Setup::new();
+        let name = "github.com/aakshintala/fiber/providers/opencode";
+        let source = setup.source("broken", &manifest(name), &[]);
+        common::install(&setup.home(), &source, FIBER).unwrap();
+        let dir = setup
+            .home()
+            .join("extensions/github.com-aakshintala-fiber-providers-opencode");
+        if damaged_record {
+            fs::remove_file(dir.join(".fiber.json")).unwrap();
+        } else {
+            write(&dir.join(".fiber.json"), "{");
+        }
+        let fix =
+            "`opencode` is damaged; run `fiber extension remove opencode`, then install it again.";
+        for request in [
+            Request::Install(name.into()),
+            Request::Update("opencode".into()),
+        ] {
+            let Err(err) = plan(
+                &setup.home(),
+                &request,
+                FIBER,
+                &Origin::github(),
+                &*fakes::clock::FakeClock::new(),
+            ) else {
+                panic!("planned")
+            };
+            assert!(matches!(err, Error::Damaged(_)), "{err}");
+            assert_eq!(err.code(), ErrorCode::ExtensionFailed, "{err}");
+            assert_eq!(err.to_string(), fix, "{err}");
+        }
+    }
+}
+
+#[test]
+fn a_dependency_on_a_damaged_slug_fails_as_damaged() {
+    let setup = Setup::new();
+    let dep = setup.source("dep", &manifest("example.com/acme/dep"), &[]);
+    common::install(&setup.home(), &dep, FIBER).unwrap();
+    fs::remove_file(
+        setup
+            .home()
+            .join("extensions/example.com-acme-dep/.fiber.json"),
+    )
+    .unwrap();
+    let top = setup.source(
+        "top",
+        &named("example.com/acme/top", &[("example.com/acme/dep", "1.0")]),
+        &[],
+    );
+    let Err(err) = plan(
+        &setup.home(),
+        &Request::Path(top),
+        FIBER,
+        &Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    ) else {
+        panic!("planned")
+    };
+    assert!(matches!(err, Error::Damaged(_)), "{err}");
+    assert_eq!(err.code(), ErrorCode::ExtensionFailed, "{err}");
+}
+
+#[test]
+fn a_damaged_extension_removes_by_its_displayed_name() {
+    for invalid in [false, true] {
+        let setup = Setup::new();
+        let name = "github.com/aakshintala/fiber/providers/opencode";
+        let slug = "github.com-aakshintala-fiber-providers-opencode";
+        let healthy = setup.source("healthy", &manifest("example.com/acme/healthy"), &[]);
+        let broken = setup.source("broken", &manifest(name), &[]);
+        common::install(&setup.home(), &healthy, FIBER).unwrap();
+        common::install(&setup.home(), &broken, FIBER).unwrap();
+        let dir = setup.home().join(format!("extensions/{slug}"));
+        if invalid {
+            write(&dir.join(".fiber.json"), "{");
+        } else {
+            fs::remove_file(dir.join(".fiber.json")).unwrap();
+        }
+        let home = setup.home();
+        let mine = [
+            home.join(format!("data/{slug}/index")),
+            home.join(format!("projects/p/data/{slug}/index")),
+            home.join(format!("config/{slug}.json")),
+            home.join(format!("projects/p/config/{slug}.json")),
+        ];
+        let theirs = home.join("data/example.com-acme-healthy/index");
+        for file in mine.iter().chain([&theirs]) {
+            write(file, "x");
+        }
+        let r = removal(&home, "opencode", &*fakes::clock::FakeClock::new()).unwrap();
+        assert_eq!(r.names, [name], "invalid={invalid}");
+        r.commit().unwrap();
+        assert!(!dir.exists(), "invalid={invalid}");
+        assert!(mine.iter().all(|f| !f.exists()), "invalid={invalid}");
+        assert!(theirs.exists(), "invalid={invalid}");
+        assert!(
+            home.join("extensions/example.com-acme-healthy").exists(),
+            "invalid={invalid}"
+        );
+    }
+}
+
+#[test]
+fn a_damaged_extension_removes_by_its_full_name() {
+    let setup = Setup::new();
+    let name = "example.com/acme/broken";
+    let broken = setup.source("broken", &manifest(name), &[]);
+    common::install(&setup.home(), &broken, FIBER).unwrap();
+    fs::remove_file(
+        setup
+            .home()
+            .join("extensions/example.com-acme-broken/.fiber.json"),
+    )
+    .unwrap();
+    let r = removal(&setup.home(), name, &*fakes::clock::FakeClock::new()).unwrap();
+    assert_eq!(r.names, [name]);
+    r.commit().unwrap();
+    assert!(
+        !setup
+            .home()
+            .join("extensions/example.com-acme-broken")
+            .exists()
+    );
 }
 
 #[test]
