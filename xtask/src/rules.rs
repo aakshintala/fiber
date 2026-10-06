@@ -168,6 +168,7 @@ pub(crate) fn unsafe_mismatches(
 /// Files that may send a process signal. An entry must refuse an id of 1 or
 /// less before anything runs: group -1 reaches every process the user owns.
 const SIGNAL_ALLOWLIST: &[&str] = &[
+    "crates/extensions/src/host/exec.rs",
     "crates/fakes/src/process_group.rs",
     "crates/mcp/src/server.rs",
     "crates/tools/src/shell/command.rs",

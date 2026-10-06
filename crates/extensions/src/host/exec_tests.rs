@@ -17,7 +17,6 @@ use contract::clock::Clock as _;
 use fakes::clock::FakeClock;
 
 use super::{ExecRequest, GROUP_POLL, group_alive, kill_every_group, refused_group, signal_name};
-
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
@@ -191,6 +190,41 @@ fn output_past_the_cap_stops_the_run_with_the_cap_error() {
         err.ran.is_some(),
         "a capped run started, so its end is logged"
     );
+}
+
+#[test]
+fn a_deadline_stop_reports_timed_out() {
+    let (_dir, cwd) = dir("fiber-exec-deadline");
+    let clock = FakeClock::new();
+    let ready = fakes::children::Ready::new(&cwd);
+    let script = format!(
+        "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
+        ready.path().display()
+    );
+    let deadline = clock.now() + Duration::from_millis(500);
+    let (_cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), Some(deadline));
+    let pgid = ready.wait(DEADLINE)[0];
+    let watchdog = fakes::Watchdog::group(pgid);
+    assert!(
+        clock.await_parked(clock.now() + GROUP_POLL, DEADLINE),
+        "waited {DEADLINE:?} for the run to park while running"
+    );
+    // Past the callback's deadline the run stops, although nothing
+    // dropped its cancel.
+    clock.advance(Duration::from_millis(1000));
+    let kill_at = clock.now() + Duration::from_millis(800);
+    assert!(
+        clock.await_parked(kill_at, DEADLINE),
+        "waited {DEADLINE:?} for the run to park for the 800 ms grace"
+    );
+    clock.advance(Duration::from_millis(800));
+    let ran = done
+        .recv_timeout(DEADLINE)
+        .expect("waited {DEADLINE:?} for the timed-out run")
+        .expect("the timed-out run stops");
+    assert_eq!(ran.signal.as_deref(), Some("SIGKILL"));
+    assert!(ran.timed_out, "the deadline stopped the run");
+    watchdog.stand_down(DEADLINE);
 }
 
 #[test]

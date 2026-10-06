@@ -743,3 +743,90 @@ fn a_timer_has_no_provider_credential_to_refresh() {
     // a timer failure is reported nowhere); the `every` keeps firing.
     assert_eq!(next_line(&first, "the every after the refusal"), b"again");
 }
+
+// The acceptance case (`docs/extensions.md`, "Host calls"): an `after_tool`
+// hook runs `host.exec` on a program that blocks until the test releases it,
+// while a timer set in `init.lua` fires in the gap and the hook returns.
+
+#[test]
+fn a_timer_fires_while_a_hook_waits_on_host_exec() {
+    let setup = Setup::new();
+    let dir = setup.workspace();
+    let init = format!(
+        "local dir = '{}'\n\
+         host.after(50, function()\n\
+           host.fs.write(dir .. \"/tick.fifo\", \"x\")\n\
+         end, {{ timeout = 1000 }})\n\
+         fiber.hook(\"after_tool\", {{ timeout = 5000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             host.fs.write(dir .. \"/started.fifo\", \"x\")\n\
+             host.exec(\"sh\", {{\"-c\", \"read x < '\" .. dir .. \"/hook.fifo'\"}})\n\
+           end }})\n",
+        dir.display(),
+    );
+    installed(&setup, "acc", &init);
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock.clone());
+    let started = read_fifo(timer_fifo(&dir, "started.fifo"));
+    let tick = read_fifo(timer_fifo(&dir, "tick.fifo"));
+    // Created with no reader: the shell's read blocks until the test opens
+    // the fifo for writing, holding the hook parked meanwhile.
+    timer_fifo(&dir, "hook.fifo");
+    let answered = ask(&session);
+    // The hook runs first and parks in its exec; the timer comes due while
+    // it waits and fires in the gap.
+    assert_eq!(next_line(&started, "the parked hook"), b"x");
+    clock.advance(Duration::from_millis(1000));
+    assert_eq!(next_line(&tick, "the timer while the hook waits"), b"x");
+    // Releasing the shell ends the exec, and the hook returns unchanged.
+    match std::fs::File::create(dir.join("hook.fifo")) {
+        Ok(mut released) => {
+            use std::io::Write as _;
+            released.write_all(b"x\n").unwrap();
+        }
+        Err(_) => panic!("opening hook.fifo for writing"),
+    }
+    match answered.recv_timeout(WAIT) {
+        Ok(answer) => assert_eq!(answer.outcome, AfterToolOutcome::Unchanged),
+        Err(_) => panic!("the hook did not return within {WAIT:?}"),
+    }
+}
+
+#[test]
+fn kill_every_group_stops_a_hook_parked_on_a_long_exec() {
+    let setup = Setup::new();
+    let dir = setup.workspace();
+    let init = format!(
+        "local dir = '{}'\n\
+         fiber.hook(\"after_tool\", {{ timeout = 60000, on_failure = \"blocking\",\n\
+           run = function(call)\n\
+             host.exec(\"sh\", {{\"-c\", \"echo $$ > '\" .. dir .. \"/pid'; echo x > '\" .. dir .. \"/started.fifo'; exec sleep 600\"}})\n\
+           end }})\n",
+        dir.display(),
+    );
+    installed(&setup, "acc", &init);
+    let clock = FakeClock::new();
+    let session = load(&setup, &[], clock);
+    let started = read_fifo(timer_fifo(&dir, "started.fifo"));
+    let answered = ask(&session);
+    assert_eq!(next_line(&started, "the parked hook"), b"x\n");
+    // The pid file names the shell, whose pid is its group's id.
+    let pid: u32 = std::fs::read_to_string(dir.join("pid"))
+        .unwrap()
+        .trim()
+        .parse()
+        .unwrap();
+    assert!(pid > 1);
+    let watchdog = fakes::Watchdog::group(pid);
+    extensions::kill_every_group();
+    assert!(
+        !fakes::kill_group(pid, "0").unwrap(),
+        "the exec group is gone after the kill"
+    );
+    // The killed run ends the hook: its signal, not an error.
+    match answered.recv_timeout(WAIT) {
+        Ok(_) => {}
+        Err(_) => panic!("the hook did not return within {WAIT:?}"),
+    }
+    watchdog.stand_down(WAIT);
+}
