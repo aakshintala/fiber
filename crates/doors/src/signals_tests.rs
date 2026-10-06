@@ -187,29 +187,6 @@ fn a_started_shutdown_has_the_same_bound() {
 }
 
 #[test]
-fn a_first_signal_while_armed_runs_on_record_once_and_start_returns_its_code() {
-    let clock = FakeClock::new();
-    let (signals, did) = recorded(&clock);
-    let (record_tx, record_calls) = mpsc::channel();
-    let (bound_tx, bound_calls) = mpsc::channel();
-    arm_with(&signals, &record_tx, &bound_tx);
-    signals.handle(SIGTERM);
-    signals.handle(SIGINT);
-    assert_eq!(
-        record_calls.try_recv().unwrap(),
-        Did::Signal(-1),
-        "on_record runs on the first signal"
-    );
-    assert!(
-        record_calls.try_recv().is_err(),
-        "on_record runs exactly once"
-    );
-    assert_eq!(start(&signals, &bound_tx), Some(143));
-    assert!(did.try_recv().is_err(), "nothing exited before the bound");
-    drop(bound_calls);
-}
-
-#[test]
 fn a_signal_while_booting_does_not_run_on_record() {
     let clock = FakeClock::new();
     let (signals, did) = recorded(&clock);

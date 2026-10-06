@@ -152,6 +152,11 @@ pub(crate) enum StartError {
     Deadline,
 }
 
+/// A start refused because Fiber is shutting down.
+fn shutting_down() -> StartError {
+    StartError::StartFailed("Fiber is shutting down.".to_owned())
+}
+
 /// Why [`Server::call`] failed.
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) enum CallError {
@@ -216,9 +221,7 @@ impl Server {
     ) -> Result<OpenServer, StartError> {
         // Sticky: a start after the stop spawns nothing.
         if Stopping.is_cancelled() {
-            return Err(StartError::StartFailed(
-                "Fiber is shutting down.".to_owned(),
-            ));
+            return Err(shutting_down());
         }
         let stopping = Stopping;
         let mut cmd = Command::new(command);
@@ -333,9 +336,7 @@ impl Server {
                 if stopping.is_cancelled() {
                     // The documented stop, then the failure the door never writes.
                     server.stop();
-                    Err(StartError::StartFailed(
-                        "Fiber is shutting down.".to_owned(),
-                    ))
+                    Err(shutting_down())
                 } else {
                     server.shutdown();
                     Err(error)
