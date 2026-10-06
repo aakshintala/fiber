@@ -59,12 +59,19 @@ impl Session {
 
     /// As [`Self::exit`], under a shutdown whose exit code is `signal`.
     fn exit_on(&self, ran: Result<(), Failure>, signal: Option<i32>) -> (i32, Value) {
-        let code = fiber_exited(&self.log, &self.dir, ran, signal).unwrap();
+        let exited = fiber_exited(&self.log, &self.dir, ran, signal).unwrap();
         let lines = log::read(&self.dir).unwrap();
         let last = lines.last().unwrap();
         assert_eq!(last.kind, "fiber_exited");
         assert!(last.turn_id.is_none());
-        (code, Value::Object(last.payload.clone()))
+        // The returned error is the written one, byte for byte.
+        let written = last.payload.get("error").cloned().unwrap_or(Value::Null);
+        let returned = match &exited.error {
+            Some(error) => serde_json::to_value(error).unwrap(),
+            None => Value::Null,
+        };
+        assert_eq!(returned, written);
+        (exited.code, Value::Object(last.payload.clone()))
     }
 }
 
@@ -129,6 +136,40 @@ fn turn_completed(outcome: TurnOutcome, error: Option<Failure>) -> Event {
         error,
         questions: None,
     })
+}
+
+#[test]
+fn fiber_exited_returns_the_error_it_wrote() {
+    let failed = Session::new();
+    let cause = failure(ErrorCode::ProviderUnavailable, "down");
+    failed.append(&turn_started(), None);
+    failed.append(
+        &turn_completed(TurnOutcome::Failed, Some(cause.clone())),
+        None,
+    );
+    let written = fiber_exited(&failed.log, &failed.dir, Ok(()), None).unwrap();
+    assert_eq!(written.code, 1);
+    assert_eq!(written.error, Some(cause));
+
+    let ok = Session::new();
+    ok.append(&turn_started(), None);
+    ok.append(&turn_completed(TurnOutcome::Completed, None), None);
+    let written = fiber_exited(&ok.log, &ok.dir, Ok(()), None).unwrap();
+    assert_eq!(written.code, 0);
+    assert_eq!(written.error, None);
+
+    let signalled = Session::new();
+    signalled.append(&turn_started(), None);
+    signalled.append(
+        &turn_completed(
+            TurnOutcome::Failed,
+            Some(failure(ErrorCode::ProviderUnavailable, "down")),
+        ),
+        None,
+    );
+    let written = fiber_exited(&signalled.log, &signalled.dir, Ok(()), Some(143)).unwrap();
+    assert_eq!(written.code, 143);
+    assert_eq!(written.error, None);
 }
 
 #[test]

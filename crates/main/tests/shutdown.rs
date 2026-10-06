@@ -337,6 +337,8 @@ fn function_call(call_id: &str, name: &str, arguments: &Value) -> Value {
 /// or final message.
 fn assert_exited(setup: &Setup, ended: &Ended, code: i32, kinds: &[&str], before: &[u8]) {
     assert_eq!(ended.code, Some(code), "stderr: {}", ended.stderr);
+    // A signal carries no `error`, so nothing is printed on stderr.
+    assert_eq!(ended.stderr, "");
     let seen: Vec<&str> = ended
         .lines
         .iter()

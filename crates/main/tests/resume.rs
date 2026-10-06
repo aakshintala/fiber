@@ -704,6 +704,44 @@ fn a_failure_before_the_session_leaves_the_log_untouched() {
     assert!(setup.sessions().join(&id).is_dir());
 }
 
+#[test]
+fn a_failed_resumed_turn_prints_its_error_on_stderr() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello(), Response::status(503, "{}")]).unwrap();
+    setup.provider(&server);
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "retry": {"attempts": 0}}),
+    );
+
+    let first = setup.fiber(&["ask", "one"]);
+    assert_eq!(first.code, Some(0), "stderr: {}", first.stderr);
+    assert_eq!(first.stderr, "");
+    let id = first.session_id().to_owned();
+
+    let run = setup.fiber(&["ask", "--resume", &id, "two"]);
+    assert_eq!(run.code, Some(1), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let exited = &run.last()["payload"];
+    assert_eq!(exited["exit_code"], 1);
+    assert_eq!(exited["error"]["code"], "provider_unavailable");
+    let message = exited["error"]["message"].as_str().unwrap();
+    assert_eq!(run.stderr, format!("fiber: {message}\n"));
+}
+
 /// Sets `providers.fake.credential` to `label` and stores `labels` as
 /// `credentials/fake/<label>`, each holding `<label>-key`.
 fn labels(setup: &Setup, label: &str, stored: &[&str]) {

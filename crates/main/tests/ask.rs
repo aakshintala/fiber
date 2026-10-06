@@ -589,6 +589,7 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
     assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.stderr, "");
     assert_eq!(run.lines[1]["payload"]["resumed"], false);
     assert_eq!(turn_input(&run), "hi");
     let exited = &run.last()["payload"];
@@ -747,6 +748,8 @@ fn a_failed_turn_exits_1_with_the_turns_error() {
     assert_eq!(exited["error"], turn["error"]);
     assert_eq!(exited["error"]["code"], "provider_unavailable");
     assert_eq!(exited.get("text"), None);
+    let message = exited["error"]["message"].as_str().unwrap();
+    assert_eq!(run.stderr, format!("fiber: {message}\n"));
     assert!(run.session_dir(&setup).join("events.jsonl").is_file());
 }
 

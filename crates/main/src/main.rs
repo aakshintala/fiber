@@ -543,7 +543,19 @@ fn run_turn(
     session.quiesce();
     // A `fiber_exited` that cannot be written leaves a log that reads as a
     // process that died, which it then is.
-    r#loop::fiber_exited(log, dir, ran, cancel.shutdown_code()).unwrap_or(1)
+    match r#loop::fiber_exited(log, dir, ran, cancel.shutdown_code()) {
+        Ok(exited) => {
+            // `fiber ask` names its failure on stderr, the sentence
+            // `fiber_exited` just carried (`docs/errors.md`, "What a
+            // caller gets"). The session command's clients read
+            // `fiber_exited` itself, so it stays silent.
+            if one_turn && let Some(error) = &exited.error {
+                writeln!(io::stderr(), "fiber: {}", error.message).unwrap_or(());
+            }
+            exited.code
+        }
+        Err(_) => 1,
+    }
 }
 
 /// Stops the servers, then fails before any session line.
