@@ -3,9 +3,8 @@
 //! stream copied to stdout, the clients on that socket, and what is left
 //! when it exits.
 
-use std::fs::{self, DirBuilder, Permissions};
+use std::fs;
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -25,11 +24,8 @@ use log::{Log, Watcher};
 use serde_json::Map;
 
 use crate::client;
+use crate::socket::{bind, remove_socket};
 use crate::{failure, mint};
-
-/// The longest socket path the platform binds: `sun_path` less its
-/// terminating byte (`docs/state.md`, "Sockets").
-const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 };
 
 // debt: 2 s grace is picked, not measured; a slow client's measured drain time would set it.
 /// How long [`Session::close`] waits for a connection's writer to finish
@@ -137,9 +133,12 @@ impl Session {
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         let (inbox, waiting) = mpsc::channel();
-        // The receiver is still here, so a send cannot fail.
         for delivery in first {
-            let _queued = inbox.send(delivery);
+            // The receiver is still here, so the send cannot fail.
+            match inbox.send(delivery) {
+                Ok(()) => {}
+                Err(mpsc::SendError(delivery)) => drop(delivery),
+            }
         }
         // A job's end wakes the loop through the same inbox
         // (`docs/tools.md`, "Background jobs").
@@ -236,7 +235,9 @@ impl Session {
         self.gate.mark_stopped();
         // Wakes `accept` if it is blocked in `accept`. A connection during
         // teardown is dropped, not served.
-        let _wake = UnixStream::connect(&self.socket);
+        match UnixStream::connect(&self.socket) {
+            Ok(_) | Err(_) => {}
+        }
         if let Some(accept) = lock(&self.accept).take() {
             join(accept);
         }
@@ -555,8 +556,13 @@ fn open_in(
     let wake = Arc::clone(&gate);
     let wake: Arc<dyn Wake> = wake;
     clock.subscribe(Arc::downgrade(&wake));
-    let printer = spawn("stdout", move || print(printer_watcher, out))
-        .inspect_err(|_| remove_socket(&socket))?;
+    let printer = match spawn("stdout", move || print(printer_watcher, out)) {
+        Ok(printer) => printer,
+        Err(error) => {
+            remove_socket(&socket);
+            return Err(error);
+        }
+    };
     Ok(Session {
         dir: dir.to_owned(),
         socket,
@@ -671,57 +677,6 @@ fn prompted(dir: &Path) -> bool {
     })
 }
 
-/// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
-/// directory (`docs/state.md`, "Sockets"). A socket a connect reaches is
-/// live: fail `session_held` and leave it alone; a refusal, a missing path,
-/// or a path that is no socket is removed before binding. Any other error
-/// may hide a live session, so the path stays and this fails `io_failed`.
-fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
-    let run = home.join("run");
-    let socket = run.join(dir.file_name().unwrap_or_default());
-    if socket.as_os_str().len() > SOCKET_PATH_MAX {
-        return Err(failure(
-            ErrorCode::Usage,
-            format!(
-                "FIBER_HOME is too long: a session's socket path must fit in \
-                 {SOCKET_PATH_MAX} bytes. Set FIBER_HOME to a shorter path."
-            ),
-        ));
-    }
-    DirBuilder::new()
-        .recursive(true)
-        .mode(0o700)
-        .create(&run)
-        .map_err(|e| io_failed(&run, &e))?;
-    match UnixStream::connect(&socket) {
-        Ok(_) => {
-            let held = format!("{}: another session is running", socket.display());
-            return Err(failure(ErrorCode::SessionHeld, held));
-        }
-        Err(error) if replaceable(&socket, &error) => remove_socket(&socket),
-        Err(error) => return Err(io_failed(&socket, &error)),
-    }
-    let listener = UnixListener::bind(&socket).map_err(|e| io_failed(&socket, &e))?;
-    if let Err(e) = fs::set_permissions(&socket, Permissions::from_mode(0o600)) {
-        remove_socket(&socket);
-        return Err(io_failed(&socket, &e));
-    }
-    Ok((socket, listener))
-}
-
-// Nothing live hides behind a refusal, a missing path, or a non-socket.
-fn replaceable(socket: &Path, error: &io::Error) -> bool {
-    matches!(
-        error.kind(),
-        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
-    ) || !fs::symlink_metadata(socket).is_ok_and(|meta| meta.file_type().is_socket())
-}
-
-fn remove_socket(socket: &Path) {
-    // Nothing there is the usual case.
-    fs::remove_file(socket).unwrap_or(());
-}
-
 /// An acknowledgement that discards its answer. `fiber ask` has no client
 /// waiting on one.
 fn ignore() -> Ack {
@@ -738,10 +693,6 @@ fn prompt_message(prompt: String) -> Message {
             command_id: Some(CommandId(mint("c_"))),
         },
     }
-}
-
-fn io_failed(path: &Path, e: &io::Error) -> Failure {
-    failure(ErrorCode::IoFailed, format!("{}: {e}", path.display()))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {

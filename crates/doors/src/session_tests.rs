@@ -1041,6 +1041,43 @@ fn open_leaves_a_live_socket_it_cannot_connect_to() {
 }
 
 #[test]
+fn open_leaves_a_symlink_to_a_live_socket_it_cannot_connect_to() {
+    reset();
+    let opened = open();
+    let live = opened.socket.clone();
+    fs::set_permissions(&live, fs::Permissions::from_mode(0o000)).unwrap();
+    // Another session's path is a symlink to the hidden live socket: it is
+    // no regular file, so nothing proves it stale.
+    let home = opened._temp.path().join("h");
+    let id = contract::SessionId(crate::mint("s_"));
+    let link = home.join("run").join(&id.0);
+    std::os::unix::fs::symlink(&live, &link).unwrap();
+    let sessions = home.join("projects/q/sessions");
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a symlink to a hidden live socket was replaced"),
+        Err(error) => error,
+    };
+    // Restored before any assert that can fail, so cleanup still unlinks it.
+    fs::set_permissions(&live, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        fs::symlink_metadata(&link).is_ok_and(|meta| meta.file_type().is_symlink()),
+        "the symlink stays in place"
+    );
+    UnixStream::connect(&live).unwrap();
+    fs::remove_file(&link).unwrap();
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn close_after_resume_keeps_a_session_that_has_turns() {
     use contract::events::{InputItem, TurnStarted};
     use contract::shapes::{ContentPart, Origin, Sender};
