@@ -43,9 +43,6 @@ pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {
     }
 }
 
-/// How a failed model call is retried, from configuration with the
-/// documented defaults (`docs/configuration.md`). `attempts` is clamped
-/// to `u32`, so a huge configured count never overflows the loop.
 /// The prompt-cache lifetime for `model`, from `cache.lifetime`
 /// (`docs/prompt-cache.md`, "Cache lifetime" and
 /// `docs/configuration.md`). A per-model key wins over the same key at
@@ -62,6 +59,9 @@ pub(crate) fn cache_lifetime(config: &Config, model: &str) -> CacheLifetime {
     }
 }
 
+/// How a failed model call is retried, from configuration with the
+/// documented defaults (`docs/configuration.md`). `attempts` is clamped
+/// to `u32`, so a huge configured count never overflows the loop.
 pub(crate) fn retry_policy(config: &Config) -> r#loop::Retry {
     let count = |key: &str, default: u64| {
         config
