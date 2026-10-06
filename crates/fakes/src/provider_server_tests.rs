@@ -120,6 +120,52 @@ fn hold_records_the_request_and_sends_the_body_only_after_release() {
     assert!(body.ends_with(b"hello"));
 }
 
+#[test]
+fn release_one_sends_one_held_response_and_keeps_holding_the_rest() {
+    let server =
+        ProviderServer::start([Response::stream(b"one"), Response::stream(b"two")]).unwrap();
+    server.hold();
+    let addr = server.addr;
+    let (tx, rx) = mpsc::channel();
+    for name in ["a", "b"] {
+        let tx = tx.clone();
+        thread::spawn(move || {
+            let mut stream = TcpStream::connect(addr).unwrap();
+            stream
+                .write_all(b"GET /v1 HTTP/1.1\r\nHost: localhost\r\n\r\n")
+                .unwrap();
+            let mut body = Vec::new();
+            stream.read_to_end(&mut body).unwrap();
+            tx.send((name, body)).unwrap();
+        });
+        // One request at a time, so the script's order is known.
+        assert!(server.await_requests(if name == "a" { 1 } else { 2 }, Duration::from_secs(2)));
+    }
+    assert!(rx.recv_timeout(Duration::from_millis(200)).is_err());
+
+    server.release_one();
+    let (first, body) = rx
+        .recv_timeout(Duration::from_secs(2))
+        .expect("one response is sent");
+    assert!(body.ends_with(b"one") || body.ends_with(b"two"), "{first}");
+    assert!(
+        rx.recv_timeout(Duration::from_millis(200)).is_err(),
+        "the other response is still held"
+    );
+
+    server.release_one();
+    rx.recv_timeout(Duration::from_secs(2))
+        .expect("the second release sends the other");
+}
+
+#[test]
+fn a_release_one_before_the_request_lets_it_through() {
+    let server = ProviderServer::start([Response::stream(b"hello")]).unwrap();
+    server.hold();
+    server.release_one();
+    assert_eq!(get_status(&server), "200");
+}
+
 /// The status line's code of a bodiless GET answered by `server`.
 fn get_status(server: &ProviderServer) -> String {
     let mut stream = TcpStream::connect(server.addr).unwrap();
@@ -143,4 +189,134 @@ fn a_request_past_the_script_gets_the_fallback_or_the_default_500() {
     let without = ProviderServer::start([Response::status(200, "")]).unwrap();
     assert_eq!(get_status(&without), "200");
     assert_eq!(get_status(&without), "500");
+}
+
+#[test]
+fn a_stall_sends_its_head_and_prefix_then_holds_until_the_client_closes() {
+    use std::io::BufRead;
+    let server = ProviderServer::start([
+        Response::stall(200, b"partial".to_vec(), 100).header("content-type", "text/plain")
+    ])
+    .unwrap();
+    let mut stream = TcpStream::connect(server.addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+    let mut status = String::new();
+    reader.read_line(&mut status).unwrap();
+    assert!(status.starts_with("HTTP/1.1 200"), "{status}");
+    let mut content_length = String::new();
+    let mut content_type = String::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        let line = line.trim_end_matches(['\r', '\n']).to_owned();
+        if line.is_empty() {
+            break;
+        }
+        let (name, value) = line.split_once(':').unwrap();
+        match name.trim().to_ascii_lowercase().as_str() {
+            "content-length" => content_length = value.trim().to_owned(),
+            "content-type" => content_type = value.trim().to_owned(),
+            _ => {}
+        }
+    }
+    assert_eq!(content_length, "100");
+    assert_eq!(content_type, "text/plain");
+    let mut prefix = vec![0u8; 7];
+    reader.read_exact(&mut prefix).unwrap();
+    assert_eq!(prefix, b"partial");
+    assert!(
+        server.await_partial(1, Duration::from_secs(2)),
+        "the partial response was sent"
+    );
+    assert_eq!(server.requests().len(), 1);
+    // The rest of the declared body never arrives while the client holds.
+    let mut one = [0u8; 1];
+    let held = reader.read_exact(&mut one);
+    assert!(held.is_err(), "the connection is held past its prefix");
+    drop(reader);
+    drop(stream);
+    assert!(
+        server.await_closed(1, Duration::from_secs(2)),
+        "the client close ends the stall"
+    );
+}
+
+#[test]
+fn a_scripted_content_length_past_the_body_without_stall_is_sent_and_closed() {
+    let server = ProviderServer::start([Response {
+        status: 200,
+        headers: vec![("content-length".to_owned(), "100".to_owned())],
+        body: b"ok".to_vec(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .unwrap();
+    let mut stream = TcpStream::connect(server.addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    let mut text = String::new();
+    // The server closes after the body: the read ends rather than timing out.
+    stream.read_to_string(&mut text).unwrap();
+    assert!(text.ends_with("ok"), "{text}");
+    assert!(!server.await_partial(1, Duration::from_millis(200)));
+    assert!(!server.await_closed(1, Duration::from_millis(200)));
+}
+
+#[test]
+fn fewer_than_ends_exactly_at_the_count() {
+    assert!(fewer_than(0, 1));
+    assert!(!fewer_than(1, 1));
+    assert!(!fewer_than(2, 1));
+}
+
+#[test]
+fn await_partial_needs_every_counted_partial() {
+    use std::io::BufRead;
+    let server = ProviderServer::start([Response::stall(200, b"partial".to_vec(), 100)]).unwrap();
+    let mut stream = TcpStream::connect(server.addr).unwrap();
+    stream
+        .set_read_timeout(Some(Duration::from_secs(2)))
+        .unwrap();
+    stream
+        .write_all(b"GET / HTTP/1.1\r\nHost: localhost\r\n\r\n")
+        .unwrap();
+    // Past the head: the prefix is what the read was blocked on.
+    let mut reader = std::io::BufReader::new(stream.try_clone().unwrap());
+    let mut head = String::new();
+    loop {
+        let mut line = String::new();
+        reader.read_line(&mut line).unwrap();
+        head.push_str(&line);
+        if line.trim_end_matches(['\r', '\n']).is_empty() {
+            break;
+        }
+    }
+    assert!(head.starts_with("HTTP/1.1 200"), "{head}");
+    let mut prefix = vec![0u8; 7];
+    reader.read_exact(&mut prefix).unwrap();
+    assert_eq!(prefix, b"partial");
+    assert!(
+        server.await_partial(1, Duration::from_secs(2)),
+        "the one partial arrived"
+    );
+    assert!(
+        !server.await_partial(2, Duration::from_millis(200)),
+        "no second partial is coming"
+    );
+    drop(reader);
+    drop(stream);
+    assert!(
+        server.await_closed(1, Duration::from_secs(2)),
+        "the client close ends the stall"
+    );
 }

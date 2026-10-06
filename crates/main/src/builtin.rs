@@ -24,11 +24,13 @@ type SessionTools = (
     Arc<dyn Fn() + Send + Sync>,
 );
 
-/// `edit`, `handoff`, `read`, `shell`, `write` and `jobs`, each registered
-/// by `builtin`, and `web_search` when `web_search` names the hosted search
-/// type of the session's model. `read`, `write` and `edit` share one session's file state,
-/// which a handoff forgets, and `read` runs the image child (`fiber image`)
-/// into `artifacts`, the session's `artifacts/` directory; the model's
+/// `edit`, `handoff`, `read`, `shell`, `web_fetch`, `write` and `jobs`, each
+/// registered by `builtin`, and `web_search` when `web_search` names the
+/// hosted search type of the session's model. `read`, `write` and `edit`
+/// share one session's file state, which a handoff forgets, and `read` runs
+/// the image child (`fiber image`) into `artifacts`, the session's
+/// `artifacts/` directory, where `web_fetch` saves the PDFs and images it
+/// downloads; the model's
 /// `shell` moves commands into `jobs`, which the `jobs` tool lists, waits on
 /// and stops. The driver shell runs in the foreground only. A failure to find
 /// the running binary is `io_failed`, before any session line.
@@ -72,6 +74,10 @@ pub(crate) fn with_binary(
         registered(tools::Handoff)?,
         registered(files.read())?,
         registered(shell)?,
+        registered(tools::WebFetch::new(
+            artifacts.to_path_buf(),
+            Arc::clone(clock),
+        ))?,
         registered(files.write())?,
         registered(jobs::JobsTool::new(Arc::clone(jobs)))?,
     ];

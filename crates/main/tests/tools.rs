@@ -27,7 +27,15 @@ const DEADLINE: Duration = Duration::from_secs(20);
 
 /// The request's tool order: the loop keys tools by name, so this is name
 /// order, whatever order `main` pushes them in.
-const TOOL_NAMES: [&str; 6] = ["edit", "handoff", "jobs", "read", "shell", "write"];
+const TOOL_NAMES: [&str; 7] = [
+    "edit",
+    "handoff",
+    "jobs",
+    "read",
+    "shell",
+    "web_fetch",
+    "write",
+];
 
 /// A temporary root holding Fiber home and the workspace, removed on drop.
 /// Its name is short: a session's socket path must fit in 103 bytes on
@@ -438,7 +446,7 @@ fn read_kinds() -> Vec<&'static str> {
 }
 
 #[test]
-fn a_new_session_offers_the_five_builtin_tools_and_a_read_completes() {
+fn a_new_session_offers_the_builtin_tools_and_a_read_completes() {
     let setup = Setup::new();
     let note = "alpha line\n";
     fs::write(setup.workspace().join("note.txt"), note).unwrap();
@@ -1399,4 +1407,226 @@ fn a_monitors_lines_reach_the_log_before_its_end_and_ask_exits() {
         }
     }
     assert_eq!(printed, "one\ntwo\n");
+}
+
+/// A page server with one 200 answer of `content_type` and `body`.
+fn page(content_type: &str, body: &str) -> ProviderServer {
+    ProviderServer::start([Response {
+        status: 200,
+        headers: vec![("content-type".to_owned(), content_type.to_owned())],
+        body: body.as_bytes().to_vec(),
+        drop_connection: false,
+        stall: false,
+    }])
+    .unwrap()
+}
+
+/// A global standing rule that allows `web_fetch` of every URL at `server`.
+fn allow_fetch_of(setup: &Setup, server: &ProviderServer) {
+    fs::write(
+        setup.home().join("rules"),
+        format!(
+            "{}\n",
+            json!({"decision": "allow", "tool": "web_fetch", "prefix": format!("{}/", server.url())})
+        ),
+    )
+    .unwrap();
+}
+
+fn completed_call(run: &Run) -> &Value {
+    run.lines
+        .iter()
+        .find(|line| line["kind"] == "tool_call_completed")
+        .unwrap()
+}
+
+#[test]
+fn a_web_fetch_allowed_by_a_standing_rule_returns_the_pages_first_line() {
+    let setup = Setup::new();
+    let site = page(
+        "text/html; charset=utf-8",
+        "<h1>Hello</h1><p>from the page</p>",
+    );
+    let url = format!("{}/doc", site.url());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_fetch",
+            "web_fetch",
+            &json!({"url": url}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    allow_fetch_of(&setup, &site);
+
+    let run = setup.run(&["ask", "fetch the page"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "standing_rule");
+    let completed = completed_call(&run);
+    assert_eq!(completed["payload"]["status"], "completed");
+    assert_eq!(
+        completed["payload"]["content"][0]["text"],
+        format!("{url} 200 text/html; charset=utf-8\n\n# Hello\n\nfrom the page\n")
+    );
+    assert_eq!(site.requests().len(), 1);
+    assert_eq!(site.requests()[0].path, "/doc");
+}
+
+#[test]
+fn a_fetched_page_over_16_kib_is_cut_and_its_whole_markdown_is_in_the_artifact() {
+    let setup = Setup::new();
+    let paragraph = "<p>0123456789 0123456789 0123456789 0123456789</p>";
+    let html = paragraph.repeat(20_000 / paragraph.len() + 1);
+    let markdown =
+        "0123456789 0123456789 0123456789 0123456789\n\n".repeat(20_000 / paragraph.len() + 1);
+    let markdown = format!("{}\n", markdown.trim_end());
+    let site = page("text/html", &html);
+    let url = format!("{}/long", site.url());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_fetch",
+            "web_fetch",
+            &json!({"url": url}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+    allow_fetch_of(&setup, &site);
+
+    let run = setup.run(&["ask", "fetch the long page"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "permission_resolved",
+            "tool_call_started",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let completed = completed_call(&run);
+    assert_eq!(completed["payload"]["status"], "completed");
+    let artifact = completed["payload"]["artifact"].as_str().unwrap();
+    let kept = fs::read_to_string(run.session_dir(&setup).join(artifact)).unwrap();
+    assert_eq!(kept, format!("{url} 200 text/html\n\n{markdown}"));
+    let shown = completed["payload"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        shown.starts_with(&format!("{url} 200 text/html\n\n")),
+        "{shown}"
+    );
+    assert!(shown.len() < kept.len(), "the result was not cut");
+}
+
+#[test]
+fn a_web_fetch_with_no_rule_is_judged_at_step_7() {
+    let setup = Setup::new();
+    let site = page("text/plain", "never fetched");
+    let url = format!("{}/doc", site.url());
+    let server = ProviderServer::start([
+        stream(&[function_call(
+            "call_fetch",
+            "web_fetch",
+            &json!({"url": url}),
+        )]),
+        hello(),
+    ])
+    .unwrap();
+    setup.provider(&server);
+
+    let run = setup.run(&["ask", "fetch the page"]);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(
+        run.kinds(),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "tool_call_requested",
+            "usage_recorded",
+            "assistant_message_completed",
+            "notice",
+            "permission_resolved",
+            "tool_call_completed",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+    let resolved = run
+        .lines
+        .iter()
+        .find(|line| line["kind"] == "permission_resolved")
+        .unwrap();
+    assert_eq!(resolved["payload"]["decided_by"], "reviewer");
+    assert_eq!(resolved["payload"]["decision"], "deny");
+    assert_eq!(completed_call(&run)["payload"]["status"], "denied");
+    assert!(site.requests().is_empty(), "a denied call sends nothing");
 }

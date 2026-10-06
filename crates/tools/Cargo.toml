@@ -16,6 +16,7 @@ ignore.workspace = true
 rustix.workspace = true
 serde_json.workspace = true
 similar.workspace = true
+ureq.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }

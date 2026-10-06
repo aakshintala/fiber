@@ -50,6 +50,10 @@ pub struct Response {
     /// connection without answering: the client sees a dropped
     /// connection. `status`, `headers` and `body` are ignored.
     pub drop_connection: bool,
+    /// When true, the server sends the head with the headers as scripted
+    /// (the script gives `content-length`) and `body` as the only body
+    /// bytes, then holds the connection open until the client closes it.
+    pub stall: bool,
 }
 
 impl Response {
@@ -60,6 +64,7 @@ impl Response {
             headers: vec![("content-type".to_owned(), "text/event-stream".to_owned())],
             body: body.into(),
             drop_connection: false,
+            stall: false,
         }
     }
 
@@ -70,6 +75,7 @@ impl Response {
             headers: vec![("content-type".to_owned(), "application/json".to_owned())],
             body: body.into(),
             drop_connection: false,
+            stall: false,
         }
     }
 
@@ -81,6 +87,24 @@ impl Response {
             headers: Vec::new(),
             body: Vec::new(),
             drop_connection: true,
+            stall: false,
+        }
+    }
+
+    /// Sends the head with `total` as its `content-length` and `prefix` as
+    /// the only body bytes, then holds the connection open until the client
+    /// closes it: what a client blocked mid-body sees. `total` must exceed
+    /// `prefix.len()`; the server records the partial send and the client's
+    /// close for [`ProviderServer::await_partial`] and
+    /// [`ProviderServer::await_closed`]. Chain `.header()` for the other
+    /// headers, such as `content-type`.
+    pub fn stall(status: u16, prefix: impl Into<Vec<u8>>, total: usize) -> Self {
+        Self {
+            status,
+            headers: vec![("content-length".to_owned(), total.to_string())],
+            body: prefix.into(),
+            drop_connection: false,
+            stall: true,
         }
     }
 
@@ -127,6 +151,12 @@ struct State {
     stopping: bool,
     /// When set, a recorded request is not answered until [`ProviderServer::release`].
     hold: bool,
+    /// Held responses [`ProviderServer::release_one`] has let go.
+    permits: usize,
+    /// Stalled responses that sent their partial body.
+    partial: usize,
+    /// Stalled connections whose client side closed.
+    closed: usize,
 }
 
 /// A fake provider listening on a local port. Each request gets the next
@@ -210,6 +240,38 @@ impl ProviderServer {
         lock(&self.state).hold = false;
         self.arrived.notify_all();
     }
+
+    /// Lets one held response go, while the hold stays on for the rest: the
+    /// next response sent is the one of the oldest request waiting, or of
+    /// the next request to arrive.
+    pub fn release_one(&self) {
+        lock(&self.state).permits += 1;
+        self.arrived.notify_all();
+    }
+
+    /// Waits, at most `within` of real time, until at least `count` stalled
+    /// responses have sent their partial body. True once they have; false
+    /// at the deadline.
+    pub fn await_partial(&self, count: usize, within: Duration) -> bool {
+        let guard = lock(&self.state);
+        let (guard, _) = self
+            .arrived
+            .wait_timeout_while(guard, within, |state| fewer_than(state.partial, count))
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.partial >= count
+    }
+
+    /// Waits, at most `within` of real time, until at least `count` stalled
+    /// connections saw their client side close. True once they did; false
+    /// at the deadline.
+    pub fn await_closed(&self, count: usize, within: Duration) -> bool {
+        let guard = lock(&self.state);
+        let (guard, _) = self
+            .arrived
+            .wait_timeout_while(guard, within, |state| fewer_than(state.closed, count))
+            .unwrap_or_else(PoisonError::into_inner);
+        guard.closed >= count
+    }
 }
 
 impl Drop for ProviderServer {
@@ -232,6 +294,13 @@ impl Drop for ProviderServer {
             }
         }
     }
+}
+
+/// Whether `have` arrivals are still fewer than the `count` waited for.
+/// The boundary is exact: below the count the wait continues, at it the
+/// wait is already over, so `==`, `>` and `<=` here each read differently.
+fn fewer_than(have: usize, count: usize) -> bool {
+    have < count
 }
 
 /// A lock that outlives a panicked holder: the state is plain data, and a
@@ -292,12 +361,23 @@ fn serve(stream: TcpStream, state: &Mutex<State>, arrived: &Condvar) -> io::Resu
             return Ok(());
         }
         if state.hold {
-            while state.hold && !state.stopping {
+            while state.hold && state.permits == 0 && !state.stopping {
                 state = arrived.wait(state).unwrap_or_else(PoisonError::into_inner);
+            }
+            // A still-held request takes one released permit. The wait
+            // above only ends with no permit left when the hold is already
+            // gone or the server is stopping, which clears the hold first,
+            // so `||` or `>=` here would only re-check a ruled-out state;
+            // the pattern states the rule with mutants a test can reach.
+            if let (true, 1..) = (state.hold, state.permits) {
+                state.permits -= 1;
             }
         }
         response
     };
+    if response.stall {
+        return write_stall(reader.get_mut(), &response, state, arrived);
+    }
     write_response(reader.get_mut(), &response)
 }
 
@@ -453,6 +533,38 @@ fn write_response(stream: &mut TcpStream, response: &Response) -> io::Result<()>
     stream.write_all(head.as_bytes())?;
     stream.write_all(&response.body)?;
     stream.flush()
+}
+
+/// Sends the head with its declared `content-length` and the prefix it
+/// carries, then holds the connection open until the client closes it: the
+/// client stays blocked mid-body. Records the partial send before holding
+/// and the client's close after it, so a test can wait for each.
+fn write_stall(
+    stream: &mut TcpStream,
+    response: &Response,
+    state: &Mutex<State>,
+    arrived: &Condvar,
+) -> io::Result<()> {
+    let mut head = format!("HTTP/1.1 {} Fake\r\n", response.status);
+    for (name, value) in &response.headers {
+        head.push_str(&format!("{name}: {value}\r\n"));
+    }
+    head.push_str("connection: close\r\n\r\n");
+    stream.write_all(head.as_bytes())?;
+    stream.write_all(&response.body)?;
+    stream.flush()?;
+    {
+        lock(state).partial += 1;
+        arrived.notify_all();
+    }
+    // Held until the client goes away: a zero read is the close.
+    let mut rest = Vec::new();
+    match stream.read_to_end(&mut rest) {
+        Ok(_) | Err(_) => {}
+    }
+    lock(state).closed += 1;
+    arrived.notify_all();
+    Ok(())
 }
 
 #[cfg(test)]

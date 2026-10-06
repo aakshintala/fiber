@@ -220,11 +220,30 @@ fn builtin_registers_the_tools_in_name_order_then_jobs() {
             tool.definition().name
         })
         .collect();
-    assert_eq!(names, ["edit", "handoff", "read", "shell", "write", "jobs"]);
+    assert_eq!(
+        names,
+        [
+            "edit",
+            "handoff",
+            "read",
+            "shell",
+            "web_fetch",
+            "write",
+            "jobs"
+        ]
+    );
     let listed: Vec<&str> = infos.iter().map(|info| info.name.as_str()).collect();
     assert_eq!(
         listed,
-        ["edit", "handoff", "read", "shell", "write", "jobs"]
+        [
+            "edit",
+            "handoff",
+            "read",
+            "shell",
+            "web_fetch",
+            "write",
+            "jobs"
+        ]
     );
 }
 
