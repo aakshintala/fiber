@@ -494,6 +494,9 @@ fn samples() -> Vec<(&'static str, Value)> {
             json!({"environment": {"date": "2026-09-29", "os": "linux",
             "arch": "x86_64", "shell": "bash", "workspace": "/w", "git": {"branch": null},
             "session_log": "/l"}, "instruction_files": [{"path": "/a", "content": "c"}],
+            "extension_sections": [{"extension": "fiber.test/notes",
+            "files": [{"path": "/h/data/fiber.test-notes/index.md", "content": "- [[x]]"}],
+            "budget_bytes": 25000}],
             "skills": [{"name": "s", "description": "d", "path": "/s/SKILL.md",
             "source": "repository"}]}),
         ),
@@ -501,6 +504,11 @@ fn samples() -> Vec<(&'static str, Value)> {
             "instruction_file",
             json!({"path": "/a", "reason": "own_edit", "content": "c",
             "sent": "none"}),
+        ),
+        (
+            "instruction_file",
+            json!({"path": "/h/data/fiber.test-notes/index.md", "reason": "changed",
+            "extension": "fiber.test/notes", "content": "- [[x]]", "sent": "full"}),
         ),
         ("date_changed", json!({"date": "2026-09-30"})),
         (
@@ -668,6 +676,21 @@ fn the_samples_cover_every_key_each_kind_lists() {
 
 fn read(kind: &str, payload: Value) -> Result<Option<Event>, serde_json::Error> {
     Event::from_envelope(&line(kind, payload))
+}
+
+#[test]
+fn an_opening_message_without_sections_reads_and_writes_back_without_the_key() {
+    let payload = json!({"environment": {"date": "2026-09-29", "os": "linux",
+        "arch": "x86_64", "shell": "bash", "workspace": "/w", "git": {"branch": null},
+        "session_log": "/l"}, "instruction_files": [],
+        "skills": []});
+    let Some(Event::OpeningMessage(message)) = read("opening_message", payload.clone()).unwrap()
+    else {
+        panic!("not an opening_message");
+    };
+    assert!(message.extension_sections.is_empty());
+    let written = Value::Object(Event::OpeningMessage(message).payload().unwrap());
+    assert_eq!(written, payload);
 }
 
 #[test]

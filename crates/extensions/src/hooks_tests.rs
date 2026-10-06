@@ -154,6 +154,83 @@ fn names(names: &[&str]) -> Vec<String> {
     names.iter().map(|n| format!("fiber.test/{n}")).collect()
 }
 
+fn opening(machine: &[&str], project: &[&str], budget_bytes: Option<u64>) -> serde_json::Value {
+    let strings = |names: &[&str]| {
+        names
+            .iter()
+            .map(|name| serde_json::Value::String((*name).into()))
+            .collect::<Vec<_>>()
+    };
+    let mut opening = serde_json::Map::new();
+    opening.insert("machine".into(), strings(machine).into());
+    opening.insert("project".into(), strings(project).into());
+    if let Some(budget) = budget_bytes {
+        opening.insert("budget_bytes".into(), budget.into());
+    }
+    serde_json::Value::Object(opening)
+}
+
+#[test]
+fn sections_list_machine_then_project_paths_in_extension_name_order() {
+    let home = Home::new();
+    home.install("zeta", None);
+    home.install("alpha", None);
+    home.edit_manifest("zeta", |m| {
+        m["opening"] = opening(&["z.md"], &["p.md"], Some(10));
+    });
+    home.edit_manifest("alpha", |m| {
+        m["opening"] = opening(&["a.md", "b/c.md"], &[], None);
+    });
+    let session = home.load(&[]);
+    let project = ProjectKey::new("p").unwrap();
+    let sections = session.sections(&project);
+    let root = home.home();
+    assert_eq!(
+        sections,
+        [
+            (
+                "fiber.test/alpha".to_owned(),
+                vec![
+                    root.join("data/fiber.test-alpha/a.md"),
+                    root.join("data/fiber.test-alpha/b/c.md"),
+                ],
+                None,
+            ),
+            (
+                "fiber.test/zeta".to_owned(),
+                vec![
+                    root.join("data/fiber.test-zeta/z.md"),
+                    root.join("projects/p/data/fiber.test-zeta/p.md"),
+                ],
+                Some(10),
+            ),
+        ]
+    );
+}
+
+#[test]
+fn sections_omit_a_disabled_extension_one_without_opening_and_an_empty_opening() {
+    let home = Home::new();
+    home.install("off", None);
+    home.install("plain", None);
+    home.install("empty", None);
+    home.edit_manifest("off", |m| {
+        m["opening"] = opening(&["o.md"], &[], None);
+    });
+    home.edit_manifest("empty", |m| {
+        m["opening"] = opening(&[], &[], None);
+    });
+    let session = home.load(&["extensions.\"fiber.test/off\".enabled=false"]);
+    assert!(
+        session
+            .loaded()
+            .iter()
+            .any(|e| e.name == "fiber.test/plain")
+    );
+    let project = ProjectKey::new("p").unwrap();
+    assert!(session.sections(&project).is_empty());
+}
+
 #[test]
 fn an_empty_home_loads_nothing_and_starts_no_vm() {
     let home = Home::new();

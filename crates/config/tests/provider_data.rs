@@ -225,7 +225,8 @@ fn the_documented_manifest_reads() {
         &dir.join("extension.json"),
         r#"{"name": "github.com/acme/fiber-acme", "version": "v1.4.0", "fiber": "0.3.0",
             "api": 1, "depends": {"github.com/acme/oauth-helper": "v1.2.0"},
-            "repo_settings": ["workspace_url"], "prompt": "prompt.md", "memory_mib": 8}"#,
+            "repo_settings": ["workspace_url"], "prompt": "prompt.md", "memory_mib": 8,
+            "opening": {"machine": ["index.md"], "project": ["notes.md"], "budget_bytes": 25000}}"#,
     );
     let manifest = read_manifest(&dir).unwrap();
     assert_eq!(manifest.name, "github.com/acme/fiber-acme");
@@ -234,6 +235,10 @@ fn the_documented_manifest_reads() {
     assert_eq!(manifest.api, 1);
     assert_eq!(manifest.depends["github.com/acme/oauth-helper"], "v1.2.0");
     assert_eq!(manifest.memory_mib, Some(8));
+    let opening = manifest.opening.unwrap();
+    assert_eq!(opening.machine, ["index.md"]);
+    assert_eq!(opening.project, ["notes.md"]);
+    assert_eq!(opening.budget_bytes, Some(25_000));
 }
 
 #[test]
@@ -391,5 +396,49 @@ fn reads_web_search_is_true_only_for_the_known_anthropic_type() {
             "{protocol:?}"
         );
         assert!(!protocol.reads_web_search("google_search"), "{protocol:?}");
+    }
+}
+
+#[test]
+fn opening_absent_is_none_and_present_reads_all_three_fields() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1}"#,
+    );
+    assert!(read_manifest(&dir).unwrap().opening.is_none());
+    setup.write(
+        &dir.join("extension.json"),
+        r#"{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1,
+            "opening": {"machine": ["a/b.md"], "project": ["n.md"], "budget_bytes": 10}}"#,
+    );
+    let opening = read_manifest(&dir).unwrap().opening.unwrap();
+    assert_eq!(opening.machine, ["a/b.md"]);
+    assert_eq!(opening.project, ["n.md"]);
+    assert_eq!(opening.budget_bytes, Some(10));
+}
+
+#[test]
+fn opening_rejects_paths_outside_the_data_directory() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    for path in ["/abs.md", "../up.md", "a/../../up.md", ".", "", "a/./b.md"] {
+        for key in ["machine", "project"] {
+            setup.write(
+                &dir.join("extension.json"),
+                &format!(
+                    r#"{{"name": "a", "version": "v1.0.0", "fiber": "0.1.0", "api": 1, "opening": {{"{key}": ["{path}"]}}}}"#
+                ),
+            );
+            let err = read_manifest(&dir).unwrap_err();
+            assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{key} {path}");
+            let msg = err.to_string();
+            assert!(msg.contains("opening"), "{msg}");
+            assert!(
+                msg.contains("paths relative to the data directory and inside it"),
+                "{msg}"
+            );
+        }
     }
 }

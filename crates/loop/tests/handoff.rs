@@ -2397,3 +2397,50 @@ fn a_result_carried_past_a_tool_handoff_keeps_its_artifact_for_an_overflow() {
         LONG
     );
 }
+
+#[test]
+fn a_handoff_rebuilds_the_section_from_its_current_files() {
+    let held = fakes::TempDir::new("fiber-handoff-sections");
+    let file = held.path().join("index.md");
+    std::fs::write(&file, "Section v1.\n").unwrap();
+    let mut session = Session::open_sectioned(
+        vec![
+            called(TRIGGER - 1),
+            Scripted::text("The note."),
+            said("Done.", 50),
+        ],
+        Vec::new(),
+        vec![weather()],
+        r#loop::Model {
+            reference: MODEL.into(),
+            cost: None,
+            subscription: false,
+        },
+        vec![("fiber.test/notes".into(), vec![file.clone()], None)],
+    )
+    .handoff(settings())
+    .retry(no_wait());
+
+    let (outcome, lines) = run(&mut session, "hi");
+    assert_eq!(outcome, Some(TurnOutcome::Completed));
+    let openings = of_kind(&lines, "opening_message");
+    assert_eq!(openings.len(), 2);
+    let expected = json!([{
+        "extension": "fiber.test/notes",
+        "files": [{"path": file.display().to_string(), "content": "Section v1.\n"}],
+    }]);
+    // Both the first opening and the handoff's rebuild carry the files'
+    // current content.
+    for opening in &openings {
+        assert_eq!(opening.payload["extension_sections"], expected);
+    }
+    // The request after the handoff sends the rebuilt section.
+    let next = &session.requests()[2].conversation;
+    assert!(is_opening(&next[0]));
+    let text = text_of(&next[0]);
+    assert!(
+        text.contains("# From the fiber.test/notes extension"),
+        "{text}"
+    );
+    assert!(text.contains("Section v1."), "{text}");
+}

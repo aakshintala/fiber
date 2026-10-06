@@ -32,6 +32,11 @@ pub struct SessionExtensions {
     loaded: Vec<LoadedExtension>,
     /// Each loaded extension's name and package directory.
     dirs: Vec<(String, PathBuf)>,
+    /// Fiber home, anchoring the extensions' data directories.
+    home: PathBuf,
+    /// Each loaded extension with an `opening`: its name, slug and
+    /// manifest opening, in load order.
+    openings: Vec<(String, String, config::Opening)>,
     notices: Vec<Notice>,
     /// The started Lua extensions.
     lua: Vec<LuaExtension>,
@@ -57,7 +62,10 @@ impl SessionExtensions {
     /// notice and the session goes on: an extension whose entry script
     /// failed is not loaded, and a hook that did not register is not run.
     pub fn load(home: &Path, config: &Config, clock: Arc<dyn Clock>) -> Self {
-        let mut session = Self::default();
+        let mut session = Self {
+            home: home.to_path_buf(),
+            ..Self::default()
+        };
         let installed = match crate::list(home, clock.as_ref()) {
             Ok(installed) => installed,
             Err(e) => {
@@ -78,13 +86,14 @@ impl SessionExtensions {
             if !enabled {
                 continue;
             }
-            let dir = match crate::install::slug(&item.name) {
-                Ok(slug) => home.join("extensions").join(slug),
+            let slug = match crate::install::slug(&item.name) {
+                Ok(slug) => slug,
                 Err(e) => {
                     session.failed(&item.name, &e);
                     continue;
                 }
             };
+            let dir = home.join("extensions").join(&slug);
             let manifest = match config::read_manifest(&dir) {
                 Ok(manifest) => manifest,
                 Err(e) => {
@@ -96,6 +105,12 @@ impl SessionExtensions {
             // "The extension API version").
             if manifest.api != API || manifest.process.is_some() {
                 continue;
+            }
+            // An empty `opening` (no paths) names no section.
+            if let Some(opening) = manifest.opening.clone()
+                && (!opening.machine.is_empty() || !opening.project.is_empty())
+            {
+                session.openings.push((item.name.clone(), slug, opening));
             }
             if dir.join(ENTRY).is_file() {
                 let mut extension = LuaExtension::new(&item.name, &dir, home, Arc::clone(&clock));
@@ -159,6 +174,41 @@ impl SessionExtensions {
     /// where its `skills/` and `prompts/` are read from.
     pub fn dirs(&self) -> Vec<(String, PathBuf)> {
         self.dirs.clone()
+    }
+
+    /// Each loaded extension's section files for the opening message:
+    /// the extension's name, its files' absolute paths with the machine
+    /// directory's first, then the project's, each in manifest order, and
+    /// its byte budget. In extension-name order; extensions with an empty
+    /// `opening` are omitted. Reads no file (`docs/system-prompt.md`,
+    /// "Extension sections").
+    pub fn sections(
+        &self,
+        project: &config::ProjectKey,
+    ) -> Vec<(String, Vec<PathBuf>, Option<u64>)> {
+        let mut out: Vec<(String, Vec<PathBuf>, Option<u64>)> = self
+            .openings
+            .iter()
+            .map(|(name, slug, opening)| {
+                let mut paths = Vec::new();
+                for relative in &opening.machine {
+                    paths.push(self.home.join("data").join(slug).join(relative));
+                }
+                for relative in &opening.project {
+                    paths.push(
+                        self.home
+                            .join("projects")
+                            .join(project.as_str())
+                            .join("data")
+                            .join(slug)
+                            .join(relative),
+                    );
+                }
+                (name.clone(), paths, opening.budget_bytes)
+            })
+            .collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        out
     }
 
     /// What loading raised: an entry script that failed, a hook that did

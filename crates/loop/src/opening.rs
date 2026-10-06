@@ -6,7 +6,9 @@ use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use contract::ErrorCode;
-use contract::events::{Environment, Git, InstructionFileSent, Notice, OpeningMessage};
+use contract::events::{
+    Environment, ExtensionSectionSent, Git, InstructionFileSent, Notice, OpeningMessage,
+};
 
 use crate::prompt::{PromptInputs, fill};
 use crate::skills;
@@ -24,10 +26,11 @@ const AGENTS_POINTER: &str = "@AGENTS.md";
 pub(crate) struct Collected {
     /// The `opening_message` payload.
     pub(crate) message: OpeningMessage,
-    /// One `io_failed` per unreadable instruction file, then
-    /// `instructions_large` when the instruction text passes 10% of the
-    /// context window, then the skill notices in discovery order, then
-    /// `skills_large` when the listing does.
+    /// One `io_failed` per unreadable instruction file, then one per
+    /// unreadable section file, then `instructions_large` when the
+    /// instruction text passes 10% of the context window, then the skill
+    /// notices in discovery order, then `skills_large` when the listing
+    /// does.
     pub(crate) notices: Vec<Notice>,
 }
 
@@ -54,6 +57,28 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
     }
     let found = skills::discover(inputs, chain.first().unwrap_or(&workspace));
     let listed = skills::listing(&found.skills, &inputs.skills_disabled);
+    let mut ordered: Vec<&crate::prompt::ExtensionSection> =
+        inputs.extension_sections.iter().collect();
+    ordered.sort_by(|a, b| a.0.cmp(&b.0));
+    let mut sections = Vec::new();
+    for (name, paths, budget) in ordered {
+        let mut files = Vec::new();
+        for path in paths {
+            match std::fs::read(path) {
+                Ok(bytes) => files.push(sent(path, &bytes)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => notices.push(section_io_failed(path, &e, name)),
+            }
+        }
+        // An extension none of whose files exist has no section.
+        if !files.is_empty() {
+            sections.push(ExtensionSectionSent {
+                extension: name.clone(),
+                files,
+                budget_bytes: *budget,
+            });
+        }
+    }
     let message = OpeningMessage {
         environment: Environment {
             date: date_of(inputs.clock.wall()),
@@ -67,9 +92,10 @@ pub(crate) fn collect(inputs: &PromptInputs, workspace: &Path) -> Collected {
                 .to_string(),
         },
         instruction_files: files,
+        extension_sections: sections,
         skills: listed.iter().map(|skill| skill.listed.clone()).collect(),
     };
-    let large = size_notice(inputs, &message.instruction_files);
+    let large = size_notice(inputs, &message);
     notices.extend(large);
     notices.extend(found.notices);
     notices.extend(skills::size_notice(&listed, inputs.context_window));
@@ -111,6 +137,21 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
             .collect::<Vec<_>>()
             .join("\n\n")
     };
+    // The sections are appended to the instruction-files text, so a
+    // message with no sections renders byte-identical to today's.
+    let sections = message
+        .extension_sections
+        .iter()
+        .map(render_section)
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let instruction_files = if sections.is_empty() {
+        files
+    } else if files.is_empty() {
+        sections
+    } else {
+        format!("{files}\n\n{sections}")
+    };
     // With an empty listing the `# Skills` heading and `{skills}` are left
     // out: the template is cut at its last `# Skills` line. Cutting before
     // the one `fill` keeps inserted text (a path or a file's content
@@ -136,10 +177,54 @@ pub(crate) fn render(message: &OpeningMessage) -> String {
             ("workspace", environment.workspace.as_str()),
             ("git", git.as_str()),
             ("session_log", environment.session_log.as_str()),
-            ("instruction_files", files.as_str()),
+            ("instruction_files", instruction_files.as_str()),
             ("skills", skills.as_str()),
         ],
     )
+}
+
+/// One extension section, rendered from its logged fields only: each file
+/// under its path, then the budget line when the files together are over
+/// the budget (`docs/system-prompt.md`, "Extension sections").
+fn render_section(section: &ExtensionSectionSent) -> String {
+    let files = section
+        .files
+        .iter()
+        .map(|file| {
+            fill(
+                &crate::prompt::body(MESSAGES_MD, "extension-file"),
+                &[
+                    ("path", file.path.as_str()),
+                    ("content", file.content.as_str()),
+                ],
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    let mut text = fill(
+        &crate::prompt::body(MESSAGES_MD, "extension-section"),
+        &[
+            ("extension", section.extension.as_str()),
+            ("files", files.as_str()),
+        ],
+    );
+    // Over means strictly greater: exactly at budget has no line. The
+    // size is the sent contents' length, so a resume renders the same.
+    let size: u64 = section
+        .files
+        .iter()
+        .map(|file| file.content.len() as u64)
+        .sum();
+    if let Some(budget) = section.budget_bytes
+        && size > budget
+    {
+        text.push_str("\n\n");
+        text.push_str(&fill(
+            &crate::prompt::body(MESSAGES_MD, "budget-line"),
+            &[("size", &size.to_string()), ("budget", &budget.to_string())],
+        ));
+    }
+    text
 }
 
 /// `YYYY-MM-DD` of `wall`, in UTC, computed without a date crate: days
@@ -316,6 +401,19 @@ fn sent(path: &Path, bytes: &[u8]) -> InstructionFileSent {
     }
 }
 
+/// An unreadable section file's notice: it names the path and the section's
+/// extension.
+pub(crate) fn section_io_failed(path: &Path, error: &std::io::Error, extension: &str) -> Notice {
+    Notice {
+        code: ErrorCode::IoFailed,
+        message: format!(
+            "Could not read section file {} from the {extension} extension: {error}.",
+            path.display()
+        ),
+        extension: Some(extension.to_owned()),
+    }
+}
+
 /// An unreadable instruction file's notice: it names the path.
 pub(crate) fn io_failed(path: &Path, error: &std::io::Error) -> Notice {
     Notice {
@@ -330,18 +428,24 @@ pub(crate) fn io_failed(path: &Path, error: &std::io::Error) -> Notice {
 
 /// The `instructions_large` notice, when the instruction text passes 10%
 /// of the context window (`docs/system-prompt.md`, "Size"). Instruction
-/// text is the instruction files, extension texts, `SYSTEM.md` and
-/// `APPEND_SYSTEM.md`, estimated at four bytes a token. `None` when the
+/// text is the instruction files, extension sections, extension texts,
+/// `SYSTEM.md` and `APPEND_SYSTEM.md`, estimated at four bytes a token.
+/// `None` when the
 /// window is unknown (`0`): no basis for the check. Exactly 10% is not
 /// over, so `>` compares the unrounded cross products.
-fn size_notice(inputs: &PromptInputs, files: &[InstructionFileSent]) -> Option<Notice> {
+fn size_notice(inputs: &PromptInputs, message: &OpeningMessage) -> Option<Notice> {
     let window = inputs.context_window.unwrap_or(0);
     // Unknown context window: the 10% check has nothing to compare with.
     if window == 0 {
         return None;
     }
     let mut sources: Vec<(String, u128)> = Vec::new();
-    for file in files {
+    for file in message.instruction_files.iter().chain(
+        message
+            .extension_sections
+            .iter()
+            .flat_map(|section| &section.files),
+    ) {
         sources.push((file.path.clone(), file.content.len() as u128));
     }
     for (name, text) in inputs

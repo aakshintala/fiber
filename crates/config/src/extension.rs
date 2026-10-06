@@ -48,6 +48,25 @@ pub struct Manifest {
     /// The built-in tools and commands it replaces.
     #[serde(default)]
     pub replaces: Vec<String>,
+    /// Files whose text goes in the opening message, from the extension's
+    /// data directories.
+    #[serde(default)]
+    pub opening: Option<Opening>,
+}
+
+/// An extension section's files in the opening message
+/// (`docs/configuration.md`, "An extension's manifest").
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct Opening {
+    /// Paths in the extension's machine data directory.
+    #[serde(default)]
+    pub machine: Vec<String>,
+    /// Paths in the extension's project data directory.
+    #[serde(default)]
+    pub project: Vec<String>,
+    /// The section's optional byte budget.
+    #[serde(default)]
+    pub budget_bytes: Option<u64>,
 }
 
 /// One platform's binary: where it is downloaded from and its checksum.
@@ -221,6 +240,35 @@ impl Protocol {
 
 const MIB: u64 = 1 << 20;
 
+/// Whether `path` names a file inside a data directory: non-empty and made
+/// only of normal components.
+fn is_inside(path: &str) -> bool {
+    if path.is_empty() || path.starts_with('/') {
+        return false;
+    }
+    let parsed = std::path::Path::new(path);
+    if parsed.is_absolute()
+        || parsed
+            .components()
+            .any(|c| !matches!(c, std::path::Component::Normal(_)))
+    {
+        return false;
+    }
+    // `components` normalises interior `.` away, so check the raw parts
+    // too: no empty, `.` or `..` part, and no Windows drive or separator.
+    if path.contains('\\') || path.as_bytes().get(1) == Some(&b':') {
+        return false;
+    }
+    let mut any = false;
+    for part in path.split('/') {
+        if part.is_empty() || part == "." || part == ".." {
+            return false;
+        }
+        any = true;
+    }
+    any
+}
+
 /// Reads `extension.json` at the top of an extension's directory.
 pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
     let file = dir.join("extension.json");
@@ -235,6 +283,17 @@ pub fn read_manifest(dir: &Path) -> Result<Manifest, ConfigError> {
             key: "memory_mib".into(),
             expected: "a whole number of MiB above 0".into(),
         });
+    }
+    if let Some(opening) = &manifest.opening {
+        for path in opening.machine.iter().chain(opening.project.iter()) {
+            if !is_inside(path) {
+                return Err(ConfigError::WrongType {
+                    source_name: file.display().to_string(),
+                    key: "opening".into(),
+                    expected: "paths relative to the data directory and inside it".into(),
+                });
+            }
+        }
     }
     Ok(manifest)
 }

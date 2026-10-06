@@ -163,8 +163,8 @@ fn opening_md_bytes_are_pinned() {
 fn messages_md_bytes_are_pinned() {
     pinned(
         include_bytes!("../prompt/messages.md"),
-        3251,
-        0x3d3b2e44248ceee5,
+        3461,
+        0x8ee3e5560505bc30,
     );
 }
 
@@ -200,6 +200,9 @@ fn messages_md_holds_every_section_the_doc_names() {
         "handoff-jobs",
         "job-line",
         "job-line-suppressed",
+        "extension-section",
+        "extension-file",
+        "budget-line",
     ] {
         assert!(
             !section(md, name).is_empty(),

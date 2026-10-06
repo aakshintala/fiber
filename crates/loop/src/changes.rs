@@ -228,6 +228,7 @@ impl State {
                         InstructionFile {
                             path: path.to_owned(),
                             reason: InstructionReason::Changed,
+                            extension: None,
                             content: Some(content.clone()),
                             sent,
                         }
@@ -235,6 +236,7 @@ impl State {
                     None => InstructionFile {
                         path: path.to_owned(),
                         reason: InstructionReason::Created,
+                        extension: None,
                         content: Some(content),
                         sent: InstructionSent::Full,
                     },
@@ -248,6 +250,7 @@ impl State {
                     out.files.push(InstructionFile {
                         path: path.to_owned(),
                         reason: InstructionReason::Deleted,
+                        extension: None,
                         content: None,
                         sent: InstructionSent::Deleted,
                     });
@@ -327,6 +330,7 @@ impl State {
                     Some(InstructionFile {
                         path,
                         reason,
+                        extension: None,
                         content: Some(content),
                         sent: InstructionSent::Full,
                     }),
@@ -393,6 +397,7 @@ impl State {
                         own.push(InstructionFile {
                             path: key,
                             reason: InstructionReason::OwnEdit,
+                            extension: None,
                             content: Some(content),
                             sent: InstructionSent::None,
                         });
@@ -406,6 +411,7 @@ impl State {
                         own.push(InstructionFile {
                             path: key,
                             reason: InstructionReason::OwnEdit,
+                            extension: None,
                             content: None,
                             sent: InstructionSent::None,
                         });

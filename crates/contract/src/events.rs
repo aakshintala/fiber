@@ -21,11 +21,11 @@ pub use action::{
     ToolCallArgumentsDelta, ToolCallCompleted, ToolCallRequested, ToolCallStarted,
 };
 pub use context::{
-    CacheLifetime, ContextNudged, DateChanged, Environment, Git, HandoffCompleted, HandoffStarted,
-    HandoffTrigger, InstructionFile, InstructionFileSent, InstructionReason, InstructionSent,
-    ModelChanged, ModelSettings, Note, Notice, OpeningMessage, Outcome, PreambleBuilt,
-    PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SkillListed, SkillSent, SkillSource,
-    SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
+    CacheLifetime, ContextNudged, DateChanged, Environment, ExtensionSectionSent, Git,
+    HandoffCompleted, HandoffStarted, HandoffTrigger, InstructionFile, InstructionFileSent,
+    InstructionReason, InstructionSent, ModelChanged, ModelSettings, Note, Notice, OpeningMessage,
+    Outcome, PreambleBuilt, PreambleReason, QuotaNoticed, RetryScheduled, SentTool, SkillListed,
+    SkillSent, SkillSource, SkillsChanged, SkillsResent, SwitchSource, ToolReplaced, UsageRecorded,
 };
 pub use host::{
     CommandAccepted, CommandRejected, CommandResult, DelegateFinished, DelegateStarted,

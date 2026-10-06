@@ -283,3 +283,122 @@ fn trigger_at_follows_the_configured_tokens() {
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["trigger_at"], 1_234);
 }
+
+fn opening_text(session: &Session) -> String {
+    let requests = session.requests();
+    let [request] = requests.as_slice() else {
+        panic!("one request, got {}", requests.len());
+    };
+    let [contract::provider::Input::User { text }, ..] = request.conversation.as_slice() else {
+        panic!("{:?}", request.conversation);
+    };
+    text.clone()
+}
+
+#[test]
+fn an_extension_section_is_logged_and_sent_after_the_instruction_files() {
+    let held = fakes::TempDir::new("fiber-preamble-sections");
+    let a = held.path().join("a.md");
+    let b = held.path().join("b.md");
+    std::fs::write(&a, "First.\n").unwrap();
+    std::fs::write(&b, "Second.\n").unwrap();
+    let mut session = Session::sectioned(
+        vec![Scripted::text("Done.")],
+        vec![("fiber.test/notes".into(), vec![a.clone(), b.clone()], None)],
+    );
+    std::fs::write(session.workspace.join("AGENTS.md"), "Leaf rules.\n").unwrap();
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    assert_eq!(
+        opening.payload["extension_sections"],
+        serde_json::json!([{
+            "extension": "fiber.test/notes",
+            "files": [
+                {"path": a.display().to_string(), "content": "First.\n"},
+                {"path": b.display().to_string(), "content": "Second.\n"},
+            ],
+        }])
+    );
+    // No budget: the key is absent, not null.
+    assert!(
+        opening.payload["extension_sections"][0]
+            .get("budget_bytes")
+            .is_none()
+    );
+    let text = opening_text(&session);
+    let leaf_at = text.find("Leaf rules.").unwrap();
+    let heading = text.find("# From the fiber.test/notes extension").unwrap();
+    assert!(leaf_at < heading, "{text}");
+    assert!(
+        text.contains(&format!("### {}\n\nFirst.\n", a.display())),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("### {}\n\nSecond.\n", b.display())),
+        "{text}"
+    );
+}
+
+#[test]
+fn a_section_whose_files_are_all_missing_has_no_entry() {
+    let held = fakes::TempDir::new("fiber-preamble-sections");
+    let present = held.path().join("present.md");
+    std::fs::write(&present, "Here.\n").unwrap();
+    let mut session = Session::sectioned(
+        vec![Scripted::text("Done.")],
+        vec![
+            (
+                "fiber.test/gone".into(),
+                vec![held.path().join("absent.md")],
+                None,
+            ),
+            (
+                "fiber.test/notes".into(),
+                vec![held.path().join("absent.md"), present.clone()],
+                None,
+            ),
+        ],
+    );
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    let opening = lines.iter().find(|l| l.kind == "opening_message").unwrap();
+    // The missing file sends nothing, and the all-missing extension has
+    // no section: only the present file is recorded.
+    assert_eq!(
+        opening.payload["extension_sections"],
+        serde_json::json!([{
+            "extension": "fiber.test/notes",
+            "files": [{"path": present.display().to_string(), "content": "Here.\n"}],
+        }])
+    );
+    assert!(lines.iter().all(|l| l.kind != "notice"));
+}
+
+#[test]
+fn over_budget_ends_the_section_with_the_prune_line_and_under_does_not() {
+    let held = fakes::TempDir::new("fiber-preamble-sections");
+    let file = held.path().join("index.md");
+    std::fs::write(&file, "123456").unwrap();
+    for (budget, over) in [(Some(5), true), (Some(6), false)] {
+        let mut session = Session::sectioned(
+            vec![Scripted::text("Done.")],
+            vec![("fiber.test/notes".into(), vec![file.clone()], budget)],
+        );
+        session.inbox.send(delivery("hi")).unwrap();
+        session.turn();
+        let text = opening_text(&session);
+        if over {
+            assert!(
+                text.contains(
+                    "Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them."
+                ),
+                "{text}"
+            );
+        } else {
+            assert!(!text.contains("Prune"), "{text}");
+        }
+    }
+}

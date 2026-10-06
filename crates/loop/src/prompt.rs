@@ -5,6 +5,10 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+/// One extension section's files for the opening message: the extension's
+/// name, its files' absolute paths in send order, and its byte budget.
+pub(crate) type ExtensionSection = (String, Vec<PathBuf>, Option<u64>);
+
 /// What a preamble build reads, once (`docs/system-prompt.md`, "The
 /// system prompt" and `docs/prompt-cache.md`, "The preamble").
 /// [`PromptInputs::new`] returns every optional input absent.
@@ -29,6 +33,9 @@ pub struct PromptInputs {
     /// Each loaded extension's name and package directory, for its
     /// `skills/` and `prompts/`.
     pub extension_dirs: Vec<(String, PathBuf)>,
+    /// Each extension section's files for the opening message, in send
+    /// order.
+    pub extension_sections: Vec<(String, Vec<PathBuf>, Option<u64>)>,
     /// `skills.disabled`, every layer unioned.
     pub skills_disabled: Vec<String>,
     /// The shell, or `unknown` when `SHELL` is unset.
@@ -61,6 +68,7 @@ impl PromptInputs {
             home,
             agents_home: None,
             extension_dirs: Vec::new(),
+            extension_sections: Vec::new(),
             skills_disabled: Vec::new(),
             shell,
             session_log,
