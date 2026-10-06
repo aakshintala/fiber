@@ -47,3 +47,7 @@ fn run(
         .map_err(|e| failed(ErrorCode::IoFailed, format!("standard output: {e}")))?;
     Ok(target)
 }
+
+#[cfg(test)]
+#[path = "sessions_tests.rs"]
+mod tests;

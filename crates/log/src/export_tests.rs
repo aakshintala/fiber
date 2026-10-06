@@ -173,3 +173,23 @@ fn a_missing_log_is_not_found() {
     assert_eq!(path, dir);
     assert!(!root.path().join("out").exists());
 }
+
+#[test]
+fn an_unreadable_artifacts_directory_fails_naming_it_and_removes_the_target() {
+    // Kills the mutant that replaces the `NotFound` guard in
+    // `copy_artifacts` with `true`: without the guard an unreadable
+    // `artifacts/` is mistaken for a missing one.
+    let root = fakes::TempDir::new("log-export-noart-read");
+    let dir = session(root.path(), "s_1", FIRST.as_bytes());
+    let artifacts = dir.join("artifacts");
+    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o000)).unwrap();
+
+    let target = root.path().join("out");
+    let Err(Error::Io { path, .. }) = export(&dir, &target) else {
+        fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o755)).unwrap();
+        panic!("the unreadable artifacts directory was copied");
+    };
+    assert_eq!(path, artifacts);
+    assert!(!target.exists());
+    fs::set_permissions(&artifacts, fs::Permissions::from_mode(0o755)).unwrap();
+}
