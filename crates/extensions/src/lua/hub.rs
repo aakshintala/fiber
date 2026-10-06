@@ -171,14 +171,17 @@ impl Hub {
     }
 
     /// Hands the session loop's inbox to the extension's `host.exec` runs:
-    /// a run that ended before any sender is buffered in order and sent on
-    /// the first sender; a later sender replaces the last, and each later
-    /// run goes to the newest. Sender choice, buffering and the flush hold
-    /// one lock, so a run ending against `deliver_to` is sent, never
-    /// stranded: an `mpsc` send never blocks, so sending under the lock is
-    /// safe, and every delivery leaves in order.
+    /// a run that ended before any sender is buffered and sent on the first
+    /// sender; a later sender replaces the last. A run that ends after the
+    /// extension is dropped is dropped, as is a sender that arrives after
+    /// it. Routing holds one lock, so a run ending against `deliver_to` is
+    /// sent, never stranded: an `mpsc` send never blocks, so sending under
+    /// the lock is safe.
     pub(crate) fn set_exec_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
         let mut shared = self.lock();
+        if shared.disposed {
+            return;
+        }
         shared.exec_inbox = Some(inbox.clone());
         let buffered = std::mem::take(&mut shared.exec_buffer);
         #[cfg(test)]
@@ -190,6 +193,18 @@ impl Hub {
                 return;
             }
         }
+    }
+
+    /// Records the extension's drop under the same lock that routes
+    /// deliveries: anything routed after this is dropped.
+    pub(crate) fn dispose(&self, name: &str) {
+        let mut shared = self.lock();
+        shared.disposed = true;
+        if !matches!(shared.phase, Phase::Stopped(_)) {
+            shared.stop(stopped(name));
+        }
+        drop(shared);
+        self.notify();
     }
 
     /// Registers a timer `host.after` or `host.every` set: `every` holds
@@ -257,13 +272,14 @@ impl Hub {
     }
 
     /// Logs a finished `host.exec` run: sent to the loop's inbox, or
-    /// buffered in end order when no sender arrived yet. A send that fails
-    /// means the session is over and nothing can log it, so the run is
-    /// dropped. Sender choice and buffering hold one lock, so a
-    /// `deliver_to` racing the run's end cannot flush an empty buffer and
-    /// strand the run.
+    /// buffered when no sender arrived yet. A run that ends after the
+    /// extension is dropped is dropped instead. Routing holds one lock, so
+    /// a run ending against `deliver_to` or the drop is never stranded.
     pub(super) fn send_exec(&self, exec: ExtensionExec) {
         let mut shared = self.lock();
+        if shared.disposed {
+            return;
+        }
         let inbox = shared.exec_inbox.clone();
         #[cfg(test)]
         self.at_window(Window::Selected);
@@ -295,6 +311,9 @@ pub(crate) struct Shared {
     pub(super) exec_inbox: Option<std::sync::mpsc::Sender<Delivery>>,
     /// Runs that ended before any inbox, in end order, sent on the first one.
     pub(super) exec_buffer: Vec<ExtensionExec>,
+    /// The extension was dropped: anything routed after this is dropped,
+    /// under the same lock that routes deliveries.
+    pub(super) disposed: bool,
     /// The timers `host.after` and `host.every` set, by id.
     pub(crate) timers: HashMap<u64, Timer>,
     /// Timer ids whose Lua functions the extension's thread still frees.

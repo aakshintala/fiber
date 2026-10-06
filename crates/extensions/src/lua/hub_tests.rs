@@ -62,6 +62,68 @@ fn a_run_before_any_sender_flushes_on_the_first_one() {
 /// How long a test waits on a worker before it fails.
 const WAIT: Duration = Duration::from_secs(10);
 
+/// A run that ends after the extension's drop is dropped, even with a
+/// live receiver: `dispose` (what `LuaExtension::drop` records) is held
+/// under the same lock that routes deliveries, so anything routed after
+/// it is suppressed. The worker sends only after the drop's signal, which
+/// forces the order without timing; each wait has the one named deadline.
+#[test]
+fn a_run_ending_after_dispose_is_dropped() {
+    let hub = Hub::new(FakeClock::new());
+    let (tx, rx) = mpsc::channel();
+    hub.set_exec_inbox(tx);
+    let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel();
+    let other = Arc::clone(&hub);
+    std::thread::spawn(move || {
+        let _waited = proceed_rx.recv_timeout(WAIT);
+        other.send_exec(exec("late"));
+        let _done = done_tx.send(());
+    });
+    hub.dispose("ext");
+    let _proceed = proceed_tx.send(());
+    done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the late run to be routed");
+    assert!(received(&rx).is_none(), "nothing arrives after the drop");
+    assert!(
+        hub.lock().exec_buffer.is_empty(),
+        "nothing is buffered after the drop"
+    );
+}
+
+/// A sender that arrives after the extension's drop flushes nothing, so a
+/// run buffered before the drop never leaves: `dispose` is held under the
+/// same lock that routes deliveries. The worker sets the sender only after
+/// the drop's signal, which forces the order without timing; each wait has
+/// the one named deadline.
+#[test]
+fn a_sender_after_dispose_flushes_nothing() {
+    let hub = Hub::new(FakeClock::new());
+    hub.send_exec(exec("early"));
+    assert_eq!(hub.lock().exec_buffer.len(), 1, "the run is buffered");
+    let (tx, rx) = mpsc::channel();
+    let (proceed_tx, proceed_rx) = mpsc::channel::<()>();
+    let (done_tx, done_rx) = mpsc::channel();
+    let other = Arc::clone(&hub);
+    std::thread::spawn(move || {
+        let _waited = proceed_rx.recv_timeout(WAIT);
+        other.set_exec_inbox(tx);
+        let _done = done_tx.send(());
+    });
+    hub.dispose("ext");
+    let _proceed = proceed_tx.send(());
+    done_rx
+        .recv_timeout(WAIT)
+        .expect("waited for the late sender to be routed");
+    assert!(received(&rx).is_none(), "nothing flushes after the drop");
+    assert_eq!(
+        hub.lock().exec_buffer.len(),
+        1,
+        "the buffered run is never flushed nor delivered"
+    );
+}
+
 /// Whether the hub lock is held: at a window it must be, so the other half
 /// of the race cannot run inside it.
 fn locked(hub: &Hub) -> bool {

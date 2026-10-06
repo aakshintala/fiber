@@ -380,15 +380,11 @@ impl LuaExtension {
     }
 }
 
-/// Stops the extension: its thread quits the next time it looks.
+/// Stops the extension: its thread quits the next time it looks, and a
+/// run that ends after this is dropped, as the session is over.
 impl Drop for LuaExtension {
     fn drop(&mut self) {
-        let mut shared = self.hub.lock();
-        if !matches!(shared.phase, Phase::Stopped(_)) {
-            shared.stop(hub::stopped(&self.name));
-        }
-        drop(shared);
-        self.hub.notify();
+        self.hub.dispose(&self.name);
     }
 }
 

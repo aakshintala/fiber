@@ -6,7 +6,7 @@
 
 use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Duration;
 
 use config::Config;
@@ -54,8 +54,6 @@ pub struct SessionExtensions {
     after_tool: Vec<Entry>,
     /// Whether any hook registered at any point.
     any: bool,
-    /// The session loop's inbox, set by `deliver_to`.
-    inbox: Mutex<Option<std::sync::mpsc::Sender<Delivery>>>,
 }
 
 /// One hook in a chain.
@@ -425,9 +423,6 @@ impl Hooks for SessionExtensions {
     fn deliver_to(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
         // A later `deliver_to` (a resume hands a new sender) replaces the
         // sender; each extension flushes what ended before the first one.
-        if let Ok(mut held) = self.inbox.lock() {
-            *held = Some(inbox.clone());
-        }
         for extension in &self.lua {
             extension.deliver_to(inbox.clone());
         }

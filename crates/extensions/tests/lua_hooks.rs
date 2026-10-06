@@ -467,9 +467,12 @@ fn next_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str) -> Vec<u8> {
 }
 
 /// Asserts no fifo line arrives: a timer that must not have fired.
+/// `QUIET` names the listen, so the wait has one named deadline.
+const QUIET: Duration = Duration::from_millis(100);
+
 fn no_line(rx: &mpsc::Receiver<Vec<u8>>, what: &str) {
     assert!(
-        rx.recv_timeout(Duration::from_millis(100)).is_err(),
+        rx.recv_timeout(QUIET).is_err(),
         "{what} fired, and it must not have"
     );
 }
@@ -965,12 +968,24 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&tick, "the timer while the hook waits"), b"x");
     // Releasing the shell ends the exec, and the hook returns unchanged.
-    match std::fs::File::create(dir.join("hook.fifo")) {
-        Ok(mut released) => {
+    // Opening for writing blocks until the shell's read opens its reader:
+    // on a worker under `WAIT`, so a run that never opens it fails the
+    // test instead of hanging it.
+    let hook_fifo = dir.join("hook.fifo");
+    let (release_tx, release_rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let result = std::fs::File::create(&hook_fifo).and_then(|mut released| {
             use std::io::Write as _;
-            released.write_all(b"x\n").unwrap();
+            released.write_all(b"x\n")
+        });
+        match release_tx.send(result) {
+            Ok(()) | Err(_) => {}
         }
-        Err(_) => panic!("opening hook.fifo for writing"),
+    });
+    match release_rx.recv_timeout(WAIT) {
+        Ok(Ok(())) => {}
+        Ok(Err(_)) => panic!("opening hook.fifo for writing"),
+        Err(_) => panic!("waited {WAIT:?} for hook.fifo to release the hook"),
     }
     match answered.recv_timeout(WAIT) {
         Ok(answer) => assert_eq!(answer.outcome, AfterToolOutcome::Unchanged),

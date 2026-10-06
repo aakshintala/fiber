@@ -568,6 +568,19 @@ fn an_after_tool_hook_running_host_exec_logs_one_extension_exec() {
     );
     let (run, _server) = setup.read_note("nothing secret\n", &json!({}));
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    // The hook sends the run while the loop is blocked in the hook, so the
+    // loop writes it at the next step's drain, after that step's
+    // `step_started`: the complete ordered list pins a misplaced event.
+    let mut expected = read_kinds(&[], &[]);
+    let at = expected
+        .iter()
+        .position(|kind| *kind == "tool_call_completed")
+        .unwrap()
+        + 2;
+    assert_eq!(expected[at - 1], "step_started");
+    assert_eq!(expected[at], "assistant_message_started");
+    expected.insert(at, "extension_exec");
+    assert_eq!(run.kinds(), expected);
     let execs = run.all("extension_exec");
     assert_eq!(execs.len(), 1, "one run outside a tool call logs one line");
     let payload = &execs[0]["payload"];
