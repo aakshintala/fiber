@@ -5,7 +5,7 @@
 
 use std::fs::{self, DirBuilder, Permissions};
 use std::io::{self, Write};
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, FileTypeExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -137,12 +137,9 @@ impl Session {
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
         let (inbox, waiting) = mpsc::channel();
+        // The receiver is still here, so a send cannot fail.
         for delivery in first {
-            // The receiver is still here, so the send cannot fail.
-            match inbox.send(delivery) {
-                Ok(()) => {}
-                Err(mpsc::SendError(delivery)) => drop(delivery),
-            }
+            let _queued = inbox.send(delivery);
         }
         // A job's end wakes the loop through the same inbox
         // (`docs/tools.md`, "Background jobs").
@@ -239,9 +236,7 @@ impl Session {
         self.gate.mark_stopped();
         // Wakes `accept` if it is blocked in `accept`. A connection during
         // teardown is dropped, not served.
-        match UnixStream::connect(&self.socket) {
-            Ok(_) | Err(_) => {}
-        }
+        let _wake = UnixStream::connect(&self.socket);
         if let Some(accept) = lock(&self.accept).take() {
             join(accept);
         }
@@ -560,13 +555,8 @@ fn open_in(
     let wake = Arc::clone(&gate);
     let wake: Arc<dyn Wake> = wake;
     clock.subscribe(Arc::downgrade(&wake));
-    let printer = match spawn("stdout", move || print(printer_watcher, out)) {
-        Ok(printer) => printer,
-        Err(error) => {
-            remove_socket(&socket);
-            return Err(error);
-        }
-    };
+    let printer = spawn("stdout", move || print(printer_watcher, out))
+        .inspect_err(|_| remove_socket(&socket))?;
     Ok(Session {
         dir: dir.to_owned(),
         socket,
@@ -682,9 +672,10 @@ fn prompted(dir: &Path) -> bool {
 }
 
 /// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
-/// directory. A socket a connect reaches is live: fail `session_held` and
-/// leave it alone; anything else is a dead process's, removed before
-/// binding (`docs/state.md`, "Sockets").
+/// directory (`docs/state.md`, "Sockets"). A socket a connect reaches is
+/// live: fail `session_held` and leave it alone; a refusal, a missing path,
+/// or a path that is no socket is removed before binding. Any other error
+/// may hide a live session, so the path stays and this fails `io_failed`.
 fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
     let run = home.join("run");
     let socket = run.join(dir.file_name().unwrap_or_default());
@@ -702,17 +693,28 @@ fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
         .mode(0o700)
         .create(&run)
         .map_err(|e| io_failed(&run, &e))?;
-    if fs::symlink_metadata(&socket).is_ok() && UnixStream::connect(&socket).is_ok() {
-        let held = format!("{}: another session is running", socket.display());
-        return Err(failure(ErrorCode::SessionHeld, held));
+    match UnixStream::connect(&socket) {
+        Ok(_) => {
+            let held = format!("{}: another session is running", socket.display());
+            return Err(failure(ErrorCode::SessionHeld, held));
+        }
+        Err(error) if replaceable(&socket, &error) => remove_socket(&socket),
+        Err(error) => return Err(io_failed(&socket, &error)),
     }
-    remove_socket(&socket);
     let listener = UnixListener::bind(&socket).map_err(|e| io_failed(&socket, &e))?;
     if let Err(e) = fs::set_permissions(&socket, Permissions::from_mode(0o600)) {
         remove_socket(&socket);
         return Err(io_failed(&socket, &e));
     }
     Ok((socket, listener))
+}
+
+// Nothing live hides behind a refusal, a missing path, or a non-socket.
+fn replaceable(socket: &Path, error: &io::Error) -> bool {
+    matches!(
+        error.kind(),
+        io::ErrorKind::ConnectionRefused | io::ErrorKind::NotFound
+    ) || !fs::symlink_metadata(socket).is_ok_and(|meta| meta.file_type().is_socket())
 }
 
 fn remove_socket(socket: &Path) {

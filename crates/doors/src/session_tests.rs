@@ -10,6 +10,7 @@
 
 use std::fs;
 use std::io::{self, Read, Write};
+use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::mpsc;
@@ -991,6 +992,49 @@ fn open_refuses_a_socket_a_live_session_holds() {
     assert_eq!(error.code, ErrorCode::SessionHeld);
     // Nothing the live session owns was removed: its socket still
     // answers. Only the refused session's own directory is cleaned up.
+    UnixStream::connect(&socket).unwrap();
+    assert!(!dir.exists());
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn open_leaves_a_live_socket_it_cannot_connect_to() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    // A live listener whose mode hides it: connect fails, but a session is
+    // still behind the path, so `open` must fail and leave the path alone.
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o000)).unwrap();
+    // The same id in another project: its own new directory, the hidden
+    // socket the live session owns.
+    let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
+    let home = opened._temp.path().join("h");
+    let sessions = home.join("projects/q/sessions");
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a socket a live session holds binds"),
+        Err(error) => error,
+    };
+    // Restored before any assert that can fail, so cleanup still unlinks it.
+    fs::set_permissions(&socket, fs::Permissions::from_mode(0o600)).unwrap();
+
+    assert_eq!(error.code, ErrorCode::IoFailed);
+    assert!(
+        error.message.contains(&socket.display().to_string()),
+        "the failure names the socket path"
+    );
+    assert!(
+        fs::symlink_metadata(&socket).is_ok(),
+        "a connect error that may hide a live session leaves its path in place"
+    );
+    // The live session still answers, and only the refused open's own
+    // directory is cleaned up.
     UnixStream::connect(&socket).unwrap();
     assert!(!dir.exists());
     close_within(opened.session, opened.log);
