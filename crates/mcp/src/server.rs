@@ -1,7 +1,7 @@
 //! One stdio MCP server: the child Fiber started, one parked thread per
 //! pipe, requests answered by id, and a stop that closes stdin, waits a
 //! grace on the clock, then kills and reaps (`docs/mcp.md`, "Starting
-//! servers"). A signal during startup stops every start through
+//! servers"); a signal during startup stops every start through
 //! [`stop_every_start`]. Time comes only from the injected
 //! [`contract::clock::Clock`]; no process group is ever signalled: only a
 //! server's own process, by pid.
@@ -41,18 +41,13 @@ const GRACE: Duration = Duration::from_millis(800);
 /// [`kill_every_server`] reaches.
 static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
 
-/// Stops every server still starting, and every start after it: the flag
-/// is sticky for the life of the process. It sets the flag and wakes the
-/// parked handshakes; the stop and reap run on each start's own thread.
-/// Idempotent: a second call wakes nobody new.
+/// Stops every server still starting, and every start after it: the flag is
+/// sticky for the life of the process. It sets the flag and wakes the parked
+/// handshakes; the stop and reap run on each start's own thread. Idempotent.
 pub fn stop_every_start() {
-    // Taken and dropped before any wake: a wake takes the shared lock, so
-    // waking under this lock would join the two.
-    let waiting = {
-        let mut stopping = lock(&STOPPING);
-        stopping.stopped = true;
-        std::mem::take(&mut stopping.waiting)
-    };
+    *lock(&STOPPED) = true;
+    // Dropped before any wake: a wake takes the shared lock.
+    let waiting = std::mem::take(&mut *lock(&WAITING));
     for waker in waiting {
         if let Some(waker) = waker.upgrade() {
             waker.wake();
@@ -60,31 +55,23 @@ pub fn stop_every_start() {
     }
 }
 
-#[derive(Default)]
-struct StoppingState {
-    stopped: bool,
-    waiting: Vec<Weak<dyn Wake>>,
-}
-
-static STOPPING: Mutex<StoppingState> = Mutex::new(StoppingState {
-    stopped: false,
-    waiting: Vec::new(),
-});
+static STOPPED: Mutex<bool> = Mutex::new(false);
+static WAITING: Mutex<Vec<Weak<dyn Wake>>> = Mutex::new(Vec::new());
 
 /// The handshake's cancel, fired by [`stop_every_start`].
 struct Stopping;
 
 impl Cancel for Stopping {
     fn is_cancelled(&self) -> bool {
-        lock(&STOPPING).stopped
+        *lock(&STOPPED)
     }
 
     fn subscribe(&self, waker: Weak<dyn Wake>) {
-        let mut stopping = lock(&STOPPING);
+        let mut waiting = lock(&WAITING);
         // A finished start drops its bridge and leaves a dead entry: pruned
         // here, so the list holds only the starts still running.
-        stopping.waiting.retain(|listed| listed.upgrade().is_some());
-        stopping.waiting.push(waker);
+        waiting.retain(|listed| listed.upgrade().is_some());
+        waiting.push(waker);
     }
 }
 
@@ -344,8 +331,7 @@ impl Server {
             Ok(tools) => Ok(OpenServer { server, tools }),
             Err(error) => {
                 if stopping.is_cancelled() {
-                    // A signal during startup: the documented stop, then
-                    // the failure the door never writes.
+                    // The documented stop, then the failure the door never writes.
                     server.stop();
                     Err(StartError::StartFailed(
                         "Fiber is shutting down.".to_owned(),
