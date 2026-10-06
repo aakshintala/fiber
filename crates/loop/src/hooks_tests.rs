@@ -316,7 +316,7 @@ fn run_with(
     let mut streamed = Vec::new();
     // The loop is dropped once its turn returns, so the watcher ends. A
     // turn that fails writes no `turn_completed`: the end breaks the loop
-    // too, as the `recv` loop it replaces did.
+    // too.
     loop {
         let got = watcher
             .recv_timeout(TURN_DEADLINE)

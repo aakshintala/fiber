@@ -300,10 +300,8 @@ fn live_reviewer() {
         let line = watcher
             .recv_timeout(DEADLINE)
             .expect("a turn_completed line in time")
-            .expect("the log outlives the turn");
-        let Some(line) = line else {
-            panic!("the log ended before turn_completed");
-        };
+            .expect("the log outlives the turn")
+            .expect("the log ended before turn_completed");
         match line.kind.as_str() {
             "tool_call_requested" => {
                 requested += 1;

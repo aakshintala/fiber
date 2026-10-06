@@ -61,10 +61,8 @@ pub(crate) fn on_request(
             let line = watcher
                 .recv_timeout(DEADLINE)
                 .expect("a permission_requested line in time")
-                .expect("the log outlives the request");
-            let Some(line) = line else {
-                panic!("the log ended before permission_requested");
-            };
+                .expect("the log outlives the request")
+                .expect("the log ended before permission_requested");
             if line.kind == "permission_requested" {
                 send(RequestId(
                     line.payload["request_id"].as_str().unwrap().into(),
@@ -996,10 +994,8 @@ impl Session {
                 .lines
                 .recv_timeout(DEADLINE)
                 .expect("a turn_completed line in time")
-                .expect("the log outlives the turn");
-            let Some(line) = line else {
-                panic!("the log ended before turn_completed");
-            };
+                .expect("the log outlives the turn")
+                .expect("the log ended before turn_completed");
             // `run` starts the status observer, whose lines race the
             // loop's own; `tests/status.rs` reads them.
             if line.kind == "session_status" {
@@ -1072,10 +1068,8 @@ impl Tap {
                 .unwrap()
                 .recv_timeout(DEADLINE)
                 .expect("a line in time")
-                .expect("the log outlives the tap");
-            let Some(line) = line else {
-                panic!("the log ended before the awaited line");
-            };
+                .expect("the log outlives the tap")
+                .expect("the log ended before the awaited line");
             if matches(&line) {
                 return line;
             }

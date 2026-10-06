@@ -351,10 +351,8 @@ impl World {
                 .watched
                 .recv_timeout(DEADLINE)
                 .expect("a turn_completed line in time")
-                .expect("the log outlives the turn");
-            let Some(line) = line else {
-                panic!("the log ended before turn_completed");
-            };
+                .expect("the log outlives the turn")
+                .expect("the log ended before turn_completed");
             // `run` starts the status observer, whose lines race the
             // loop's own and are not what these tests pin.
             if line.kind == "session_status" {
@@ -890,10 +888,8 @@ fn on_request(log: &Log, send: impl FnOnce(RequestId) + Send + 'static) -> threa
             let line = watcher
                 .recv_timeout(DEADLINE)
                 .expect("a permission_requested line in time")
-                .expect("the log outlives the request");
-            let Some(line) = line else {
-                panic!("the log ended before permission_requested");
-            };
+                .expect("the log outlives the request")
+                .expect("the log ended before permission_requested");
             if line.kind == "permission_requested" {
                 send(RequestId(
                     line.payload["request_id"].as_str().unwrap().into(),

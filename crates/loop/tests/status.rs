@@ -34,10 +34,8 @@ fn statuses_until(watcher: &mut Watcher, until: impl Fn(&Envelope) -> bool) -> V
         let line = watcher
             .recv_timeout(DEADLINE)
             .expect("a session_status the test waits for in time")
-            .expect("the log outlives the status");
-        let Some(line) = line else {
-            panic!("the log ended before the awaited session_status");
-        };
+            .expect("the log outlives the status")
+            .expect("the log ended before the awaited session_status");
         if line.kind != "session_status" {
             continue;
         }
@@ -137,10 +135,8 @@ fn no_status_follows_the_line_written_after_run_returns() {
         let line = watcher
             .recv_timeout(DEADLINE)
             .expect("fiber_exited arrives in time")
-            .expect("the log outlives fiber_exited");
-        let Some(line) = line else {
-            panic!("the log ended before fiber_exited");
-        };
+            .expect("the log outlives fiber_exited")
+            .expect("the log ended before fiber_exited");
         assert_ne!(
             line.kind, "session_status",
             "no status after the loop ended"

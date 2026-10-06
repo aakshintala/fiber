@@ -12,7 +12,6 @@
 mod support;
 
 use std::sync::Arc;
-use std::thread;
 
 use contract::commands::{Reply, ReplyAnswer};
 use contract::events::{Decision, TurnOutcome};
@@ -25,7 +24,7 @@ use contract::{Envelope, RequestId};
 use fakes::Scripted;
 use serde_json::{Value, json};
 
-use support::{Session, TestTool, calls_reply, delivery, ignore, kinds, message};
+use support::{Session, TestTool, calls_reply, delivery, ignore, kinds, message, on_request};
 
 fn paris() -> Value {
     json!({"city": "Paris"})
@@ -70,35 +69,6 @@ fn deny(feedback: Option<&str>) -> ReplyAnswer {
 
 fn reply(request_id: RequestId, answer: ReplyAnswer) -> Delivery {
     Delivery::Reply(Reply { request_id, answer }, ignore())
-}
-
-/// Watches the log for the turn's `permission_requested`, then runs `send`
-/// with its request id: the signal the loop is waiting for a reply. The wait
-/// is bounded by [`support::DEADLINE`]: a turn that never asks fails naming
-/// the missing `permission_requested`, and the thread's end drops its inbox
-/// sender, releasing a loop still waiting for a reply.
-fn on_request(
-    session: &Session,
-    send: impl FnOnce(RequestId) + Send + 'static,
-) -> thread::JoinHandle<()> {
-    let mut watcher = session.log.watch();
-    thread::spawn(move || {
-        loop {
-            let line = watcher
-                .recv_timeout(support::DEADLINE)
-                .expect("a permission_requested line in time")
-                .expect("the log outlives the request");
-            let Some(line) = line else {
-                panic!("the log ended before permission_requested");
-            };
-            if line.kind == "permission_requested" {
-                send(RequestId(
-                    line.payload["request_id"].as_str().unwrap().into(),
-                ));
-                return;
-            }
-        }
-    })
 }
 
 /// Sends "go", runs one turn, and returns its lines.
