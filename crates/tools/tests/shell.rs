@@ -1148,7 +1148,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     let ready = Ready::new(dir.path());
     let jobs = FakeJobs::new(dir.path());
     let command = format!(
-        "echo $$ > {ready}; sleep 1000 & exit 3",
+        "echo $$ > {ready}; sleep 1000 & until ps -o comm= -p $! | grep -q sleep; do :; done; exit 3",
         ready = quote(ready.path()),
     );
     let running = start_jobs(
@@ -1164,7 +1164,7 @@ fn a_shell_that_exits_with_members_moves_and_names_them() {
     let output = running
         .output
         .recv_timeout(DEADLINE)
-        .expect("the shell-exited receipt");
+        .expect("waited for the shell-exited receipt after sleep exec'd");
     let body = text(&output);
     assert!(output.error.is_none(), "{body}");
     assert!(output.process.is_none());
