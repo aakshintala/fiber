@@ -78,7 +78,9 @@ what the terminal shows (`docs/testing.md`).
 ## Tools, not handwork
 
 The same edit in three or more places is made by a script that rewrites the
-code, not by hand. A check that will run more than once is a script. Three
+code, not by hand. Edits are the same when one rewrite rule makes all of
+them; a sweep where each site needs its own edit is handwork, and the body
+says so. A check that will run more than once is a script. Three
 is picked, not measured.
 
 The pull request body gives the command that ran the script and what it
