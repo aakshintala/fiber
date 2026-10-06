@@ -17,7 +17,14 @@ use super::McpTool;
 use crate::effects::Hints;
 use crate::server::Server;
 
-const WITHIN: Duration = Duration::from_secs(5);
+/// How long a test waits for a thread or a child, in real time.
+///
+/// The largest round value that keeps every test's serial deadlines within
+/// half of nextest's 120 s kill: the worst mcp test,
+/// `server::tests::cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
+/// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
+/// bounds a hang.
+const WITHIN: Duration = Duration::from_secs(10);
 
 fn arguments() -> Map<String, Value> {
     Map::new()
@@ -103,20 +110,32 @@ impl Live {
         let clock: Arc<dyn Clock> = fake.clone();
         let script = fakes::mcp_fixture().display().to_string();
         let workspace = dir.path().to_path_buf();
-        let opened = Server::start(
-            &script,
-            &[workspace.display().to_string()],
-            &BTreeMap::new(),
-            &workspace,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-        )
-        .expect("the fixture server starts");
+        // Threaded with a wall-clock limit: without `send`, `insert`,
+        // `deliver` or `read_stdout` the handshake would sit parked on the
+        // fake clock forever, so a bare direct start would hang the test
+        // instead of failing it.
+        let (done, result) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let outcome = Server::start(
+                &script,
+                &[workspace.display().to_string()],
+                &BTreeMap::new(),
+                &workspace,
+                &clock,
+                Duration::from_secs(5),
+                "0.0.0",
+            );
+            done.send(outcome).expect("collected");
+        });
+        let server = result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the server starts within {WITHIN:?}"))
+            .expect("the fixture server starts")
+            .server;
         Self {
             _dir: dir,
             fake,
-            server: Arc::new(opened.server),
+            server: Arc::new(server),
         }
     }
 

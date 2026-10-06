@@ -15,10 +15,19 @@ use serde_json::{Value, json};
 use super::{CallError, Server, StartError};
 
 /// How long a test waits for a thread or a child, in real time.
-const WITHIN: Duration = Duration::from_secs(5);
+///
+/// The largest round value that keeps every test's serial deadlines within
+/// half of nextest's 120 s kill: the worst test,
+/// `cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
+/// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
+/// bounds a hang.
+const WITHIN: Duration = Duration::from_secs(10);
 
 /// One real-time poll of a child's exit.
 const POLL: Duration = Duration::from_millis(50);
+
+/// Poll iterations that span one `WITHIN` of `POLL` sleeps.
+const POLLS: u128 = WITHIN.as_millis() / POLL.as_millis();
 
 struct Setup {
     dir: TempDir,
@@ -44,18 +53,33 @@ impl Setup {
     }
 
     fn start(&self, timeout: Duration) -> super::OpenServer {
+        let script = fakes::mcp_fixture().display().to_string();
+        let workspace = self.dir.path().to_path_buf();
+        let arg = workspace.display().to_string();
+        Self::start_result(&script, &[arg], &workspace, &self.clock(), timeout)
+            .expect("the fixture server starts")
+    }
+
+    fn start_result(
+        command: &str,
+        args: &[String],
+        workspace: &std::path::Path,
+        clock: &std::sync::Arc<dyn Clock>,
+        timeout: Duration,
+    ) -> Result<super::OpenServer, StartError> {
         // Threaded with a wall-clock limit: without `send`, `insert`,
         // `deliver` or `read_stdout` the handshake would sit parked on the
         // fake clock forever, so a bare direct start would hang the test
         // instead of failing it.
-        let script = fakes::mcp_fixture().display().to_string();
-        let workspace = self.dir.path().to_path_buf();
-        let clock = self.clock();
+        let command = command.to_owned();
+        let args = args.to_owned();
+        let workspace = workspace.to_path_buf();
+        let clock = std::sync::Arc::clone(clock);
         let (done, result) = mpsc::channel();
         thread::spawn(move || {
             let outcome = Server::start(
-                &script,
-                &[workspace.display().to_string()],
+                &command,
+                &args,
                 &BTreeMap::new(),
                 &workspace,
                 &clock,
@@ -66,8 +90,7 @@ impl Setup {
         });
         result
             .recv_timeout(WITHIN)
-            .expect("the server starts within 5s")
-            .expect("the fixture server starts")
+            .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"))
     }
 
     fn pid(&self) -> u32 {
@@ -77,6 +100,42 @@ impl Setup {
             .parse()
             .expect("a pid")
     }
+}
+
+/// One call against a server that may already be gone: when the call is
+/// seen parked on its deadline the clock advances past it, and when the
+/// call answers without parking nothing moves. Either way the answer is
+/// collected; when neither happens within `WITHIN` the test fails naming
+/// the wait.
+fn gone_call(fake: &FakeClock, server: &Server, timeout: Duration) -> Result<Value, CallError> {
+    let deadline = fake.now().checked_add(timeout).expect("deadline");
+    let (done, result) = mpsc::channel();
+    thread::scope(|scope| {
+        scope.spawn(|| {
+            let call = server.call("hang", &json!({}), timeout, &fakes::CancelToken::new());
+            done.send(call).expect("collected");
+        });
+        // Either the answer arrives without a park (the server was gone
+        // before the call) or the call is parked on its deadline (then,
+        // and only then, the clock moves, once). Polling bounds neither: a
+        // late answer or park is seen on a later pass, and only a full
+        // `WITHIN` of neither fails the test naming the wait.
+        let mut advanced = false;
+        for _ in 0..POLLS {
+            if !advanced && fake.parked().contains(&Some(deadline)) {
+                fake.advance(timeout);
+                advanced = true;
+            }
+            if let Ok(answer) = result.recv_timeout(POLL) {
+                return answer;
+            }
+        }
+        // Release a caller parked on the fake clock so the scoped join can
+        // still finish, then fail naming the wait (as the cancel test does
+        // on its miss path).
+        fake.advance(timeout);
+        panic!("the call ends within {WITHIN:?}");
+    })
 }
 
 fn write(dir: &TempDir, name: &str, content: &str) {
@@ -147,7 +206,7 @@ fn a_call_round_trips() {
         });
         let answer = result
             .recv_timeout(WITHIN)
-            .expect("the call answers within 5s");
+            .unwrap_or_else(|_| panic!("the call answers within {WITHIN:?}"));
         assert_eq!(
             answer.expect("the call answers"),
             json!({"content": [{"type": "text", "text": "hi"}]})
@@ -187,7 +246,7 @@ fn two_concurrent_calls_resolve_by_id_out_of_order() {
     for _ in 0..2 {
         let (tool, answer): (String, Result<Value, CallError>) = results
             .recv_timeout(WITHIN)
-            .expect("both calls answer within 5s");
+            .unwrap_or_else(|_| panic!("both calls answer within {WITHIN:?}"));
         seen.push((tool, answer.expect("no call fails")));
     }
     seen.sort_by(|left, right| left.0.cmp(&right.0));
@@ -257,23 +316,23 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
             "the caller waits on the call deadline within {WITHIN:?}",
         );
         cancel.cancel();
-        // Promptness proves the bridge: without its wake the waiter would
-        // sit parked until the clock moves. On a miss, move the clock so
-        // the scoped join can still finish, then fail naming the wake.
-        match result.recv_timeout(Duration::from_millis(200)) {
+        // The wake proves the bridge: without it the waiter would sit
+        // parked until the clock moves. On a miss, move the clock so the
+        // scoped join can still finish, then fail naming the wake.
+        match result.recv_timeout(WITHIN) {
             Ok(answer) => assert_eq!(answer, Err(CallError::Cancelled)),
             Err(_) => {
                 setup.fake.advance(timeout);
                 match result.recv_timeout(WITHIN) {
                     Ok(_) | Err(_) => {}
                 }
-                panic!("cancel did not wake the waiter within 200ms without a clock move");
+                panic!("cancel did not wake the waiter within {WITHIN:?} without a clock move");
             }
         }
         // The waiter sends `notifications/cancelled` before it answers,
         // but the fixture appends it when it reads it: poll the log.
         let (_held, tick) = mpsc::channel::<()>();
-        for _ in 0..100 {
+        for _ in 0..POLLS {
             let log =
                 std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
             if log.contains("notifications/cancelled") {
@@ -283,7 +342,7 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
                 Ok(()) | Err(_) => {}
             }
         }
-        panic!("waited 5s for notifications/cancelled in requests.log");
+        panic!("waited {WITHIN:?} for notifications/cancelled in requests.log");
     });
 }
 
@@ -291,39 +350,24 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
 fn a_non_object_initialize_reply_fails_the_start() {
     // A `result` that is not an object is not a handshake: the start
     // fails naming `initialize`, rather than moving on to `tools/list`.
+    // The script runs as `bash -c`, never as a file written and executed
+    // here: macOS can hold the first exec of a newly written executable
+    // in `_dyld_start` for seconds (seen on #754), which no deadline
+    // short of the nextest kill covers.
     let dir = TempDir::new("fiber-mcp-bad-init");
-    let script = dir.path().join("bad-init.sh");
-    std::fs::write(
-        &script,
-        "#!/bin/bash\nIFS= read -r line\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\nprintf '%s\\n' \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":42}\"\n",
-    )
-    .expect("script");
-    #[cfg(unix)]
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("executable");
+    let script = "IFS= read -r line\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\nprintf '%s\\n' \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":42}\"\n";
     let workspace = dir.path().to_path_buf();
     let fake = FakeClock::new();
     let clock: std::sync::Arc<dyn Clock> = fake;
-    // Threaded with a wall-clock limit: without `deliver` the handshake
-    // would sit parked on the fake clock forever instead of failing.
-    let (done, result) = mpsc::channel();
-    thread::spawn(move || {
-        let outcome = Server::start(
-            &script.display().to_string(),
-            &[],
-            &BTreeMap::new(),
-            &workspace,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-        );
-        done.send(outcome).expect("collected");
-    });
-    let error = result
-        .recv_timeout(WITHIN)
-        .expect("the start ends within 5s")
-        .err()
-        .expect("a non-object initialize fails");
+    let error = Setup::start_result(
+        "/bin/bash",
+        &["-c".to_owned(), script.to_owned()],
+        &workspace,
+        &clock,
+        Duration::from_secs(5),
+    )
+    .err()
+    .expect("a non-object initialize fails");
     match error {
         StartError::StartFailed(message) => assert!(
             message.contains("initialize"),
@@ -337,14 +381,12 @@ fn a_non_object_initialize_reply_fails_the_start() {
 fn a_command_that_does_not_exist_fails_the_start() {
     let setup = Setup::tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
-    let error = Server::start(
+    let error = Setup::start_result(
         "/no/such/command",
         &[],
-        &BTreeMap::new(),
         &workspace,
         &setup.clock(),
         Duration::from_secs(5),
-        "0.0.0",
     )
     .err()
     .expect("an unknown command fails");
@@ -356,24 +398,7 @@ fn a_server_that_exits_at_once_fails_the_start() {
     let setup = Setup::tools(&json!([]));
     let workspace = setup.dir.path().to_path_buf();
     let clock = setup.clock();
-    // Threaded with a wall-clock limit: without `gone` (via
-    // `read_stdout`) the handshake would sit parked forever.
-    let (done, result) = mpsc::channel();
-    thread::spawn(move || {
-        let outcome = Server::start(
-            "/bin/true",
-            &[],
-            &BTreeMap::new(),
-            &workspace,
-            &clock,
-            Duration::from_secs(5),
-            "0.0.0",
-        );
-        done.send(outcome).expect("collected");
-    });
-    let error = result
-        .recv_timeout(WITHIN)
-        .expect("the start ends within 5s")
+    let error = Setup::start_result("/bin/true", &[], &workspace, &clock, Duration::from_secs(5))
         .err()
         .expect("an instant exit fails");
     assert!(matches!(error, StartError::StartFailed(_)));
@@ -426,31 +451,7 @@ fn a_server_killed_mid_call_is_gone() {
     // caller is waiting on it (`docs/testing.md`, "Waits and timeouts").
     let mut answer = Err(CallError::Timeout);
     for _ in 0..50 {
-        let (done, result) = mpsc::channel();
-        let server = &opened.server;
-        let deadline = setup
-            .fake
-            .now()
-            .checked_add(Duration::from_secs(1))
-            .expect("deadline");
-        thread::scope(|scope| {
-            scope.spawn(|| {
-                let call = server.call(
-                    "hang",
-                    &json!({}),
-                    Duration::from_secs(1),
-                    &fakes::CancelToken::new(),
-                );
-                done.send(call).expect("collected");
-            });
-            if setup
-                .fake
-                .await_parked(deadline, Duration::from_millis(200))
-            {
-                setup.fake.advance(Duration::from_secs(1));
-            }
-            answer = result.recv_timeout(WITHIN).expect("the call ends");
-        });
+        answer = gone_call(&setup.fake, &opened.server, Duration::from_secs(1));
         if answer == Err(CallError::Gone) {
             break;
         }
@@ -475,7 +476,9 @@ fn garbage_on_stdout_is_ignored() {
             );
             done.send(answer).expect("collected");
         });
-        let answer = result.recv_timeout(WITHIN).expect("calls answer within 5s");
+        let answer = result
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("calls answer within {WITHIN:?}"));
         assert_eq!(
             answer.expect("calls work past the garbage"),
             json!({"content": [{"type": "text", "text": "hi"}]})
@@ -498,31 +501,7 @@ fn closing_stdin_lets_the_server_exit_on_eof() {
     // the clock moves only after `await_parked` proves the wait.
     let mut answer = Err(CallError::Timeout);
     for _ in 0..50 {
-        let (done, result) = mpsc::channel();
-        let server = &opened.server;
-        let deadline = setup
-            .fake
-            .now()
-            .checked_add(Duration::from_secs(1))
-            .expect("deadline");
-        thread::scope(|scope| {
-            scope.spawn(|| {
-                let call = server.call(
-                    "hang",
-                    &json!({}),
-                    Duration::from_secs(1),
-                    &fakes::CancelToken::new(),
-                );
-                done.send(call).expect("collected");
-            });
-            if setup
-                .fake
-                .await_parked(deadline, Duration::from_millis(200))
-            {
-                setup.fake.advance(Duration::from_secs(1));
-            }
-            answer = result.recv_timeout(WITHIN).expect("the call ends");
-        });
+        answer = gone_call(&setup.fake, &opened.server, Duration::from_secs(1));
         if answer == Err(CallError::Gone) {
             break;
         }
@@ -544,7 +523,7 @@ fn dropping_the_server_reaps_the_child() {
     );
     drop(opened.server);
     let (_held, probe) = mpsc::channel::<()>();
-    for _ in 0..100 {
+    for _ in 0..POLLS {
         if !fakes::kill_pid(pid, "0").expect("probe") {
             return;
         }
@@ -552,7 +531,7 @@ fn dropping_the_server_reaps_the_child() {
             Ok(()) | Err(_) => {}
         }
     }
-    panic!("waited 5s for pid {pid} to be reaped after the drop");
+    panic!("waited {WITHIN:?} for pid {pid} to be reaped after the drop");
 }
 
 #[test]
@@ -585,7 +564,7 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
     // The fixture's ping answers land in its own log as received lines:
     // `ping` gets `result {}`, the unknown method gets `-32601`.
     let (_held, tick) = mpsc::channel::<()>();
-    for _ in 0..100 {
+    for _ in 0..POLLS {
         let log = std::fs::read_to_string(setup.dir.path().join("requests.log")).expect("requests");
         if log.contains("\"id\":\"probe\"")
             && log.contains("\"result\":{}")
@@ -599,7 +578,7 @@ fn server_requests_are_answered_ping_ok_and_unknown_32601() {
             Ok(()) | Err(_) => {}
         }
     }
-    panic!("waited 5s for ping answers in requests.log");
+    panic!("waited {WITHIN:?} for ping answers in requests.log");
 }
 
 #[test]
@@ -614,7 +593,7 @@ fn stop_leaves_no_running_child() {
     );
     opened.server.stop();
     let (_held, probe) = mpsc::channel::<()>();
-    for _ in 0..100 {
+    for _ in 0..POLLS {
         if !fakes::kill_pid(pid, "0").expect("probe") {
             return;
         }
@@ -622,7 +601,7 @@ fn stop_leaves_no_running_child() {
             Ok(()) | Err(_) => {}
         }
     }
-    panic!("waited 5s for pid {pid} to exit after the stop");
+    panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
 }
 
 #[test]

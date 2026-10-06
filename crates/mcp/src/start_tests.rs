@@ -17,7 +17,20 @@ use serde_json::{Value, json};
 use super::{DEFAULT_CALL_TIMEOUT, DEFAULT_STARTUP_TIMEOUT, ServerSpec, start};
 use crate::effects::Hints;
 
-const WITHIN: Duration = Duration::from_secs(5);
+/// How long a test waits for a thread or a child, in real time.
+///
+/// The largest round value that keeps every test's serial deadlines within
+/// half of nextest's 120 s kill: the worst mcp test,
+/// `server::tests::cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
+/// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
+/// bounds a hang.
+const WITHIN: Duration = Duration::from_secs(10);
+
+/// One real-time poll of a child's exit.
+const POLL: Duration = Duration::from_millis(50);
+
+/// Poll iterations that span one `WITHIN` of `POLL` sleeps.
+const POLLS: u128 = WITHIN.as_millis() / POLL.as_millis();
 
 struct Setup {
     dir: TempDir,
@@ -71,6 +84,24 @@ fn names(started: &super::Started) -> Vec<String> {
         .collect()
 }
 
+fn start_within(
+    specs: Vec<ServerSpec>,
+    workspace: std::path::PathBuf,
+    clock: Arc<dyn Clock>,
+) -> super::Started {
+    // Threaded with a wall-clock limit: a silent or missing server would
+    // sit parked on the fake clock forever, so a bare direct start would
+    // hang the test instead of failing it.
+    let (done, result) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let started = start(specs, &workspace, &clock, "0.0.0");
+        done.send(started).expect("collected");
+    });
+    result
+        .recv_timeout(WITHIN)
+        .unwrap_or_else(|_| panic!("the start ends within {WITHIN:?}"))
+}
+
 #[test]
 fn tools_of_two_servers_declare_in_one_sorted_order() {
     let first = Setup::new();
@@ -80,7 +111,7 @@ fn tools_of_two_servers_declare_in_one_sorted_order() {
     second.tools(&json!([{"name": "alpha"}]));
     second.result("alpha", r#"{"content":[]}"#);
     let specs = vec![first.spec("one"), second.spec("two")];
-    let started = start(specs, &first.workspace(), &first.clock(), "0.0.0");
+    let started = start_within(specs, first.workspace(), first.clock());
     assert!(started.failed.is_empty());
     assert_eq!(names(&started), ["mcp__one__zeta", "mcp__two__alpha"]);
     for info in &started.infos {
@@ -97,7 +128,7 @@ fn enabled_declares_only_those_tools() {
     setup.result("drop", r#"{"content":[]}"#);
     let mut spec = setup.spec("fx");
     spec.enabled = Some(vec!["keep".to_owned()]);
-    let started = start(vec![spec], &setup.workspace(), &setup.clock(), "0.0.0");
+    let started = start_within(vec![spec], setup.workspace(), setup.clock());
     assert_eq!(names(&started), ["mcp__fx__keep"]);
     started.servers.stop();
 }
@@ -110,7 +141,7 @@ fn disabled_removes_those_tools() {
     setup.result("drop", r#"{"content":[]}"#);
     let mut spec = setup.spec("fx");
     spec.disabled = vec!["drop".to_owned()];
-    let started = start(vec![spec], &setup.workspace(), &setup.clock(), "0.0.0");
+    let started = start_within(vec![spec], setup.workspace(), setup.clock());
     assert_eq!(names(&started), ["mcp__fx__keep"]);
     started.servers.stop();
 }
@@ -124,7 +155,7 @@ fn enabled_and_disabled_is_enabled_minus_disabled() {
     let mut spec = setup.spec("fx");
     spec.enabled = Some(vec!["a".to_owned(), "b".to_owned()]);
     spec.disabled = vec!["b".to_owned()];
-    let started = start(vec![spec], &setup.workspace(), &setup.clock(), "0.0.0");
+    let started = start_within(vec![spec], setup.workspace(), setup.clock());
     assert_eq!(names(&started), ["mcp__fx__a"]);
     started.servers.stop();
 }
@@ -146,7 +177,7 @@ fn the_persons_hints_replace_the_servers() {
             open_world: None,
         },
     );
-    let started = start(vec![spec], &setup.workspace(), &setup.clock(), "0.0.0");
+    let started = start_within(vec![spec], setup.workspace(), setup.clock());
     assert_eq!(names(&started), ["mcp__fx__wipe"]);
     let (_, tool) = started.tools.first().expect("one tool");
     let effects = tool.effects(&Default::default()).expect("classifiable");
@@ -170,12 +201,7 @@ fn the_schema_passes_through_with_sorted_keys() {
         },
     }]));
     setup.result("echo", r#"{"content":[]}"#);
-    let started = start(
-        vec![setup.spec("fx")],
-        &setup.workspace(),
-        &setup.clock(),
-        "0.0.0",
-    );
+    let started = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
     let (_, tool) = started.tools.first().expect("one tool");
     let definition = tool.definition();
     assert_eq!(definition.description, "Echoes.");
@@ -197,7 +223,7 @@ fn a_long_qualified_name_is_cut() {
     let server = "s".repeat(crate::name::MAX_NAME_LEN);
     let mut spec = setup.spec(&server);
     spec.name = server;
-    let started = start(vec![spec], &setup.workspace(), &setup.clock(), "0.0.0");
+    let started = start_within(vec![spec], setup.workspace(), setup.clock());
     let name = names(&started).pop().expect("one tool");
     assert_eq!(name.chars().count(), crate::name::MAX_NAME_LEN);
     assert!(name.starts_with("mcp__ssss"));
@@ -213,11 +239,10 @@ fn a_failing_command_leaves_the_other_servers_tools_declared() {
     let mut failing = bad.spec("bad");
     failing.command = "/no/such/command".to_owned();
     failing.args = Vec::new();
-    let started = start(
+    let started = start_within(
         vec![good.spec("good"), failing],
-        &good.workspace(),
-        &good.clock(),
-        "0.0.0",
+        good.workspace(),
+        good.clock(),
     );
     assert_eq!(names(&started), ["mcp__good__echo"]);
     assert_eq!(started.failed.len(), 1);
@@ -268,7 +293,7 @@ fn a_server_that_misses_its_deadline_is_left_out() {
 #[test]
 fn no_specs_starts_nothing() {
     let setup = Setup::new();
-    let started = start(Vec::new(), &setup.workspace(), &setup.clock(), "0.0.0");
+    let started = start_within(Vec::new(), setup.workspace(), setup.clock());
     assert!(started.tools.is_empty());
     assert!(started.infos.is_empty());
     assert!(started.failed.is_empty());
@@ -282,12 +307,7 @@ fn stopping_all_servers_leaves_no_running_child() {
     let setup = Setup::new();
     setup.tools(&json!([{"name": "hang"}]));
     setup.result("hang", "hang");
-    let started = start(
-        vec![setup.spec("fx")],
-        &setup.workspace(),
-        &setup.clock(),
-        "0.0.0",
-    );
+    let started = start_within(vec![setup.spec("fx")], setup.workspace(), setup.clock());
     assert!(started.failed.is_empty());
     let pid: u32 = std::fs::read_to_string(setup.dir.path().join("pid.txt"))
         .expect("pid.txt")
@@ -297,13 +317,13 @@ fn stopping_all_servers_leaves_no_running_child() {
     assert!(fakes::kill_pid(pid, "0").expect("probe"));
     started.servers.stop();
     let (_held, probe) = std::sync::mpsc::channel::<()>();
-    for _ in 0..100 {
+    for _ in 0..POLLS {
         if !fakes::kill_pid(pid, "0").expect("probe") {
             return;
         }
-        match probe.recv_timeout(Duration::from_millis(50)) {
+        match probe.recv_timeout(POLL) {
             Ok(()) | Err(_) => {}
         }
     }
-    panic!("waited 5s for pid {pid} to exit after the stop");
+    panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
 }
