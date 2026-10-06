@@ -5,7 +5,8 @@
 //! global file of the same name; the two are not combined. An empty or
 //! whitespace-only file is treated as absent.
 
-use std::path::Path;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 
 use config::ProjectKey;
 
@@ -19,6 +20,15 @@ pub(crate) fn system(home: &Path, project: &ProjectKey) -> Option<String> {
 /// absent, so the global one applies.
 pub(crate) fn append(home: &Path, project: &ProjectKey) -> Option<String> {
     read_one(home, project, "APPEND_SYSTEM.md")
+}
+
+/// The person's home, where `~/.agents/skills` is read from: the `HOME`
+/// value, when it is set to an absolute path. Unset, empty or relative
+/// leaves that place unread.
+pub(crate) fn agents_home(home_env: Option<OsString>) -> Option<PathBuf> {
+    home_env
+        .map(PathBuf::from)
+        .filter(|home| home.is_absolute())
 }
 
 fn read_one(home: &Path, project: &ProjectKey, name: &str) -> Option<String> {

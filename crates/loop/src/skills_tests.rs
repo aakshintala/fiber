@@ -131,9 +131,8 @@ fn every_place_in_the_table_is_read() {
         .into_iter()
         .map(|found| (found.listed.name, found.listed.path, found.listed.source))
         .collect();
-    let want = |name: &str, path: &Path, source| {
-        (name.to_owned(), path.display().to_string(), source)
-    };
+    let want =
+        |name: &str, path: &Path, source| (name.to_owned(), path.display().to_string(), source);
     assert_eq!(
         got,
         [
@@ -212,7 +211,12 @@ fn entries_are_read_in_byte_order_of_their_directory_names() {
 #[test]
 fn the_name_is_the_headers_not_the_directorys() {
     let tree = Tree::new();
-    skill(&tree.top().join(".fiber/skills"), "dir-name", "Header Name", "d");
+    skill(
+        &tree.top().join(".fiber/skills"),
+        "dir-name",
+        "Header Name",
+        "d",
+    );
     assert_eq!(names(&tree.discover()), ["Header Name"]);
 }
 
@@ -371,7 +375,11 @@ fn a_header_that_does_not_parse_or_lacks_a_field_is_left_out_naming_its_path() {
 #[test]
 fn an_invalid_skill_shadows_nothing() {
     let tree = Tree::new();
-    write(&tree.top().join(".fiber/skills"), "a", "---\nname: same\n---\n");
+    write(
+        &tree.top().join(".fiber/skills"),
+        "a",
+        "---\nname: same\n---\n",
+    );
     skill(&tree.home().join("skills"), "a", "same", "d");
     let found = tree.discover();
     assert_eq!(names(&found), ["same"]);
@@ -407,9 +415,10 @@ fn an_unreadable_skill_md_is_an_io_failed_notice_naming_it() {
     };
     assert_eq!(notice.code, ErrorCode::IoFailed);
     assert!(
-        notice
-            .message
-            .starts_with(&format!("Could not read skill {}", place.join("a/SKILL.md").display())),
+        notice.message.starts_with(&format!(
+            "Could not read skill {}",
+            place.join("a/SKILL.md").display()
+        )),
         "{}",
         notice.message
     );

@@ -52,9 +52,24 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
         prompts,
     };
     let mut places = vec![
-        place(top.join(".fiber/skills"), SkillSource::Repository, None, false),
-        place(top.join(".agents/skills"), SkillSource::Repository, None, false),
-        place(inputs.home.join("skills"), SkillSource::Personal, None, false),
+        place(
+            top.join(".fiber/skills"),
+            SkillSource::Repository,
+            None,
+            false,
+        ),
+        place(
+            top.join(".agents/skills"),
+            SkillSource::Repository,
+            None,
+            false,
+        ),
+        place(
+            inputs.home.join("skills"),
+            SkillSource::Personal,
+            None,
+            false,
+        ),
     ];
     if let Some(home) = &inputs.agents_home {
         places.push(place(
@@ -74,7 +89,12 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
             label.clone(),
             false,
         ));
-        places.push(place(dir.join("prompts"), SkillSource::Extension, label, true));
+        places.push(place(
+            dir.join("prompts"),
+            SkillSource::Extension,
+            label,
+            true,
+        ));
     }
     // debt: no built-in skill is compiled in, so the built-in source adds
     // no place; fixed by #760.
@@ -195,9 +215,7 @@ fn invalid_notice(path: &Path, invalid: &Invalid) -> Notice {
 pub(crate) fn listing<'a>(found: &'a [Found], disabled: &[String]) -> Vec<&'a Found> {
     let mut listed: Vec<&Found> = found
         .iter()
-        .filter(|skill| {
-            skill.model_invocable && !disabled.iter().any(|name| *name == skill.listed.name)
-        })
+        .filter(|skill| skill.model_invocable && !disabled.contains(&skill.listed.name))
         .collect();
     listed.sort_by(|a, b| a.listed.name.cmp(&b.listed.name));
     listed

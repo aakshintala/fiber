@@ -37,12 +37,18 @@ fn a_plain_value_keeps_colons_inside() {
 
 #[test]
 fn a_plain_value_continues_on_indented_lines() {
-    assert_eq!(description("description: one\n  two\n   three"), "one two three");
+    assert_eq!(
+        description("description: one\n  two\n   three"),
+        "one two three"
+    );
 }
 
 #[test]
 fn a_plain_value_may_start_on_the_next_line() {
-    assert_eq!(description("description:\n  first\n  second"), "first second");
+    assert_eq!(
+        description("description:\n  first\n  second"),
+        "first second"
+    );
 }
 
 #[test]
@@ -137,12 +143,18 @@ fn a_folded_block_joins_lines_with_a_space() {
 #[test]
 fn a_folded_block_with_chomping_marks_and_a_comment() {
     assert_eq!(description("description: >+\n  one\n  two\n\n"), "one two");
-    assert_eq!(description("description: >- # why\n  one\n  two"), "one two");
+    assert_eq!(
+        description("description: >- # why\n  one\n  two"),
+        "one two"
+    );
 }
 
 #[test]
 fn a_block_keeps_hash_lines() {
-    assert_eq!(description("description: |\n  # not a comment\n  x"), "# not a comment\nx");
+    assert_eq!(
+        description("description: |\n  # not a comment\n  x"),
+        "# not a comment\nx"
+    );
 }
 
 #[test]
@@ -153,13 +165,19 @@ fn a_gt_inside_a_value_is_plain_text() {
 
 #[test]
 fn no_opening_line_does_not_parse() {
-    assert_eq!(invalid("name: n\ndescription: d\n---\n"), Invalid::DoesNotParse);
+    assert_eq!(
+        invalid("name: n\ndescription: d\n---\n"),
+        Invalid::DoesNotParse
+    );
     assert_eq!(invalid(""), Invalid::DoesNotParse);
 }
 
 #[test]
 fn no_closing_line_does_not_parse() {
-    assert_eq!(invalid("---\nname: n\ndescription: d\n"), Invalid::DoesNotParse);
+    assert_eq!(
+        invalid("---\nname: n\ndescription: d\n"),
+        Invalid::DoesNotParse
+    );
 }
 
 #[test]
@@ -234,11 +252,20 @@ fn a_name_or_description_that_is_a_map_or_list_does_not_parse() {
 fn a_missing_or_blank_name_or_description() {
     assert_eq!(invalid(&header("description: d")), Invalid::NoName);
     assert_eq!(invalid(&header("name:\ndescription: d")), Invalid::NoName);
-    assert_eq!(invalid(&header("name: '  '\ndescription: d")), Invalid::NoName);
+    assert_eq!(
+        invalid(&header("name: '  '\ndescription: d")),
+        Invalid::NoName
+    );
     assert_eq!(invalid(&header("name: n")), Invalid::NoDescription);
-    assert_eq!(invalid(&header("name: n\ndescription: \"  \"")), Invalid::NoDescription);
+    assert_eq!(
+        invalid(&header("name: n\ndescription: \"  \"")),
+        Invalid::NoDescription
+    );
     assert_eq!(invalid(&header("")), Invalid::NoName);
-    assert_eq!(invalid(&header("description: '  '\nname: ' a '")), Invalid::NoDescription);
+    assert_eq!(
+        invalid(&header("description: '  '\nname: ' a '")),
+        Invalid::NoDescription
+    );
 }
 
 #[test]
@@ -282,7 +309,11 @@ fn disable_model_invocation_reads_true_in_any_case() {
     assert!(flag("false"));
     assert!(flag("yes"));
     assert!(flag("truely"));
-    assert!(parse(&header("name: n\ndescription: d")).unwrap().model_invocable);
+    assert!(
+        parse(&header("name: n\ndescription: d"))
+            .unwrap()
+            .model_invocable
+    );
 }
 
 #[test]

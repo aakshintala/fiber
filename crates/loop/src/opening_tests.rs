@@ -805,7 +805,11 @@ fn with_no_skills_the_heading_and_sentence_are_absent_and_the_bytes_are_unchange
                 ("path", file.path.as_str()),
                 (
                     "dir",
-                    &Path::new(&file.path).parent().unwrap().display().to_string()
+                    &Path::new(&file.path)
+                        .parent()
+                        .unwrap()
+                        .display()
+                        .to_string()
                 ),
                 ("content", file.content.as_str()),
             ],
