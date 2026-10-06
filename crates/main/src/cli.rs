@@ -2,6 +2,7 @@
 //! the menu, the version, and the one-sentence form of a parse error.
 
 use std::ffi::OsString;
+use std::path::PathBuf;
 use std::sync::LazyLock;
 
 use clap::error::{ContextKind, ContextValue};
@@ -15,6 +16,7 @@ Usage: fiber <command> [arguments]
 
 Sessions:
   ask [--model <model>] [--resume <id>] [<prompt>] [-]  Run one session of one turn; its events go to stdout
+  sessions export <id> [<path>]                         Write the session's log and its artifacts to <path>
 
 Fiber itself:
   login [<provider>] [--as <label>]         Store a provider's key
@@ -77,6 +79,9 @@ struct Cli {
 pub(crate) enum Commands {
     /// Run one session of one turn; its events go to stdout
     Ask(AskArgs),
+    /// Write a session's log and its artifacts to a directory
+    #[command(subcommand, arg_required_else_help = false)]
+    Sessions(SessionsCommands),
     /// Manage extensions
     #[command(subcommand, arg_required_else_help = false)]
     Extension(ExtensionCommands),
@@ -126,6 +131,21 @@ pub(crate) enum Commands {
             value_name = "args"
         )]
         args: Vec<OsString>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
+pub(crate) enum SessionsCommands {
+    /// Write the session's log and its artifacts to <path>
+    Export {
+        /// The session: a full id or a unique prefix of one.
+        #[arg(value_name = "id")]
+        id: String,
+        /// The directory to write, from the current directory when
+        /// relative; the session id when absent.
+        #[arg(value_name = "path")]
+        path: Option<PathBuf>,
     },
 }
 

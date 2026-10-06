@@ -1,6 +1,7 @@
-//! The commands that run no session: `fiber login`, `fiber logout` and
-//! `fiber approve` (`docs/architecture.md`, "The modules"). `main` parses
-//! argv and dispatches here; this crate takes plain values.
+//! The commands that run no session: `fiber login`, `fiber logout`,
+//! `fiber approve` and `fiber sessions export` (`docs/architecture.md`,
+//! "The modules"). `main` parses argv and dispatches here; this crate takes
+//! plain values.
 
 use std::fmt::Display;
 use std::io::{self, Write};
@@ -12,9 +13,11 @@ use doors::failure;
 
 mod approve;
 mod login;
+mod sessions;
 
 pub use approve::approve;
 pub use login::{LogoutTarget, run_login, run_logout};
+pub use sessions::export;
 
 /// What `fiber logout` says when it is given no provider.
 pub const LOGOUT_SHAPE: &str =

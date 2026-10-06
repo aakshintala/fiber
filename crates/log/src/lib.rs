@@ -7,6 +7,7 @@
 //! [`Watcher`] are the reading side, which `tui` and `doors` may use
 //! (`docs/architecture.md`, "The call rules").
 
+mod export;
 mod read;
 mod resolve;
 mod write;
@@ -16,6 +17,7 @@ use std::path::{Path, PathBuf};
 
 use contract::{ErrorCode, SessionId};
 
+pub use export::export;
 pub use read::{Injector, Watcher, read};
 pub use resolve::resolve;
 pub use write::Log;
@@ -69,6 +71,9 @@ pub enum Error {
         /// The matching ids, sorted.
         matches: Vec<String>,
     },
+    /// The export target already exists: an export writes a new directory.
+    #[error("{0} already exists; export writes a new directory")]
+    Exists(PathBuf),
     /// A complete line in the log is not an event line.
     #[error("{path}, line {line}: {source}")]
     Unreadable {
@@ -99,7 +104,7 @@ impl Error {
         match self {
             Self::Held { .. } => ErrorCode::SessionHeld,
             Self::NotFound(_) => ErrorCode::SessionNotFound,
-            Self::Ambiguous { .. } => ErrorCode::Usage,
+            Self::Ambiguous { .. } | Self::Exists(_) => ErrorCode::Usage,
             // Only a failed write or fsync stops a log.
             Self::Poisoned { .. } | Self::Io { .. } => ErrorCode::IoFailed,
             Self::Unreadable { .. } | Self::Encode(_) => ErrorCode::LogCorrupt,
