@@ -511,6 +511,124 @@ fn a_prompt_over_the_socket_runs_a_turn_and_close_ends_the_session() {
 }
 
 #[test]
+fn a_prompt_naming_a_skill_sends_the_expanded_text_as_one_message() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+    // The `review-pr` skill, as `tests/ask.rs` installs it: the prompt
+    // driver command expands the same way (`see #532`).
+    let dir = setup.root.path().join("w/.agents/skills/review-pr");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("SKILL.md"),
+        "---\nname: review-pr\ndescription: Reviews a pull request.\n---\nReview the pull request named in the arguments.\n",
+    )
+    .unwrap();
+    let id = doors::mint("s_");
+    let mut running = setup.start_session(&id, &[]);
+
+    let client = running.connect(&setup.socket(&id));
+    // Behind the loop's startup: `extensions_loaded` is on stdout, so
+    // every startup line is in the log and `clients` lands after them.
+    // The loop parks waiting for a prompt, so nothing else moves.
+    running.wait_for("extensions_loaded");
+    send(
+        &client,
+        r#"{"id":"c_sub","command":"subscribe","args":{"level":"full"}}"#,
+    );
+    let sub = recv(&client);
+    assert_eq!(sub["payload"]["command_id"], "c_sub");
+    send(
+        &client,
+        r#"{"id":"c_prompt","command":"prompt","args":{"content":[{"type":"text","text":"/review-pr 42"}]}}"#,
+    );
+    let rest = until(&client, "turn_completed", |line| {
+        line["kind"] == "turn_completed"
+    });
+    let expanded = "Review the pull request named in the arguments.\n\n42";
+    let turn_started = rest
+        .iter()
+        .find(|line| line["kind"] == "turn_started")
+        .expect("the prompt started a turn");
+    assert_eq!(
+        turn_started["payload"]["input"][0]["content"][0]["text"],
+        expanded
+    );
+    // The fake provider's received user message carries the expanded text.
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert!(
+        String::from_utf8_lossy(&requests[0].body)
+            .contains(&serde_json::to_string(expanded).unwrap())
+    );
+    assert!(
+        rest.iter()
+            .any(|line| line["kind"] == "text_completed" && line["payload"]["text"] == "Hello."),
+        "the fake model's text arrived: {rest:?}"
+    );
+
+    send(&client, r#"{"id":"c_close","command":"close"}"#);
+    let tail = until_close(&client);
+    drop(client);
+    let (status, out, stderr) = running.wait();
+    assert!(status.success(), "stderr: {stderr}");
+    let exited = out.last().expect("fiber_exited is the last stdout line");
+    assert_eq!(exited["kind"], "fiber_exited");
+    assert_eq!(exited["payload"]["exit_code"], 0);
+    assert!(!setup.socket(&id).exists());
+    // The session was prompted, so its directory remains.
+    assert!(setup.session_dir(&id).join("events.jsonl").is_file());
+    let mut stream = vec![sub];
+    stream.extend(rest);
+    stream.extend(tail);
+    assert_eq!(
+        kinds(&stream),
+        [
+            "command_accepted",
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "command_accepted",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "command_accepted",
+            "fiber_exited",
+        ]
+    );
+    assert_eq!(
+        kinds(&out),
+        [
+            "session_started",
+            "fiber_started",
+            "extensions_loaded",
+            "clients",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+            "fiber_exited",
+        ]
+    );
+}
+
+#[test]
 fn an_idle_session_exits_with_a_client_still_connected() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();
