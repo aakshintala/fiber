@@ -1050,13 +1050,17 @@ fn a_second_ask_while_the_first_turn_runs_attaches_and_is_rejected() {
     assert_eq!(line.get("session_id"), None);
     assert_eq!(line["payload"]["exit_code"], 1);
     assert_eq!(line["payload"]["error"]["code"], "closing");
-    // Either the loop rejected the queued prompt, or the session exited
-    // before the prompt was sent: both are the `closing` failure of an
-    // attach that started nothing.
+    // Three `closing` outcomes of the attach race: the loop rejected
+    // the queued prompt; the attach saw the session close or its
+    // `fiber_exited` before an answer; or the prompt reached the session
+    // after the loop's last receive, so its acknowledgement was dropped
+    // uncalled (`doors/src/client.rs`). All three are the `closing`
+    // failure of an attach that started nothing.
     let message = line["payload"]["error"]["message"].as_str().unwrap();
     assert!(
         message == "The session is closing and takes no new turn."
-            || message == format!("session {id} ended before its turn completed"),
+            || message == format!("session {id} ended before its turn completed")
+            || message == "The session ended before answering.",
         "{message}"
     );
     assert_eq!(second.stderr, format!("fiber: {message}\n"));
