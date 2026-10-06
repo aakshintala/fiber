@@ -24,8 +24,7 @@ pub trait Provider: Send + Sync {
     /// the protocol puts in its request for that tool. The strict-tool
     /// budget is spent in name order, so it depends on the whole set.
     /// The default is each definition as a JSON object, for fakes.
-    /// This is the tools Fiber builds, before `extra_body` is merged
-    /// (see #509).
+    /// This is the tools Fiber builds.
     fn wire_tools(&self, tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
         let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
         sorted.sort_by(|a, b| a.name.cmp(&b.name));

@@ -182,8 +182,7 @@ fn retry_info(error: Error) -> Error {
 /// `parametersJsonSchema` takes the schema as written, `$ref` and
 /// `anyOf` included; `parameters` rejects `$ref`
 /// (`docs/model-routing.md`, "Google Generative AI wire facts").
-/// Nothing rewrites a schema. This is the tools Fiber builds, before
-/// `extra_body` is merged (see #509).
+/// Nothing rewrites a schema. This is the tools Fiber builds.
 fn wire_tools(tools: &[ToolDefinition]) -> Vec<Map<String, Value>> {
     let mut sorted: Vec<&ToolDefinition> = tools.iter().collect();
     sorted.sort_by(|a, b| a.name.cmp(&b.name));
