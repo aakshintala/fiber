@@ -606,8 +606,6 @@ fn parts_with(
     let idle = settings::idle_exit(&config);
     // The extensions loaded above, started before the model was chosen:
     // choosing a Lua provider's model waits on them.
-    // debt: extension prompt texts and the model's addendum arrive empty;
-    // filled by #510.
     // The session log's path is set by the caller, which mints the session
     // directory after this returns.
     let mut prompt = r#loop::PromptInputs::new(
@@ -620,6 +618,8 @@ fn parts_with(
     prompt.append = prompt_files::append(&home, &project);
     prompt.context_window = model.model.context_window;
     prompt.agents_home = prompt_files::agents_home(std::env::var_os("HOME"));
+    prompt.addendum = providers.addendum(&model).map(str::to_owned);
+    prompt.extensions = extensions.prompts();
     prompt.extension_dirs = extensions.dirs();
     prompt.extension_sections = extensions.sections(&project);
     prompt.skills_disabled = config.union_list("skills.disabled");

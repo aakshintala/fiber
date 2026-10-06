@@ -40,6 +40,9 @@ pub struct SessionExtensions {
     /// Each loaded extension with an `opening`: its name, slug and
     /// manifest opening, in load order.
     openings: Vec<(String, String, config::Opening)>,
+    /// Each loaded extension naming a `prompt` file: its name and the
+    /// file's text, in load order.
+    prompts: Vec<(String, String)>,
     notices: Vec<Notice>,
     /// The started Lua extensions.
     lua: Vec<Arc<LuaExtension>>,
@@ -131,6 +134,20 @@ impl SessionExtensions {
             if manifest.api != API || manifest.process.is_some() {
                 continue;
             }
+            // A named prompt file that is missing or outside the package
+            // fails the load, before its VM starts: it registers no hooks
+            // and no Lua providers (`docs/system-prompt.md`, "Extension
+            // texts").
+            let prompt = match manifest.prompt.as_deref() {
+                Some(relative) => match config::read_package_text(&dir, relative, "prompt") {
+                    Ok(text) => Some(text),
+                    Err(e) => {
+                        session.failed(&item.name, &Error::Config(e));
+                        continue;
+                    }
+                },
+                None => None,
+            };
             if dir.join(ENTRY).is_file() {
                 let repo: Vec<&str> = manifest.repo_settings.iter().map(String::as_str).collect();
                 match config.extension_settings(&item.name, &repo) {
@@ -184,6 +201,9 @@ impl SessionExtensions {
             if let Some(opening) = manifest.opening.clone() {
                 session.openings.push((item.name.clone(), slug, opening));
             }
+            if let Some(text) = prompt {
+                session.prompts.push((item.name.clone(), text));
+            }
             session.dirs.push((item.name.clone(), dir));
             session.loaded.push(LoadedExtension {
                 name: item.name,
@@ -228,6 +248,13 @@ impl SessionExtensions {
     /// where its `skills/` and `prompts/` are read from.
     pub fn dirs(&self) -> Vec<(String, PathBuf)> {
         self.dirs.clone()
+    }
+
+    /// Each loaded extension naming a `prompt` file: its name and the
+    /// file's text, in load order. The loop sorts by name
+    /// (`docs/system-prompt.md`, "Extension texts").
+    pub fn prompts(&self) -> Vec<(String, String)> {
+        self.prompts.clone()
     }
 
     /// Each loaded extension's section files for the opening message:

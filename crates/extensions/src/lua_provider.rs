@@ -5,6 +5,7 @@
 //! function on the request path, which sees the body's SHA-256 and never the
 //! body.
 
+use std::path::Path;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -48,6 +49,12 @@ impl LuaProvider {
     /// The provider's name, as `fiber.provider` registered it.
     pub(crate) fn name(&self) -> &str {
         &self.name
+    }
+
+    /// The registering extension's package directory, which its models'
+    /// `prompt_addendum` paths resolve against.
+    pub(crate) fn dir(&self) -> &Path {
+        self.extension.dir()
     }
 
     /// The functions `fiber.provider` registered for this provider, sorted.

@@ -715,3 +715,195 @@ fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
     assert_eq!(failing.add_lua("broke-ext", &bad).len(), 1);
     assert!(failing.lua("broke").is_some());
 }
+
+/// A provider with one model carrying `prompt_addendum`.
+fn provider_with_addendum(name: &str, id: &str, addendum: &str) -> serde_json::Value {
+    json!({
+        "name": name,
+        "credential": { "env": "FIBER_TEST_UNSET_KEY" },
+        "models": [{"id": id, "protocol": "openai-responses",
+                    "base_url": "http://127.0.0.1:1/v1",
+                    "prompt_addendum": addendum}]
+    })
+}
+
+/// A Lua `models()` run returning one model with `prompt_addendum`.
+fn lua_addendum_run(id: &str, addendum: &str) -> String {
+    format!(
+        "{{ {{ id = \"{id}\", protocol = \"openai-responses\", \
+         base_url = \"http://127.0.0.1:1/v1\", prompt_addendum = \"{addendum}\" }} }}"
+    )
+}
+
+#[test]
+fn an_addendum_file_is_read_for_static_data() {
+    let setup = Setup::new();
+    let mut with = provider_with_addendum("acme", "with", "prompts/with.md");
+    with["models"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({"id": "without", "protocol": "openai-responses",
+                     "base_url": "http://127.0.0.1:1/v1"}));
+    let source = setup.source("acme", &manifest("acme"), &[with]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    write(
+        &setup.home().join("extensions/acme/prompts/with.md"),
+        "Answer as a pirate.\n",
+    );
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let model = providers.resolve("acme/with").unwrap();
+    assert_eq!(providers.addendum(&model), Some("Answer as a pirate.\n"));
+    // A model naming no addendum has none.
+    let plain = providers.resolve("acme/without").unwrap();
+    assert_eq!(providers.addendum(&plain), None);
+}
+
+#[test]
+fn a_missing_addendum_leaves_out_the_whole_extension_and_keeps_the_other() {
+    let setup = Setup::new();
+    let good = provider_with_addendum("a", "m", "prompts/m.md");
+    let bad = provider_with_addendum("b", "m", "prompts/gone.md");
+    let source = setup.source("acme", &manifest("acme"), &[good, bad]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    write(
+        &setup.home().join("extensions/acme/prompts/m.md"),
+        "Present.\n",
+    );
+    let other = setup.source("other", &manifest("other"), &[provider("zed", &["z"])]);
+    install(&setup.home(), &other, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    // The bad second file leaves out the good first file's provider too.
+    assert!(providers.resolve("a/m").is_err());
+    assert!(providers.resolve("b/m").is_err());
+    assert!(providers.resolve("zed/z").is_ok());
+    assert_eq!(
+        providers.addendum(&providers.resolve("zed/z").unwrap()),
+        None
+    );
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+    assert!(
+        notices[0].message.contains("prompt_addendum") && notices[0].message.contains("gone.md"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn an_addendum_path_outside_the_package_leaves_out_the_extension() {
+    let setup = Setup::new();
+    let escaping = provider_with_addendum("acme", "m", "../x.md");
+    let source = setup.source("acme", &manifest("acme"), &[escaping]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    let other = setup.source("other", &manifest("other"), &[provider("zed", &["z"])]);
+    install(&setup.home(), &other, "0.1.0").unwrap();
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(providers.resolve("acme/m").is_err());
+    assert!(providers.resolve("zed/z").is_ok());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme"));
+}
+
+#[test]
+fn the_later_extension_wins_the_provider_and_its_addendum() {
+    let setup = Setup::new();
+    for (dir, text) in [("first", "From one.\n"), ("second", "From two.\n")] {
+        let data = provider_with_addendum("acme", "m", "prompts/m.md");
+        let source = setup.source(dir, &manifest(dir), &[data]);
+        install(&setup.home(), &source, "0.1.0").unwrap();
+        write(
+            &setup.home().join(format!("extensions/{dir}/prompts/m.md")),
+            text,
+        );
+    }
+    let (providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    let model = providers.resolve("acme/m").unwrap();
+    assert_eq!(providers.addendum(&model), Some("From two.\n"));
+}
+
+#[test]
+fn add_lua_reads_the_addendum_against_the_lua_extensions_directory() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    write(&setup.home().join("ext/prompts/m.md"), "Lua says hi.\n");
+    let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/m.md"));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(notices.is_empty(), "{notices:?}");
+    let model = providers.resolve("acme/m").unwrap();
+    assert_eq!(providers.addendum(&model), Some("Lua says hi.\n"));
+}
+
+#[test]
+fn add_lua_replaces_the_data_files_models_and_addenda_together() {
+    let setup = Setup::new();
+    let data = provider_with_addendum("acme", "old", "prompts/old.md");
+    let source = setup.source("acme", &manifest("acme"), &[data]);
+    install(&setup.home(), &source, "0.1.0").unwrap();
+    write(
+        &setup.home().join("extensions/acme/prompts/old.md"),
+        "Stale.\n",
+    );
+    let (mut providers, notices) = Providers::load(&setup.home()).unwrap();
+    assert!(notices.is_empty(), "{notices:?}");
+    assert_eq!(
+        providers.addendum(&providers.resolve("acme/old").unwrap()),
+        Some("Stale.\n")
+    );
+    write(&setup.home().join("ext/prompts/new.md"), "Fresh.\n");
+    let lua = lua_acme(&setup, "ext", &lua_addendum_run("new", "prompts/new.md"));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/old").is_err());
+    let model = providers.resolve("acme/new").unwrap();
+    assert_eq!(providers.addendum(&model), Some("Fresh.\n"));
+}
+
+#[test]
+fn add_lua_with_a_missing_addendum_leaves_no_models_but_keeps_the_provider() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert_eq!(providers.names().count(), 0);
+    assert!(providers.lua("acme").is_some());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+    assert!(
+        notices[0].message.contains("prompt_addendum") && notices[0].message.contains("gone.md"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn add_lua_with_a_missing_addendum_keeps_the_data_files_models() {
+    let setup = Setup::new();
+    let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "prompts/gone.md"));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(providers.resolve("acme/a").is_ok());
+    assert_eq!(
+        providers.addendum(&providers.resolve("acme/a").unwrap()),
+        None
+    );
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+}
+
+#[test]
+fn add_lua_with_an_escaping_addendum_leaves_no_models() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let lua = lua_acme(&setup, "ext", &lua_addendum_run("m", "../x.md"));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert_eq!(providers.names().count(), 0);
+    assert!(providers.lua("acme").is_some());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+}

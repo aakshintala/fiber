@@ -15,10 +15,8 @@ pub struct PromptInputs {
     /// `APPEND_SYSTEM.md` text.
     pub append: Option<String>,
     /// The model's addendum.
-    // debt: no provider data carries an addendum yet; fixed by #510.
     pub addendum: Option<String>,
     /// `(extension name, prompt text)`, any order.
-    // debt: no extension runtime loads packages in `main`; fixed by #510.
     pub extensions: Vec<(String, String)>,
     /// The model's context window, in tokens.
     pub context_window: Option<u64>,

@@ -22,6 +22,10 @@ const THINKING: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh",
 #[derive(Clone, Default)]
 pub struct Providers {
     by_name: BTreeMap<String, ProviderData>,
+    /// Each provider's models' addendum texts, by provider name then
+    /// model id: read with the data that declared them and replaced
+    /// together with it.
+    addenda: BTreeMap<String, BTreeMap<String, String>>,
     /// One Lua provider per `fiber.provider` registration, by provider
     /// name: what signs its requests and refreshes its token.
     lua: BTreeMap<String, Arc<LuaProvider>>,
@@ -174,6 +178,8 @@ impl Providers {
                 });
                 continue;
             }
+            let mut buffered: Vec<(ProviderData, BTreeMap<String, String>)> = Vec::new();
+            let mut failed: Option<Notice> = None;
             for mut data in config::read_providers(&dir)? {
                 // The cached `models()` list stands in for the data file's
                 // until the refresh returns; a copy that is no list is no copy.
@@ -185,7 +191,41 @@ impl Providers {
                     &manifest.name,
                     &mut data.models,
                 ));
-                providers.by_name.insert(data.name.clone(), data);
+                // One extension's addenda are read into a local buffer
+                // against its own directory, and inserted only when every
+                // one of its files succeeds: a bad addendum leaves out all
+                // of its providers, with one notice, and other extensions
+                // load (`docs/system-prompt.md`, "Extension texts").
+                let mut addenda = BTreeMap::new();
+                for model in &data.models {
+                    if let Some(relative) = model.prompt_addendum.as_deref() {
+                        match config::read_package_text(&dir, relative, "prompt_addendum") {
+                            Ok(text) => {
+                                addenda.insert(model.id.clone(), text);
+                            }
+                            Err(e) => {
+                                failed = Some(Notice {
+                                    code: ErrorCode::ExtensionFailed,
+                                    message: e.to_string(),
+                                    extension: Some(manifest.name.clone()),
+                                });
+                                break;
+                            }
+                        }
+                    }
+                }
+                if failed.is_some() {
+                    break;
+                }
+                buffered.push((data, addenda));
+            }
+            if let Some(notice) = failed {
+                notices.push(notice);
+            } else {
+                for (data, addenda) in buffered {
+                    providers.addenda.insert(data.name.clone(), addenda);
+                    providers.by_name.insert(data.name.clone(), data);
+                }
             }
         }
         Ok((providers, notices))
@@ -200,8 +240,11 @@ impl Providers {
     /// one is created with every other field default, with one only its
     /// models are replaced. Either list passes through
     /// [`leave_out_invalid`]. A `models()` that fails leaves no models, or
-    /// the data file's, and one notice with the error's own code. The
-    /// provider is kept either way, for its signer and token.
+    /// the data file's, and one notice with the error's own code. A model
+    /// whose addendum file is missing or outside the package leaves no
+    /// models from it, with one `extension_failed` notice naming the
+    /// extension. The provider is kept either way, for its signer and
+    /// token.
     pub fn add_lua(&mut self, extension: &str, provider: &Arc<LuaProvider>) -> Vec<Notice> {
         let name = provider.name().to_owned();
         self.lua.insert(name.clone(), Arc::clone(provider));
@@ -216,9 +259,32 @@ impl Providers {
             }
         };
         let notices = leave_out_invalid(&name, extension, &mut models);
+        // The addenda resolve against the Lua extension's package
+        // directory, replacing the data file's with the final models.
+        let mut addenda = BTreeMap::new();
+        for model in &models {
+            if let Some(relative) = model.prompt_addendum.as_deref() {
+                match config::read_package_text(provider.dir(), relative, "prompt_addendum") {
+                    Ok(text) => {
+                        addenda.insert(model.id.clone(), text);
+                    }
+                    Err(e) => {
+                        return vec![Notice {
+                            code: ErrorCode::ExtensionFailed,
+                            message: e.to_string(),
+                            extension: Some(extension.to_owned()),
+                        }];
+                    }
+                }
+            }
+        }
         match self.by_name.get_mut(&name) {
-            Some(data) => data.models = models,
+            Some(data) => {
+                data.models = models;
+                self.addenda.insert(name, addenda);
+            }
             None => {
+                self.addenda.insert(name.clone(), addenda);
                 self.by_name.insert(
                     name.clone(),
                     ProviderData {
@@ -239,6 +305,15 @@ impl Providers {
     /// registered one.
     pub fn lua(&self, name: &str) -> Option<&Arc<LuaProvider>> {
         self.lua.get(name)
+    }
+
+    /// The text of the chosen model's addendum file; `None` when the model
+    /// names none.
+    pub fn addendum(&self, model: &Model<'_>) -> Option<&str> {
+        self.addenda
+            .get(model.provider.name.as_str())?
+            .get(model.model.id.as_str())
+            .map(String::as_str)
     }
 
     /// The provider installed under `name`.

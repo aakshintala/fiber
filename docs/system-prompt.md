@@ -134,7 +134,8 @@ must survive a handoff. A tool's own description stays in its tool definition.
 
 An extension with a prompt file is read at session start, when every enabled
 Lua extension starts (`docs/extensions.md`, "Loading, and cost when nothing is
-loaded"). A hook never changes the system
+loaded"). A named prompt file that is missing or outside the package fails
+the extension's load. A hook never changes the system
 prompt.
 
 ## The opening message

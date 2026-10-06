@@ -156,6 +156,98 @@ fn names(names: &[&str]) -> Vec<String> {
     names.iter().map(|n| format!("fiber.test/{n}")).collect()
 }
 
+/// Writes `text` to `file` in the installed `fiber.test/<short>`'s
+/// directory.
+fn installed_file(home: &Home, short: &str, file: &str, text: &str) {
+    let path = home
+        .home()
+        .join("extensions")
+        .join(format!("fiber.test-{short}"))
+        .join(file);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    fs::write(&path, text).unwrap();
+}
+
+#[test]
+fn a_prompt_file_is_loaded_with_its_text() {
+    let home = Home::new();
+    home.install("noted", None);
+    home.edit_manifest("noted", |m| m["prompt"] = json!("prompt.md"));
+    installed_file(&home, "noted", "prompt.md", "Prefer read first.\n");
+    let session = home.load(&[]);
+    assert_eq!(
+        session.prompts(),
+        [(
+            "fiber.test/noted".to_owned(),
+            "Prefer read first.\n".to_owned()
+        )]
+    );
+    assert!(
+        session
+            .loaded()
+            .iter()
+            .any(|e| e.name == "fiber.test/noted")
+    );
+}
+
+#[test]
+fn an_extension_without_a_prompt_has_no_prompt_text() {
+    let home = Home::new();
+    home.install("plain", None);
+    let session = home.load(&[]);
+    assert!(session.prompts().is_empty());
+    assert!(
+        session
+            .loaded()
+            .iter()
+            .any(|e| e.name == "fiber.test/plain")
+    );
+}
+
+#[test]
+fn a_missing_prompt_file_fails_the_load_before_its_vm_starts() {
+    let home = Home::new();
+    home.install("broken", Some(&tagging("broken", "transform")));
+    home.install("fine", Some(&tagging("fine", "transform")));
+    home.edit_manifest("broken", |m| m["prompt"] = json!("gone.md"));
+    let session = home.load(&[]);
+    let loaded: Vec<String> = session.loaded().into_iter().map(|e| e.name).collect();
+    assert_eq!(loaded, names(&["fine"]));
+    assert!(
+        session
+            .dirs()
+            .iter()
+            .all(|(name, _)| name != "fiber.test/broken")
+    );
+    assert!(session.prompts().is_empty());
+    // Its entry script never ran: only the fine extension's VM started.
+    assert_eq!(session.lua.len(), 1);
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/broken"));
+    assert!(
+        notices[0].message.contains("gone.md"),
+        "{}",
+        notices[0].message
+    );
+    assert_eq!(changed_content(&after_tool(&session, "x")), Some("x|fine"));
+}
+
+#[test]
+fn a_prompt_path_outside_the_package_fails_the_load() {
+    let home = Home::new();
+    home.install("sneaky", None);
+    home.edit_manifest("sneaky", |m| m["prompt"] = json!("../x.md"));
+    let session = home.load(&[]);
+    assert!(session.loaded().is_empty());
+    assert!(session.prompts().is_empty());
+    let notices = session.notices();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("fiber.test/sneaky"));
+}
+
 fn opening(machine: &[&str], project: &[&str], budget_bytes: Option<u64>) -> serde_json::Value {
     let strings = |names: &[&str]| {
         names

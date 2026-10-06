@@ -7,7 +7,7 @@
 mod common;
 
 use common::Setup;
-use config::{CredentialSource, Protocol, read_manifest, read_providers};
+use config::{CredentialSource, Protocol, read_manifest, read_package_text, read_providers};
 use contract::ErrorCode;
 
 const DATABRICKS: &str = r#"{
@@ -30,6 +30,80 @@ const DATABRICKS: &str = r#"{
     { "id": "gpt", "protocol": "openai-responses", "base_url": "https://x/v1", "subscription": true }
   ]
 }"#;
+
+#[test]
+fn prompt_addendum_reads_and_defaults_to_none() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(
+        &dir.join("providers/p.json"),
+        r#"{"name":"p","models":[
+            {"id":"with","protocol":"anthropic-messages","base_url":"u","prompt_addendum":"prompts/with.md"},
+            {"id":"without","protocol":"anthropic-messages","base_url":"u"}]}"#,
+    );
+    let models = &read_providers(&dir).unwrap()[0].models;
+    assert_eq!(
+        models[0].prompt_addendum.as_deref(),
+        Some("prompts/with.md")
+    );
+    assert_eq!(models[1].prompt_addendum, None);
+}
+
+#[test]
+fn read_package_text_returns_the_files_text() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    setup.write(&dir.join("prompts/m.md"), "Be brief.\n");
+    assert_eq!(
+        read_package_text(&dir, "prompts/m.md", "prompt_addendum").unwrap(),
+        "Be brief.\n"
+    );
+}
+
+#[test]
+fn read_package_text_rejects_a_missing_file() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let err = read_package_text(&dir, "prompts/gone.md", "prompt_addendum").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    let msg = err.to_string();
+    assert!(msg.contains("prompt_addendum"), "{msg}");
+    assert!(msg.contains("gone.md"), "{msg}");
+}
+
+#[test]
+fn read_package_text_rejects_paths_outside_the_package() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    for path in [
+        "../up.md",
+        "/abs.md",
+        "a/../../up.md",
+        "a/./b.md",
+        "",
+        "a\\\\b.md",
+        "C:x.md",
+    ] {
+        let err = read_package_text(&dir, path, "prompt").unwrap_err();
+        assert_eq!(err.code(), ErrorCode::ConfigInvalid, "{path}");
+        let msg = err.to_string();
+        assert!(msg.contains("prompt"), "{path}: {msg}");
+    }
+}
+
+#[test]
+fn read_package_text_rejects_non_utf8_bytes() {
+    let setup = Setup::new();
+    let dir = setup.root().join("ext");
+    let file = dir.join("prompts/bin.md");
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(&file, [0xff, 0xfe]).unwrap();
+    let err = read_package_text(&dir, "prompts/bin.md", "prompt").unwrap_err();
+    assert_eq!(err.code(), ErrorCode::ConfigInvalid);
+    let msg = err.to_string();
+    assert!(msg.contains("prompt"), "{msg}");
+    assert!(msg.contains("bin.md"), "{msg}");
+}
 
 #[test]
 fn reviewer_model_reads_from_provider_data_and_is_none_when_absent() {

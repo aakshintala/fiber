@@ -249,8 +249,11 @@ For each model:
   model's provider hosts no search for it ("Hosted web search")
 - extra request body fields, which may not name a field Fiber builds
   itself ("Extra request body fields")
-- a prompt addendum, text appended to the system prompt for this model only
-  (`docs/system-prompt.md`, "The model's addendum")
+- `prompt_addendum`, naming a Markdown file in the extension package whose
+  text is appended to the system prompt for this model only
+  (`docs/system-prompt.md`, "The model's addendum"); a named file that is
+  missing or outside the package fails the load, under the same check
+  `prompt` gets
 - context window, output token limit, input kinds and cost
 - whether a subscription login covers it ("Cost")
 

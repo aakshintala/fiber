@@ -155,6 +155,11 @@ pub struct ModelData {
     /// search for it.
     #[serde(default)]
     pub web_search: Option<String>,
+    /// A Markdown file in the extension package whose text is appended to
+    /// the system prompt for this model only
+    /// (`docs/system-prompt.md`, "The model's addendum").
+    #[serde(default)]
+    pub prompt_addendum: Option<String>,
 }
 
 /// A model's prices, in US dollars per million tokens.
@@ -252,6 +257,32 @@ fn is_inside(path: &str) -> bool {
         && path
             .split('/')
             .all(|p| !p.is_empty() && p != "." && p != "..")
+}
+
+/// Reads the UTF-8 text of `relative` inside the extension package `dir`.
+/// The path must pass the `is_inside` rule (relative, no `.`/`..`/empty
+/// part, no `\`, no drive letter), the file must exist, and it must be
+/// UTF-8. Any failure is a `ConfigError` naming `key` and the file, so one
+/// check serves both `prompt` and `prompt_addendum`.
+pub fn read_package_text(dir: &Path, relative: &str, key: &str) -> Result<String, ConfigError> {
+    if !is_inside(relative) {
+        return Err(ConfigError::WrongType {
+            source_name: dir.join(relative).display().to_string(),
+            key: key.into(),
+            expected: "a path relative to the package directory and inside it".into(),
+        });
+    }
+    let file = dir.join(relative);
+    let bytes = fs::read(&file).map_err(|source| ConfigError::WrongType {
+        source_name: file.display().to_string(),
+        key: key.into(),
+        expected: format!("a file that reads ({source})"),
+    })?;
+    String::from_utf8(bytes).map_err(|_| ConfigError::WrongType {
+        source_name: file.display().to_string(),
+        key: key.into(),
+        expected: "UTF-8 text".into(),
+    })
 }
 
 /// Reads `extension.json` at the top of an extension's directory.

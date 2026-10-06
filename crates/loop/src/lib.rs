@@ -408,8 +408,6 @@ impl Loop {
         // The one preamble build, before `turn_started`: `answerable` is
         // already what the builder set, so an unattended loop's prompt
         // carries its line. A loop that never takes a turn writes none.
-        // debt: extension texts and the addendum arrive empty from `main`;
-        // fixed by #510.
         // The instruction files and the date are checked at each turn
         // start, before `turn_started` — never on the turn that wrote the
         // opening message, whose state was just built from it.
