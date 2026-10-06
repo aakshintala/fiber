@@ -429,8 +429,7 @@ fn test_files_map_to_their_tests() {
 
 #[test]
 fn only_a_crate_root_file_is_a_crate_root() {
-    let (expression, _) =
-        test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members());
+    let (expression, _) = test_filter(&strings(&["crates/log/src/fold/lib_tests.rs"]), &members());
     assert_eq!(expression, "(package(log) & test(/^fold::lib::tests::/))");
 }
 
