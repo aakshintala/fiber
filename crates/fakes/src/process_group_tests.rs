@@ -2,7 +2,39 @@ use std::os::unix::process::CommandExt;
 use std::panic::{self, AssertUnwindSafe};
 use std::process::{Child, Command, Stdio};
 
-use super::{WATCHDOG_SCRIPT, kill_group, kill_pid};
+use std::os::unix::process::ExitStatusExt;
+use std::sync::mpsc;
+use std::thread;
+use std::time::Duration;
+
+use super::{
+    MATCHING_PATTERN_VAR, MATCHING_WATCHDOG_SCRIPT, WATCHDOG_SCRIPT, kill_group, kill_matching,
+    kill_pid, matching, pattern,
+};
+
+const DEADLINE: Duration = Duration::from_secs(5);
+
+/// A shell in its own process group whose command line carries `marker`,
+/// with a `sleep` child in that group.
+fn marked(marker: &str) -> Child {
+    Command::new("sh")
+        .args(["-c", "sleep 30; :", marker])
+        .process_group(0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap()
+}
+
+/// Reaps `child` under [`DEADLINE`], naming `what` on expiry.
+fn reaped(mut child: Child, what: &str) -> std::process::ExitStatus {
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || done.send(child.wait()).unwrap());
+    match finished.recv_timeout(DEADLINE) {
+        Ok(status) => status.unwrap(),
+        Err(_) => panic!("waited {DEADLINE:?} for {what}"),
+    }
+}
 
 /// A process in the test's own group that a stray group signal would kill.
 fn sentinel() -> Child {
@@ -92,4 +124,79 @@ fn the_watchdog_script_refuses_group_zero_and_one() {
         assert_eq!(status.code(), Some(2), "group {group}");
         assert!(survived(sentinel), "group {group} signalled the sentinel");
     }
+}
+
+// The empty-match refusals list processes or run nothing: none signals.
+#[test]
+fn pattern_refuses_an_empty_match() {
+    let message = *panic::catch_unwind(|| pattern(""))
+        .unwrap_err()
+        .downcast::<&str>()
+        .unwrap();
+    assert!(message.contains("empty command-line match"), "{message}");
+}
+
+#[test]
+fn matching_refuses_an_empty_match() {
+    assert!(panic::catch_unwind(|| matching("")).is_err());
+}
+
+#[test]
+fn pattern_escapes_every_regex_metacharacter() {
+    assert_eq!(pattern("/tmp/a-b_c"), "/tmp/a-b_c");
+    assert_eq!(pattern(r".[]()*+?{}|^$\"), r"\.\[\]\(\)\*\+\?\{\}\|\^\$\\");
+}
+
+#[test]
+fn matching_finds_a_process_by_its_command_line() {
+    let dir = crate::TempDir::new("pm");
+    let marker = dir.path().join("a.b").to_string_lossy().into_owned();
+    let child = marked(&marker);
+    let pid = child.id();
+    assert_eq!(matching(&marker).unwrap(), vec![pid]);
+    // The dot is literal: a near miss matches nothing.
+    let near = marker.replace("a.b", "axb");
+    assert!(matching(&near).unwrap().is_empty());
+    kill_group(pid, "KILL").unwrap();
+    reaped(child, "the marked shell");
+    assert!(matching(&marker).unwrap().is_empty());
+}
+
+#[test]
+fn kill_matching_kills_each_match_and_its_group() {
+    let dir = crate::TempDir::new("pk");
+    let marker = dir.path().to_string_lossy().into_owned();
+    let child = marked(&marker);
+    let group = child.id();
+    kill_matching(&marker).unwrap();
+    assert_eq!(reaped(child, "the killed shell").signal(), Some(9));
+    let (done, gone) = mpsc::channel();
+    thread::spawn(move || {
+        while kill_group(group, "0").unwrap() {
+            thread::yield_now();
+        }
+        done.send(()).unwrap();
+    });
+    assert!(
+        gone.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for the shell's group to empty"
+    );
+}
+
+#[test]
+fn the_matching_watchdog_script_refuses_an_empty_pattern() {
+    let sentinel = sentinel();
+    // Null stdin is EOF: unguarded, the script would reach `pgrep`.
+    let status = Command::new("sh")
+        .args(["-c", MATCHING_WATCHDOG_SCRIPT, "watchdog"])
+        .env(MATCHING_PATTERN_VAR, "")
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .unwrap();
+    assert_eq!(status.code(), Some(2));
+    assert!(
+        survived(sentinel),
+        "the empty pattern signalled the sentinel"
+    );
 }

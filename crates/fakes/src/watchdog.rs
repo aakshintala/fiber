@@ -1,4 +1,5 @@
-//! Kills a process group if the test process dies (`docs/testing.md`, "Running tests").
+//! Kills a process group, or every process matching a command line, if the
+//! test process dies (`docs/testing.md`, "Running tests").
 
 use std::io::Write;
 use std::os::unix::process::CommandExt;
@@ -7,8 +8,9 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-/// Kills one process group when this value is dropped. [`Watchdog::stand_down`]
-/// tells it to exit without signalling.
+/// Kills one process group, or every process matching a command line, when
+/// this value is dropped. [`Watchdog::stand_down`] tells it to exit without
+/// signalling.
 pub struct Watchdog {
     stdin: Option<std::process::ChildStdin>,
     child: Option<Child>,
@@ -34,8 +36,40 @@ impl Watchdog {
         );
         let group_arg = group.to_string();
         let mut shell = Command::new("sh");
+        shell.args(["-c", crate::WATCHDOG_SCRIPT, "watchdog", group_arg.as_str()]);
+        Self::spawn(shell)
+    }
+
+    /// Starts a watchdog for every process whose command line contains
+    /// `text`, and their process groups. Dropping it kills them. The pattern
+    /// reaches the watchdog through its environment, so the watchdog's own
+    /// command line never matches.
+    ///
+    /// # Panics
+    ///
+    /// When `text` is empty, before spawning anything, or when the watchdog
+    /// cannot be started.
+    pub fn matching(text: &str) -> Self {
+        let mut shell = Command::new("sh");
         shell
-            .args(["-c", crate::WATCHDOG_SCRIPT, "watchdog", group_arg.as_str()])
+            .args([
+                "-c",
+                crate::process_group::MATCHING_WATCHDOG_SCRIPT,
+                "watchdog",
+            ])
+            .env(
+                crate::process_group::MATCHING_PATTERN_VAR,
+                crate::process_group::pattern(text),
+            );
+        Self::spawn(shell)
+    }
+
+    #[allow(
+        clippy::panic,
+        reason = "a watchdog that cannot start cannot protect the test"
+    )]
+    fn spawn(mut shell: Command) -> Self {
+        shell
             .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null())
@@ -54,7 +88,7 @@ impl Watchdog {
         }
     }
 
-    /// The group is done. Tell the watchdog to exit without signalling, and
+    /// The processes are done. Tell the watchdog to exit without signalling, and
     /// wait for it at most `within`.
     #[allow(
         clippy::panic,

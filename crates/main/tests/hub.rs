@@ -357,47 +357,6 @@ fn hello() -> Response {
     ])
 }
 
-/// The process groups of the sessions under `home`: the pid each
-/// session's log lock names. A session runs in its own process group, so
-/// its pid is the group. A lock not yet written, or emptied by a session
-/// that let go, names none.
-fn session_groups(home: &Path) -> Vec<u32> {
-    let mut groups = Vec::new();
-    let Ok(projects) = fs::read_dir(home.join("projects")) else {
-        return groups;
-    };
-    for project in projects.flatten() {
-        let Ok(sessions) = fs::read_dir(project.path().join("sessions")) else {
-            continue;
-        };
-        for session in sessions.flatten() {
-            let pid = fs::read_to_string(session.path().join("session.lock")).unwrap_or_default();
-            if let Ok(group) = pid.trim().parse::<u32>() {
-                groups.push(group);
-            }
-        }
-    }
-    groups
-}
-
-/// Kills, on drop, the process group of every session under `home`.
-/// Armed before `start` is sent, so a start that fails or times out leaves
-/// no session behind. After the sessions are gone, [`std::mem::forget`]
-/// skips the kill.
-struct KillSessions(PathBuf);
-
-impl Drop for KillSessions {
-    fn drop(&mut self) {
-        for group in session_groups(&self.0) {
-            if group > 1 {
-                match fakes::kill_group(group, "KILL") {
-                    Ok(_) | Err(_) => {}
-                }
-            }
-        }
-    }
-}
-
 /// Waits under [`DEADLINE`] for process group `group` to empty.
 fn until_gone(group: u32, what: &str) {
     let (done, gone) = mpsc::channel();
@@ -415,67 +374,83 @@ fn until_gone(group: u32, what: &str) {
     );
 }
 
-/// A session the hub started in its own process group: killed on drop,
-/// and by its watchdog if the test process dies.
-struct SessionProc {
-    id: String,
-    group: u32,
-    guard: KillSessions,
-    watchdog: Watchdog,
+/// Waits under [`DEADLINE`] until `done` holds for the processes whose
+/// command line contains `text`, naming `what` on expiry.
+fn until_matching(text: &str, what: &str, done: fn(&[u32]) -> bool) {
+    let (tx, rx) = mpsc::channel();
+    let text = text.to_owned();
+    thread::spawn(move || {
+        while !done(&fakes::matching(&text).unwrap()) {
+            thread::yield_now();
+        }
+        match tx.send(()) {
+            Ok(()) | Err(mpsc::SendError(())) => {}
+        }
+    });
+    assert!(
+        rx.recv_timeout(DEADLINE).is_ok(),
+        "waited {DEADLINE:?} for {what}"
+    );
 }
 
-impl SessionProc {
-    /// Waits under [`DEADLINE`] for the session's process group to empty,
-    /// then stands the guards down.
-    fn wait_gone(self) {
-        let Self {
-            group,
-            guard,
-            watchdog,
-            ..
-        } = self;
-        until_gone(group, "the session's process group");
-        std::mem::forget(guard);
-        watchdog.stand_down(DEADLINE);
+/// Guards every session the hub starts in `workspace`: each carries the
+/// workspace path on its command line. Dropping it kills every process
+/// whose command line holds the path, and its process group; its watchdog
+/// does the same if the test process dies. Armed before `start` is sent,
+/// so a session stuck in setup, or a start that fails or times out, leaves
+/// nothing behind.
+struct SessionGuard {
+    workspace: String,
+    watchdog: Option<Watchdog>,
+}
+
+impl SessionGuard {
+    fn arm(workspace: &str) -> Self {
+        Self {
+            workspace: workspace.to_owned(),
+            watchdog: Some(Watchdog::matching(workspace)),
+        }
+    }
+
+    /// Stands the watchdog down, leaving the drop's kill as the only one.
+    fn stand_down_watchdog(&mut self) {
+        if let Some(watchdog) = self.watchdog.take() {
+            watchdog.stand_down(DEADLINE);
+        }
+    }
+
+    /// Waits under [`DEADLINE`] until no process's command line holds the
+    /// workspace path, then stands the guard down.
+    fn wait_gone(mut self) {
+        until_matching(
+            &self.workspace,
+            "every process holding the workspace path to exit",
+            <[u32]>::is_empty,
+        );
+        self.stand_down_watchdog();
     }
 }
 
-/// Starts a session through the hub with `content`, and guards its process
-/// group. The guard is armed before `start` is sent. The session writes its
-/// pid into its log's lock before it binds `run/<id>`, and the hub
-/// acknowledges only once that socket accepts, so the pid is there once the
-/// acknowledgement arrives; the watchdog is armed then.
-fn start_session(setup: &Setup, client: &Socket, workspace: &str, content: &str) -> SessionProc {
-    let guard = KillSessions(setup.home());
+impl Drop for SessionGuard {
+    fn drop(&mut self) {
+        match fakes::kill_matching(&self.workspace) {
+            Ok(()) | Err(_) => {}
+        }
+    }
+}
+
+/// Starts a session through the hub with `content`, and returns its id.
+/// The caller arms a [`SessionGuard`] first.
+fn start_session(client: &Socket, workspace: &str, content: &str) -> String {
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{content}\"}}]}}}}"
     ));
     let ack = recv(client, "the start acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    let id = ack["payload"]["result"]["session_id"]
+    ack["payload"]["result"]["session_id"]
         .as_str()
         .expect("the start answers with a session id")
-        .to_owned();
-    let project = fs::canonicalize(workspace).unwrap();
-    let lock = log::sessions_dir(&setup.home(), &project)
-        .join(&id)
-        .join("session.lock");
-    let group: u32 = fs::read_to_string(&lock)
-        .unwrap()
-        .trim()
-        .parse()
-        .expect("the session's lock names its pid");
-    let watchdog = Watchdog::group(group);
-    assert!(
-        group_alive(group),
-        "the lock's pid names the session's group"
-    );
-    SessionProc {
-        id,
-        group,
-        guard,
-        watchdog,
-    }
+        .to_owned()
 }
 
 /// Subscribes `full` to `session` through the hub.
@@ -506,8 +481,9 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     assert_eq!(hello["kind"], "hub_hello");
     assert_eq!(hello["payload"]["fiber_version"], env!("CARGO_PKG_VERSION"));
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let session = start_session(&setup, &client, &workspace, PROMPT);
-    subscribe(&client, &session.id);
+    let guard = SessionGuard::arm(&workspace);
+    let session = start_session(&client, &workspace, PROMPT);
+    subscribe(&client, &session);
     let rest = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -522,14 +498,14 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     hub.kill("KILL");
     let status = hub.wait();
     assert!(!status.success());
-    let direct = Socket::connect(&setup.session_socket(&session.id));
+    let direct = Socket::connect(&setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
     assert!(
-        !setup.session_socket(&session.id).exists(),
+        !setup.session_socket(&session).exists(),
         "the closed session unlinked its socket"
     );
-    session.wait_gone();
+    guard.wait_gone();
 }
 
 /// One side of a two-thread meeting with a deadline: each side waits
@@ -628,17 +604,18 @@ fn sigterm_stops_the_hub_and_leaves_sessions_accepting() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let session = start_session(&setup, &client, &workspace, PROMPT);
-    subscribe(&client, &session.id);
+    let guard = SessionGuard::arm(&workspace);
+    let session = start_session(&client, &workspace, PROMPT);
+    subscribe(&client, &session);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill("TERM");
     let status = hub.wait();
     assert_eq!(status.code(), Some(143));
     // The session keeps accepting on its own socket.
-    let direct = Socket::connect(&setup.session_socket(&session.id));
+    let direct = Socket::connect(&setup.session_socket(&session));
     close_session(&direct);
     drop(direct);
-    session.wait_gone();
+    guard.wait_gone();
     drop(client);
     let log = setup.hub_log();
     for code in [
@@ -697,17 +674,65 @@ fn a_session_left_running_is_killed_by_its_guard() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let SessionProc {
-        group,
-        guard,
-        watchdog,
-        ..
-    } = start_session(&setup, &client, &workspace, PROMPT);
-    assert!(group_alive(group));
-    // The watchdog stands down first, so only the guard can kill.
-    watchdog.stand_down(DEADLINE);
+    let mut guard = SessionGuard::arm(&workspace);
+    start_session(&client, &workspace, PROMPT);
+    until_matching(&workspace, "the started session", |pids| !pids.is_empty());
+    // The watchdog stands down first, so only the drop can kill.
+    guard.stand_down_watchdog();
     drop(guard);
-    until_gone(group, "the session's process group after its guard dropped");
+    until_matching(
+        &workspace,
+        "the session to die after its guard dropped",
+        <[u32]>::is_empty,
+    );
+    drop(client);
+    let hub = hub.lock().unwrap().take().expect("the starter ran");
+    hub.kill("KILL");
+    hub.wait();
+}
+
+#[test]
+fn a_session_stuck_in_setup_is_killed_by_its_guard() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([]).unwrap();
+    setup.provider(&server);
+    let workspace = setup.workspace().to_string_lossy().into_owned();
+    // An MCP server that never answers holds the session in setup, before
+    // its log and lock exist. Its command line carries a marker.
+    let marker = format!("{workspace}/blocked-mcp");
+    write_json(
+        &setup.home().join("config.json"),
+        &json!({"model": "fake/m", "mcp": {"servers": {"blocked": {
+            "command": "sh",
+            "args": ["-c", "while read -r line; do :; done", marker],
+            "startup_timeout_ms": 600_000
+        }}}}),
+    );
+    let hub = Arc::new(Mutex::new(None));
+    let (client, _) = connect_hub(&setup, &hub);
+    let mut guard = SessionGuard::arm(&workspace);
+    client.send(&format!(
+        "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\"}}}}"
+    ));
+    until_matching(&marker, "the session's MCP server", |pids| !pids.is_empty());
+    let sessions = log::sessions_dir(&setup.home(), &fs::canonicalize(&workspace).unwrap());
+    let locks = fs::read_dir(&sessions)
+        .map(|dirs| {
+            dirs.flatten()
+                .filter(|dir| dir.path().join("session.lock").exists())
+                .count()
+        })
+        .unwrap_or(0);
+    assert_eq!(locks, 0, "the session is still in setup: no lock yet");
+    guard.stand_down_watchdog();
+    drop(guard);
+    until_matching(
+        &workspace,
+        "the stuck session and its server to die after the guard dropped",
+        <[u32]>::is_empty,
+    );
+    let rejected = recv(&client, "the start rejection");
+    assert_eq!(rejected["kind"], "command_rejected", "{rejected}");
     drop(client);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill("KILL");
