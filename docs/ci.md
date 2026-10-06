@@ -111,8 +111,10 @@ On Linux x86_64 alone:
   one test hang until its deadline is then caught by a faster test, not
   reported as a timeout.
 - for a pull request where any issue its body resolves is labelled
-  `bug`, its new and changed tests run against the base commit, and at least
-  one must fail there
+  `bug`, its new and changed tests run at its first commit, the red commit,
+  and at its head: the red commit must build and at least one of them must
+  fail there, and all must pass at the head (`docs/workflow.md`, "The pull
+  request")
 
 One more Linux x86_64 job builds the release profile for the target that
 ships, `x86_64-unknown-linux-musl` (`docs/releasing.md`), at the pull

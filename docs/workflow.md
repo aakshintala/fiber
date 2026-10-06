@@ -113,14 +113,20 @@ The body says `Resolves #<ticket>`, and either `Doc friction: none` or a
 link to each `needs-owner` issue the work raised ("When a doc should
 change").
 
-When any issue its body resolves is labelled `bug`, CI runs the pull request's new and
-changed tests against the base commit, and at least one must fail there
-(`docs/testing.md`, "Proving a test bites").
+A pull request that resolves an issue labelled `bug` proves its fix with a
+red commit, then green. Its first commit, the red commit, holds the test that
+reproduces the bug and any new signature or test seam that test needs, but
+not the fix. The red commit builds, and at least one new or changed test
+fails there. The head passes. CI runs the new and changed tests at both
+commits (`docs/testing.md`, "Proving a test bites"). The squash merge still
+lands one commit.
 
 A ticket whose defect is in test code, such as a flaky test, carries the
 `test-only` label, never `bug`. Its pull request states the root cause and
 the evidence that the fix holds, such as repeated runs under load, in place
-of a test that fails on the base commit.
+of a red commit. Once a `test-only` ticket's cause is confirmed to be in
+production code, it is a bug: the implementer relabels it `bug` and drops
+`test-only`.
 
 The orchestrator waits on `CI` with `gh-ci`. A failed check is fixed in a new
 commit. A failed run is never re-run until it passes; the one exception is
