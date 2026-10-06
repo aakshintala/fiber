@@ -124,9 +124,9 @@ only that crate, in KiB; the empty program is 323 KiB.
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo | ~0 | ~0 | ~0 | 4 | 330 |
 | ignore, grep-searcher, grep-regex, grep-matcher | the search behind the shell's `grep` and `find` (`docs/tools.md`, "Search") | 2,656 | 2,480 | 1,904 | 25 | 2,886 |
 | similar | an edit's diff in `details` (`docs/tools.md`, "edit") and an instruction file's diff (`docs/system-prompt.md`, "When something changes"), and a repository's changed code against its approved copy (`docs/extensions.md`, "Code a repository ships") | ~0 | 380 | ~0 | 1 | 389 |
-| html5ever | `web_fetch`'s tokenizer, without its tree builder | TBD | TBD | TBD | 19 | TBD |
-| encoding_rs | `web_fetch`'s decoding by the declared character set | TBD | TBD | TBD | 5 | TBD |
-| all of the above together | | TBD | TBD | TBD | TBD | TBD |
+| html5ever | `web_fetch`'s tokenizer, without its tree builder | TBD | TBD | 480 | 19 | TBD |
+| encoding_rs | `web_fetch`'s decoding by the declared character set | TBD | TBD | 272 | 5 | TBD |
+| all of the above together | | TBD | TBD | 4,720 | TBD | TBD |
 | image, fast_image_resize | the image child; png, jpeg, gif and webp only (`docs/model-routing.md`, "Image limits") | 68,076 | 67,604 | 72,352 | 32 | 5,234 |
 
 Notes:
@@ -151,15 +151,17 @@ Notes:
   file. Alone, `regex` measured 1,780 KiB and `ignore` 1,392 KiB on Linux
   x86_64; about 440 KiB of `regex`'s binary is Unicode tables. The search,
   similar and together rows were measured on September 26, 2026.
-- html5ever's figure is a generated 1 MiB page through the tokenizer alone,
+- The html5ever and encoding_rs rows, and the together row's macOS figure,
+  were measured on October 5, 2026; their Linux figures are not measured yet.
+- html5ever's figure is a generated 64 KiB page through the tokenizer alone,
   counting tokens in the sink, as the converter does without a tree.
-- encoding_rs's figure is decoding a 1 MiB windows-1252 page by its declared
+- encoding_rs's figure is decoding a 64 KiB windows-1252 page by its declared
   character set.
 - `web_fetch` converts a page with html5ever's tokenizer feeding Fiber's own
   single-pass writer (`crates/tools/src/web_fetch/markdown.rs`), not with a
   parser that builds the page's document tree. The smallest maintained crate
   that converts HTML to markdown on its own, htmd 0.5.5, passes `cargo deny`
-  with this repository's `deny.toml` but pulls 41 crates (html5ever,
+  with this repository's `deny.toml` but pulls 30 crates (html5ever,
   markup5ever_rcdom, xml5ever, string_cache, phf and their dependencies) and
   builds a DOM of the page. It is the tree that costs: htmd's tree
   (markup5ever_rcdom) is what cost 232 MB. Peak memory footprint on macOS
@@ -168,8 +170,11 @@ Notes:
 
   | Page | htmd | Fiber's converter |
   |---|---|---|
-  | 1 MiB | 24.9 MB | 3.0 MB |
-  | 10 MiB (the download cap) | 232.2 MB | 21.0 MB |
+  | 1 MiB | 24.9 MB | 3.5 MB |
+  | 10 MiB (the download cap) | 232.2 MB | 23.0 MB |
+
+  Fiber's converter figures are html5ever's tokenizer feeding the writer,
+  with the page held in memory, measured on October 5, 2026.
 - The image row is `image` 0.25 with default features off and only the png,
   jpeg, gif and webp codecs, plus `fast_image_resize` 6 with its `image`
   feature, Lanczos3. It is pure Rust and passes cargo-deny. Memory is the
