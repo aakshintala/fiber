@@ -76,7 +76,9 @@ fn a_run_ending_after_dispose_is_dropped() {
     let (done_tx, done_rx) = mpsc::channel();
     let other = Arc::clone(&hub);
     std::thread::spawn(move || {
-        let _waited = proceed_rx.recv_timeout(WAIT);
+        proceed_rx
+            .recv_timeout(WAIT)
+            .expect("waited for the drop's signal before routing the late run");
         other.send_exec(exec("late"));
         let _done = done_tx.send(());
     });
@@ -107,7 +109,9 @@ fn a_sender_after_dispose_flushes_nothing() {
     let (done_tx, done_rx) = mpsc::channel();
     let other = Arc::clone(&hub);
     std::thread::spawn(move || {
-        let _waited = proceed_rx.recv_timeout(WAIT);
+        proceed_rx
+            .recv_timeout(WAIT)
+            .expect("waited for the drop's signal before setting the late sender");
         other.set_exec_inbox(tx);
         let _done = done_tx.send(());
     });
@@ -157,7 +161,9 @@ fn deliver_to_at_a_runs_buffer_choice_flushes_the_run() {
     }));
     hub.send_exec(exec("run"));
     assert!(
-        held_rx.recv_timeout(WAIT).unwrap(),
+        held_rx
+            .recv_timeout(WAIT)
+            .expect("waited for the pause at the buffer choice"),
         "the buffer choice holds the hub lock"
     );
     done_rx
@@ -192,7 +198,9 @@ fn a_run_ending_at_a_flush_follows_the_buffered_runs() {
     }));
     hub.set_exec_inbox(tx);
     assert!(
-        held_rx.recv_timeout(WAIT).unwrap(),
+        held_rx
+            .recv_timeout(WAIT)
+            .expect("waited for the pause at the flush"),
         "the flush holds the hub lock"
     );
     done_rx

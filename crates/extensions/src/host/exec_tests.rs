@@ -20,6 +20,37 @@ use super::{ExecRequest, GROUP_POLL, group_alive, kill_every_group, refused_grou
 /// How long a test waits on the run before it fails.
 const DEADLINE: Duration = Duration::from_secs(10);
 
+/// Runs `work` on a worker and returns its answer within `DEADLINE`: a call
+/// that blocks, such as a `Command::status` or a fifo, is a wait too.
+fn within<T: Send + 'static>(what: &str, work: impl FnOnce() -> T + Send + 'static) -> T {
+    let (tx, rx) = mpsc::channel();
+    std::thread::spawn(move || {
+        let _sent = tx.send(work());
+    });
+    rx.recv_timeout(DEADLINE)
+        .unwrap_or_else(|_| panic!("waited {DEADLINE:?} for {what}"))
+}
+
+/// Whether the group still holds a process: `kill -0` on a worker.
+fn group_lives(pgid: u32) -> bool {
+    within("kill -0 on the group", move || {
+        fakes::kill_group(pgid, "0").unwrap()
+    })
+}
+
+/// Sends SIGKILL to `pid` on a worker; an already-gone pid is fine.
+fn kill_pid_now(pid: u32) {
+    within("kill -KILL on the pid", move || {
+        drop(fakes::kill_pid(pid, "KILL"));
+    });
+}
+
+/// A ready fifo in `dir`, made on a worker: `mkfifo` is a `Command::status`.
+fn ready_in(dir: &std::path::Path) -> fakes::children::Ready {
+    let dir = dir.to_path_buf();
+    within("the ready fifo", move || fakes::children::Ready::new(&dir))
+}
+
 /// The extension's memory cap in these tests, unless one sets its own.
 const CAP: usize = 1 << 20;
 
@@ -196,7 +227,7 @@ fn output_past_the_cap_stops_the_run_with_the_cap_error() {
 fn a_deadline_stop_reports_timed_out() {
     let (_dir, cwd) = dir("fiber-exec-deadline");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let script = format!(
         "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
         ready.path().display()
@@ -231,7 +262,7 @@ fn a_deadline_stop_reports_timed_out() {
 fn cancel_sends_term_then_kill_after_800_ms() {
     let (_dir, cwd) = dir("fiber-exec-cancel");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let script = format!(
         "echo $$ > '{}'\ntrap '' TERM\nwhile :; do :; done\n",
         ready.path().display()
@@ -252,10 +283,7 @@ fn cancel_sends_term_then_kill_after_800_ms() {
         clock.await_parked(kill_at, DEADLINE),
         "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
-    assert!(
-        fakes::kill_group(pgid, "0").unwrap(),
-        "SIGTERM leaves the ignoring group alive"
-    );
+    assert!(group_lives(pgid), "SIGTERM leaves the ignoring group alive");
     clock.advance(Duration::from_millis(800));
     let ran = done
         .recv_timeout(DEADLINE)
@@ -271,7 +299,7 @@ fn cancel_sends_term_then_kill_after_800_ms() {
 fn output_held_open_after_the_kill_stops_after_2_s() {
     let (_dir, cwd) = dir("fiber-exec-drain");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let script = fakes::children::escapes_group(ready.path());
     let (cancel, done) = spawn(sh(&script, cwd, CAP), Arc::clone(&clock), None);
     let first = ready.wait(DEADLINE)[0];
@@ -299,7 +327,7 @@ fn output_held_open_after_the_kill_stops_after_2_s() {
     assert!(!ran.timed_out);
     // The escaped grandchild still holds the pipe: clean it by pid.
     for pid in _second {
-        drop(fakes::kill_pid(pid, "KILL"));
+        kill_pid_now(pid);
     }
     watchdog.stand_down(DEADLINE);
 }
@@ -329,7 +357,7 @@ fn in_child(name: &str) {
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || tx.send(child.wait_with_output().unwrap()));
     let Ok(output) = rx.recv_timeout(DEADLINE) else {
-        drop(fakes::kill_pid(pid, "KILL"));
+        kill_pid_now(pid);
         panic!("waited {DEADLINE:?} for the child running {name}");
     };
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -451,7 +479,7 @@ fn output_of_exactly_the_cap_returns_and_one_byte_more_is_refused() {
 fn a_member_outliving_the_leader_is_stopped_with_its_group() {
     let (_dir, cwd) = dir("fiber-exec-member");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let ready_path = ready.path().display().to_string();
     let script = format!(
         "echo $$ > '{ready_path}'\n\
@@ -470,7 +498,7 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
         "waited {DEADLINE:?} for the run to park for the 800 ms grace"
     );
     assert!(
-        fakes::kill_group(pgid, "0").unwrap(),
+        group_lives(pgid),
         "the member ignores SIGTERM, so the group lives through the grace"
     );
     clock.advance(Duration::from_millis(800));
@@ -478,7 +506,7 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
         .expect("waited {DEADLINE:?} for the stopped run")
         .expect("the stopped run returns");
     assert!(
-        !fakes::kill_group(pgid, "0").unwrap(),
+        !group_lives(pgid),
         "the run returned only once the group was empty"
     );
     watchdog.stand_down(DEADLINE);
@@ -491,7 +519,7 @@ fn a_member_outliving_the_leader_is_stopped_with_its_group() {
 fn one_stream_still_open_keeps_the_drain_to_its_bound() {
     let (_dir, cwd) = dir("fiber-exec-one-open");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let ready_path = ready.path().display().to_string();
     let script = format!(
         "echo $$ > '{ready_path}'\n\
@@ -515,7 +543,7 @@ fn one_stream_still_open_keeps_the_drain_to_its_bound() {
         .expect("waited {DEADLINE:?} for the drained run")
         .expect("the drained run returns");
     for pid in escaped {
-        drop(fakes::kill_pid(pid, "KILL"));
+        kill_pid_now(pid);
     }
     watchdog.stand_down(DEADLINE);
 }
@@ -564,7 +592,7 @@ fn abort(
 fn a_startup_abort_kills_only_after_the_800_ms_grace() {
     let (_dir, cwd) = dir("fiber-exec-abort-grace");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let script = format!(
         "trap '' TERM\necho $$ > '{}'\nwhile :; do :; done\n",
         ready.path().display()
@@ -579,7 +607,7 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
         "waited {DEADLINE:?} for the abort to park for the 800 ms grace"
     );
     assert!(
-        fakes::kill_group(pgid, "0").unwrap(),
+        group_lives(pgid),
         "SIGTERM leaves the ignoring group alive through the grace"
     );
     assert!(
@@ -604,7 +632,7 @@ fn a_startup_abort_kills_only_after_the_800_ms_grace() {
 fn a_startup_abort_of_a_group_that_ends_on_term_sends_no_kill() {
     let (_dir, cwd) = dir("fiber-exec-abort-term");
     let clock = FakeClock::new();
-    let ready = fakes::children::Ready::new(&cwd);
+    let ready = ready_in(&cwd);
     let script = format!(
         "echo $$ > '{}'\nwhile :; do :; done\n",
         ready.path().display()
