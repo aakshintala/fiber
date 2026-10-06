@@ -215,19 +215,20 @@ fn wait_idle(gate: &Gate) {
     );
 }
 
-/// Waits until the process holds `before` descriptors. A connection leaves
-/// `live` before `reap` drops its socket's last clone, and
-/// `Gate::finish` notifies only once that clone is dropped, so this, not
-/// `wait_idle`, proves the descriptors are released.
-fn wait_descriptors(gate: &Gate, before: usize) {
+/// Waits until no connection is live, no writer is open and the process
+/// holds `before` descriptors. A connection leaves `live` before `reap` drops
+/// its socket's last clone; `Gate::finish` notifies under the lock after that,
+/// so the count, not an empty `live`, proves the descriptors are released.
+fn wait_released(gate: &Gate, before: usize) {
     let conns = super::lock(&gate.conns);
-    let _held = gate
+    let (_conns, waited) = gate
         .writers
-        .wait_timeout_while(conns, DEADLINE, |_| descriptors() != before)
+        .wait_timeout_while(conns, DEADLINE, |conns| {
+            !conns.live.is_empty() || conns.writers_open > 0 || descriptors() != before
+        })
         .unwrap_or_else(PoisonError::into_inner);
-    assert_eq!(
-        descriptors(),
-        before,
+    assert!(
+        !waited.timed_out(),
         "descriptors return to the count from before the clients connected"
     );
 }
@@ -271,8 +272,7 @@ fn many_connections_leave_nothing_held() {
                 let _ack = recv(&client);
                 drop(client);
             }
-            wait_idle(&gate);
-            wait_descriptors(&gate, before);
+            wait_released(&gate, before);
             Ok(())
         })
         .unwrap();

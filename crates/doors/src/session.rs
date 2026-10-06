@@ -436,6 +436,9 @@ impl Gate {
         if let Some(live) = taken {
             reap(live);
         }
+        // The socket closed outside the lock. Taking it before the notify
+        // means a waiter that judged the descriptors still open has parked.
+        let _held = lock(&self.conns);
         self.writers.notify_all();
     }
 
