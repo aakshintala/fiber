@@ -338,6 +338,44 @@ fn web_search_reads_and_defaults_to_none() {
 }
 
 #[test]
+fn reserved_body_fields_match_the_documented_table() {
+    assert_eq!(
+        Protocol::AnthropicMessages.reserved_body_fields(),
+        [
+            "model",
+            "system",
+            "messages",
+            "tools",
+            "tool_choice",
+            "stream"
+        ]
+    );
+    assert_eq!(
+        Protocol::OpenaiCompletions.reserved_body_fields(),
+        ["model", "messages", "tools", "tool_choice", "stream"]
+    );
+    assert_eq!(
+        Protocol::OpenaiResponses.reserved_body_fields(),
+        [
+            "model",
+            "instructions",
+            "input",
+            "tools",
+            "tool_choice",
+            "stream"
+        ]
+    );
+    assert_eq!(
+        Protocol::GoogleGenerativeAi.reserved_body_fields(),
+        ["systemInstruction", "contents", "tools", "toolConfig"]
+    );
+    assert_eq!(
+        Protocol::BedrockConverse.reserved_body_fields(),
+        ["system", "messages", "toolConfig"]
+    );
+}
+
+#[test]
 fn reads_web_search_is_true_only_for_the_known_anthropic_type() {
     assert!(Protocol::AnthropicMessages.reads_web_search("web_search_20250305"));
     assert!(!Protocol::AnthropicMessages.reads_web_search("web_search_20260209"));

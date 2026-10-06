@@ -190,6 +190,33 @@ impl Protocol {
     pub fn reads_web_search(self, kind: &str) -> bool {
         matches!(self, Self::AnthropicMessages) && kind == "web_search_20250305"
     }
+
+    /// The request fields Fiber builds for this protocol, which a model's
+    /// `extra_body` may not name (`docs/model-routing.md`, "Extra request
+    /// body fields"), in the doc table's order.
+    pub fn reserved_body_fields(self) -> &'static [&'static str] {
+        match self {
+            Self::AnthropicMessages => &[
+                "model",
+                "system",
+                "messages",
+                "tools",
+                "tool_choice",
+                "stream",
+            ],
+            Self::OpenaiCompletions => &["model", "messages", "tools", "tool_choice", "stream"],
+            Self::OpenaiResponses => &[
+                "model",
+                "instructions",
+                "input",
+                "tools",
+                "tool_choice",
+                "stream",
+            ],
+            Self::GoogleGenerativeAi => &["systemInstruction", "contents", "tools", "toolConfig"],
+            Self::BedrockConverse => &["system", "messages", "toolConfig"],
+        }
+    }
 }
 
 const MIB: u64 = 1 << 20;
