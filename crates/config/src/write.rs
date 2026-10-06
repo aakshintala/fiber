@@ -82,23 +82,21 @@ pub fn set(
         return Err(ConfigError::Refused {
             key: key.into(),
             file,
-            why: refused_why(&segments, layer),
+            why: refused_why(&segments),
         });
     }
     update(&file, &segments, value, false).map(|_| ())
 }
 
-/// Why `set` refuses `key` at `layer`: the notice `keys::check` pushed,
-/// read back off the table, since `keys` names no reason of its own.
-fn refused_why(segments: &[String], layer: Layer) -> &'static str {
+/// Why `set` refused `key`: the notice `keys::check` pushed, read back off
+/// the table, since `keys` names no reason of its own. Only called with a
+/// notice in hand, so a known key that is not repository-settable was
+/// written to a repository, and any other known key is repository-only.
+fn refused_why(segments: &[String]) -> &'static str {
     match keys::leaf(segments) {
-        Some(found) if matches!(layer, Layer::Repository) && !found.repo => {
-            "a repository may not set it"
-        }
-        Some(found) if found.repo_only && !matches!(layer, Layer::Repository) => {
-            "only a repository's own file may set it"
-        }
-        _ => "this Fiber does not know it",
+        None => "this Fiber does not know it",
+        Some(found) if !found.repo => "a repository may not set it",
+        Some(_) => "only a repository's own file may set it",
     }
 }
 
