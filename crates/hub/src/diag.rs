@@ -60,28 +60,11 @@ impl Diag {
     }
 
     /// Writes an `info` line naming the session, such as `session_started`.
-    #[allow(
-        dead_code,
-        reason = "the relay writes it; it arrives with the connection handling"
-    )]
     pub(crate) fn info_session(&self, session: &SessionId, code: &str, message: &str) {
         self.write("info", Some(session), code, message);
     }
 
-    /// Writes a `warn` line, such as a session that failed to start.
-    #[allow(
-        dead_code,
-        reason = "`start` writes it; it arrives with the connection handling"
-    )]
-    pub(crate) fn warn(&self, code: &str, message: &str) {
-        self.write("warn", None, code, message);
-    }
-
     /// Writes a `warn` line naming the session it concerns.
-    #[allow(
-        dead_code,
-        reason = "`start` writes it; it arrives with the connection handling"
-    )]
     pub(crate) fn warn_session(&self, session: &SessionId, code: &str, message: &str) {
         self.write("warn", Some(session), code, message);
     }
@@ -116,7 +99,7 @@ struct Line<'a> {
     message: &'a str,
 }
 
-fn wall_ms(wall: SystemTime) -> u64 {
+pub(crate) fn wall_ms(wall: SystemTime) -> u64 {
     wall.duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_millis())
         .unwrap_or(0)

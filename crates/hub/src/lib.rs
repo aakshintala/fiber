@@ -9,19 +9,22 @@
 
 mod connection;
 mod diag;
+#[cfg(test)]
+pub(crate) mod fake;
 mod listen;
 mod start;
 
 use std::io;
 use std::path::Path;
 use std::sync::Arc;
+use std::thread;
 use std::time::Duration;
 
 use contract::SessionId;
 use contract::clock::Clock;
 use contract::shapes::Failure;
 
-pub(crate) use diag::Diag;
+use crate::connection::Hub;
 
 /// Starts a session the hub was asked for: runs the internal session
 /// command in `workspace` with `id`, so the starter knows the id before the
@@ -50,23 +53,30 @@ pub trait Started: Send {
 /// process with 128 plus the signal, as `doors::signal_code` does.
 pub fn serve(
     home: &Path,
-    idle_exit: Duration,
+    _idle_exit: Duration,
     fiber_version: &str,
     starter: Arc<dyn Starter>,
     clock: Arc<dyn Clock>,
 ) -> i32 {
-    // debt: the accept loop, with relay and the idle wait, arrives with the
-    // connection handling; until then the hub stops idle at once. Ceiling:
-    // the connection handling lands.
-    let _ = (idle_exit, fiber_version, starter);
     let held = match listen::listen(home) {
         Ok(Some(held)) => held,
         Ok(None) => return 0,
         Err(_) => return 1,
     };
-    let diag = Diag::open(home, Arc::clone(&clock));
-    diag.info("hub_started", "The hub started.");
-    diag.info("hub_stopped", "The hub stopped: idle.");
+    // debt: the idle wait arrives with the idle handling; until then the
+    // accept loop blocks. Ceiling: the idle handling lands.
+    let hub = Arc::new(Hub::new(home, fiber_version, starter, clock));
+    hub.diag.info("hub_started", "The hub started.");
+    for stream in held.listener.incoming().flatten() {
+        let hub = Arc::clone(&hub);
+        let spawned = thread::Builder::new()
+            .name("hub-conn".to_owned())
+            .spawn(move || connection::serve_connection(stream, hub));
+        if spawned.is_err() {
+            continue;
+        }
+    }
+    hub.diag.info("hub_stopped", "The hub stopped: idle.");
     held.stop();
     0
 }

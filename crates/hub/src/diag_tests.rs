@@ -84,11 +84,15 @@ fn a_line_naming_a_session_carries_session_id_after_process() {
 fn a_failure_is_a_warn_line_with_the_rejection_code() {
     let temp = Temp::new();
     let diag = temp.diag();
-    diag.warn("io_failed", "Session s_x could not start: refused.");
+    diag.warn_session(
+        &SessionId("s_0123456789abcdef".into()),
+        "io_failed",
+        "Session s_0123456789abcdef could not start: refused.",
+    );
     assert_eq!(
         temp.text(),
         "{\"ts\":1700000000000,\"level\":\"warn\",\"process\":\"hub\",\
-         \"code\":\"io_failed\",\"message\":\"Session s_x could not start: refused.\"}\n"
+         \"session_id\":\"s_0123456789abcdef\",\"code\":\"io_failed\",\"message\":\"Session s_0123456789abcdef could not start: refused.\"}\n"
     );
 }
 

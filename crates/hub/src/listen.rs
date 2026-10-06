@@ -22,7 +22,7 @@ const SOCKET_PATH_MAX: usize = if cfg!(target_os = "macos") { 103 } else { 107 }
 /// the holder binds or removes `run/hub`.
 pub(crate) struct Held {
     _lock: File,
-    listener: UnixListener,
+    pub(crate) listener: UnixListener,
     socket: PathBuf,
 }
 
