@@ -259,7 +259,7 @@ host.drive(command, args)          -- send a driver command
 host.ask(kind, spec)               -- raise an interaction; returns the answer, or declined
 host.status(text) / host.widget(id, lines)
 host.emit(data)                    -- data for this extension's own TUI extension
-host.log(msg)                      -- write a debug line
+host.log(msg)                      -- write a diagnostic line (see below)
 host.oauth.open(url)               -- open the browser at url, and show the URL to copy
 host.oauth.callback(opts)          -- serve one request on localhost; returns its query parameters
 host.oauth.pkce()                  -- returns { verifier, challenge }
@@ -321,6 +321,11 @@ json.decode(str) / json.encode(value)   -- JSON, host-provided (Lua has none bui
   crypto written in Lua. `host.hmac_sha256` returns raw bytes because a
   signing scheme such as AWS SigV4 feeds each HMAC into the next as its key,
   and hex-encodes only the last.
+- **`host.log`** writes one line to the session's diagnostic log in `logs/`
+  (`docs/state.md`, "What each part holds"), and sends it live to attached clients
+  and `fiber ask` as an `extension_log` event (`docs/events.md`). Fiber
+  records the line as given. People attach `logs/` to bug reports, so an
+  extension never logs a secret, a token or a person's content.
 
 ### Running a tool
 
