@@ -943,11 +943,10 @@ loaded skills (`docs/handoff.md`, "What the model sees after a handoff").
 
 `opening_message` is written at session start and after each completed
 handoff. Each `extension_sections` entry records one extension's section with
-its extension, files and budget. `instruction_file` with `own_edit` records
-the content after the
-session's own call changed the file, and sends nothing. A diff is rendered from
-`content` and the content the model last had, both in the log. The texts are
-rendered from these payloads.
+its extension, files and budget. `instruction_file` with `own_edit` records the
+content after the session's own call changed the file, and sends nothing. A
+diff is rendered from `content` and the content the model last had, both in the
+log. The texts are rendered from these payloads.
 
 ### Handoff
 

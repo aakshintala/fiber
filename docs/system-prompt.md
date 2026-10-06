@@ -429,8 +429,8 @@ The kinds are in `docs/events.md`, "Preamble":
 
 - `opening_message` holds the environment, each instruction file's path and
   content, each extension section with its extension, files and budget, and
-  the skills listing, each entry with its name, description, path
-  and source. The text is rendered from these fields.
+  the skills listing, each entry with its name, description, path and source.
+  The text is rendered from these fields.
 - `skills_changed` records the skills added or removed at a turn start, as
   sent.
 - `instruction_file` records one appended change: the path, the reason, the

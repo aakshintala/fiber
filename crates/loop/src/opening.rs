@@ -430,9 +430,8 @@ pub(crate) fn io_failed(path: &Path, error: &std::io::Error) -> Notice {
 /// of the context window (`docs/system-prompt.md`, "Size"). Instruction
 /// text is the instruction files, extension sections, extension texts,
 /// `SYSTEM.md` and `APPEND_SYSTEM.md`, estimated at four bytes a token.
-/// `None` when the
-/// window is unknown (`0`): no basis for the check. Exactly 10% is not
-/// over, so `>` compares the unrounded cross products.
+/// `None` when the window is unknown (`0`): no basis for the check.
+/// Exactly 10% is not over, so `>` compares the unrounded cross products.
 fn size_notice(inputs: &PromptInputs, message: &OpeningMessage) -> Option<Notice> {
     let window = inputs.context_window.unwrap_or(0);
     // Unknown context window: the 10% check has nothing to compare with.

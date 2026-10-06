@@ -334,8 +334,8 @@ pub struct InstructionFile {
     /// Why it was written.
     pub reason: InstructionReason,
     /// The section's extension, when the file is a section file; absent
-    /// for an instruction file. Read here so a resumed session can tell
-    /// the two apart; set by #784's change tracking.
+    /// for an instruction file.
+    // debt: never set until section files are tracked at turn start; fixed by #784.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension: Option<String>,
     /// The file's content now; absent when deleted.
