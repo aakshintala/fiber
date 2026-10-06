@@ -160,13 +160,12 @@ pub(crate) fn execute(
     };
     scrub_env(&mut cmd);
     detach(&mut cmd, tty);
-    let child = cmd.spawn()?;
+    let child = groups::spawn(&mut cmd)?;
     // The parent drops every write end, or every secondary, so EOF arrives
     // when the last holder exits.
     drop(cmd);
 
     let pgid = child.id();
-    groups::register(pgid);
     let shared = Arc::new(Shared::default());
     {
         let mut inner = lock(&shared.inner);
