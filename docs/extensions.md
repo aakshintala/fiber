@@ -862,8 +862,10 @@ nothing at start:
 - an extension with no Lua, only data, skills, themes, prompt templates,
   opening-message files or binaries, which starts no VM, such as the
   first-party `memory` extension;
-- a provider, which its manifest's `providers` and its data file declare, so
-  its Lua, if it has any, first runs when the session uses one of its models;
+- a provider, which its manifest's `providers` and its data file declare. Its
+  `models()`, if it has one, may run at start to refresh a stale model list,
+  and the provider is unloaded once the list is written. Its other Lua
+  functions run only when the session uses one of its models;
 - the first-party `hooks` extension in a session whose configuration has no
   `hooks` key ("Hooks declared in configuration").
 
@@ -1031,6 +1033,7 @@ running on.
 | `fiber extension install <name>` | Installs an extension and its dependencies. If any part fails, nothing is installed. |
 | `fiber extension update [<name>]` | Moves one extension, or every installed extension when no name is given, to its newest version and re-resolves dependencies. The new version stays a minimum (see [Versions](#versions)). It never touches a repository's extension. |
 | `fiber extension remove <name>` | Removes an extension, and any dependency nothing else uses. |
+| `fiber extension reinstall <name>` | Removes an extension and installs it again. When its install record can be read, it installs the recorded source at the recorded commit. When the extension is damaged, it installs `<name>` as given, a short name or a git address. |
 | `fiber extension list` | Lists installed extensions with their versions and commits, and each repository extension with its project, its path in the repository and the content it loads. |
 | `fiber approve [--yes]` | Shows everything the current repository declares and approves it ("Code a repository ships"). |
 
@@ -1075,9 +1078,12 @@ hand. Fiber treats it the same way in every command:
   reading the record, so it always works.
 - A session skips it when loading extensions, with the notice
   `extension_failed`.
+- Loading providers skips it, so its models are left out of the model list,
+  for sessions, `fiber models` and `fiber login` alike.
+- `fiber extension reinstall <name>` installs it again.
 
 Every message names the extension and the fix:
-`` `opencode` is damaged; run `fiber extension remove opencode`, then install it again. ``
+`` `opencode` is damaged; run `fiber extension reinstall opencode`. ``
 No operating-system error is shown for a damaged extension, and skipping one
 does not change a command's exit code.
 
@@ -1099,8 +1105,8 @@ recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.
 
 A provider, `hooks` or `memory` costs nothing in a session that does not use it. A
-provider that is pure data is only read, a Lua provider first runs when a
-session uses one of its models, and `hooks` loads only when configuration has
+provider that is pure data is only read, a Lua provider runs only to refresh a
+stale model list or when a session uses one of its models, and `hooks` loads only when configuration has
 a `hooks` key. `memory` has no code, and its opening-message section adds
 nothing while the store is empty.
 

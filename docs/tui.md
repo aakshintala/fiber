@@ -305,7 +305,9 @@ the conversation. The views are:
   level saves `models."<provider/model>".thinking` to the global file. One key
   marks the choice as this session only, and then nothing is saved. When
   `scoped_models` is set, the picker shows only those models, with a "show
-  all" toggle. Ctrl+L opens it, as `/model` does.
+  all" toggle. Ctrl+L opens it, as `/model` does. It draws from the cached
+  model lists at once and refreshes stale ones in the background; its refresh
+  button refreshes every list (`docs/model-routing.md`, "Model discovery").
 - **The usage view,** `/usage`: the session's `usage` (`docs/events.md`) broken
   down by turn, by model and by delegate, each with tokens by kind, cost billed
   and cost on subscription, and the budget left when `budget.usd` is set.

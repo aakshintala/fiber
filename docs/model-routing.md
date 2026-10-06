@@ -356,10 +356,28 @@ that is data.
 ### Model discovery
 
 A provider may also declare a Lua `models()` function that returns its model
-list. It runs when the list is needed and there is no cached copy, and again
-in the background each time Fiber starts. Fiber stores the result on disk in
-[Fiber home](state.md)'s cache and serves that copy until the refresh returns.
-Nothing refreshes on a timer, so an idle Fiber does no work.
+list. Fiber stores the result on disk in [Fiber home](state.md)'s cache, and
+every surface that shows a model list draws from that copy at once: the
+terminal's model picker, `fiber models`, and anything an agent reads. A refresh
+runs in the background and never holds a list back.
+
+- **At start,** Fiber refreshes each provider that has a credential and whose
+  cached list is older than `model_lists.refresh_after` (`docs/configuration.md`),
+  one day by default. Each provider that ran is unloaded once its list is
+  written. Only the extensions the session uses stay loaded, and a provider
+  with no credential never runs.
+- **When no cached copy exists,** `models()` runs when the list is first
+  needed.
+- **The model picker** refreshes, in the background, any provider whose list
+  is older than `model_lists.refresh_after`, and updates the list when the result
+  arrives. Its refresh button refreshes every provider with a credential,
+  whatever the age of its list.
+
+The age of a list is the age of its cache file, so sessions that start
+together refresh a provider once. A provider already refreshing is not
+started again. Nothing refreshes on a timer, so an idle Fiber does no work.
+A refresh never changes the tool definitions a session has sent: an agent sees
+a new list only through a tool result (`docs/prompt-cache.md`).
 
 The function can ask the vendor's own listing endpoint, read a file, or look up
 metadata anywhere, models.dev included. A vendor with no listing endpoint ships a

@@ -99,6 +99,7 @@ set the key.
 |---|---|---|---|
 | `model` | none | yes | The default model for a new session, as `provider/model` (`docs/model-routing.md`, "Choosing the model"). |
 | `thinking` | the model's own default | yes | The thinking level for a new session (`docs/model-routing.md`, "Thinking"). |
+| `model_lists.refresh_after` | `"24h"` | no | How old a provider's cached model list must be before Fiber refreshes it in the background, as a duration such as `"7d"`. The model picker's refresh button ignores it (`docs/model-routing.md`, "Model discovery"). |
 | `scoped_models` | none | yes | A list of model references the model picker shows; none means every installed model (`docs/tui.md`, "Swapped views"). |
 | `roles."<name>"` | none | yes | A delegate's model reference, such as `"fiber:openai/gpt-5.6:xhigh"`, or an object with `model`, the reference, and `credential`, the credential label the delegate uses (`docs/delegates.md`). A repository's role cannot name a credential: its `credential` is ignored with a `notice`. |
 | `hub.port` | none | no | The port of `127.0.0.1` an installed hub listens on, as well as its local socket; unset, it listens on its local socket only. `fiber hub install --port` writes it (`docs/invocation.md`, "The hub"). |
