@@ -333,6 +333,7 @@ impl Decoder {
             generation_id: GenerationId(std::mem::take(&mut self.id)),
             tokens: tokens(&Value::Object(std::mem::take(&mut self.usage))),
             web_searches,
+            cost: None,
         })
     }
 }

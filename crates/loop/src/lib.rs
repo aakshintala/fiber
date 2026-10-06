@@ -693,11 +693,7 @@ impl Loop {
                 ReplyAction::Hosted(hosted) => self.write_hosted(&hosted, turn)?,
             }
         }
-        let cost = self
-            .model
-            .cost
-            .as_ref()
-            .map(|prices| usage::price(prices, &reply.tokens));
+        let cost = usage::call_cost(reply.cost, self.model.cost.as_ref(), &reply.tokens);
         let recorded = UsageRecorded {
             generation_id: reply.generation_id,
             model: self.model.reference.clone(),

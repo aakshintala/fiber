@@ -21,6 +21,7 @@ fn reply(actions: Vec<ReplyAction>) -> Reply {
             output: 0,
         },
         web_searches: None,
+        cost: None,
     }
 }
 

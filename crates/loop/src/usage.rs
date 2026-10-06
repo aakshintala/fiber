@@ -54,6 +54,17 @@ fn tier(cost: &Cost, prompt: u64) -> Option<&Tier> {
         .max_by_key(|tier| tier.input_tokens_above)
 }
 
+/// The cost one call is recorded at (`docs/model-routing.md`, "Cost"): the
+/// vendor's own figure where the reply reports one, otherwise the model's
+/// declared prices applied to the call's tokens, else `None`.
+pub(crate) fn call_cost(
+    inline: Option<f64>,
+    prices: Option<&Cost>,
+    tokens: &Tokens,
+) -> Option<f64> {
+    inline.or_else(|| prices.map(|prices| price(prices, tokens)))
+}
+
 /// The latest `usage_recorded` per `generation_id`. A later line with an id
 /// already recorded replaces the earlier one in every total, so a copy of a
 /// copy is still one call (`docs/events.md`, `usage_recorded`).

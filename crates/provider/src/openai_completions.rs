@@ -485,6 +485,7 @@ impl Decoder {
             generation_id: GenerationId(self.id),
             tokens: tokens(&self.usage, lifetime),
             web_searches: None,
+            cost: cost(&self.usage),
         })
     }
 }
@@ -517,6 +518,17 @@ fn tokens(usage: &Value, lifetime: &CacheLifetime) -> Tokens {
         },
         output: count("/completion_tokens"),
     }
+}
+
+/// The vendor's own figure for the call, in US dollars, where `usage`
+/// reports one (`docs/events.md`, "Usage and notices"): OpenRouter's
+/// `usage.cost`. Missing, `null`, a string or a negative number reports
+/// none; a cost of `0` is reported, so `0.0`.
+fn cost(usage: &Value) -> Option<f64> {
+    usage
+        .get("cost")
+        .and_then(Value::as_f64)
+        .filter(|cost| *cost >= 0.0)
 }
 
 /// The string at `key`, or `""`.

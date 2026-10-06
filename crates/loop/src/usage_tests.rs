@@ -3,7 +3,7 @@ use contract::events::UsageRecorded;
 use contract::provider::{Cost, Tier};
 use contract::shapes::Tokens;
 
-use super::{Ledger, price};
+use super::{Ledger, call_cost, price};
 
 fn tokens(input: u64, cache_read: u64, cache_write: &[(&str, u64)], output: u64) -> Tokens {
     Tokens {
@@ -247,4 +247,41 @@ fn usage_totals_saturate_instead_of_overflowing() {
     assert_eq!(usage.tokens.cache_read, u64::MAX);
     assert_eq!(usage.tokens.output, u64::MAX);
     assert_eq!(usage.tokens.cache_write["1h"], u64::MAX);
+}
+
+fn priced() -> Cost {
+    Cost {
+        input: 2.0,
+        output: 10.0,
+        cache_read: None,
+        cache_write: None,
+        tiers: Vec::new(),
+    }
+}
+
+#[test]
+fn without_an_inline_cost_the_declared_prices_apply() {
+    let prices = priced();
+    assert_eq!(
+        call_cost(None, Some(&prices), &tokens(1_000_000, 0, &[], 0)),
+        Some(2.0)
+    );
+}
+
+#[test]
+fn without_either_the_cost_is_unknown() {
+    assert_eq!(
+        call_cost(None, None, &tokens(1_000_000, 0, &[], 1_000)),
+        None
+    );
+}
+
+#[test]
+fn the_inline_cost_wins_over_the_declared_prices() {
+    let prices = priced();
+    // The declared prices give 2.0; the vendor's figure stands instead.
+    assert_eq!(
+        call_cost(Some(0.000123), Some(&prices), &tokens(1_000_000, 0, &[], 0)),
+        Some(0.000123)
+    );
 }

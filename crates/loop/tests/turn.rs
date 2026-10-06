@@ -15,7 +15,7 @@ mod support;
 use contract::events::{
     CacheLifetime, ReasoningCompleted, TextCompleted, TextDelta, ToolCallRequested, TurnOutcome,
 };
-use contract::provider::{Delta, Input, ReplyAction};
+use contract::provider::{Cost, Delta, Input, ReplyAction};
 use contract::shapes::Failure;
 use contract::{ActionId, ErrorCode, Seq};
 use fakes::{Scripted, reply};
@@ -1284,4 +1284,52 @@ fn a_reply_reporting_searches_records_their_count() {
     );
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert!(usage.payload.get("web_searches").is_none());
+}
+
+#[test]
+fn a_reply_carrying_an_inline_cost_records_it_instead_of_the_declared_price() {
+    let priced = r#loop::Model {
+        reference: MODEL.into(),
+        cost: Some(Cost {
+            input: 100.0,
+            output: 200.0,
+            cache_read: None,
+            cache_write: None,
+            tiers: Vec::new(),
+        }),
+        subscription: false,
+    };
+    // The declared prices give 0.0016 for the reply's tokens; the
+    // vendor's own figure stands instead.
+    let mut end = reply("Done.");
+    end.cost = Some(0.000123);
+    let mut scripted = Scripted::text("Done.");
+    scripted.end = Ok(end);
+    let mut session = Session::open(vec![scripted], Vec::new(), Vec::new(), priced);
+    session.inbox.send(delivery("hi")).unwrap();
+    session.turn();
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
+    let usages: Vec<_> = lines
+        .iter()
+        .filter(|line| line.kind == "usage_recorded")
+        .collect();
+    assert_eq!(usages.len(), 1);
+    assert_eq!(usages[0].payload["cost"], json!(0.000123));
 }
