@@ -117,7 +117,7 @@ pub(crate) struct State {
     /// Whether this turn began as a person's `handoff` between turns.
     person_turn: bool,
     /// Whether a handoff of any trigger ran in this step: the overflow rule
-    /// runs at most once per step.
+    /// runs at most once per step, and a tool's handoff does not follow one.
     step_ran: bool,
 }
 
@@ -501,8 +501,13 @@ impl Loop {
     /// The handoff the last step's tools asked for, through
     /// `control.handoff`: no note request, because each call's argument is
     /// the note (`docs/handoff.md`, "A tool"). Runs once the step's calls
-    /// have completed.
+    /// have completed. At most one handoff runs per step: after an
+    /// automatic or person's handoff in this step, it does nothing, and each
+    /// call's result stays in the conversation as an ordinary result.
     pub(crate) fn handoff_from_tools(&mut self, turn: &TurnId) -> Result<(), Error> {
+        if self.handoff.step_ran {
+            return Ok(());
+        }
         let note = self.handoff.carry.noted();
         if note.is_empty() {
             return Ok(());
