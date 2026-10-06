@@ -651,6 +651,10 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
     // The server runs, so the signals were armed before it started.
     let _pid = ready.wait(DEADLINE)[0];
     fiber.signal("TERM");
+    // Before `end`, whose group check would otherwise catch a server
+    // left alive first: this wait is the one that pins the kill.
+    died.recv_timeout(DEADLINE)
+        .expect("the MCP server outlived fiber");
     let ended = fiber.end();
 
     assert_eq!(ended.code, Some(143), "stderr: {}", ended.stderr);
@@ -660,7 +664,5 @@ fn sigterm_while_an_mcp_server_starts_kills_it_and_exits_143_writing_nothing() {
         setup.session_dirs().is_empty(),
         "a session directory was created"
     );
-    died.recv_timeout(DEADLINE)
-        .expect("the MCP server outlived fiber");
     assert!(server.requests().is_empty());
 }
