@@ -153,7 +153,7 @@ impl Loop {
             // `cancelled` with no `tool_call_started` and no permission
             // lines. A decision line already written stays.
             if self.turn_cancelled() {
-                decided.push((id, call.name, Err(super::cancel::never_ran())));
+                decided.push((id, call.name, Err(self.cancelled_before_ran())));
                 continue;
             }
             let decision = self.decide(&call, &id, turn)?;
@@ -163,7 +163,7 @@ impl Loop {
                 return Ok(false);
             }
             if self.turn_cancelled() {
-                decided.push((id, call.name, Err(super::cancel::never_ran())));
+                decided.push((id, call.name, Err(self.cancelled_before_ran())));
                 continue;
             }
             decided.push((id, call.name, decision));
@@ -190,7 +190,7 @@ impl Loop {
                     // ends an approved call before it starts: no
                     // `tool_call_started`, completed `cancelled`. A decision
                     // line already written stays.
-                    Ok(_) if self.turn_cancelled() => State::Ready(super::cancel::never_ran()),
+                    Ok(_) if self.turn_cancelled() => State::Ready(self.cancelled_before_ran()),
                     Ok((tool, arguments, declared)) => {
                         self.append(
                             &Event::ToolCallStarted(ToolCallStarted {
@@ -362,10 +362,10 @@ impl Loop {
             )? {
                 Asked::Allow => Ok(Ok((tool, arguments, effects.declared))),
                 Asked::Deny(completed) | Asked::Gone(completed) => Ok(Err(completed)),
-                Asked::Cancelled => Ok(Err(super::cancel::never_ran())),
+                Asked::Cancelled => Ok(Err(self.cancelled_before_ran())),
                 // The idle delay passed. Nothing more is written; `run_calls`
                 // sees `idle_left` and the turn unwinds.
-                Asked::Idle => Ok(Err(super::cancel::never_ran())),
+                Asked::Idle => Ok(Err(self.cancelled_before_ran())),
                 Asked::Closed(request_id) => {
                     Ok(Err(self.unanswerable(id, turn, Some(request_id))?))
                 }
@@ -693,7 +693,7 @@ impl Loop {
             // written completes `cancelled`: a denial or failure decided
             // but not yet written, or a call approved but never started. A
             // `permission_resolved` line already written stays.
-            State::Ready(_) if self.turn_cancelled() => super::cancel::never_ran(),
+            State::Ready(_) if self.turn_cancelled() => self.cancelled_before_ran(),
             State::Ready(completed) => completed.clone(),
             State::Running {
                 stream,

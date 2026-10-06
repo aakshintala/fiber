@@ -68,8 +68,11 @@ pub(crate) struct Gate {
     /// Both sit under this lock, so a shell that registers after `close`
     /// cannot miss the snapshot.
     shells: Mutex<RunningShells>,
+    /// Signalled whenever a driver shell leaves [`Gate::shells`].
+    shell_ended: Condvar,
     stop: AtomicBool,
-    clients: Mutex<u32>,
+    /// The `full` connections, and whether `clients` lines are sealed.
+    clients: Mutex<(u32, bool)>,
     /// Paired with [`Gate::conns`].
     writers: Condvar,
     conns: Mutex<Conns>,
@@ -191,6 +194,36 @@ impl Session {
         *lock(&self.gate.jobs) = Some(jobs);
     }
 
+    /// What a shutdown calls to stop the door side's work
+    /// (`docs/invocation.md`, "Shutdown"): every driver shell is cancelled,
+    /// a later one is cancelled as it starts, and the loop is woken. Once
+    /// the inbox is gone it wakes nothing.
+    pub fn stopper(&self) -> Arc<dyn Fn() + Send + Sync> {
+        let gate = Arc::clone(&self.gate);
+        Arc::new(move || {
+            gate.cancel_shells();
+            gate.deliver(Delivery::Cancelled);
+        })
+    }
+
+    /// Makes `fiber_exited` the last line this process writes: no later
+    /// `clients` line is emitted, no new driver shell runs, and every
+    /// running one is cancelled and waited for. Called just before
+    /// `fiber_exited`. Idempotent; [`Session::close`] behaves as before.
+    pub fn quiesce(&self) {
+        // An emission holds this lock, so one in flight finishes first.
+        lock(&self.gate.clients).1 = true;
+        self.gate.cancel_shells();
+        let mut shells = lock(&self.gate.shells);
+        while !shells.running.is_empty() {
+            shells = self
+                .gate
+                .shell_ended
+                .wait(shells)
+                .unwrap_or_else(PoisonError::into_inner);
+        }
+    }
+
     /// Ends the door side: stops accepting, unlinks the socket, drops `log`
     /// (the last handle, which releases the lock), waits up to [`GRACE`] for
     /// each writer, then shuts down whatever is still open. A driver shell
@@ -271,16 +304,20 @@ impl Gate {
 
     /// One more `full` connection, and the `clients` line for it.
     pub(crate) fn attach(&self) {
-        let mut count = lock(&self.clients);
-        *count += 1;
-        self.emit_clients(*count);
+        let mut clients = lock(&self.clients);
+        clients.0 += 1;
+        if !clients.1 {
+            self.emit_clients(clients.0);
+        }
     }
 
     /// One fewer `full` connection, and the `clients` line for it.
     pub(crate) fn detach(&self) {
-        let mut count = lock(&self.clients);
-        *count = count.saturating_sub(1);
-        self.emit_clients(*count);
+        let mut clients = lock(&self.clients);
+        clients.0 = clients.0.saturating_sub(1);
+        if !clients.1 {
+            self.emit_clients(clients.0);
+        }
     }
 
     fn emit_clients(&self, count: u32) {
@@ -343,6 +380,7 @@ impl Gate {
         lock(&self.shells)
             .running
             .retain(|tracked| !Arc::ptr_eq(tracked, cancel));
+        self.shell_ended.notify_all();
     }
 
     pub(crate) fn deliver(&self, delivery: Delivery) {
@@ -498,8 +536,9 @@ fn open_in(
             stopped: false,
             running: Vec::new(),
         }),
+        shell_ended: Condvar::new(),
         stop: AtomicBool::new(false),
-        clients: Mutex::new(0),
+        clients: Mutex::new((0, false)),
         writers: Condvar::new(),
         conns: Mutex::new(Conns {
             live: Vec::new(),

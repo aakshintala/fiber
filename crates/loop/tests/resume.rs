@@ -1677,11 +1677,21 @@ impl History {
     /// Resumes with `tools` as an unattended session answers: no person
     /// can answer an approval.
     fn resume_headless(&mut self, tools: Vec<(String, Arc<dyn Tool>)>) -> Loop {
+        let provider = Arc::clone(&self.provider) as Arc<dyn Provider>;
+        self.resume_headless_on(provider, tools)
+    }
+
+    /// As [`History::resume_headless`], its model calls reaching `provider`.
+    fn resume_headless_on(
+        &mut self,
+        provider: Arc<dyn Provider>,
+        tools: Vec<(String, Arc<dyn Tool>)>,
+    ) -> Loop {
         let lines = self.lines();
         Loop::resume(
             Arc::clone(&self.log),
             &lines,
-            Arc::clone(&self.provider) as Arc<dyn Provider>,
+            provider,
             Self::model(),
             self.prompt(),
             self.inbox_rx.take().unwrap(),
@@ -3678,4 +3688,92 @@ fn a_resumed_session_replays_a_logged_section_byte_for_byte() {
         panic!("not an opening message");
     };
     assert_eq!(text, &live_text);
+}
+
+/// A provider that starts a shutdown on `cancel` as each call is made, then
+/// answers from `inner`.
+struct ShutsDown {
+    inner: Arc<ScriptedProvider>,
+    cancel: Arc<r#loop::TurnCancel>,
+}
+
+impl Provider for ShutsDown {
+    fn call(
+        &self,
+        request: &contract::provider::ModelRequest,
+    ) -> Box<dyn contract::provider::ModelCall> {
+        self.cancel.shutdown(143);
+        self.inner.call(request)
+    }
+}
+
+/// `fiber_exited` under SIGTERM after the resumed process's lines.
+fn exited_on_signal(history: &History) -> Envelope {
+    let code = r#loop::fiber_exited(&history.log, &history.dir, Ok(()), Some(143)).unwrap();
+    assert_eq!(code, 143);
+    history.lines().pop().unwrap()
+}
+
+#[test]
+fn a_shutdown_before_the_finishing_turn_writes_nothing_and_keeps_the_request() {
+    let mut history = suspended_history(vec![Scripted::text("Done.")]);
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let looped = history
+        .resume_headless(Vec::new())
+        .cancelled_by(Arc::clone(&cancel));
+    r#loop::fiber_started(&history.log, "0.0.1", true).unwrap();
+    cancel.shutdown(143);
+    let (_looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, None);
+    // No preamble, no re-raise: only this process's `fiber_started`.
+    assert_eq!(history.new_kinds(), ["fiber_started"]);
+    assert!(history.provider.requests().is_empty());
+    let exited = exited_on_signal(&history);
+    assert_eq!(exited.payload["suspended_on"], "r_9");
+}
+
+#[test]
+fn a_shutdown_after_the_refusal_ends_the_finishing_turn_interrupted() {
+    let mut history = suspended_history(vec![Scripted::text("Done.")]);
+    let cancel = Arc::new(r#loop::TurnCancel::default());
+    let provider = Arc::new(ShutsDown {
+        inner: Arc::clone(&history.provider),
+        cancel: Arc::clone(&cancel),
+    });
+    // A prompt waiting behind the finishing turn is held aside, then
+    // answered by the shutdown.
+    let (prompt, answer) = recording();
+    history
+        .inbox_tx
+        .send(Delivery::Prompt(support::message("two"), prompt))
+        .unwrap();
+    let looped = history
+        .resume_headless_on(provider, Vec::new())
+        .cancelled_by(Arc::clone(&cancel));
+    let (looped, outcome) = history.step(looped);
+
+    assert_eq!(outcome, Some(contract::events::TurnOutcome::Interrupted));
+    let kinds = history.new_kinds();
+    assert!(kinds.contains(&"permission_requested".to_owned()));
+    assert!(kinds.contains(&"permission_resolved".to_owned()));
+    assert_eq!(kinds.last().map(String::as_str), Some("turn_completed"));
+    // The loop starts no other turn and rejects the held prompt.
+    let (done, finished) = mpsc::channel();
+    std::thread::spawn(move || done.send(looped.run().is_ok()).unwrap());
+    assert!(
+        finished
+            .recv_timeout(support::DEADLINE)
+            .expect("run returned")
+    );
+    match &*answer.lock().unwrap() {
+        Some(Err(rejected)) => assert_eq!(rejected.code, contract::ErrorCode::Closing),
+        other => panic!("the prompt was answered closing, not {other:?}"),
+    }
+    assert_eq!(
+        history.new_kinds().last().map(String::as_str),
+        Some("turn_completed")
+    );
+    let exited = exited_on_signal(&history);
+    assert_eq!(exited.payload.get("suspended_on"), None);
 }

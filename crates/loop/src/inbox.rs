@@ -11,6 +11,7 @@ use contract::events::{QueuedMessage, SteeringQueue};
 use contract::inbox::{Ack, Delivery, Rejection};
 use contract::{CommandId, ErrorCode, RequestId, TurnId};
 
+use crate::cancel::SignalState;
 use crate::jobs::Queued;
 use crate::{Error, Loop};
 
@@ -18,13 +19,14 @@ use crate::{Error, Loop};
 const BUSY: &str = "A turn is running; send `steer` to add to it.";
 
 /// `close` has been taken.
-const CLOSING: &str = "The session is closing and takes no new turn.";
+pub(crate) const CLOSING: &str = "The session is closing and takes no new turn.";
 
 /// A `steer_drop` names nothing still queued.
-const STALE_STEER: &str = "That steering message was already applied, or was never queued.";
+pub(crate) const STALE_STEER: &str =
+    "That steering message was already applied, or was never queued.";
 
 /// A `reply` names nothing pending.
-const STALE_REPLY: &str = "That request is no longer pending.";
+pub(crate) const STALE_REPLY: &str = "That request is no longer pending.";
 
 /// A `reply`'s keys do not fit the pending request.
 pub(crate) const UNFIT_REPLY: &str = "That answer does not fit the pending request.";
@@ -92,9 +94,14 @@ impl Loop {
     /// from the start of the idle wait; while a job runs there is none, and
     /// a wait that sees the last job end counts the delay from then.
     /// With `check`, the wait also ends when the jobs check comes due
-    /// (`docs/invocation.md`, "Lifecycle").
+    /// (`docs/invocation.md`, "Lifecycle"). Once a shutdown started, every
+    /// wait ends as the idle delay ends it, taking nothing
+    /// (`docs/invocation.md`, "Shutdown").
     pub(crate) fn recv_until(&mut self, deadline: Option<Instant>, check: bool) -> InboxRecv {
         loop {
+            if self.shutting_down() {
+                return InboxRecv::Idle;
+            }
             match self.inbox.try_recv() {
                 Ok(delivery) => return InboxRecv::Delivery(delivery),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => return InboxRecv::Closed,
@@ -318,13 +325,24 @@ impl Loop {
         delivery: Delivery,
         turn: &TurnId,
     ) -> Result<Waited, Error> {
-        // The signal wins over whatever arrived first: every delivery is
-        // admitted as at any drain, so a steer is still queued and a reply
-        // queued ahead of the wake is rejected `stale_request`, and the
-        // approval ends denied by the cancel.
-        if self.turn_cancelled() {
-            self.admit_running(delivery, turn)?;
-            return Ok(Waited::Cancelled);
+        // One locked read of the signal decides whether it or the delivery
+        // came first; whatever lands after the read (a shutdown an ack
+        // starts, say) does not change what it decided. A shutdown leaves
+        // the request pending: the delivery is answered as at any drain, a
+        // reply `stale_request`, and the wait ends as the idle delay ends it
+        // (`docs/invocation.md`, "Shutdown"). A cancel wins the same way and
+        // the approval ends denied by it. With the signal live, a reply to
+        // the request answers it, and its answer stands whatever lands next.
+        match self.cancel.state() {
+            SignalState::Shutdown => {
+                self.admit_running(delivery, turn)?;
+                return Ok(Waited::Again);
+            }
+            SignalState::Cancelled => {
+                self.admit_running(delivery, turn)?;
+                return Ok(Waited::Cancelled);
+            }
+            SignalState::Live => {}
         }
         match delivery {
             Delivery::Reply(reply, ack) if reply.request_id == *pending => {

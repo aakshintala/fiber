@@ -65,11 +65,14 @@ pub struct Servers {
 }
 
 impl Servers {
-    /// Stops every server: stdin closed, the grace, then kill and reap.
+    /// Stops every server at once, each on its own thread: stdin closed,
+    /// SIGTERM, the grace, then kill and reap.
     pub fn stop(&self) {
-        for server in &self.servers {
-            server.stop();
-        }
+        thread::scope(|scope| {
+            for server in &self.servers {
+                scope.spawn(|| server.stop());
+            }
+        });
     }
 }
 

@@ -64,6 +64,17 @@ impl Loop {
         id: &ActionId,
         turn: &TurnId,
     ) -> Result<Shaped, Error> {
+        // Under a shutdown no hook runs, so nothing is left to redact the
+        // output: the completion carries none of it (`docs/invocation.md`,
+        // "Shutdown").
+        if self.shutting_down() {
+            return Ok(Shaped {
+                content: Vec::new(),
+                details: None,
+                artifact: None,
+                changed_by: None,
+            });
+        }
         let full = crate::conversation::text(&ran.text);
         let Some(hooks) = self.hooks.clone() else {
             return Ok(self

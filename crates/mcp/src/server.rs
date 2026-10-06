@@ -2,7 +2,7 @@
 //! pipe, requests answered by id, and a stop that closes stdin, waits a
 //! grace on the clock, then kills and reaps (`docs/mcp.md`, "Starting
 //! servers"). Time comes only from the injected [`contract::clock::Clock`];
-//! no process group is ever signalled.
+//! no process group is ever signalled: only a server's own process, by pid.
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, Read, Write};
@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 
 use contract::clock::{Clock, Wake};
 use contract::tool::Cancel;
+use rustix::process::{Pid, Signal};
 use serde_json::Value;
 
 use crate::effects::Hints;
@@ -33,6 +34,62 @@ const MAX_LINE: usize = 4 * 1024 * 1024;
 /// The grace between closing stdin and killing the child: the shell's
 /// `GRACE` (`crates/tools/src/shell/command.rs`).
 const GRACE: Duration = Duration::from_millis(800);
+
+/// Every server child's pid, from its spawn until its reap: what
+/// [`kill_every_server`] reaches.
+static LIVE: Mutex<Vec<u32>> = Mutex::new(Vec::new());
+
+/// Sends SIGKILL to every server child not yet reaped, at once
+/// (`docs/invocation.md`, "Shutdown": the bound). A pid of 1 or less is
+/// never signalled.
+pub fn kill_every_server() {
+    // Held while `kill` runs: a reap unlists its pid under this lock before
+    // it waits, so every pid signalled here is still unreaped and cannot
+    // have been reused.
+    let live = lock(&LIVE);
+    before_signal();
+    signal(&live, Signal::KILL);
+}
+
+/// Runs while a signaller holds the lock that keeps its pids unreaped, just
+/// before `kill`: the seam a test pauses on to force a reap against it.
+#[cfg(test)]
+fn before_signal() {
+    tests::before_signal();
+}
+
+#[cfg(not(test))]
+fn before_signal() {}
+
+/// Runs as a reap is about to take `which` lock (`child` or `live`): the
+/// seam a test waits on to know the reap contends before it asserts.
+#[cfg(test)]
+fn before_lock(which: &'static str) {
+    tests::before_lock(which);
+}
+
+#[cfg(not(test))]
+fn before_lock(_which: &'static str) {}
+
+/// Sends `signal` to each of `pids`, leaving out every id [`refused`]
+/// names.
+fn signal(pids: &[u32], signal: Signal) {
+    for pid in pids.iter().filter(|pid| !refused(**pid)) {
+        if let Some(pid) = i32::try_from(*pid).ok().and_then(Pid::from_raw) {
+            // A server already gone refuses the signal; its reap still runs.
+            match rustix::process::kill_process(pid, signal) {
+                Ok(()) | Err(_) => {}
+            }
+        }
+    }
+}
+
+/// A pid of 1 or less is never a server's: `kill(-1)` reaches every
+/// process the user owns, and `kill(0)` this process's own group. Tested
+/// as a function, so a mutant of it signals nothing.
+fn refused(pid: u32) -> bool {
+    pid <= 1
+}
 
 /// One tool the server lists: its name, description, schema and hints, as
 /// [`crate::tool`] declares them.
@@ -133,6 +190,7 @@ impl Server {
         let mut child = cmd.spawn().map_err(|error| {
             StartError::StartFailed(format!("The server could not be started: {error}."))
         })?;
+        lock(&LIVE).push(child.id());
         let stdin = child.stdin.take();
         let stdout = child.stdout.take();
         let shared = Arc::new(Shared::default());
@@ -261,15 +319,24 @@ impl Server {
         )
     }
 
-    /// Stops the server: closes stdin, waits the grace on the clock, then
-    /// kills and reaps the child. Idempotent: the child is taken, killed
-    /// and reaped exactly once, and [`Drop`] repeats only what is left.
-    /// `&self` because tools share the connection while [`Servers`] owns
-    /// the shutdown.
+    /// Stops the server: closes stdin, sends SIGTERM to its process, waits
+    /// on the clock until its output ends or the grace passes, then kills
+    /// and reaps the child (`docs/invocation.md`, "Shutdown"). Idempotent:
+    /// the child is taken, killed and reaped exactly once, and [`Drop`]
+    /// repeats only what is left. `&self` because tools share the
+    /// connection while [`Servers`] owns the shutdown.
     pub(crate) fn stop(&self) {
         if let Some(inner) = self.inner.as_ref() {
             inner.close_stdin();
-            inner.clock.sleep(GRACE);
+            // Under the child's lock: a reap takes the child under it, so
+            // the pid is unreaped while `kill` runs.
+            let child = lock(&inner.child);
+            if let Some(child) = child.as_ref() {
+                before_signal();
+                signal(&[child.id()], Signal::TERM);
+            }
+            drop(child);
+            inner.wait_gone();
         }
         self.reap();
     }
@@ -345,6 +412,7 @@ impl Server {
     /// Kills and reaps the child exactly once; later calls find none.
     fn reap(&self) {
         let child = self.inner.as_ref().and_then(|inner| {
+            before_lock("child");
             inner
                 .child
                 .lock()
@@ -356,6 +424,10 @@ impl Server {
             match child.kill() {
                 Ok(()) | Err(_) => {}
             }
+            // Unlisted before the reap frees the pid for reuse.
+            let pid = child.id();
+            before_lock("live");
+            lock(&LIVE).retain(|listed| *listed != pid);
             match child.wait() {
                 Ok(_) | Err(_) => {}
             }
@@ -405,6 +477,26 @@ impl Inner {
     /// Closes stdin by dropping the writer's sender.
     fn close_stdin(&self) {
         lock(&self.writer).take();
+    }
+
+    /// Waits until the server's output ends or [`GRACE`] passes on the
+    /// clock.
+    fn wait_gone(&self) {
+        let until = self
+            .clock
+            .now()
+            .checked_add(GRACE)
+            .unwrap_or(self.clock.now());
+        loop {
+            let (gone, seq) = {
+                let state = lock(&self.shared.inner);
+                (state.gone, state.seq)
+            };
+            if gone || self.clock.now() >= until {
+                return;
+            }
+            park(self.clock.as_ref(), &self.shared, &NoCancel, until, seq);
+        }
     }
 
     /// Sends `line` to the writer thread. A failed send means the thread

@@ -13,6 +13,7 @@ contract = { path = "../contract" }
 serde_json.workspace = true
 thiserror.workspace = true
 ring = "0.17"
+rustix.workspace = true
 
 [dev-dependencies]
 fakes = { path = "../fakes" }

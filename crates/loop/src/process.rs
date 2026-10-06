@@ -66,11 +66,19 @@ pub fn mcp_servers_started(
 /// Writes `fiber_exited` once the loop has stopped: the final message and
 /// the usage, folded from the session's log in `dir`, and `ran`'s error or
 /// else the last turn's. Returns the exit code it wrote: 1 when either
-/// failed (`docs/errors.md`, "What a caller gets"), otherwise 0.
-pub fn fiber_exited(log: &Log, dir: &Path, ran: Result<(), Failure>) -> Result<i32, Error> {
+/// failed (`docs/errors.md`, "What a caller gets"), otherwise 0. Under a
+/// shutdown, `signal` is its exit code: it is the code written, with no
+/// `error` and no final message, and `suspended_on` also names a request an
+/// earlier process left unresolved (`docs/invocation.md`, "Shutdown").
+pub fn fiber_exited(
+    log: &Log,
+    dir: &Path,
+    ran: Result<(), Failure>,
+    signal: Option<i32>,
+) -> Result<i32, Error> {
     let folded = log::read(dir)
         .map_err(Error::from)
-        .and_then(|lines| fold(&lines).map_err(Error::Unreadable));
+        .and_then(|lines| fold(&lines, signal.is_some()).map_err(Error::Unreadable));
     let (fold, unread) = match folded {
         Ok(fold) => (fold, None),
         Err(e) => (Fold::default(), Some(e)),
@@ -82,11 +90,14 @@ pub fn fiber_exited(log: &Log, dir: &Path, ran: Result<(), Failure>) -> Result<i
         provider: None,
     });
     let error = ran.err().or(unread).or(fold.error);
-    let exit_code = i32::from(error.is_some());
+    let (exit_code, error, final_message) = match signal {
+        Some(code) => (code, None, None),
+        None => (i32::from(error.is_some()), error, fold.final_message),
+    };
     let exited = Event::FiberExited(FiberExited {
         exit_code,
         usage: fold.ledger.usage(),
-        final_message: fold.final_message,
+        final_message,
         error,
         suspended_on: fold.suspended_on,
         questions: fold.questions,
@@ -106,7 +117,9 @@ struct Fold {
     suspended_on: Option<RequestId>,
 }
 
-fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
+/// Folds `lines`. With `keep_open`, the requests raised before the latest
+/// `fiber_started` and still unresolved stay open across it.
+fn fold(lines: &[Envelope], keep_open: bool) -> Result<Fold, serde_json::Error> {
     let mut fold = Fold::default();
     // Text parts of the open assistant message, joined in log order.
     // Every message takes them: messages never interleave, and a failed
@@ -123,7 +136,9 @@ fn fold(lines: &[Envelope]) -> Result<Fold, serde_json::Error> {
         if matches!(&event, Some(Event::FiberStarted(_))) {
             fold = Fold::default();
             text.clear();
-            open.clear();
+            if !keep_open {
+                open.clear();
+            }
             continue;
         }
         if let Some(Event::PermissionRequested(requested)) = &event {

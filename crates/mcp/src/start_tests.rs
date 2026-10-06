@@ -327,3 +327,54 @@ fn stopping_all_servers_leaves_no_running_child() {
     }
     panic!("waited {WITHIN:?} for pid {pid} to exit after the stop");
 }
+
+#[test]
+fn servers_stop_at_once() {
+    // Each server ignores SIGTERM and outlives the end of its input, so
+    // each stop waits out the grace: both are parked on the clock together.
+    let setups = [Setup::new(), Setup::new()];
+    let script = "trap '' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n";
+    let specs = setups
+        .iter()
+        .enumerate()
+        .map(|(index, setup)| {
+            setup.tools(&json!([{"name": format!("tool{index}")}]));
+            ServerSpec {
+                command: "/bin/bash".to_owned(),
+                args: vec![
+                    "-c".to_owned(),
+                    script.to_owned(),
+                    "lingering".to_owned(),
+                    fakes::mcp_fixture().display().to_string(),
+                    setup.dir.path().display().to_string(),
+                ],
+                ..setup.spec(&format!("s{index}"))
+            }
+        })
+        .collect();
+    let clock = setups[0].clock();
+    let workspace = setups[0].workspace();
+    let (opened, started) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        opened
+            .send(start(specs, &workspace, &clock, "0.0.0"))
+            .expect("collected");
+    });
+    let started = started
+        .recv_timeout(WITHIN)
+        .expect("both servers start within 5s");
+    assert_eq!(started.failed.len(), 0);
+    let grace = setups[0].fake.now() + Duration::from_millis(800);
+    let (done, stopped) = std::sync::mpsc::channel();
+    let servers = started.servers;
+    std::thread::spawn(move || {
+        servers.stop();
+        done.send(()).expect("collected");
+    });
+    assert!(
+        setups[0].fake.await_parked_count(grace, 2, WITHIN),
+        "both stops wait on the grace at once"
+    );
+    setups[0].fake.advance(Duration::from_millis(800));
+    stopped.recv_timeout(WITHIN).expect("the stop returned");
+}

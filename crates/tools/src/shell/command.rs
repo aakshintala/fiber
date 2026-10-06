@@ -17,6 +17,7 @@ use contract::jobs::{Input, Jobs};
 use contract::tool::Cancel;
 
 use super::background::{MoveAsk, Step, running_step, wait_deadline};
+use super::groups;
 use super::monitor::Feed;
 use super::output::{
     Errors, JobStream, OUTPUT_CAP, Shared, bump, lock, read_errors, read_output, stream_output,
@@ -165,6 +166,7 @@ pub(crate) fn execute(
     drop(cmd);
 
     let pgid = child.id();
+    groups::register(pgid);
     let shared = Arc::new(Shared::default());
     {
         let mut inner = lock(&shared.inner);
@@ -439,6 +441,7 @@ impl Moved {
             // `Stay` does not move. Finishing here keeps a bug from spinning.
             LoopEnd::Move(_) => {
                 let view = view(&progress.shared, cancel);
+                groups::finished(progress.pgid, progress.seen_empty);
                 finish(
                     &progress.shared,
                     progress.stop,
@@ -573,6 +576,7 @@ fn pump(
                 // passes with the pipe open or the group occupied.
                 let settled = view.eof && progress.seen_empty;
                 if settled || clock.now() >= until {
+                    groups::finished(progress.pgid, progress.seen_empty);
                     let mut finished = finish(
                         &progress.shared,
                         progress.stop,
@@ -749,7 +753,7 @@ fn after(clock: &dyn Clock, delay: Duration) -> Instant {
     now.checked_add(delay).unwrap_or(now)
 }
 
-fn group_alive(pgid: u32) -> bool {
+pub(super) fn group_alive(pgid: u32) -> bool {
     // Waiting on group 1 or 0 would loop: nothing of this run is there.
     if refused_group(pgid) {
         return false;
@@ -757,7 +761,7 @@ fn group_alive(pgid: u32) -> bool {
     pid(pgid).is_some_and(|pid| rustix::process::test_kill_process_group(pid).is_ok())
 }
 
-fn signal_group(pgid: u32, signal: Signal) {
+pub(super) fn signal_group(pgid: u32, signal: Signal) {
     if refused_group(pgid) {
         return;
     }

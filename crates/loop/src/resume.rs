@@ -18,6 +18,7 @@ use contract::{ActionId, Envelope, ErrorCode, TurnId};
 use log::Log;
 
 use crate::calls;
+use crate::cancel::Commit;
 use crate::retry::Retry;
 use crate::reviewer::{BlockLimits, NO_MODEL_MESSAGE, render_reviewed};
 use crate::{Error, Loop, Model, Permissions, Step};
@@ -352,13 +353,24 @@ impl Loop {
         self.deferred.extend(self.inbox.try_iter());
         self.ensure_preamble()?;
         self.cut_off = false;
-        self.cancel.arm();
         let turn = suspended.turn.clone();
-        self.append(
-            &Event::PermissionRequested(suspended.request.clone()),
-            &turn,
-            Some(&suspended.action),
-        )?;
+        // Armed with the re-raise: a shutdown before it leaves the request
+        // pending, so the next resume raises it again (`docs/invocation.md`,
+        // "Shutdown"). Once raised, the request's answer is the refusal
+        // below, already in hand: it stands, and a shutdown after the
+        // re-raise ends the turn `interrupted`.
+        let cancel = Arc::clone(&self.cancel);
+        let raised = cancel.commit(Commit::Arm, || {
+            self.append(
+                &Event::PermissionRequested(suspended.request.clone()),
+                &turn,
+                Some(&suspended.action),
+            )
+        });
+        let Some(raised) = raised else {
+            return Ok(None);
+        };
+        raised?;
         // debt: refuses a suspended request whatever answerable says; the
         // hub's resume raises it and waits for a reply (docs/invocation.md
         // "Lifecycle").
@@ -371,7 +383,7 @@ impl Loop {
             let completed = if *id == suspended.action {
                 denied.clone()
             } else {
-                crate::cancel::never_ran()
+                self.cancelled_before_ran()
             };
             self.append(&Event::ToolCallCompleted(*completed), &turn, Some(id))?;
         }

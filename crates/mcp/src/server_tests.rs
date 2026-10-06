@@ -780,3 +780,250 @@ impl std::io::BufRead for DataThenErr {
         self.done = true;
     }
 }
+
+/// A server that keeps running after its stdin ends: the fixture under a
+/// shell that loops once it returns. `term` is the shell's TERM trap:
+/// `exit 0` to end on SIGTERM, empty to ignore it.
+fn lingering(setup: &Setup, term: &str) -> super::OpenServer {
+    let script = format!("trap '{term}' TERM\n\"$1\" \"$2\"\nwhile :; do sleep 0.05; done\n");
+    let fixture = fakes::mcp_fixture().display().to_string();
+    let workspace = setup.dir.path().to_path_buf();
+    let clock = setup.clock();
+    let (done, result) = mpsc::channel();
+    thread::spawn(move || {
+        let outcome = Server::start(
+            "/bin/bash",
+            &[
+                "-c".to_owned(),
+                script,
+                "lingering".to_owned(),
+                fixture,
+                workspace.display().to_string(),
+            ],
+            &BTreeMap::new(),
+            &workspace,
+            &clock,
+            Duration::from_secs(5),
+            "0.0.0",
+        );
+        done.send(outcome).expect("collected");
+    });
+    result
+        .recv_timeout(WITHIN)
+        .expect("the server starts within 5s")
+        .expect("the lingering server starts")
+}
+
+/// Runs `stop` on its own thread; the receiver hears when it returns.
+fn stopping(server: super::Server) -> mpsc::Receiver<()> {
+    let (done, stopped) = mpsc::channel();
+    thread::spawn(move || {
+        server.stop();
+        done.send(()).expect("collected");
+    });
+    stopped
+}
+
+#[test]
+fn a_pid_of_one_or_less_is_refused() {
+    assert!(super::refused(0));
+    assert!(super::refused(1));
+    assert!(!super::refused(2));
+}
+
+#[test]
+fn a_server_that_ignores_end_of_input_stops_on_sigterm_before_the_grace() {
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let opened = lingering(&setup, "exit 0");
+    let stopped = stopping(opened.server);
+    // The clock never moves: only the SIGTERM ends the server.
+    stopped
+        .recv_timeout(WITHIN)
+        .expect("the stop returned without the grace passing");
+}
+
+#[test]
+fn kill_every_server_kills_one_that_ignores_sigterm() {
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let opened = lingering(&setup, "");
+    let grace = setup.fake.now() + super::GRACE;
+    let stopped = stopping(opened.server);
+    assert!(
+        setup.fake.await_parked(grace, WITHIN),
+        "the stop waits out the grace on a server ignoring SIGTERM"
+    );
+    super::kill_every_server();
+    // Killed, its output ends: the stop returns with the clock unmoved.
+    stopped
+        .recv_timeout(WITHIN)
+        .expect("the stop returned once the server was killed");
+}
+
+#[test]
+fn a_server_is_listed_until_its_reap() {
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let opened = setup.start(Duration::from_secs(5));
+    assert_eq!(super::lock(&super::LIVE).len(), 1);
+    stopping(opened.server)
+        .recv_timeout(WITHIN)
+        .expect("the stop returned");
+    assert!(super::lock(&super::LIVE).is_empty());
+}
+
+/// What [`super::before_signal`] runs in this test process, if anything.
+static BEFORE_SIGNAL: std::sync::Mutex<Option<std::sync::Arc<dyn Fn() + Send + Sync>>> =
+    std::sync::Mutex::new(None);
+
+pub(super) fn before_signal() {
+    let hook = super::lock(&BEFORE_SIGNAL).clone();
+    if let Some(hook) = hook {
+        hook();
+    }
+}
+
+/// Where [`super::before_lock`] reports, if anywhere.
+static BEFORE_LOCK: std::sync::Mutex<Option<mpsc::Sender<&'static str>>> =
+    std::sync::Mutex::new(None);
+
+pub(super) fn before_lock(which: &'static str) {
+    if let Some(tx) = super::lock(&BEFORE_LOCK).as_ref() {
+        tx.send(which).unwrap_or(());
+    }
+}
+
+/// Reports each lock a reap is about to take.
+fn watch_reap_locks() -> mpsc::Receiver<&'static str> {
+    let (tx, rx) = mpsc::channel();
+    *super::lock(&BEFORE_LOCK) = Some(tx);
+    rx
+}
+
+/// Waits, at most [`WITHIN`], until a reap reports it is about to take
+/// `which`.
+fn await_lock(locks: &mpsc::Receiver<&'static str>, which: &str) {
+    loop {
+        let reached = locks
+            .recv_timeout(WITHIN)
+            .unwrap_or_else(|_| panic!("the reap reached the {which} lock within 5s"));
+        if reached == which {
+            return;
+        }
+    }
+}
+
+/// Pauses the next signaller at [`super::before_signal`]: `entered` hears
+/// it arrive, and it goes on once `go` is sent.
+fn pause_signallers() -> (mpsc::Receiver<()>, mpsc::Sender<()>) {
+    let (entered_tx, entered) = mpsc::channel();
+    let (go, go_rx) = mpsc::channel::<()>();
+    let entered_tx = std::sync::Mutex::new(entered_tx);
+    let go_rx = std::sync::Mutex::new(go_rx);
+    *super::lock(&BEFORE_SIGNAL) = Some(std::sync::Arc::new(move || {
+        super::lock(&entered_tx)
+            .send(())
+            .expect("the test is waiting");
+        super::lock(&go_rx)
+            .recv_timeout(WITHIN)
+            .expect("the test let the signaller go");
+    }));
+    (entered, go)
+}
+
+/// Waits, at most [`WITHIN`], until the server's output has ended.
+fn await_gone(shared: &super::Shared) {
+    let state = super::lock(&shared.inner);
+    let (state, _) = shared
+        .cv
+        .wait_timeout_while(state, WITHIN, |state| !state.gone)
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    assert!(state.gone, "the server's output ended within 5s");
+}
+
+#[test]
+fn kill_every_server_holds_its_pids_unreaped_while_it_signals() {
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    setup.result("hang", "hang");
+    let opened = setup.start(Duration::from_secs(5));
+    let pid = setup.pid();
+    let shared = std::sync::Arc::clone(&opened.server.inner.as_ref().expect("running").shared);
+    let (entered, go) = pause_signallers();
+    let (killed_tx, killed) = mpsc::channel();
+    thread::spawn(move || {
+        super::kill_every_server();
+        killed_tx.send(()).expect("collected");
+    });
+    entered
+        .recv_timeout(WITHIN)
+        .expect("kill_every_server reached its signal");
+    // A reap races the paused signaller: it stops the server, but cannot
+    // reap it while the signaller holds the list.
+    let locks = watch_reap_locks();
+    let (reaped_tx, reaped) = mpsc::channel();
+    thread::spawn(move || {
+        drop(opened.server);
+        reaped_tx.send(()).expect("collected");
+    });
+    await_lock(&locks, "live");
+    await_gone(&shared);
+    assert!(
+        fakes::kill_pid(pid, "0").expect("probe"),
+        "the pid was reaped while kill_every_server held it"
+    );
+    assert!(
+        reaped.try_recv().is_err(),
+        "the reap finished under the signaller"
+    );
+    go.send(()).expect("the signaller waits");
+    killed
+        .recv_timeout(WITHIN)
+        .expect("kill_every_server returned");
+    reaped.recv_timeout(WITHIN).expect("the reap finished");
+    assert!(!super::lock(&super::LIVE).contains(&pid));
+}
+
+#[test]
+fn stop_holds_the_child_unreaped_while_it_sends_sigterm() {
+    let setup = Setup::tools(&json!([{"name": "hang"}]));
+    let opened = lingering(&setup, "exit 0");
+    let server = std::sync::Arc::new(opened.server);
+    let shared = std::sync::Arc::clone(&server.inner.as_ref().expect("running").shared);
+    let pid = super::lock(&server.inner.as_ref().expect("running").child)
+        .as_ref()
+        .expect("unreaped")
+        .id();
+    let (entered, go) = pause_signallers();
+    let stopping = std::sync::Arc::clone(&server);
+    let (stopped_tx, stopped) = mpsc::channel();
+    thread::spawn(move || {
+        stopping.stop();
+        stopped_tx.send(()).expect("collected");
+    });
+    entered
+        .recv_timeout(WITHIN)
+        .expect("stop reached its SIGTERM");
+    // A reap races the paused SIGTERM: it cannot take the child while stop
+    // holds it, so the server is neither killed nor reaped yet.
+    let locks = watch_reap_locks();
+    let reaping = std::sync::Arc::clone(&server);
+    let (reaped_tx, reaped) = mpsc::channel();
+    thread::spawn(move || {
+        reaping.reap();
+        reaped_tx.send(()).expect("collected");
+    });
+    await_lock(&locks, "child");
+    assert!(
+        fakes::kill_pid(pid, "0").expect("probe"),
+        "the server was reaped while stop held it"
+    );
+    assert!(
+        reaped.try_recv().is_err(),
+        "the reap finished under the SIGTERM"
+    );
+    assert!(!super::lock(&shared.inner).gone, "the server still runs");
+    go.send(()).expect("stop waits");
+    // The SIGTERM ends the server: the clock never moves.
+    stopped.recv_timeout(WITHIN).expect("stop returned");
+    reaped.recv_timeout(WITHIN).expect("the reap finished");
+    assert!(!super::lock(&super::LIVE).contains(&pid));
+}

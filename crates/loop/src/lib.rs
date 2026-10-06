@@ -12,6 +12,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 
+pub(crate) use completion::Step;
 use contract::events::{
     AssistantMessageCompleted, CacheLifetime, Empty, Event, Grant, MessageOutcome, PreambleReason,
     SessionStarted, ToolReplaced, TurnCompleted, TurnOutcome, TurnStarted, UsageRecorded,
@@ -46,6 +47,7 @@ mod resume;
 mod retry;
 mod reviewer;
 mod schema;
+mod shutdown;
 mod skill_header;
 mod skills;
 mod status;
@@ -378,6 +380,7 @@ impl Loop {
                 Err(e) => break Err(e),
             }
         };
+        let result = self.settled(result);
         // `fiber_exited` is the last line a process writes: no status
         // follows it.
         if let Some(status) = status {
@@ -392,6 +395,10 @@ impl Loop {
     /// Returns how the turn ended, or `None` once `close` was taken while
     /// idle or every sender of the inbox is gone.
     pub fn turn(&mut self) -> Result<Option<TurnOutcome>, Error> {
+        // A shutdown starts no turn and finishes none.
+        if self.shutting_down() {
+            return Ok(None);
+        }
         if let Some(pending) = self.suspended.take() {
             return self.finish_suspended(pending);
         }
@@ -411,15 +418,21 @@ impl Loop {
         }
         let turn = TurnId(mint("t_"));
         self.cut_off = false;
-        self.cancel.arm();
         let input = self.turn_input(started.pieces);
         let person = input
             .iter()
             .any(|item| matches!(item, contract::events::InputItem::Handoff { .. }));
         self.handoff.new_turn(person);
-        self.append(&Event::TurnStarted(TurnStarted { input }), &turn, None)?;
+        // Armed with `turn_started`: a shutdown lands before both or after.
+        let cancel = Arc::clone(&self.cancel);
+        let event = Event::TurnStarted(TurnStarted { input });
+        let Some(written) = cancel.commit(cancel::Commit::Arm, || self.append(&event, &turn, None))
+        else {
+            return Ok(None);
+        };
+        written?;
         // A prompt is accepted once its `turn_started` is written. A log
-        // error above drops it uncalled.
+        // error or a shutdown above drops it uncalled.
         if let Some(ack) = started.prompt {
             inbox::accept(ack);
         }
@@ -522,10 +535,14 @@ impl Loop {
         // A cancel that landed ends the turn before anything is sent: no
         // `step_started`, no request, and queued steers stay queued for
         // the next turn.
-        if self.turn_cancelled() {
+        let cancel = Arc::clone(&self.cancel);
+        let step = cancel.commit(cancel::Commit::Step, || {
+            self.append(&Event::StepStarted(Empty {}), turn, None)
+        });
+        let Some(written) = step else {
             return Ok(Step::Ended(ended(TurnOutcome::Interrupted, None)));
-        }
-        self.append(&Event::StepStarted(Empty {}), turn, None)?;
+        };
+        written?;
         // A jobs notice comes first, before the drain's `steering_queue`.
         self.write_pending(turn)?;
         // Queued first: a steer held during an approval, or taken by the
@@ -762,35 +779,4 @@ impl Loop {
         self.handoff_from_tools(turn)?;
         Ok(Step::Next)
     }
-
-    /// Writes `event` and renders it into the conversation.
-    fn append(
-        &mut self,
-        event: &Event,
-        turn: &TurnId,
-        action: Option<&ActionId>,
-    ) -> Result<(), Error> {
-        util::write(
-            &self.log,
-            &mut self.conversation,
-            &mut self.reviewed,
-            &self.model.reference,
-            event,
-            Some(turn),
-            action,
-            &mut self.changes.had,
-            &mut self.handoff.carry,
-        )
-    }
-}
-
-/// How a step ended.
-pub(crate) enum Step {
-    /// The reply called tools: take the next step.
-    Next,
-    /// The reply called no tool: the turn completes unless something is
-    /// waiting.
-    Replied,
-    /// The turn ended.
-    Ended(TurnCompleted),
 }

@@ -1026,3 +1026,249 @@ fn a_kept_steer_with_a_clean_inbox_starts_the_next_turn_without_blocking() {
         .collect();
     assert_eq!(input, ["next"]);
 }
+
+#[test]
+fn a_shutdown_mid_stream_ends_the_turn_interrupted_and_starts_no_other() {
+    let (mut session, blocking) = Session::blocking(vec![steer("next")]);
+    session.inbox.send(delivery("hi")).unwrap();
+    let cancel = Arc::clone(&session.cancel);
+    std::thread::scope(|scope| {
+        let turn = scope.spawn(|| session.turn());
+        blocking.wait_started(DEADLINE);
+        cancel.shutdown(143);
+        assert_eq!(turn.join().unwrap(), Some(TurnOutcome::Interrupted));
+    });
+    let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "turn_completed",
+        ]
+    );
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+    // The steer that arrived during the call starts no turn.
+    assert_eq!(session.turn(), None);
+    let written = log::read(&session.dir).unwrap();
+    assert_eq!(written.last().unwrap().kind, "turn_completed");
+}
+
+#[test]
+fn a_shutdown_during_an_approval_wait_leaves_the_request_pending() {
+    let ask = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("shell", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![ask.clone() as Arc<dyn contract::tool::Tool>],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.inbox.send(delivery("hi")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let asked = support::on_request(&session, move |_| {
+        // As the door's stopper does: the shutdown, then the wake.
+        cancel.shutdown(143);
+        inbox.send(Delivery::Cancelled).unwrap();
+    });
+    // The wait ends as the idle delay ends it: no turn outcome.
+    assert_eq!(session.turn(), None);
+    asked.join().unwrap();
+    let lines: Vec<contract::Envelope> = log::read(&session.dir)
+        .unwrap()
+        .into_iter()
+        .filter(contract::Envelope::is_durable)
+        .collect();
+    let kinds = kinds(&lines);
+    assert_eq!(kinds.last(), Some(&"permission_requested"));
+    assert!(!kinds.contains(&"permission_resolved"));
+    assert!(!kinds.contains(&"tool_call_completed"));
+    assert!(!kinds.contains(&"turn_completed"));
+    assert!(ask.ran.lock().unwrap().is_empty());
+    let request_id = lines.last().unwrap().payload["request_id"].clone();
+
+    let code = r#loop::fiber_exited(&session.log, &session.dir, Ok(()), Some(143)).unwrap();
+    assert_eq!(code, 143);
+    let exited = log::read(&session.dir).unwrap().pop().unwrap();
+    assert_eq!(exited.payload["suspended_on"], request_id);
+    assert_eq!(exited.payload["exit_code"], 143);
+}
+
+/// An allow of `request_id` whose ack reports on `answers` whether it was
+/// accepted, then runs `then`.
+fn allow_then(
+    request_id: contract::RequestId,
+    answers: std::sync::mpsc::Sender<bool>,
+    then: impl FnOnce() + Send + 'static,
+) -> Delivery {
+    Delivery::Reply(
+        Reply {
+            request_id,
+            answer: ReplyAnswer::Approval {
+                decision: Decision::Allow,
+                feedback: None,
+                remember: None,
+            },
+        },
+        Ack(Box::new(move |answer| {
+            answers.send(answer.is_ok()).unwrap();
+            then();
+        })),
+    )
+}
+
+#[test]
+fn a_reply_taken_before_the_shutdown_stands_and_the_call_never_runs() {
+    let ask = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("shell", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![ask.clone() as Arc<dyn contract::tool::Tool>],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.inbox.send(delivery("hi")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let (answers, answered) = std::sync::mpsc::channel();
+    let asked = support::on_request(&session, move |request_id| {
+        // The shutdown lands as the reply is applied: after the wait's one
+        // read of the signal found it live.
+        inbox
+            .send(allow_then(request_id, answers, move || {
+                cancel.shutdown(143);
+            }))
+            .unwrap();
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    asked.join().unwrap();
+    assert!(
+        answered.recv_timeout(DEADLINE).expect("the reply's answer"),
+        "the reply was accepted"
+    );
+    let lines = session.lines();
+    let resolved: Vec<&contract::Envelope> = lines
+        .iter()
+        .filter(|l| l.kind == "permission_resolved")
+        .collect();
+    assert_eq!(resolved.len(), 1);
+    assert_eq!(resolved[0].payload["decision"], "allow");
+    assert_eq!(resolved[0].payload["decided_by"], "person");
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "cancelled");
+    assert_eq!(text(done[0]), "");
+    assert_eq!(done[0].payload.get("artifact"), None);
+    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(ask.ran.lock().unwrap().is_empty());
+    assert_eq!(lines.last().unwrap().kind, "turn_completed");
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+
+    let code = r#loop::fiber_exited(&session.log, &session.dir, Ok(()), Some(143)).unwrap();
+    assert_eq!(code, 143);
+    let exited = log::read(&session.dir).unwrap().pop().unwrap();
+    assert_eq!(exited.kind, "fiber_exited");
+    assert!(exited.payload.get("suspended_on").is_none());
+}
+
+#[test]
+fn a_reply_taken_before_a_cancel_keeps_its_text() {
+    let ask = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("shell", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![ask.clone() as Arc<dyn contract::tool::Tool>],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.inbox.send(delivery("hi")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let (answers, answered) = std::sync::mpsc::channel();
+    let asked = support::on_request(&session, move |request_id| {
+        // An ordinary cancel lands as the reply is applied: after the
+        // wait's one read of the signal found it live.
+        inbox
+            .send(allow_then(request_id, answers, move || {
+                assert!(cancel.cancel());
+            }))
+            .unwrap();
+    });
+    assert_eq!(session.turn(), Some(TurnOutcome::Interrupted));
+    asked.join().unwrap();
+    assert!(
+        answered.recv_timeout(DEADLINE).expect("the reply's answer"),
+        "the reply was accepted"
+    );
+    let lines = session.lines();
+    let done = completed(&lines);
+    assert_eq!(done.len(), 1);
+    assert_eq!(done[0].payload["status"], "cancelled");
+    assert_eq!(text(done[0]), "Cancelled before it ran.");
+    assert!(lines.iter().all(|l| l.kind != "tool_call_started"));
+    assert!(ask.ran.lock().unwrap().is_empty());
+    assert_eq!(lines.last().unwrap().payload["outcome"], "interrupted");
+}
+
+#[test]
+fn a_reply_sent_after_the_shutdown_is_never_applied() {
+    let ask = shell("npm publish");
+    let mut session = Session::with_tools(
+        vec![
+            support::calls_reply("", &[("shell", paris())]),
+            fakes::Scripted::text("Done."),
+        ],
+        None,
+        vec![ask.clone() as Arc<dyn contract::tool::Tool>],
+    );
+    session
+        .rules
+        .set(standing("shell", RuleDecision::Ask, "npm publish"));
+    session.inbox.send(delivery("hi")).unwrap();
+    let inbox = session.inbox.clone();
+    let cancel = Arc::clone(&session.cancel);
+    let (answers, answered) = std::sync::mpsc::channel();
+    let asked = support::on_request(&session, move |request_id| {
+        // As the door's stopper does, then the person's reply, last.
+        cancel.shutdown(143);
+        inbox.send(Delivery::Cancelled).unwrap();
+        inbox.send(allow_then(request_id, answers, || {})).unwrap();
+    });
+    assert_eq!(session.turn(), None);
+    asked.join().unwrap();
+    // The settle may reject the reply `stale_request`; nothing accepts it.
+    assert_ne!(answered.try_recv(), Ok(true), "the reply was not accepted");
+    let lines: Vec<contract::Envelope> = log::read(&session.dir)
+        .unwrap()
+        .into_iter()
+        .filter(contract::Envelope::is_durable)
+        .collect();
+    let kinds = kinds(&lines);
+    assert_eq!(kinds.last(), Some(&"permission_requested"));
+    assert!(!kinds.contains(&"permission_resolved"));
+    assert!(!kinds.contains(&"turn_completed"));
+    assert!(ask.ran.lock().unwrap().is_empty());
+    let request_id = lines.last().unwrap().payload["request_id"].clone();
+
+    let code = r#loop::fiber_exited(&session.log, &session.dir, Ok(()), Some(143)).unwrap();
+    assert_eq!(code, 143);
+    let exited = log::read(&session.dir).unwrap().pop().unwrap();
+    assert_eq!(exited.payload["suspended_on"], request_id);
+}

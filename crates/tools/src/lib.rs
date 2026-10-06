@@ -18,7 +18,7 @@ pub use files::{Files, PathGuard, PathLocks};
 pub use handoff::Handoff;
 pub use read::Read;
 pub use search::{find_main, grep_main};
-pub use shell::Shell;
+pub use shell::{Shell, kill_every_group};
 pub use web_fetch::WebFetch;
 pub use web_search::HostedSearch;
 pub use write::Write;

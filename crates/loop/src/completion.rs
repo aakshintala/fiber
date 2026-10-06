@@ -2,7 +2,9 @@
 //! is told when a call never ran, was denied or failed before it ran, and
 //! the `permission_resolved` line behind each.
 
-use contract::events::{CallStatus, DecidedBy, Decision, PermissionResolved, ToolCallCompleted};
+use contract::events::{
+    CallStatus, DecidedBy, Decision, PermissionResolved, ToolCallCompleted, TurnCompleted,
+};
 use contract::shapes::{ContentPart, Failure};
 use contract::{ErrorCode, RequestId};
 
@@ -83,4 +85,15 @@ pub(crate) fn completed(text: String, error: Option<Failure>) -> ToolCallComplet
         changed_by: None,
         provider_item: None,
     }
+}
+
+/// How a step ended.
+pub(crate) enum Step {
+    /// The reply called tools: take the next step.
+    Next,
+    /// The reply called no tool: the turn completes unless something is
+    /// waiting.
+    Replied,
+    /// The turn ended.
+    Ended(TurnCompleted),
 }

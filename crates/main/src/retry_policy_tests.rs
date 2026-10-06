@@ -51,7 +51,7 @@ fn failure(code: contract::ErrorCode) -> contract::shapes::Failure {
 #[test]
 fn stop_and_fail_returns_usage_as_2() {
     assert_eq!(
-        super::stop_and_fail(empty_servers(), failure(contract::ErrorCode::Usage)),
+        crate::stop_and_fail(empty_servers(), failure(contract::ErrorCode::Usage)),
         2
     );
 }
@@ -59,7 +59,7 @@ fn stop_and_fail_returns_usage_as_2() {
 #[test]
 fn stop_and_fail_returns_other_failures_as_1() {
     assert_eq!(
-        super::stop_and_fail(
+        crate::stop_and_fail(
             empty_servers(),
             failure(contract::ErrorCode::McpServerUnavailable)
         ),

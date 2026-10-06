@@ -1188,3 +1188,217 @@ fn run_sends_the_jobs_ends_to_the_loops_inbox() {
         .unwrap();
     close_within(opened.session, opened.log);
 }
+
+/// A driver shell that reports its start, then its cancel, and returns only
+/// once the test releases it.
+struct HeldShell {
+    entered: Mutex<Option<mpsc::Sender<()>>>,
+    cancelled: Mutex<Option<mpsc::Sender<()>>>,
+    release: Mutex<Option<mpsc::Receiver<()>>>,
+}
+
+impl Tool for HeldShell {
+    fn definition(&self) -> ToolDefinition {
+        ToolDefinition {
+            name: "shell".to_owned(),
+            description: "test".to_owned(),
+            input_schema: Value::Object(Map::new()),
+            deferred: false,
+            hosted: None,
+        }
+    }
+
+    fn effects(&self, _arguments: &Map<String, Value>) -> Result<Effects, EffectsError> {
+        Err(EffectsError::Tool("unused".into()))
+    }
+
+    fn run(
+        &self,
+        _arguments: &Map<String, Value>,
+        cancel: &dyn Cancel,
+        _emit: &dyn Emit,
+    ) -> Output {
+        let flag = Arc::new(LateFlag {
+            ready: Mutex::new(false),
+            cv: Condvar::new(),
+        });
+        let wake: Arc<dyn Wake> = flag.clone();
+        cancel.subscribe(Arc::downgrade(&wake));
+        if let Some(sender) = lock(&self.entered).take() {
+            sender.send(()).expect("the test is waiting");
+        }
+        let guard = lock(&flag.ready);
+        let _wait = flag
+            .cv
+            .wait_timeout_while(guard, SHELL_LIMIT, |_| !cancel.is_cancelled());
+        if cancel.is_cancelled()
+            && let Some(sender) = lock(&self.cancelled).take()
+        {
+            sender.send(()).expect("the test is waiting");
+        }
+        if let Some(release) = lock(&self.release).take() {
+            let _released = release.recv_timeout(SHELL_LIMIT);
+        }
+        Output {
+            content: vec![ContentPart::Text {
+                text: "stopped".to_owned(),
+            }],
+            process: Some(Process {
+                exit_code: None,
+                signal: None,
+                timed_out: false,
+            }),
+            ..Output::default()
+        }
+    }
+}
+
+/// A session with a [`HeldShell`] running one driver shell on a `full`
+/// client. Returns the client, and the receivers that hear the shell's
+/// cancel, and the sender that releases it.
+struct Running {
+    opened: Opened,
+    client: Client,
+    cancelled: mpsc::Receiver<()>,
+    release: mpsc::Sender<()>,
+}
+
+fn running_shell(check: impl FnOnce(&mpsc::Receiver<Delivery>, &Session) + Send) -> Running {
+    let opened = open();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (cancelled_tx, cancelled) = mpsc::channel();
+    let (release, release_rx) = mpsc::channel();
+    opened.session.shell(Arc::new(HeldShell {
+        entered: Mutex::new(Some(entered_tx)),
+        cancelled: Mutex::new(Some(cancelled_tx)),
+        release: Mutex::new(Some(release_rx)),
+    }));
+    let socket = opened.socket.clone();
+    let mut connected = None;
+    let session = &opened.session;
+    session
+        .run(Vec::new(), Arc::new(|| false), |inbox| {
+            let client = Client::connect(&socket).unwrap();
+            subscribe(&client, "c_full", "full");
+            let _ack = recv(&client);
+            client
+                .send(r#"{"id":"c_shell","command":"shell","args":{"command":"sleep 60"}}"#)
+                .unwrap();
+            entered_rx
+                .recv_timeout(DEADLINE)
+                .expect("the driver shell started");
+            check(&inbox, session);
+            connected = Some(client);
+            Ok(())
+        })
+        .unwrap();
+    Running {
+        opened,
+        client: connected.expect("the client connected"),
+        cancelled,
+        release,
+    }
+}
+
+#[test]
+fn the_stopper_cancels_a_running_driver_shell_and_wakes_the_loop() {
+    let running = running_shell(|inbox, session| {
+        (session.stopper())();
+        let delivery = inbox
+            .recv_timeout(DEADLINE)
+            .expect("the stopper wakes the inbox");
+        assert!(matches!(delivery, Delivery::Cancelled));
+    });
+    running
+        .cancelled
+        .recv_timeout(DEADLINE)
+        .expect("the driver shell saw its cancel");
+    running.release.send(()).unwrap();
+    drop(running.client);
+    close_within(running.opened.session, running.opened.log);
+}
+
+#[test]
+fn the_stopper_after_the_inbox_is_gone_still_cancels_later_shells() {
+    let opened = open();
+    (opened.session.stopper())();
+    assert!(super::lock(&opened.session.gate.shells).stopped);
+    close_within(opened.session, opened.log);
+}
+
+#[test]
+fn quiesce_cancels_a_running_driver_shell_and_waits_for_it() {
+    let running = running_shell(|_, _| {});
+    let session = running.opened.session;
+    let (done_tx, done) = mpsc::channel();
+    let gate = Arc::clone(&session.gate);
+    let quiescing = thread::spawn(move || {
+        session.quiesce();
+        done_tx.send(()).unwrap();
+        session
+    });
+    running
+        .cancelled
+        .recv_timeout(DEADLINE)
+        .expect("quiesce cancelled the driver shell");
+    // The shell is cancelled but still running: quiesce is still waiting.
+    assert!(!super::lock(&gate.shells).running.is_empty());
+    assert!(
+        done.try_recv().is_err(),
+        "quiesce returned before the shell ended"
+    );
+    running.release.send(()).unwrap();
+    done.recv_timeout(DEADLINE)
+        .expect("quiesce returned once the shell ended");
+    let session = quiescing.join().unwrap();
+    assert!(super::lock(&gate.shells).running.is_empty());
+    drop(running.client);
+    close_within(session, running.opened.log);
+}
+
+#[test]
+fn after_quiesce_a_client_leaving_writes_no_clients_line() {
+    let opened = open();
+    let socket = opened.socket.clone();
+    let gate = Arc::clone(&opened.session.gate);
+    let mut connected = None;
+    let first = socket.clone();
+    opened
+        .session
+        .run(Vec::new(), Arc::new(|| false), |_| {
+            let client = Client::connect(&first).unwrap();
+            subscribe(&client, "c_full", "full");
+            let _ack = recv(&client);
+            connected = Some(client);
+            Ok(())
+        })
+        .unwrap();
+    // The watcher blocks without a deadline, so its lines cross a channel
+    // and the read below carries the deadline.
+    let mut watcher = opened.log.watch();
+    let (forward, lines) = mpsc::channel();
+    thread::spawn(move || {
+        while let Ok(Some(line)) = watcher.recv() {
+            if forward.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    opened.session.quiesce();
+    drop(connected);
+    wait_idle(&gate);
+    // A client attaching after quiesce writes none either.
+    let late = Client::connect(&socket).unwrap();
+    subscribe(&late, "c_late", "full");
+    let _ack = recv(&late);
+    opened.log.append(&notice(), None, None).unwrap();
+    loop {
+        let line = lines.recv_timeout(DEADLINE).expect("the notice arrives");
+        assert_ne!(line.kind, "clients", "a clients line followed quiesce");
+        if line.kind == "notice" {
+            break;
+        }
+    }
+    drop(late);
+    close_within(opened.session, opened.log);
+}
