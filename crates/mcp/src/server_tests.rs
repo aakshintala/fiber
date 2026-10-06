@@ -115,17 +115,16 @@ fn gone_call(fake: &FakeClock, server: &Server, timeout: Duration) -> Result<Val
             let call = server.call("hang", &json!({}), timeout, &fakes::CancelToken::new());
             done.send(call).expect("collected");
         });
-        // Either the answer is already here (the server was gone before
-        // the call, so it never parked) or the call is parked on its
-        // deadline (then, and only then, the clock moves). Polling bounds
-        // neither: a late answer or park is seen on a later pass, and only
-        // a full `WITHIN` of neither fails the test naming the wait.
+        // Either the answer arrives without a park (the server was gone
+        // before the call) or the call is parked on its deadline (then,
+        // and only then, the clock moves, once). Polling bounds neither: a
+        // late answer or park is seen on a later pass, and only a full
+        // `WITHIN` of neither fails the test naming the wait.
+        let mut advanced = false;
         for _ in 0..POLLS {
-            if let Ok(answer) = result.try_recv() {
-                return answer;
-            }
-            if fake.parked().contains(&Some(deadline)) {
+            if !advanced && fake.parked().contains(&Some(deadline)) {
                 fake.advance(timeout);
+                advanced = true;
             }
             if let Ok(answer) = result.recv_timeout(POLL) {
                 return answer;
