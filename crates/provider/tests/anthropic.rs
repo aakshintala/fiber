@@ -1923,3 +1923,106 @@ fn a_cache_marker_on_a_hosted_block_is_the_only_key_added() {
             "input": {"query": "rust 1.90"}})
     );
 }
+
+/// One live hosted search on `claude-sonnet-5-5`, recorded with the `record`
+/// jig from the request Fiber builds for a model whose `web_search` is
+/// `web_search_20250305`.
+fn web_search_recording() -> Vec<u8> {
+    std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/recordings/anthropic-web-search.sse"),
+    )
+    .unwrap()
+}
+
+#[test]
+fn the_recorded_hosted_search_runs_through_the_seam_and_replays_its_blocks() {
+    let bytes = web_search_recording();
+    let server = ProviderServer::start([Response::stream(bytes), completed_reply()]).unwrap();
+    let provider: Box<dyn Provider> = Box::new(Messages::new(endpoint(&server)));
+    let (reply, _) = run(provider.call(&request()));
+    let reply = reply.unwrap();
+    assert_eq!(reply.finish, Finish::Completed);
+    assert_eq!(reply.web_searches, Some(1));
+
+    let hosted: Vec<_> = reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Hosted(hosted) => Some(hosted),
+            ReplyAction::Text(_) | ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) => None,
+        })
+        .collect();
+    let [hosted] = hosted.as_slice() else {
+        panic!("expected one hosted call, got {:?}", reply.actions);
+    };
+    let call_item = hosted.call.provider_item.as_ref().unwrap();
+    assert_eq!(hosted.call.name, "web_search");
+    assert_eq!(call_item["type"], "server_tool_use");
+    assert_eq!(
+        hosted.call.provider_id.as_ref().unwrap().0,
+        call_item["id"].as_str().unwrap()
+    );
+    assert!(hosted.call.arguments["query"].is_string());
+    assert_eq!(call_item["input"], hosted.call.arguments);
+
+    let result_item = hosted.completed.provider_item.as_ref().unwrap();
+    assert_eq!(result_item["type"], "web_search_tool_result");
+    assert_eq!(result_item["tool_use_id"], call_item["id"]);
+    let urls: Vec<&str> = result_item["content"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|result| result["url"].as_str().unwrap())
+        .collect();
+    assert!(!urls.is_empty());
+    assert_eq!(
+        hosted.completed.status,
+        contract::events::CallStatus::Completed
+    );
+    assert_eq!(
+        hosted.completed.content,
+        vec![contract::shapes::ContentPart::Text {
+            text: urls.join("\n")
+        }]
+    );
+
+    let cited: Vec<&Value> = reply
+        .actions
+        .iter()
+        .filter_map(|action| match action {
+            ReplyAction::Text(part) => part.provider_item.as_ref(),
+            ReplyAction::Reasoning(_) | ReplyAction::ToolCall(_) | ReplyAction::Hosted(_) => None,
+        })
+        .collect();
+    assert!(!cited.is_empty(), "the answer cites the search");
+    assert!(
+        cited
+            .iter()
+            .all(|item| item["citations"][0]["encrypted_index"].is_string())
+    );
+
+    // The next request to the same model sends both raw blocks back
+    // unchanged, in order, in the assistant message.
+    let reference = "anthropic/claude-sonnet-5-5".to_owned();
+    let mut next = request();
+    next.conversation.extend([
+        Input::Assistant {
+            model: reference.clone(),
+            text: String::new(),
+            provider_item: Some(call_item.clone()),
+        },
+        Input::Assistant {
+            model: reference,
+            text: String::new(),
+            provider_item: Some(result_item.clone()),
+        },
+        Input::User {
+            text: "Thanks.".into(),
+        },
+    ]);
+    let (second, _) = run(provider.call(&next));
+    second.unwrap();
+    let sent = sent_body(&server, 1);
+    let blocks = sent["messages"][1]["content"].as_array().unwrap();
+    assert_eq!(blocks, &vec![call_item.clone(), result_item.clone()]);
+}
