@@ -12,6 +12,7 @@ mod builtin;
 mod cli;
 mod clock;
 mod cost;
+mod crash;
 mod credential;
 mod handoff;
 mod late_emit;
@@ -87,6 +88,13 @@ fn run() -> i32 {
     // Help and version print before anything reads the home, configuration,
     // credentials, or stdin.
     let clock: Arc<dyn contract::clock::Clock> = Arc::new(clock::System);
+    // First: every process writes one crash report and aborts on a panic
+    // (`docs/code-quality.md`, "What a panic leaves").
+    crash::install(
+        std::env::var_os("FIBER_HOME"),
+        std::env::var_os("HOME"),
+        Arc::clone(&clock),
+    );
     match cli::parse() {
         cli::Invocation::Print(error) => {
             // A closed stdout leaves nobody to tell, as `fiber extension list` does.
@@ -371,6 +379,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         Err(e) => return ask_failed(e),
     };
     let id = SessionId(doors::mint("s_"));
+    crash::attach(&id);
     let dir = parts.sessions.join(&id.0);
     // The session directory's log: the opening message's environment
     // names it.
