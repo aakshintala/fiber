@@ -14,7 +14,7 @@ Use your ordinary tools: read the logs, write a short script in a scratch direct
 Session logs are `projects/<key>/sessions/<id>/events.jsonl` in Fiber home (`~/.fiber` unless moved; `docs/state.md`). Each line is a JSON object with a `kind` and a `ts` in milliseconds (`docs/events.md`).
 
 - Keep an interactive session: one with more than one `turn_started`, and no `parent` in its `session_started` payload. A `fiber ask` run, or a delegate, never warms, so leave them out.
-- For each kept session, take every `usage_recorded` line in order. Its request time is the line's `ts`. Its context size is `tokens.input + tokens.cache_read` plus the sum of `tokens.cache_write`.
+- For each kept session, keep only its own conversation requests, in order: a `usage_recorded` line with an envelope `action_id`, and with neither `extension` nor `origin_session_id` in its payload. A reviewer's or an extension's call carries no `action_id`, `extension` names an extension's own `host.model` call, and `origin_session_id` marks a delegate copy (absent on the session's own calls). Leave out warming refreshes: the session's last request with its output capped at one token, logged as `usage_recorded` like any request. Its request time is the line's `ts`. Its context size is `tokens.input + tokens.cache_read` plus the sum of `tokens.cache_write`. Deduplicate late corrections by `generation_id`, keeping the original request time: a cost that settles late is a second `usage_recorded` with the same `generation_id`, replacing the first, and the fold counts one line per `generation_id`, the latest.
 - Drop a session with fewer than two requests.
 - The cache lifetime L is 1 hour unless the person set another (`docs/prompt-cache.md`, "Cache lifetime"). Use the lifetime the sessions ran with.
 
@@ -44,4 +44,4 @@ fiber config set cache.warm_idle true
 fiber config set cache.warm_cap 2h
 ```
 
-Replace `2h` with the recommended number of lifetimes in hours. `fiber config set` writes the global file; `--repo` and the per-project forms are in `docs/configuration.md`.
+Replace `2h` with the recommended cap as a duration k x L (for example 2 lifetimes of 5m is `10m`). `fiber config set` writes the global file; `--repo` and the per-project forms are in `docs/configuration.md`.

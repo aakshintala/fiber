@@ -618,6 +618,7 @@ fn the_opening_message_lists_the_built_in_skills() {
     let run = setup.fiber(&["ask", "hi"], None);
 
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     let opening = run
         .lines
         .iter()
