@@ -84,12 +84,17 @@ fn models_runs_when_there_is_no_cached_copy_and_its_list_is_cached() {
     let setup = Setup::new();
     let server = ProviderServer::start([listing(&["m1", "m2"])]).unwrap();
     let provider = fixture(&setup, &server);
+    assert!(
+        !provider.has_model_cache(),
+        "no copy before the first discovery"
+    );
     let models = within({
         let provider = Arc::clone(&provider);
         move || provider.models()
     })
     .unwrap();
     assert_eq!(ids(&models), ["m1", "m2"]);
+    assert!(provider.has_model_cache(), "discovery writes the copy");
     assert_eq!(models[0].base_url, format!("{}/v1", server.url()));
     assert_eq!(models[0].context_window, Some(1000));
 
@@ -585,4 +590,307 @@ fn a_host_http_call_gives_up_at_the_callbacks_deadline() {
     // A timeout of one parked callback leaves the extension's thread running.
     let again = Arc::clone(&extension);
     assert_eq!(within(move || again.command("ok", "")).unwrap(), "ok");
+}
+
+/// A test-local provider `p`: `credential` and `sign` run `credential_run`
+/// and `sign_run`, each absent when its option is `None`.
+fn script_provider(
+    setup: &Setup,
+    credential_run: Option<&str>,
+    sign_run: Option<&str>,
+) -> Arc<LuaProvider> {
+    let mut spec = Vec::new();
+    if let Some(run) = credential_run {
+        spec.push(format!(
+            "credential = {{ timeout = 5000, run = function() return {run} end }}"
+        ));
+    }
+    if let Some(run) = sign_run {
+        spec.push(format!(
+            "sign = {{ timeout = 1000, run = function(request) return {run} end }}"
+        ));
+    }
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!("fiber.provider(\"p\", {{ {} }})\n", spec.join(", ")),
+    );
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        FakeClock::new(),
+    ));
+    LuaProvider::new(extension, "p")
+}
+
+fn signed(signer: &Arc<dyn Signer>, headers: &[(String, String)]) -> Vec<(String, String)> {
+    let url = "http://127.0.0.1:1/v1/responses".to_owned();
+    let body = br#"{"model":"m"}"#.to_vec();
+    let signer = Arc::clone(signer);
+    let owned: Vec<(String, String)> = headers.to_vec();
+    within(move || {
+        signer.sign(&SignRequest {
+            method: "POST",
+            url: &url,
+            headers: &owned,
+            body: &body,
+        })
+    })
+    .unwrap()
+}
+
+const TOKEN: &str = "{ token = \"tok-1\", expires_at = 1700003600 }";
+
+#[test]
+fn the_token_rides_before_what_sign_returns_and_sign_sees_it() {
+    let setup = Setup::new();
+    let provider = script_provider(
+        &setup,
+        Some(TOKEN),
+        Some("{ [\"x-saw-auth\"] = request.headers.authorization or \"missing\" }"),
+    );
+    assert_eq!(
+        within({
+            let provider = Arc::clone(&provider);
+            move || provider.functions()
+        })
+        .unwrap(),
+        ["credential", "sign"]
+    );
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    let headers = signed(
+        &(signer as Arc<dyn Signer>),
+        &[("x-client".to_owned(), "fiber".to_owned())],
+    );
+    assert_eq!(
+        headers,
+        [
+            ("authorization".to_owned(), "Bearer tok-1".to_owned()),
+            ("x-saw-auth".to_owned(), "Bearer tok-1".to_owned()),
+        ]
+    );
+}
+
+#[test]
+fn without_sign_only_the_token_is_sent() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, Some(TOKEN), None);
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        signed(&(signer as Arc<dyn Signer>), &[]),
+        [("authorization".to_owned(), "Bearer tok-1".to_owned())]
+    );
+}
+
+#[test]
+fn without_credential_only_what_sign_returns_is_sent() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, None, Some("{ [\"x-s\"] = \"v\" }"));
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        signed(&(signer as Arc<dyn Signer>), &[]),
+        [("x-s".to_owned(), "v".to_owned())]
+    );
+}
+
+#[test]
+fn without_credential_or_sign_there_is_no_signer() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, None, None);
+    assert_eq!(
+        within({
+            let provider = Arc::clone(&provider);
+            move || provider.functions()
+        })
+        .unwrap(),
+        Vec::<String>::new()
+    );
+    assert!(
+        within({
+            let provider = Arc::clone(&provider);
+            move || provider.signer()
+        })
+        .unwrap()
+        .is_none()
+    );
+}
+
+#[test]
+fn registers_is_true_for_a_registered_function_only() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, Some(TOKEN), None);
+    let registered = |function: &'static str| {
+        within({
+            let provider = Arc::clone(&provider);
+            move || provider.registers(function)
+        })
+        .unwrap()
+    };
+    assert!(registered("credential"));
+    assert!(!registered("sign"));
+    assert!(!registered("models"));
+
+    let setup = Setup::new();
+    let bare = script_provider(&setup, None, None);
+    assert!(
+        !within({
+            let bare = Arc::clone(&bare);
+            move || bare.registers("credential")
+        })
+        .unwrap()
+    );
+}
+
+#[test]
+fn sign_wins_over_the_token_header_whatever_its_case() {
+    let setup = Setup::new();
+    let provider = script_provider(
+        &setup,
+        Some(TOKEN),
+        Some("{ Authorization = \"Bearer custom\" }"),
+    );
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    assert_eq!(
+        signed(&(signer as Arc<dyn Signer>), &[]),
+        [("Authorization".to_owned(), "Bearer custom".to_owned())]
+    );
+}
+
+#[test]
+fn a_credential_error_at_send_time_is_credential_failed() {
+    let setup = Setup::new();
+    let provider = script_provider(&setup, Some("{}"), Some("{}"));
+    let signer = within({
+        let provider = Arc::clone(&provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    let url = "http://127.0.0.1:1/v1/responses".to_owned();
+    let err = within(move || {
+        signer.sign(&SignRequest {
+            method: "POST",
+            url: &url,
+            headers: &[],
+            body: b"{}",
+        })
+    })
+    .unwrap_err();
+    let contract::signing::Error::Credential { code, message } = &err else {
+        panic!("{err:?}")
+    };
+    assert_eq!(*code, ErrorCode::CredentialFailed);
+    assert_eq!(message, "`ext`: `p.credential` returned no `token`.");
+}
+
+/// A provider whose `credential()` refreshes OAuth against `url`.
+fn refresh_provider(setup: &Setup, url: &str) -> Arc<LuaProvider> {
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        &format!(
+            "fiber.provider(\"p\", {{\n\
+             credential = {{ timeout = 60000, run = function()\n\
+             return host.oauth.refresh(function()\n\
+             local reply = host.http({{ url = \"{url}/token\", method = \"POST\" }})\n\
+             if reply.status ~= 200 then error(\"refresh failed: \" .. reply.status) end\n\
+             return {{ token = \"t\", expires_at = 1700003600 }}\n\
+             end) end }},\n\
+             sign = {{ timeout = 1000, run = function() return {{}} end }},\n\
+             }})\n"
+        ),
+    );
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        FakeClock::new(),
+    ));
+    LuaProvider::new(extension, "p")
+}
+
+fn sign_error(provider: &Arc<LuaProvider>) -> contract::signing::Error {
+    let signer = within({
+        let provider = Arc::clone(provider);
+        move || provider.signer()
+    })
+    .unwrap()
+    .unwrap();
+    let url = "http://127.0.0.1:1/v1/responses".to_owned();
+    within(move || {
+        signer.sign(&SignRequest {
+            method: "POST",
+            url: &url,
+            headers: &[],
+            body: b"{}",
+        })
+    })
+    .unwrap_err()
+}
+
+#[test]
+fn a_rejected_refresh_at_send_time_keeps_authentication_failed() {
+    let setup = Setup::new();
+    let server = fakes::OauthServer::start(vec![fakes::OauthReply::raw(400, "{}")]);
+    let provider = refresh_provider(&setup, &server.url());
+    let contract::signing::Error::Credential { code, message } = &sign_error(&provider) else {
+        panic!("expected a credential error")
+    };
+    assert_eq!(*code, ErrorCode::AuthenticationFailed);
+    assert!(message.contains("refresh failed: 400"), "{message}");
+}
+
+#[test]
+fn an_unreachable_refresh_at_send_time_keeps_connection_failed() {
+    let setup = Setup::new();
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let provider = refresh_provider(&setup, &format!("http://127.0.0.1:{port}"));
+    let contract::signing::Error::Credential { code, .. } = &sign_error(&provider) else {
+        panic!("expected a credential error")
+    };
+    assert_eq!(*code, ErrorCode::ConnectionFailed);
+}
+
+#[test]
+fn provider_names_lists_every_registered_provider_sorted() {
+    let setup = Setup::new();
+    let dir = setup.home().join("ext");
+    write(
+        &dir.join("init.lua"),
+        "fiber.provider(\"b\", { models = { timeout = 1000, run = function() return {} end } })\n\
+         fiber.provider(\"a\", { sign = { timeout = 1000, run = function() return {} end } })\n",
+    );
+    let extension = Arc::new(LuaExtension::new(
+        "ext",
+        dir,
+        setup.home(),
+        FakeClock::new(),
+    ));
+    let names = within(move || extension.provider_names()).unwrap();
+    assert_eq!(names, ["a", "b"]);
 }

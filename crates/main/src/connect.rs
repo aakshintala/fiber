@@ -18,21 +18,26 @@ use serde_json::Value;
 /// The provider a model reaches: the endpoint and protocol construction the
 /// session's model and the reviewer's share. A reviewer failure never falls
 /// back to the session's model (`docs/permissions.md`, "How it runs").
+/// `key` is `None` when a Lua `credential()` supplies the token, which
+/// rides the signing seam instead (`docs/model-routing.md`, "Keys, tokens
+/// and OAuth").
 pub(crate) fn connect(
     model: extensions::Model<'_>,
-    key: String,
+    key: Option<String>,
+    signer: Option<Arc<dyn contract::signing::Signer>>,
 ) -> Result<Arc<dyn Provider>, Failure> {
     let endpoint = Endpoint {
         provider: model.provider.name.clone(),
         model: model.model.id.clone(),
         base_url: model.model.base_url.clone(),
-        key: Some(key),
+        key,
         headers: model
             .provider
             .headers
             .iter()
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect(),
+        signer,
         compat: Compat::from_data(&model.model.compat),
         max_output_tokens: model.model.max_output_tokens,
         extra_body: model.model.extra_body.clone(),

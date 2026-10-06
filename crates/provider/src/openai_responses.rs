@@ -71,6 +71,7 @@ impl Responses {
             headers,
             body: body(endpoint, request),
             provider: endpoint.provider.clone(),
+            signer: endpoint.signer.clone(),
             direct: endpoint.direct,
             cancel: Arc::default(),
         }
@@ -88,12 +89,12 @@ impl Provider for Responses {
 }
 
 /// One `openai-responses` call, ready to send.
-#[derive(Debug)]
 pub struct Call {
     url: String,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     provider: String,
+    signer: Option<Arc<dyn contract::signing::Signer>>,
     direct: bool,
     cancel: Arc<Cancel>,
 }
@@ -101,10 +102,11 @@ pub struct Call {
 impl Call {
     /// Sends the request and returns the reply's bytes, unread.
     pub fn open(&self) -> Result<impl Read + use<>, Error> {
-        http::post(
+        http::post_signed(
             &self.url,
             &self.headers,
             &self.body,
+            self.signer.as_deref(),
             self.direct,
             &self.cancel,
         )
@@ -114,10 +116,11 @@ impl Call {
 
 impl ModelCall for Call {
     fn run(&self, sink: &mut dyn FnMut(Delta)) -> Result<Reply, CallError> {
-        let (reply, should_retry) = match http::post(
+        let (reply, should_retry) = match http::post_signed(
             &self.url,
             &self.headers,
             &self.body,
+            self.signer.as_deref(),
             self.direct,
             &self.cancel,
         ) {

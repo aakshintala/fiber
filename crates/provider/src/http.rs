@@ -84,22 +84,10 @@ impl Cancel {
     }
 }
 
-/// POSTs `body` to `url` and returns the response body to read with the
-/// response's `x-should-retry` header, which also governs a failure the
-/// body reports later; or the failure a non-2xx status reports.
-pub(crate) fn post(
-    url: &str,
-    headers: &[(String, String)],
-    body: &[u8],
-    direct: bool,
-    cancel: &Arc<Cancel>,
-) -> Result<(impl Read + use<>, Option<bool>), Error> {
-    post_signed(url, headers, body, None, direct, cancel)
-}
-
-/// [`post`], with the headers `signer` adds for this request.
-// debt: no `Endpoint` carries a signer yet, so only tests pass one; the
-// protocols call `post` until `Endpoint` gains the field.
+/// POSTs `body` to `url` with the headers `signer` adds for this request,
+/// and returns the response body to read with the response's
+/// `x-should-retry` header, which also governs a failure the body reports
+/// later; or the failure a non-2xx status reports.
 pub(crate) fn post_signed(
     url: &str,
     headers: &[(String, String)],

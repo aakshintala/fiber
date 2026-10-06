@@ -20,6 +20,20 @@ use serde_json::{Value, json};
 
 use super::run;
 
+/// `fiber models` never writes a file, so its lock runs every call straight
+/// through.
+struct NoLock;
+
+impl contract::files::PathLock for NoLock {
+    fn hold(&self, _path: &std::path::Path, run: &mut dyn FnMut()) {
+        run();
+    }
+
+    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
+        run();
+    }
+}
+
 /// Fiber home and a workspace in a temporary directory, removed on drop.
 struct Setup {
     root: fakes::TempDir,
@@ -78,6 +92,7 @@ impl Setup {
     fn run(&self, search: Option<&str>, json: bool) -> (Result<(), Failure>, String, String) {
         let mut out = Vec::new();
         let mut err = Vec::new();
+        let home = self.home();
         let result = run(
             &self.home(),
             &self.workspace(),
@@ -85,12 +100,58 @@ impl Setup {
             json,
             &mut out,
             &mut err,
+            &|config: &config::Config| {
+                let clock: std::sync::Arc<dyn contract::clock::Clock> =
+                    fakes::clock::FakeClock::new();
+                extensions::SessionExtensions::load(
+                    &home,
+                    config,
+                    clock,
+                    std::sync::Arc::new(NoLock),
+                )
+            },
         );
         (
             result,
             String::from_utf8(out).unwrap(),
             String::from_utf8(err).unwrap(),
         )
+    }
+
+    /// Installs the Lua extension `extension` registering the provider
+    /// `name` whose `models()` returns the Lua list `models`.
+    fn install_lua(&self, extension: &str, name: &str, models: &str) {
+        let src = self.root.path().join("src").join(extension);
+        fs::create_dir_all(&src).unwrap();
+        fs::write(
+            src.join("extension.json"),
+            json!({
+                "name": extension,
+                "version": "v0.0.0",
+                "fiber": "0.0.0",
+                "api": extensions::API,
+            })
+            .to_string(),
+        )
+        .unwrap();
+        fs::write(
+            src.join("init.lua"),
+            format!(
+                "fiber.provider(\"{name}\", {{ models = {{ timeout = 1000, \
+                 run = function() return {models} end }} }})\n"
+            ),
+        )
+        .unwrap();
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(src),
+            "0.0.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
     }
 }
 
@@ -329,7 +390,12 @@ fn models_exits_zero_and_prints_the_row() {
     // code is `models`' own. The parent checks the code and the row: a code
     // alone would not catch a `models` that returns 0 without printing.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(super::models(None, false));
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+        ));
     }
     let setup = Setup::new();
     setup.install(
@@ -375,7 +441,12 @@ fn models_with_a_relative_fiber_home_is_a_usage_failure() {
     // anything is read. It runs in a child so the process's own `FIBER_HOME`
     // cannot change the outcome.
     if std::env::var_os(CHILD).is_some() {
-        std::process::exit(super::models(None, false));
+        std::process::exit(super::models(
+            None,
+            false,
+            fakes::clock::FakeClock::new(),
+            std::sync::Arc::new(NoLock),
+        ));
     }
     let setup = Setup::new();
     let name = module_path!().split_once("::").unwrap().1;
@@ -434,4 +505,27 @@ fn padding_counts_characters_not_bytes() {
          \x20 acme/café  -        -       -\n\
          * acme/big   -        -       -\n"
     );
+}
+
+#[test]
+fn a_lua_providers_discovered_models_are_listed_with_no_cached_copy() {
+    let setup = Setup::new();
+    setup.install_lua(
+        "acme-lua",
+        "acme",
+        "{ { id = \"m\", protocol = \"openai-responses\", \
+         base_url = \"http://127.0.0.1:1/v1\", context_window = 8000 } }",
+    );
+    let (result, out, err) = setup.run(None, false);
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(
+        out.lines()
+            .any(|line| line.contains("acme/m") && line.contains("8000")),
+        "{out:?}"
+    );
+    let (result, out, err) = setup.run(Some("acme"), true);
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(out.contains("\"model\":\"acme/m\""), "{out:?}");
 }

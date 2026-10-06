@@ -6,21 +6,35 @@ use std::collections::BTreeMap;
 use std::fs;
 use std::io::ErrorKind;
 use std::path::Path;
+use std::sync::Arc;
 
 use config::{Config, ModelData, ProviderData};
 use contract::ErrorCode;
 use contract::events::Notice;
 use serde_json::Value;
 
-use crate::{API, Error};
+use crate::{API, Error, LuaProvider};
 
 /// The thinking levels a typed model may end in, after a `:`.
 const THINKING: [&str; 7] = ["off", "minimal", "low", "medium", "high", "xhigh", "max"];
 
 /// Every provider the installed extensions register, by name.
-#[derive(Debug, Clone, Default)]
+#[derive(Clone, Default)]
 pub struct Providers {
     by_name: BTreeMap<String, ProviderData>,
+    /// One Lua provider per `fiber.provider` registration, by provider
+    /// name: what signs its requests and refreshes its token.
+    lua: BTreeMap<String, Arc<LuaProvider>>,
+}
+
+// `Arc<LuaProvider>` has no `Debug`: the registry prints its names.
+impl std::fmt::Debug for Providers {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Providers")
+            .field("by_name", &self.by_name)
+            .field("lua", &self.lua.keys().collect::<Vec<_>>())
+            .finish()
+    }
 }
 
 /// One model of one installed provider, as a session names it.
@@ -180,6 +194,51 @@ impl Providers {
     /// The installed providers' names, sorted.
     pub fn names(&self) -> impl Iterator<Item = &str> {
         self.by_name.keys().map(String::as_str)
+    }
+
+    /// Adds the models `provider`'s `models()` returns: with no data file
+    /// one is created with every other field default, with one only its
+    /// models are replaced. Either list passes through
+    /// [`leave_out_invalid`]. A `models()` that fails leaves no models, or
+    /// the data file's, and one notice with the error's own code. The
+    /// provider is kept either way, for its signer and token.
+    pub fn add_lua(&mut self, extension: &str, provider: &Arc<LuaProvider>) -> Vec<Notice> {
+        let name = provider.name().to_owned();
+        self.lua.insert(name.clone(), Arc::clone(provider));
+        let mut models = match provider.models() {
+            Ok(models) => models,
+            Err(e) => {
+                return vec![Notice {
+                    code: e.code(),
+                    message: e.to_string(),
+                    extension: Some(extension.to_owned()),
+                }];
+            }
+        };
+        let notices = leave_out_invalid(&name, extension, &mut models);
+        match self.by_name.get_mut(&name) {
+            Some(data) => data.models = models,
+            None => {
+                self.by_name.insert(
+                    name.clone(),
+                    ProviderData {
+                        name,
+                        models,
+                        credential: None,
+                        credential_name: None,
+                        headers: BTreeMap::new(),
+                        reviewer_model: None,
+                    },
+                );
+            }
+        }
+        notices
+    }
+
+    /// The Lua provider `name`, for its signer and token, if an extension
+    /// registered one.
+    pub fn lua(&self, name: &str) -> Option<&Arc<LuaProvider>> {
+        self.lua.get(name)
     }
 
     /// The provider installed under `name`.

@@ -17,6 +17,7 @@ mod crash;
 mod credential;
 mod handoff;
 mod late_emit;
+mod lua_providers;
 mod mcp_servers;
 mod prompt_files;
 mod resume;
@@ -141,9 +142,12 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
         },
-        cli::Invocation::Run(Some(cli::Commands::Models(args))) => {
-            ::cli::models(args.search.as_deref(), args.json)
-        }
+        cli::Invocation::Run(Some(cli::Commands::Models(args))) => ::cli::models(
+            args.search.as_deref(),
+            args.json,
+            clock,
+            Arc::new(tools::PathLocks::new()),
+        ),
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
         cli::Invocation::Run(Some(cli::Commands::Config(cmd))) => match cmd {
@@ -577,24 +581,31 @@ fn parts_with(
     // debt: weakens docs/configuration.md, "When Fiber reads configuration",
     // and docs/extensions.md, "The extension API version"; fixed by #382.
     // Notices from configuration and loading are dropped.
-    let (providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    let (mut providers, _notices) = Providers::load(&home).map_err(|e| failed(e.code(), e))?;
+    let locks = Arc::new(tools::PathLocks::new());
+    let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
+    let extensions =
+        extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
+    lua_providers::add_lua(&extensions, &mut providers);
     // `recorded` first, then `--model` and configuration's `model`
     // (`docs/model-routing.md`, "Choosing the model").
     let model = providers
         .choose(recorded, &config)
         .map_err(|e| failed(e.code(), e))?;
-    let (label, key) =
-        credential::session_credential(&config, model.provider, recorded_credential)?;
-    let provider = connect(model, key.expose().to_owned())?;
+    let label =
+        recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
+    let (key, signer) = lua_providers::session_credential(&providers, model.provider, || {
+        crate::credential::session_credential(&config, model.provider, recorded_credential)
+            .map(|(_, key)| key)
+    })?;
+    let provider = connect(model, key, signer)?;
     let reviewer = choose_reviewer(&providers, &config, &model, &label);
     let limits = settings::block_limits(&config);
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
     let idle = settings::idle_exit(&config);
-    let locks = Arc::new(tools::PathLocks::new());
-    let session_locks: Arc<dyn contract::files::PathLock> = locks.clone();
-    let extensions =
-        extensions::SessionExtensions::load(&home, &config, Arc::clone(&clock), session_locks);
+    // The extensions loaded above, started before the model was chosen:
+    // choosing a Lua provider's model waits on them.
     // debt: extension prompt texts and the model's addendum arrive empty;
     // filled by #510.
     // The session log's path is set by the caller, which mints the session
@@ -663,8 +674,15 @@ fn choose_reviewer(
         },
     };
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
-    let key = credential::reviewer_credential(config, model.provider, session.provider, label)?;
-    let provider = connect(model, key.expose().to_owned())?;
+    // The reviewer goes through the same path, so a Lua reviewer model
+    // works: the token when it registered `credential`, else the key.
+    let (key, signer) = lua_providers::session_credential(providers, model.provider, || {
+        credential::reviewer_credential(config, model.provider, session.provider, label)
+    })?;
+    // The token is read once, so a failing `credential()` fails here:
+    // not a startup error, the loop gets it and every reviewed call
+    // escalates it (`docs/permissions.md`, "How it runs").
+    let provider = connect(model, key, signer)?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {

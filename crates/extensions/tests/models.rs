@@ -525,3 +525,193 @@ fn leave_out_invalid_filters_a_model_list_like_models_returns() {
         "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber builds itself."
     );
 }
+
+fn lua_acme(setup: &Setup, dir: &str, models_run: &str) -> std::sync::Arc<extensions::LuaProvider> {
+    lua_named(setup, dir, "acme", models_run)
+}
+
+fn lua_named(
+    setup: &Setup,
+    dir: &str,
+    provider: &str,
+    models_run: &str,
+) -> std::sync::Arc<extensions::LuaProvider> {
+    let ext = setup.home().join(dir);
+    write(
+        &ext.join("init.lua"),
+        &[
+            "fiber.provider(\"",
+            provider,
+            "\", { models = { timeout = 1000, run = function() return ",
+            models_run,
+            " end } })\n",
+        ]
+        .concat(),
+    );
+    let extension = std::sync::Arc::new(extensions::LuaExtension::new(
+        "acme-ext",
+        ext,
+        setup.home(),
+        fakes::clock::FakeClock::new(),
+    ));
+    extensions::LuaProvider::new(extension, provider)
+}
+
+fn lua_list(ids: &[&str]) -> String {
+    let models: Vec<String> = ids
+        .iter()
+        .map(|id| {
+            format!(
+                "{{ id = \"{id}\", protocol = \"openai-responses\", \
+                 base_url = \"http://127.0.0.1:1/v1\" }}"
+            )
+        })
+        .collect();
+    format!("{{ {} }}", models.join(", "))
+}
+
+#[test]
+fn add_lua_without_a_data_file_creates_the_provider() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/m").is_ok());
+    let data = providers.get("acme").unwrap();
+    assert_eq!(data.name, "acme");
+    assert!(data.credential.is_none());
+    assert!(data.credential_name.is_none());
+    assert!(data.headers.is_empty());
+    assert!(data.reviewer_model.is_none());
+}
+
+#[test]
+fn add_lua_with_a_data_file_replaces_only_models() {
+    let setup = Setup::new();
+    let mut data = provider("acme", &["old"]);
+    data["headers"] = json!({ "x-client": "fiber" });
+    data["reviewer_model"] = json!("tiny");
+    let mut providers = installed(&setup, &[("acme", data)]);
+    let lua = lua_acme(&setup, "ext", &lua_list(&["new"]));
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(notices.is_empty(), "{notices:?}");
+    assert!(providers.resolve("acme/new").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/old").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    let data = providers.get("acme").unwrap();
+    assert_eq!(
+        data.headers.get("x-client").map(String::as_str),
+        Some("fiber")
+    );
+    assert_eq!(data.reviewer_model.as_deref(), Some("tiny"));
+}
+
+#[test]
+fn add_lua_leaves_out_an_invalid_model_with_a_notice() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let lua = lua_acme(
+        &setup,
+        "ext",
+        &[
+            "{ { id = \"ok\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\" }, ",
+            "{ id = \"bad\", protocol = \"openai-responses\", \
+             base_url = \"http://127.0.0.1:1/v1\", extra_body = { tools = 1 } } }",
+        ]
+        .concat(),
+    );
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(providers.resolve("acme/ok").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+    assert_eq!(
+        notices[0].message,
+        "The model `acme/bad` names `tools` in its `extra_body`, a field Fiber builds itself."
+    );
+}
+
+#[test]
+fn add_lua_filters_a_cached_list_without_running_lua() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([
+            {"id": "bad", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1", "extra_body": { "tools": 1 }},
+            {"id": "ok", "protocol": "openai-responses",
+             "base_url": "http://127.0.0.1:1/v1"},
+        ]),
+    )
+    .unwrap();
+    let lua = lua_acme(&setup, "ext", "error(\"must not run\")");
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(providers.resolve("acme/ok").is_ok());
+    assert!(matches!(
+        providers.resolve("acme/bad").unwrap_err(),
+        Error::UnknownModel { .. }
+    ));
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ModelInvalid);
+}
+
+#[test]
+fn a_failing_models_leaves_no_models_with_the_errors_code() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let lua = lua_acme(&setup, "ext", "error(\"boom\")");
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert_eq!(providers.names().count(), 0);
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+    assert_eq!(notices[0].extension.as_deref(), Some("acme-ext"));
+    assert!(
+        notices[0].message.contains("boom"),
+        "{}",
+        notices[0].message
+    );
+}
+
+#[test]
+fn a_failing_models_keeps_the_data_files_models() {
+    let setup = Setup::new();
+    let mut providers = installed(&setup, &[("acme", provider("acme", &["a"]))]);
+    let lua = lua_acme(&setup, "ext", "error(\"boom\")");
+    let notices = providers.add_lua("acme-ext", &lua);
+    assert!(providers.resolve("acme/a").is_ok());
+    assert_eq!(notices.len(), 1, "{notices:?}");
+    assert_eq!(notices[0].code, ErrorCode::ExtensionFailed);
+}
+
+#[test]
+fn providers_debug_names_the_installed_providers() {
+    let setup = Setup::new();
+    let providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
+    let text = format!("{providers:?}");
+    assert!(text.contains("openai"), "{text:?}");
+}
+
+#[test]
+fn add_lua_keeps_the_provider_for_its_signer_even_when_models_fails() {
+    let setup = Setup::new();
+    let mut providers = Providers::default();
+    let lua = lua_acme(&setup, "ext", &lua_list(&["m"]));
+    providers.add_lua("acme-ext", &lua);
+    assert!(providers.lua("acme").is_some());
+    assert!(providers.lua("nobody").is_none());
+
+    let mut failing = Providers::default();
+    let bad = lua_named(&setup, "bad", "broke", "error(\"boom\")");
+    assert_eq!(failing.add_lua("broke-ext", &bad).len(), 1);
+    assert!(failing.lua("broke").is_some());
+}

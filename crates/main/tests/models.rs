@@ -211,3 +211,39 @@ fn help_models_matches_models_help() {
         via_flag.stdout
     );
 }
+
+#[test]
+fn models_runs_a_lua_providers_models_with_no_cached_copy() {
+    let setup = Setup::new();
+    let server = fakes::ProviderServer::start([fakes::Response::status(
+        200,
+        json!({"data": [{"id": "m1", "context_length": 1000}]}).to_string(),
+    )])
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(fakes::lua_fixture()),
+        "0.1.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.url",
+        &config::Secret::new(server.url()),
+    )
+    .unwrap();
+    config::store_secret(
+        &setup.home(),
+        "fixture.api_key",
+        &config::Secret::new("k1".into()),
+    )
+    .unwrap();
+    let run = setup.fiber(&["models"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.stderr, "");
+    assert!(run.stdout.contains("fixture/m1"), "stdout: {}", run.stdout);
+}
