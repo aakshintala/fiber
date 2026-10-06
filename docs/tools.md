@@ -781,11 +781,15 @@ backend.
 ### web_search
 
 - The model sees one tool, `web_search`, whichever way it runs.
-- Arguments: `query` (required), and either `allowed_domains` or
-  `blocked_domains`, never both. These match Anthropic's hosted tool, so the
-  model sees the same arguments on every provider.
-- The description tells the model to end an answer that used search with a
-  list of the sources it used, as markdown links.
+- A hosted search is the vendor's own tool, sent as its type and name only.
+  It has no description, and its settings, such as a domain list, are fixed
+  in the request; the model's call carries only the query.
+- Fiber's own tool, over a backend, takes `query` (required), and either
+  `allowed_domains` or `blocked_domains`, never both.
+- `web_search` has a guideline line telling the model to end an answer that
+  used search with a list of the sources it used, as markdown links
+  (`docs/system-prompt.md`, "Tool guidelines"). It reaches the model whether
+  the search is hosted or Fiber's own.
 - There is no limit on searches per turn or per session.
 
 #### Hosted by the provider
@@ -806,8 +810,16 @@ backend.
 - The provider runs the search before Fiber sees it, so a hosted search is
   never reviewed and cannot be refused. It writes `tool_call_started` and
   `tool_call_completed` like any call, with the query and the result URLs.
-- Its raw blocks are logged exactly as they arrived and sent back unchanged
-  only to the model that produced them, the rule for reasoning state
+- Its raw blocks are logged exactly as they arrived, as the `provider_item`
+  of `tool_call_requested` (the call) and `tool_call_completed` (the result)
+  (`docs/events.md`). A call with `provider_item` is one the provider ran, so
+  Fiber never reviews it, runs it, or gives it a result on resume. Its
+  `tool_call_completed` content is the result URLs, one per line. A search
+  that fails at the provider, such as Anthropic's
+  `web_search_tool_result_error`, completes `failed` with the vendor's error
+  code in the message.
+- The raw blocks are sent back unchanged only to the model that produced
+  them, the rule for reasoning state
   (`docs/loop.md`). Anthropic refuses a request whose encrypted search content
   was changed. After a switch to another model reference, the request leaves
   them out.
