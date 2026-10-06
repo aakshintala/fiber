@@ -351,22 +351,18 @@ fn cancel_ends_the_wait_and_sends_cancelled() {
 fn a_non_object_initialize_reply_fails_the_start() {
     // A `result` that is not an object is not a handshake: the start
     // fails naming `initialize`, rather than moving on to `tools/list`.
+    // The script runs as `bash -c`, never as a file written and executed
+    // here: macOS can hold the first exec of a newly written executable
+    // in `_dyld_start` for seconds (seen on #754), which no deadline
+    // short of the nextest kill covers.
     let dir = TempDir::new("fiber-mcp-bad-init");
-    let script = dir.path().join("bad-init.sh");
-    std::fs::write(
-        &script,
-        "#!/bin/bash\nIFS= read -r line\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\nprintf '%s\\n' \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":42}\"\n",
-    )
-    .expect("script");
-    #[cfg(unix)]
-    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-        .expect("executable");
+    let script = "IFS= read -r line\nid=$(printf '%s' \"$line\" | sed -n 's/.*\"id\":\\([0-9]*\\).*/\\1/p')\nprintf '%s\\n' \"{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"id\\\":$id,\\\"result\\\":42}\"\n";
     let workspace = dir.path().to_path_buf();
     let fake = FakeClock::new();
     let clock: std::sync::Arc<dyn Clock> = fake;
     let error = Setup::start_result(
-        &script.display().to_string(),
-        &[],
+        "/bin/bash",
+        &["-c".to_owned(), script.to_owned()],
         &workspace,
         &clock,
         Duration::from_secs(5),

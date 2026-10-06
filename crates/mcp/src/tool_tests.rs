@@ -20,8 +20,8 @@ use crate::server::Server;
 /// How long a test waits for a thread or a child, in real time.
 ///
 /// The largest round value that keeps every test's serial deadlines within
-/// half of nextest's 120 s kill: the worst test,
-/// `cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
+/// half of nextest's 120 s kill: the worst mcp test,
+/// `server::tests::cancel_ends_the_wait_and_sends_cancelled`, can exhaust five
 /// (5 x 10 s = 50 s <= 60 s). A passing run never waits on it; it only
 /// bounds a hang.
 const WITHIN: Duration = Duration::from_secs(10);
