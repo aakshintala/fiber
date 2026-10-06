@@ -88,6 +88,15 @@ impl LuaProvider {
         self.discover()
     }
 
+    /// Whether a cached model list waits on disk: what [`LuaProvider::models`]
+    /// serves without calling `models()`.
+    pub fn has_model_cache(&self) -> bool {
+        matches!(
+            config::read_model_cache(self.extension.home(), &self.name),
+            Ok(Some(_))
+        )
+    }
+
     /// Calls `models()` on its own thread, as Fiber does at every start, and
     /// replaces the cached list with what it returns. Until it returns,
     /// [`LuaProvider::models`] serves the copy it had.

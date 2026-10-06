@@ -2572,13 +2572,10 @@ fn only_model_request(server: &ProviderServer) -> Request {
 #[test]
 fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
     let setup = Setup::new();
+    // With no cache discovery runs synchronously once and no refresh
+    // runs: one reply each for discovery, the token and the model request.
     let server = ProviderServer::start_with_fallback(
-        [
-            listing_and_token(),
-            listing_and_token(),
-            listing_and_token(),
-            hello(),
-        ],
+        [listing_and_token(), listing_and_token(), hello()],
         hello(),
     )
     .unwrap();
@@ -2604,15 +2601,22 @@ fn a_lua_providers_model_answers_with_the_token_and_sign_headers() {
             .any(|model| model["id"] == "m1"),
         "{cached:?}"
     );
-    // Discovery and the token request went out too.
-    let paths: Vec<String> = server
-        .requests()
-        .iter()
-        .map(|request| request.path.clone())
-        .collect();
+    // Discovery ran synchronously once at startup: with no cache no
+    // background refresh runs, so exactly one `GET /v1/models` went out.
+    // The run above waited for the session to finish, past when a refresh
+    // would have arrived. The token request went out too.
+    let requests = server.requests();
+    assert_eq!(
+        requests
+            .iter()
+            .filter(|request| request.method == "GET" && request.path == "/v1/models")
+            .count(),
+        1,
+        "{requests:?}"
+    );
     assert!(
-        paths.contains(&"/v1/models".to_owned()) && paths.contains(&"/token".to_owned()),
-        "{paths:?}"
+        requests.iter().any(|request| request.path == "/token"),
+        "{requests:?}"
     );
 }
 
@@ -2648,7 +2652,7 @@ fn a_cached_list_serves_the_model_while_the_refresh_runs_in_the_background() {
     assert_eq!(exited["exit_code"], 0);
     assert_eq!(exited["text"], "Hello.");
     assert!(
-        server.await_requests(3, Duration::from_secs(10)),
+        server.await_requests(3, DEADLINE),
         "waited for the refresh, the token and the model request"
     );
     let mut paths: Vec<String> = server

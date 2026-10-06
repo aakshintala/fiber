@@ -594,13 +594,12 @@ fn parts_with(
         .map_err(|e| failed(e.code(), e))?;
     let label =
         recorded_credential.map_or_else(|| config.credential_label(model.provider), str::to_owned);
-    let credential = lua_providers::session_credential(&providers, model.provider, label, || {
-        // The label is already above; only the key is used.
+    let (key, signer) = lua_providers::session_credential(&providers, model.provider, || {
         crate::credential::session_credential(&config, model.provider, recorded_credential)
             .map(|(_, key)| key)
     })?;
-    let provider = connect(model, credential.key, credential.signer)?;
-    let reviewer = choose_reviewer(&providers, &config, &model, &credential.label);
+    let provider = connect(model, key, signer)?;
+    let reviewer = choose_reviewer(&providers, &config, &model, &label);
     let limits = settings::block_limits(&config);
     let retry = settings::retry_policy(&config);
     let handoff = handoff::handoff_settings(&config, &model.reference());
@@ -624,7 +623,7 @@ fn parts_with(
     prompt.extension_dirs = extensions.dirs();
     prompt.extension_sections = extensions.sections(&project);
     prompt.skills_disabled = config.union_list("skills.disabled");
-    prompt.credential = Some(credential.label);
+    prompt.credential = Some(label);
     Ok(Parts {
         sessions,
         home,
@@ -677,19 +676,13 @@ fn choose_reviewer(
     let model = providers.resolve(&typed).map_err(|e| failed(e.code(), e))?;
     // The reviewer goes through the same path, so a Lua reviewer model
     // works: the token when it registered `credential`, else the key.
-    let fallback = if model.provider.name == session.provider.name {
-        label.to_owned()
-    } else {
-        config.credential_label(model.provider)
-    };
-    let credential =
-        lua_providers::session_credential(providers, model.provider, fallback.clone(), || {
-            credential::reviewer_credential(config, model.provider, session.provider, label)
-        })?;
+    let (key, signer) = lua_providers::session_credential(providers, model.provider, || {
+        credential::reviewer_credential(config, model.provider, session.provider, label)
+    })?;
     // The token is read once, so a failing `credential()` fails here:
     // not a startup error, the loop gets it and every reviewed call
     // escalates it (`docs/permissions.md`, "How it runs").
-    let provider = connect(model, credential.key, credential.signer)?;
+    let provider = connect(model, key, signer)?;
     Ok(r#loop::Reviewer {
         provider,
         model: Model {
