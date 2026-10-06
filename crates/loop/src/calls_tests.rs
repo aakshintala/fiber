@@ -266,10 +266,8 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
     for single in [
         path("data/n/x.lua"),
         // `y.MD` has no lowercase sibling, so no file system folds it to
-        // `y.md`: the extension check sees `MD` everywhere (R3). A `DATA/`
-        // spelling is left out: where the file system folds case it is
-        // genuinely inside, where it does not it is reviewed (R8); either
-        // way nothing outside qualifies.
+        // `y.md`: the extension check sees `MD` everywhere. A `DATA/`
+        // spelling is checked below.
         path("data/n/y.MD"),
         path("data/n/x.markdown"),
         path("data/n/.md"),
@@ -290,6 +288,17 @@ fn other_writes_do_not_take_the_data_directory_fast_path() {
             "{single}"
         );
     }
+    // A case spelling of the data directory. Where the file system folds
+    // case it resolves to the real `data/` and is genuinely inside; where it
+    // does not, it names nothing and is reviewed. The verdict follows the
+    // resolved path on every platform.
+    let upper = path("DATA/n/x.md");
+    let folded = std::fs::canonicalize(&upper).is_ok_and(|p| p.starts_with(home.join("data/n")));
+    assert_eq!(
+        data_writes(&ws, &home, &[Effect::Writes], std::slice::from_ref(&upper)),
+        folded,
+        "{upper}"
+    );
     let kept = path("data/n/a.md");
     let lua = path("data/n/b.lua");
     assert!(
