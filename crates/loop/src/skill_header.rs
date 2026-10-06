@@ -54,11 +54,12 @@ pub(crate) fn parse(text: &str) -> Result<Header, Invalid> {
                 entry.rest.push(line);
             }
         } else if line.starts_with([' ', '\t']) {
-            entries
-                .last_mut()
-                .ok_or(Invalid::DoesNotParse)?
-                .rest
-                .push(line);
+            match entries.last_mut() {
+                Some(entry) => entry.rest.push(line),
+                // An indented comment before the first key.
+                None if line.trim_start().starts_with('#') => {}
+                None => return Err(Invalid::DoesNotParse),
+            }
         } else if line.starts_with('#') {
             // A comment at column 0.
         } else {
@@ -204,7 +205,15 @@ fn block_scalar(fold: bool, rest: &[&str]) -> String {
         .unwrap_or(0);
     let lines: Vec<&str> = rest
         .iter()
-        .map(|line| line.get(indent..).unwrap_or("").trim_end())
+        // A whitespace-only line is a blank line; any other line keeps its
+        // trailing spaces, so the description is sent in full.
+        .map(|line| {
+            if line.trim().is_empty() {
+                ""
+            } else {
+                line.get(indent..).unwrap_or("")
+            }
+        })
         .collect();
     if fold {
         fold_lines(&lines)

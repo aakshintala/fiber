@@ -339,3 +339,27 @@ fn a_real_world_folded_description_with_metadata_between_fields() {
     let parsed = parse(&text).unwrap();
     assert_eq!(parsed.description, "Grill the user. Use when: asked.");
 }
+
+#[test]
+fn an_indented_comment_before_the_first_key_is_skipped() {
+    let parsed = parse("---\n  # note\nname: n\ndescription: d\n---\n").unwrap();
+    assert_eq!(parsed.name, "n");
+}
+
+#[test]
+fn an_indented_line_before_the_first_key_does_not_parse() {
+    assert_eq!(
+        invalid("---\n  stray\nname: n\ndescription: d\n---\n"),
+        Invalid::DoesNotParse
+    );
+}
+
+#[test]
+fn a_literal_block_keeps_trailing_spaces_inside_the_description() {
+    assert_eq!(description("description: |\n  first  \n  second"), "first  \nsecond");
+}
+
+#[test]
+fn a_whitespace_only_line_in_a_folded_block_is_a_line_break() {
+    assert_eq!(description("description: >\n  a\n     \n  b"), "a\nb");
+}
