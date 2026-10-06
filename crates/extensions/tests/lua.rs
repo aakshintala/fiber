@@ -514,8 +514,11 @@ fn answer_when_released(
     drop(sock.write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok"));
 }
 
+/// A command queued behind a parked command runs once the parked command
+/// finishes. That it does not start while parked is proved by the unit test
+/// `a_command_queued_behind_a_parked_command_does_not_start`.
 #[test]
-fn a_second_command_waits_until_the_parked_command_finishes() {
+fn a_command_queued_behind_a_parked_command_runs_once_it_finishes() {
     let setup = Setup::new();
     let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}/", listener.local_addr().unwrap());
@@ -547,10 +550,6 @@ fn a_second_command_waits_until_the_parked_command_finishes() {
         ["sign"]
     );
     let second = start(&ext, "second");
-    assert!(
-        second.recv_timeout(Duration::from_millis(200)).is_err(),
-        "the second command started while the first was parked"
-    );
     release_tx.send(()).unwrap();
     let first = first
         .recv_timeout(WAIT)
