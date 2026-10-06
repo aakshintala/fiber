@@ -5,8 +5,8 @@ use std::path::PathBuf;
 use clap::error::ContextValue;
 
 use super::{
-    Commands, ConfigCommands, ExtensionCommands, Invocation, MENU, SessionsCommands, command,
-    parse_from, usage_sentence, version_line,
+    Commands, ConfigCommands, ExtensionCommands, HubCommands, Invocation, MENU, SessionsCommands,
+    command, parse_from, usage_sentence, version_line,
 };
 
 fn menu() -> String {
@@ -914,5 +914,35 @@ fn the_menu_lists_config_get_and_set_under_configuration() {
         ),
         "{}",
         menu()
+    );
+}
+
+#[test]
+fn hub_serve_parses_and_stays_hidden() {
+    let Invocation::Run(Some(Commands::Hub(HubCommands::Serve))) =
+        parse_from(["fiber", "hub", "serve"])
+    else {
+        panic!("hub serve parses");
+    };
+    // `fiber hub` with no subcommand is a usage error, not the hub.
+    let (_, missing) = usage(&["fiber", "hub"]);
+    assert!(
+        missing.ends_with("Run `fiber --help` for usage."),
+        "{missing}"
+    );
+    let command_line = |text: &str| text.lines().any(|line| line.starts_with("  hub "));
+    assert!(
+        !command_line(&menu()),
+        "the menu names no hub command:\n{}",
+        menu()
+    );
+    assert!(
+        !command_line(&super::render_help(None).unwrap()),
+        "top-level help names no hub command"
+    );
+    assert!(
+        visible().iter().all(|name| name != "hub"),
+        "hub stays hidden: {:?}",
+        visible()
     );
 }

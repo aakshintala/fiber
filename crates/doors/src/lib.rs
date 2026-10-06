@@ -9,6 +9,7 @@
 
 mod attach;
 mod client;
+pub mod hub;
 mod session;
 mod shell;
 mod signals;

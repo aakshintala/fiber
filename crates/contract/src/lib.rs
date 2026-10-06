@@ -24,7 +24,7 @@ pub mod signing;
 pub mod tool;
 
 pub use codes::ErrorCode;
-pub use envelope::{Envelope, SCHEMA_VERSION};
+pub use envelope::{Envelope, HubLine, SCHEMA_VERSION};
 pub use ids::{
     ActionId, CommandId, GenerationId, JobId, ProviderCallId, RequestId, Seq, SessionId, TurnId,
 };

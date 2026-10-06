@@ -27,7 +27,7 @@ pub use client::Client;
 pub use connect_proxy::ConnectProxy;
 pub use emit::Recorder;
 pub use oauth_server::{OauthReply, OauthRequest, OauthServer};
-pub use process_group::{WATCHDOG_SCRIPT, kill_group, kill_pid};
+pub use process_group::{WATCHDOG_SCRIPT, kill_group, kill_matching, kill_pid, matching};
 pub use provider_server::{ProviderServer, Request, Response, fingerprint};
 pub use rerun::rerun;
 pub use scripted_provider::{Scripted, ScriptedProvider, reply};

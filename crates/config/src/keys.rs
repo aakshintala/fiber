@@ -130,6 +130,7 @@ const LIFETIMES: &[&str] = &["5m", "1h"];
 pub(crate) const KEYS: &[Key] = &[
     key("model", Str, YES, None),
     key("roles.*", Str, YES, None),
+    key("hub.idle_exit_ms", Count, NO, Some("1800000")),
     key("session.idle_exit_ms", Count, NO, Some("1800000")),
     key("reviewer.model", Str, NO, None),
     key("reviewer.block_limits.consecutive", Count, NO, Some("3")),

@@ -16,6 +16,7 @@ mod cost;
 mod crash;
 mod credential;
 mod handoff;
+mod hub_command;
 mod late_emit;
 mod lua_providers;
 mod mcp_servers;
@@ -139,6 +140,7 @@ fn run() -> i32 {
         cli::Invocation::Run(Some(cli::Commands::Session(args))) => {
             session_command::run(args, clock)
         }
+        cli::Invocation::Run(Some(cli::Commands::Hub(command))) => hub_command::run(command),
         cli::Invocation::Run(Some(cli::Commands::Sessions(cmd))) => match cmd {
             cli::SessionsCommands::Export { id, path } => ::cli::export(&id, path.as_deref()),
         },

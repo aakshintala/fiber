@@ -1,0 +1,18 @@
+[package]
+name = "hub"
+version = "0.0.0"
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+contract = { path = "../contract" }
+serde.workspace = true
+serde_json.workspace = true
+signal-hook = "0.3"
+
+[dev-dependencies]
+fakes = { path = "../fakes" }
+
+[lints]
+workspace = true

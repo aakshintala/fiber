@@ -147,6 +147,16 @@ pub(crate) enum Commands {
     /// The internal session command: hidden and free to change.
     #[command(hide = true)]
     Session(SessionArgs),
+    /// The internal hub command: hidden and free to change.
+    #[command(hide = true, subcommand)]
+    Hub(HubCommands),
+}
+
+#[derive(Debug, Subcommand)]
+#[command(disable_help_subcommand = true)]
+pub(crate) enum HubCommands {
+    /// Run the hub on its local socket.
+    Serve,
 }
 
 #[derive(Debug, Subcommand)]
