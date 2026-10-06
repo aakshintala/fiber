@@ -16,7 +16,7 @@ use contract::events::{
     ToolReplaced,
 };
 use contract::provider::ToolDefinition;
-use contract::shapes::{ContentPart, DeclaredEffects, Effect};
+use contract::shapes::{ContentPart, DeclaredEffects};
 use contract::tool::{Bound, Cancel, Output, Tool};
 use contract::{ActionId, ErrorCode, RequestId, SessionId, TurnId};
 use serde_json::{Map, Value};
@@ -339,6 +339,7 @@ impl Loop {
             &rules,
             &self.grants,
             &self.workspace,
+            &self.prompt.home,
             &self.credentials,
         ) {
             super::permission::Verdict::Deny { by, reason, why } => {
@@ -747,33 +748,6 @@ pub(crate) enum Asked {
     /// The idle delay passed. No decision line is written. The turn unwinds
     /// without `tool_call_completed` or `turn_completed`.
     Idle,
-}
-
-/// Whether a call with `declared` effects takes a fast path
-/// (`docs/permissions.md`, "Fast paths"): it only reads, or it writes only
-/// inside `workspace` and outside `.git/` and `.fiber/`.
-pub(crate) fn fast_path(declared: &DeclaredEffects, workspace: &Path) -> bool {
-    let only = |allowed: &[Effect]| declared.effects.iter().all(|e| allowed.contains(e));
-    if only(&[Effect::Reads]) {
-        return true;
-    }
-    only(&[Effect::Reads, Effect::Writes])
-        && declared.paths.as_ref().is_some_and(|paths| {
-            !paths.is_empty() && paths.iter().all(|p| inside(&workspace.join(p), workspace))
-        })
-}
-
-/// Whether `path`, symlinks resolved, sits in `workspace` and under no
-/// `.git` or `.fiber` directory.
-fn inside(path: &Path, workspace: &Path) -> bool {
-    resolve(path)
-        .as_deref()
-        .and_then(|p| p.strip_prefix(workspace).ok())
-        .is_some_and(|rest| {
-            !rest
-                .components()
-                .any(|c| c.as_os_str() == ".git" || c.as_os_str() == ".fiber")
-        })
 }
 
 /// `path` with its longest existing ancestor canonicalised. `None` when the

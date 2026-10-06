@@ -47,18 +47,20 @@ fn empty_rules() -> Result<StandingRules, RulesError> {
     rules(Vec::new(), Vec::new())
 }
 
-/// A workspace and a credentials directory that both exist.
-fn dirs() -> (fakes::TempDir, PathBuf, PathBuf) {
+/// A workspace, a Fiber home and a credentials directory that all exist.
+fn dirs() -> (fakes::TempDir, PathBuf, PathBuf, PathBuf) {
     let root = fakes::TempDir::new("fiber-permission");
     let workspace = root.path().join("ws");
-    let credentials = root.path().join("home/credentials");
+    let home = root.path().join("home");
+    let credentials = home.join("credentials");
     std::fs::create_dir_all(&workspace).unwrap();
     std::fs::create_dir_all(&credentials).unwrap();
     // Canonicalised, as the loop holds them: the temporary directory may sit
     // under a symlink.
     let workspace = workspace.canonicalize().unwrap();
+    let home = home.canonicalize().unwrap();
     let credentials = credentials.canonicalize().unwrap();
-    (root, workspace, credentials)
+    (root, workspace, home, credentials)
 }
 
 #[test]
@@ -88,20 +90,28 @@ fn an_empty_subject_matches_only_an_empty_prefix() {
 
 #[test]
 fn the_credential_deny_runs_before_a_standing_allow() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let secret = credentials.join("token");
     std::fs::write(&secret, "s3cret").unwrap();
     let spelled = secret.display().to_string();
     let effects = call(vec![Effect::Reads], Some(vec![spelled.as_str()]), Some(""));
     // A standing allow matches the same call.
     let standing = rules(vec![rule(RuleDecision::Allow, "read", "")], Vec::new());
-    let verdict = judge("read", &effects, &standing, &[], &workspace, &credentials);
+    let verdict = judge(
+        "read",
+        &effects,
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
     assert!(matches!(verdict, Verdict::Deny { .. }));
 }
 
 #[test]
 fn a_standing_deny_beats_an_allow_a_grant_and_a_fast_path() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(
         vec![
             rule(RuleDecision::Deny, "read", ""),
@@ -120,6 +130,7 @@ fn a_standing_deny_beats_an_allow_a_grant_and_a_fast_path() {
         &standing,
         &grants,
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(
@@ -134,7 +145,7 @@ fn a_standing_deny_beats_an_allow_a_grant_and_a_fast_path() {
 
 #[test]
 fn a_standing_ask_beats_a_fast_path_and_an_allow() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(
         vec![
             rule(RuleDecision::Ask, "read", ""),
@@ -148,6 +159,7 @@ fn a_standing_ask_beats_a_fast_path_and_an_allow() {
         &standing,
         &[],
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(verdict, Verdict::Ask(_)));
@@ -155,7 +167,7 @@ fn a_standing_ask_beats_a_fast_path_and_an_allow() {
 
 #[test]
 fn a_fast_path_beats_a_grant_and_an_allow() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(vec![rule(RuleDecision::Allow, "read", "")], Vec::new());
     let grants = [Grant {
         tool: "read".into(),
@@ -167,6 +179,153 @@ fn a_fast_path_beats_a_grant_and_an_allow() {
         &standing,
         &grants,
         &workspace,
+        &home,
+        &credentials,
+    );
+    assert!(matches!(verdict, Verdict::Allow(None)));
+}
+
+/// A machine data directory holding one Markdown file, for the ordering
+/// tests: the write below would take the fast path, so any other verdict
+/// proves an earlier step judged it.
+fn data_markdown(home: &std::path::Path) -> String {
+    std::fs::create_dir_all(home.join("data/n")).unwrap();
+    let kept = home.join("data/n/x.md");
+    std::fs::write(&kept, "kept\n").unwrap();
+    kept.display().to_string()
+}
+
+#[test]
+fn a_standing_deny_beats_the_data_directory_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let kept = data_markdown(&home);
+    let effects = call(vec![Effect::Writes], Some(vec![kept.as_str()]), Some(""));
+    let standing = rules(vec![rule(RuleDecision::Deny, "write", "")], Vec::new());
+    let verdict = judge(
+        "write",
+        &effects,
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::StandingRule,
+            reason: "standing_rule",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn a_standing_ask_beats_the_data_directory_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let kept = data_markdown(&home);
+    let effects = call(vec![Effect::Writes], Some(vec![kept.as_str()]), Some(""));
+    let standing = rules(vec![rule(RuleDecision::Ask, "write", "")], Vec::new());
+    let verdict = judge(
+        "write",
+        &effects,
+        &standing,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
+    assert!(matches!(verdict, Verdict::Ask(_)));
+}
+
+#[test]
+fn the_credential_deny_beats_the_data_directory_fast_path() {
+    let (_root, workspace, home, credentials) = dirs();
+    let kept = data_markdown(&home);
+    let secret = credentials.join("k");
+    std::fs::write(&secret, "s3cret").unwrap();
+    // A call that also writes a credential file: the Markdown path would
+    // take the fast path on its own.
+    let spelled = secret.display().to_string();
+    let effects = call(
+        vec![Effect::Writes],
+        Some(vec![kept.as_str(), spelled.as_str()]),
+        Some(""),
+    );
+    let verdict = judge(
+        "write",
+        &effects,
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
+    assert!(matches!(
+        verdict,
+        Verdict::Deny {
+            by: DecidedBy::CredentialDeny,
+            reason: "credentials",
+            ..
+        }
+    ));
+    // A Markdown link resolving into the credentials directory.
+    #[cfg(unix)]
+    {
+        let token = credentials.join("c.md");
+        std::fs::write(&token, "s3cret").unwrap();
+        std::os::unix::fs::symlink(&token, home.join("data/n/c.md")).unwrap();
+        let linked = home.join("data/n/c.md").display().to_string();
+        let effects = call(vec![Effect::Writes], Some(vec![linked.as_str()]), Some(""));
+        let verdict = judge(
+            "write",
+            &effects,
+            &empty_rules(),
+            &[],
+            &workspace,
+            &home,
+            &credentials,
+        );
+        assert!(matches!(
+            verdict,
+            Verdict::Deny {
+                by: DecidedBy::CredentialDeny,
+                reason: "credentials",
+                ..
+            }
+        ));
+    }
+}
+
+#[test]
+fn a_data_directory_markdown_write_takes_the_fast_path_before_a_grant_and_an_allow() {
+    let (_root, workspace, home, credentials) = dirs();
+    let kept = data_markdown(&home);
+    let effects = call(vec![Effect::Writes], Some(vec![kept.as_str()]), Some(""));
+    // With no rule the write takes the fast path: no decision line.
+    let verdict = judge(
+        "write",
+        &effects,
+        &empty_rules(),
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
+    assert!(matches!(verdict, Verdict::Allow(None)));
+    // A session grant and a standing allow do not change that.
+    let standing = rules(vec![rule(RuleDecision::Allow, "write", "")], Vec::new());
+    let grants = [Grant {
+        tool: "write".into(),
+        prefix: String::new(),
+    }];
+    let verdict = judge(
+        "write",
+        &effects,
+        &standing,
+        &grants,
+        &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(verdict, Verdict::Allow(None)));
@@ -174,7 +333,7 @@ fn a_fast_path_beats_a_grant_and_an_allow() {
 
 #[test]
 fn a_session_grant_beats_a_standing_allow() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(
         vec![rule(RuleDecision::Allow, "shell", "npm test")],
         Vec::new(),
@@ -189,6 +348,7 @@ fn a_session_grant_beats_a_standing_allow() {
         &standing,
         &grants,
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(
@@ -199,7 +359,7 @@ fn a_session_grant_beats_a_standing_allow() {
 
 #[test]
 fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let effects = call(vec![Effect::Executes], None, Some("npm test --watch"));
     let before = judge(
         "shell",
@@ -207,6 +367,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &empty_rules(),
         &[],
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(before, Verdict::Review));
@@ -228,6 +389,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
         &empty_rules(),
         &grants,
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(
@@ -238,7 +400,7 @@ fn a_grant_added_by_an_answer_matches_the_next_call_judged() {
 
 #[test]
 fn a_grant_matches_only_its_tool_and_prefix() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let effects = call(vec![Effect::Executes], None, Some("npm test --watch"));
     // The prefix matches but the tool does not, and the other way round:
     // neither grants the call.
@@ -258,6 +420,7 @@ fn a_grant_matches_only_its_tool_and_prefix() {
             &empty_rules(),
             &[grant],
             &workspace,
+            &home,
             &credentials,
         );
         assert!(matches!(verdict, Verdict::Review));
@@ -266,13 +429,14 @@ fn a_grant_matches_only_its_tool_and_prefix() {
 
 #[test]
 fn no_match_on_an_executes_call_is_review() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let verdict = judge(
         "shell",
         &call(vec![Effect::Executes], None, None),
         &empty_rules(),
         &[],
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(verdict, Verdict::Review));
@@ -280,7 +444,7 @@ fn no_match_on_an_executes_call_is_review() {
 
 #[test]
 fn a_call_no_rule_can_match_matches_no_deny() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(
         vec![rule(RuleDecision::Deny, "shell", "npm test")],
         Vec::new(),
@@ -291,6 +455,7 @@ fn a_call_no_rule_can_match_matches_no_deny() {
         &standing,
         &[],
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(verdict, Verdict::Review));
@@ -298,7 +463,7 @@ fn a_call_no_rule_can_match_matches_no_deny() {
 
 #[test]
 fn at_the_same_step_the_project_rule_is_used() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(
         vec![rule(RuleDecision::Ask, "read", "global")],
         vec![rule(RuleDecision::Ask, "read", "project")],
@@ -309,6 +474,7 @@ fn at_the_same_step_the_project_rule_is_used() {
         &standing,
         &[],
         &workspace,
+        &home,
         &credentials,
     ) else {
         panic!("a standing ask matches");
@@ -319,7 +485,7 @@ fn at_the_same_step_the_project_rule_is_used() {
 
 #[test]
 fn a_global_deny_beats_a_project_allow() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let standing = rules(
         vec![rule(RuleDecision::Deny, "shell", "npm test")],
         vec![rule(RuleDecision::Allow, "shell", "npm test")],
@@ -330,6 +496,7 @@ fn a_global_deny_beats_a_project_allow() {
         &standing,
         &[],
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(
@@ -343,7 +510,7 @@ fn a_global_deny_beats_a_project_allow() {
 
 #[test]
 fn credential_paths_match_inside_the_directory_and_fail_closed() {
-    let (root, workspace, credentials) = dirs();
+    let (root, workspace, home, credentials) = dirs();
     let secret = credentials.join("token");
     std::fs::write(&secret, "s3cret").unwrap();
     let deny = |paths: Option<Vec<String>>| {
@@ -362,6 +529,7 @@ fn credential_paths_match_inside_the_directory_and_fail_closed() {
             &empty_rules(),
             &[],
             &workspace,
+            &home,
             &credentials,
         )
     };
@@ -419,7 +587,7 @@ fn pathdiff(target: &std::path::Path, base: &std::path::Path) -> String {
 
 #[test]
 fn an_unreadable_rules_file_denies_at_step_two() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let error: Result<StandingRules, RulesError> = Err(RulesError("/home/rules:2: bad".into()));
     let verdict = judge(
         "read",
@@ -427,6 +595,7 @@ fn an_unreadable_rules_file_denies_at_step_two() {
         &error,
         &[],
         &workspace,
+        &home,
         &credentials,
     );
     assert!(matches!(
@@ -441,13 +610,21 @@ fn an_unreadable_rules_file_denies_at_step_two() {
 
 #[test]
 fn a_credential_path_is_denied_even_when_the_rules_are_unreadable() {
-    let (_root, workspace, credentials) = dirs();
+    let (_root, workspace, home, credentials) = dirs();
     let secret = credentials.join("token");
     std::fs::write(&secret, "s3cret").unwrap();
     let spelled = secret.display().to_string();
     let effects = call(vec![Effect::Reads], Some(vec![spelled.as_str()]), Some(""));
     let error: Result<StandingRules, RulesError> = Err(RulesError("/home/rules:2: bad".into()));
-    let verdict = judge("read", &effects, &error, &[], &workspace, &credentials);
+    let verdict = judge(
+        "read",
+        &effects,
+        &error,
+        &[],
+        &workspace,
+        &home,
+        &credentials,
+    );
     assert!(matches!(
         verdict,
         Verdict::Deny {

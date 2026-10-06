@@ -8,7 +8,7 @@ use std::path::Path;
 use contract::commands::{RememberScope, ReplyAnswer};
 use contract::events::{DecidedBy, Decision, Grant, RuleOffer, RuleScope, StandingRule};
 use contract::rules::{RuleDecision, RulesError, StandingRules};
-use contract::shapes::DeclaredEffects;
+use contract::shapes::{DeclaredEffects, Effect};
 use contract::tool::Effects;
 
 /// What steps 1 to 6 say about one call.
@@ -32,13 +32,15 @@ pub(crate) enum Verdict {
 /// Judges one call of `tool` with `effects`: the credential deny, a standing
 /// deny, a standing ask, a fast path, a session grant, then a standing
 /// allow. `rules` is both files read now; `grants` are the session's grants
-/// so far. `credentials` is the resolved credentials directory.
+/// so far. `home` is Fiber home, resolved inside the fast-path check;
+/// `credentials` is the resolved credentials directory.
 pub(crate) fn judge(
     tool: &str,
     effects: &Effects,
     rules: &Result<StandingRules, RulesError>,
     grants: &[Grant],
     workspace: &Path,
+    home: &Path,
     credentials: &Path,
 ) -> Verdict {
     if let Some(why) = credential_why(&effects.declared, workspace, credentials) {
@@ -69,7 +71,7 @@ pub(crate) fn judge(
     if let Some(rule) = find(rules, tool, subject, RuleDecision::Ask) {
         return Verdict::Ask(rule);
     }
-    if super::calls::fast_path(&effects.declared, workspace) {
+    if fast_path(&effects.declared, workspace, home) {
         return Verdict::Allow(None);
     }
     if grants
@@ -104,6 +106,56 @@ pub(crate) fn credential_why(
             }
         })
         .then(|| "The call touches Fiber's credential directory.".to_owned())
+}
+
+/// Whether a call with `declared` effects takes a fast path
+/// (`docs/permissions.md`, "Fast paths"): it only reads, or it writes only
+/// inside `workspace` and outside `.git/` and `.fiber/`, or it writes only
+/// Markdown files inside extension data directories in Fiber `home`.
+pub(crate) fn fast_path(declared: &DeclaredEffects, workspace: &Path, home: &Path) -> bool {
+    let only = |allowed: &[Effect]| declared.effects.iter().all(|e| allowed.contains(e));
+    if only(&[Effect::Reads]) {
+        return true;
+    }
+    only(&[Effect::Reads, Effect::Writes])
+        && declared.paths.as_ref().is_some_and(|paths| {
+            !paths.is_empty()
+                && (paths.iter().all(|p| inside(&workspace.join(p), workspace))
+                    || paths.iter().all(|p| in_data(&workspace.join(p), home)))
+        })
+}
+
+/// Whether `path`, symlinks resolved, sits in `workspace` and under no
+/// `.git` or `.fiber` directory.
+fn inside(path: &Path, workspace: &Path) -> bool {
+    super::calls::resolve(path)
+        .as_deref()
+        .and_then(|p| p.strip_prefix(workspace).ok())
+        .is_some_and(|rest| {
+            !rest
+                .components()
+                .any(|c| c.as_os_str() == ".git" || c.as_os_str() == ".fiber")
+        })
+}
+
+/// Whether `path`, symlinks resolved, is a Markdown file strictly inside an
+/// extension data directory in Fiber `home` (`docs/permissions.md`, "Fast
+/// paths"): below `data/<name>/`, or below `projects/<key>/data/<name>/`.
+/// A path that resolves out through a link, or to no Markdown file, does
+/// not qualify.
+fn in_data(path: &Path, home: &Path) -> bool {
+    let (Some(resolved), Some(home)) = (super::calls::resolve(path), super::calls::resolve(home))
+    else {
+        return false;
+    };
+    let Ok(rest) = resolved.strip_prefix(&home) else {
+        return false;
+    };
+    let names: Vec<&std::ffi::OsStr> = rest.components().map(|c| c.as_os_str()).collect();
+    let at = |index: usize, name: &str| names.get(index).is_some_and(|part| *part == name);
+    let machine = names.len() >= 3 && at(0, "data");
+    let project = names.len() >= 5 && at(0, "projects") && at(2, "data");
+    (machine || project) && resolved.extension().is_some_and(|ext| ext == "md")
 }
 
 /// The matching rule with `decision` for `tool`, the project's where both
