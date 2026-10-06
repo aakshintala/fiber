@@ -238,6 +238,12 @@ impl LuaExtension {
         &self.home
     }
 
+    /// The extension's package directory, which `prompt` and
+    /// `prompt_addendum` paths resolve against.
+    pub(crate) fn dir(&self) -> &Path {
+        &self.dir
+    }
+
     /// Whether the extension's VM and thread exist and take calls.
     pub fn is_running(&self) -> bool {
         matches!(

@@ -74,6 +74,29 @@ impl Setup {
         .unwrap();
     }
 
+    /// Installs `fiber.test/<short>` as a data-only extension whose
+    /// manifest names `prompt.md`, holding `text`.
+    fn prompt_fixture(&self, short: &str, text: &str) {
+        let source = self.root.path().join("src").join(short);
+        write(
+            &source.join("extension.json"),
+            &json!({"name": format!("fiber.test/{short}"), "version": "v1.0.0",
+                "fiber": "0.1.0", "api": 1, "prompt": "prompt.md"})
+            .to_string(),
+        );
+        write(&source.join("prompt.md"), text);
+        extensions::plan(
+            &self.home(),
+            &extensions::Request::Path(source),
+            "0.1.0",
+            &extensions::Origin::github(),
+            &*fakes::clock::FakeClock::new(),
+        )
+        .unwrap()
+        .commit()
+        .unwrap();
+    }
+
     /// Writes `content` to the fixture's machine data directory.
     fn machine_file(&self, name: &str, content: &str) -> PathBuf {
         let slug = FIXTURE.replace('/', "-");
@@ -377,4 +400,41 @@ fn an_over_budget_section_ends_with_the_prune_line() {
         body.contains("Fiber: these files are 6 bytes, over their budget of 5 bytes. Prune them."),
         "{body}"
     );
+}
+
+#[test]
+fn the_model_addendum_and_the_extension_prompt_reach_the_system_prompt() {
+    let setup = Setup::new();
+    setup.prompt_fixture("guide", "Read before shell.\n");
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server, &json!({}));
+    // The installed model names an addendum file holding its own text.
+    write(
+        &setup.home().join("extensions/fake/providers/fake.json"),
+        &json!({
+            "name": "fake",
+            "credential": {"env": "FIBER_TEST_FAKE_KEY"},
+            "models": [{"id": "m", "protocol": "openai-responses",
+                        "base_url": format!("{}/v1", server.url()),
+                        "prompt_addendum": "prompts/m.md"}]
+        })
+        .to_string(),
+    );
+    write(
+        &setup.home().join("extensions/fake/prompts/m.md"),
+        "Answer with a haiku.\n",
+    );
+    let run = setup.run(&["ask", "hi"]);
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+
+    // `preamble_built` records the system prompt as sent: the model's
+    // addendum after the model line, and the extension's text under a
+    // heading naming it.
+    let system = run.first("preamble_built")["payload"]["system_prompt"]
+        .as_str()
+        .unwrap();
+    assert!(system.contains("Answer with a haiku."), "{system}");
+    assert!(system.contains("Read before shell."), "{system}");
+    assert!(system.contains("fiber.test/guide"), "{system}");
 }
