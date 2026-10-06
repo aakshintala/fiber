@@ -256,7 +256,7 @@ fn without_a_session_both_calls_raise() {
 }
 
 #[test]
-fn two_sessions_setting_at_once_lose_no_key() {
+fn two_sequential_sets_both_land() {
     let setup = Setup::new();
     let home = setup.home();
     let workspace = setup.workspace();
@@ -291,11 +291,15 @@ fn two_sessions_setting_at_once_lose_no_key() {
         })
     };
     writer(1, done_a);
-    writer(2, done_b);
     assert!(
         done_rx_a.recv_timeout(DEADLINE).is_ok(),
         "the first session's set did not finish within {DEADLINE:?}"
     );
+    // The second session starts only after the first finished: two
+    // sequential sets both land. Contention on one file is forced in
+    // `a_second_update_waits_for_the_files_lock_then_keeps_both_writes`
+    // in `crates/config/src/write.rs`.
+    writer(2, done_b);
     assert!(
         done_rx_b.recv_timeout(DEADLINE).is_ok(),
         "the second session's set did not finish within {DEADLINE:?}"

@@ -25,6 +25,10 @@ impl contract::files::PathLock for NoLock {
     fn hold(&self, _path: &Path, run: &mut dyn FnMut()) {
         run();
     }
+
+    fn hold_all(&self, _paths: &[PathBuf], run: &mut dyn FnMut()) {
+        run();
+    }
 }
 
 /// How long a test waits for a signal or an answer before failing. A hook

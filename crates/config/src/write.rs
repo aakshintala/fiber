@@ -6,6 +6,8 @@ use std::fs::{self, DirBuilder, File, OpenOptions};
 use std::io::{ErrorKind, Write};
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
+#[cfg(test)]
+use std::sync::atomic::AtomicUsize;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use serde_json::{Map, Value};
@@ -227,15 +229,34 @@ pub(crate) fn update(
     Ok(true)
 }
 
+/// Callers blocked in [`locked`], raised before they wait, so a test can
+/// observe that a second write is blocked rather than sleeping.
+#[cfg(test)]
+static WAITING: AtomicUsize = AtomicUsize::new(0);
+
+/// How many callers are blocked in [`locked`].
+///
+/// Raised before the wait, so a test can observe that a second write is
+/// blocked rather than sleeping.
+#[cfg(test)]
+fn waiting() -> usize {
+    WAITING.load(Ordering::SeqCst)
+}
+
 /// Takes the lock for a whole-file write to `file`: creates the parent
 /// directory, then holds `file.lock` until the caller renames over `file`
 /// (`docs/state.md`, "Concurrent access").
 pub(crate) fn locked(file: &Path) -> Result<File, ConfigError> {
     let lock = open_lock(file, 0o666)?;
-    lock.lock().map_err(|source| ConfigError::Io {
+    #[cfg(test)]
+    WAITING.fetch_add(1, Ordering::SeqCst);
+    let outcome = lock.lock().map_err(|source| ConfigError::Io {
         file: file.to_path_buf(),
         source,
-    })?;
+    });
+    #[cfg(test)]
+    WAITING.fetch_sub(1, Ordering::SeqCst);
+    outcome?;
     Ok(lock)
 }
 
@@ -309,4 +330,71 @@ fn write_synced(path: &Path, bytes: &[u8], mode: u32) -> std::io::Result<()> {
         .open(path)?;
     out.write_all(bytes)?;
     out.sync_all()
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::Duration;
+
+    use fakes::TempDir;
+    use serde_json::json;
+
+    use super::*;
+
+    /// How long the test waits for a thread before failing.
+    const DEADLINE: Duration = Duration::from_secs(10);
+
+    fn wait_until(what: &str, pred: impl Fn() -> bool + Send + 'static) {
+        let (done, finished) = mpsc::channel();
+        thread::spawn(move || {
+            while !pred() {
+                thread::yield_now();
+            }
+            done.send(()).unwrap();
+        });
+        assert!(
+            finished.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for {what}"
+        );
+    }
+
+    #[test]
+    fn a_second_update_waits_for_the_files_lock_then_keeps_both_writes() {
+        let dir = TempDir::new("fiber-write-lock");
+        let file = dir.path().join("fiber-acme.json");
+        update(&file, &["a".to_owned()], Value::from(1), false).unwrap();
+        let held = locked(&file).unwrap();
+        let (started, started_rx) = mpsc::channel();
+        let (done, done_rx) = mpsc::channel();
+        let worker_file = file.clone();
+        let worker = thread::spawn(move || {
+            started.send(()).unwrap();
+            update(&worker_file, &["b".to_owned()], Value::from(2), false).unwrap();
+            done.send(()).unwrap();
+        });
+        assert!(
+            started_rx.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the second update to reach the file's lock"
+        );
+        wait_until("the second update to be waiting on the file's lock", || {
+            waiting() == 1
+        });
+        assert!(
+            done_rx.try_recv().is_err(),
+            "the second update finished while the file was locked"
+        );
+        // Another session's write lands while the second update waits:
+        // the lock serializes whole-file writes, it does not hide them.
+        fs::write(&file, "{\"a\": 1, \"c\": 3}\n").unwrap();
+        drop(held);
+        assert!(
+            done_rx.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the second update to finish after the release"
+        );
+        worker.join().unwrap();
+        let written: Value = serde_json::from_str(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(written, json!({"a": 1, "b": 2, "c": 3}));
+    }
 }

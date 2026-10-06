@@ -189,12 +189,8 @@ impl Fs {
     /// The absolute path `raw` names: a relative path joins the workspace,
     /// an absolute path is used as given, and `~` is not expanded.
     fn absolute(&self, raw: &[u8]) -> PathBuf {
-        let path = Path::new(OsStr::from_bytes(raw));
-        if path.is_absolute() {
-            path.to_path_buf()
-        } else {
-            self.workspace.join(path)
-        }
+        // `join` replaces the workspace when `raw` is absolute.
+        self.workspace.join(Path::new(OsStr::from_bytes(raw)))
     }
 
     fn read(&self, raw: &[u8]) -> Result<Vec<u8>, String> {
@@ -458,6 +454,26 @@ impl PathLock for FakeLock {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         state.held.remove(path);
         self.changed.notify_all();
+    }
+
+    fn hold_all(&self, paths: &[PathBuf], run: &mut dyn FnMut()) {
+        let mut keys = paths.to_vec();
+        keys.sort();
+        keys.dedup();
+        nest(self, &keys, run);
+    }
+}
+
+/// Runs `run` while holding the fake's lock on each of `keys`: the first
+/// key is held, then the rest inside it, so two renames never deadlock.
+#[cfg(test)]
+fn nest(lock: &FakeLock, keys: &[PathBuf], run: &mut dyn FnMut()) {
+    match keys.split_first() {
+        None => run(),
+        Some((first, rest)) => {
+            let mut next = || nest(lock, rest, run);
+            lock.hold(first, &mut next);
+        }
     }
 }
 
