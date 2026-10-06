@@ -284,6 +284,31 @@ struct Relay {
     writer: UnixStream,
 }
 
+/// A connection's relays, and the last epoch minted on it. Epochs are
+/// never reused for the connection's lifetime, so a stale relay thread
+/// never drops the entry of a reconnect to the same session.
+#[derive(Default)]
+struct Relays {
+    entries: Vec<Relay>,
+    minted: u64,
+}
+
+impl Relays {
+    /// The next relay epoch: one past every epoch minted on this connection.
+    fn mint(&mut self) -> u64 {
+        self.minted += 1;
+        self.minted
+    }
+
+    /// Drops a finished relay thread's entry: its own session and epoch
+    /// only, so a stale thread never drops a reconnect's entry.
+    fn finish(&mut self, session: &str, epoch: u64) {
+        if let Some(at) = relay_slot(&self.entries, session, epoch) {
+            self.entries.remove(at);
+        }
+    }
+}
+
 /// Serves one client connection: `hub_hello`, then one acknowledgement per
 /// hub command, and a relay thread per session commanded on it. Returning
 /// shuts down every relay stream of the connection, so each session sees
@@ -317,7 +342,7 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
             Value::String(hub.fiber_version.clone()),
         )]),
     );
-    let relays: Arc<Mutex<Vec<Relay>>> = Arc::new(Mutex::new(Vec::new()));
+    let relays: Arc<Mutex<Relays>> = Arc::new(Mutex::new(Relays::default()));
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
     loop {
@@ -330,7 +355,7 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
         }
     }
     let mut relays = lock(&relays);
-    for entry in relays.drain(..) {
+    for entry in relays.entries.drain(..) {
         match entry.writer.shutdown(Shutdown::Both) {
             Ok(()) | Err(_) => {}
         }
@@ -351,7 +376,7 @@ fn on_command(
     bytes: &[u8],
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
-    relays: &Arc<Mutex<Vec<Relay>>>,
+    relays: &Arc<Mutex<Relays>>,
 ) {
     let line = match classify(bytes) {
         Ok(line) => line,
@@ -532,7 +557,7 @@ fn relay_command(
     value: &Value,
     hub: &Arc<Hub>,
     writer: &Arc<Mutex<UnixStream>>,
-    relays: &Arc<Mutex<Vec<Relay>>>,
+    relays: &Arc<Mutex<Relays>>,
 ) {
     if !valid_session_id(session) {
         not_found(writer, hub, id, session);
@@ -549,15 +574,20 @@ fn relay_command(
     };
     bytes.push(b'\n');
     {
-        let mut entries = lock(relays);
-        if let Some(at) = entries.iter().position(|entry| entry.session == session) {
-            if entries
+        let mut held = lock(relays);
+        if let Some(at) = held
+            .entries
+            .iter()
+            .position(|entry| entry.session == session)
+        {
+            if held
+                .entries
                 .get(at)
                 .is_some_and(|entry| write_all(&entry.writer, &bytes).is_ok())
             {
                 return;
             }
-            entries.remove(at);
+            held.entries.remove(at);
         }
     }
     let socket = hub.home.join("run").join(session);
@@ -574,8 +604,8 @@ fn relay_command(
                     return;
                 }
             };
-            let mut entries = lock(relays);
-            let epoch = next_epoch(&entries);
+            let mut held = lock(relays);
+            let epoch = held.mint();
             // The thread may run before its entry is pushed: on session
             // EOF it only removes an entry it finds.
             let relayed = thread::Builder::new().name("hub-relay".to_owned()).spawn({
@@ -587,7 +617,7 @@ fn relay_command(
             // A thread that never started leaves no entry: the next
             // command for the session reconnects.
             if relayed.is_ok() {
-                entries.push(Relay {
+                held.entries.push(Relay {
                     session: session.to_owned(),
                     epoch,
                     writer: stream,
@@ -596,12 +626,6 @@ fn relay_command(
         }
         Err(_) => not_found(writer, hub, id, session),
     }
-}
-
-/// One more than the highest relay epoch in use, so a stale relay thread
-/// never removes a fresh entry.
-fn next_epoch(entries: &[Relay]) -> u64 {
-    entries.iter().map(|entry| entry.epoch).max().unwrap_or(0) + 1
 }
 
 fn not_found(writer: &Arc<Mutex<UnixStream>>, hub: &Hub, id: &CommandId, session: &str) {
@@ -622,7 +646,7 @@ fn relay(
     session: &str,
     reader: UnixStream,
     writer: &Arc<Mutex<UnixStream>>,
-    relays: &Arc<Mutex<Vec<Relay>>>,
+    relays: &Arc<Mutex<Relays>>,
 ) {
     let mut read = BufReader::new(reader);
     let mut buf = Vec::new();
@@ -638,10 +662,7 @@ fn relay(
             }
         }
     }
-    let mut relays = lock(relays);
-    if let Some(at) = relay_slot(&relays, session, epoch) {
-        relays.remove(at);
-    }
+    lock(relays).finish(session, epoch);
 }
 
 /// The entry a finished relay thread drops: its own session and epoch, so

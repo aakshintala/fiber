@@ -531,7 +531,7 @@ fn session_ids_outside_the_minted_shape_are_session_not_found() {
 }
 
 #[test]
-fn relay_epochs_increase_past_every_entry_in_use() {
+fn a_stale_relay_never_drops_a_reconnect_to_the_same_session() {
     fn entry(epoch: u64) -> Relay {
         let (writer, _) = UnixStream::pair().unwrap();
         Relay {
@@ -540,9 +540,22 @@ fn relay_epochs_increase_past_every_entry_in_use() {
             writer,
         }
     }
-    assert_eq!(next_epoch(&[]), 1);
-    assert_eq!(next_epoch(&[entry(5)]), 6);
-    assert_eq!(next_epoch(&[entry(2), entry(5), entry(3)]), 6);
+    let sid = "s_0123456789abcdef";
+    let mut relays = Relays::default();
+    let stale = relays.mint();
+    relays.entries.push(entry(stale));
+    // A failed write drops the entry, leaving the map empty; the
+    // reconnect mints its epoch after that.
+    relays.entries.remove(0);
+    let fresh = relays.mint();
+    assert_ne!(fresh, stale);
+    relays.entries.push(entry(fresh));
+    // The stale relay thread finishes after the reconnect.
+    relays.finish(sid, stale);
+    assert_eq!(relays.entries.len(), 1, "the reconnect's entry stays");
+    assert_eq!(relays.entries[0].epoch, fresh);
+    relays.finish(sid, fresh);
+    assert!(relays.entries.is_empty(), "a relay drops its own entry");
 }
 
 #[test]

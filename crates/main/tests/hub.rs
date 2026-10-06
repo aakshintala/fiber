@@ -233,13 +233,7 @@ struct Socket {
 
 impl Socket {
     fn connect(path: &Path) -> Self {
-        let write = UnixStream::connect(path).expect("the socket accepted before the deadline");
-        let read = write.try_clone().unwrap();
-        read.set_read_timeout(Some(DEADLINE)).unwrap();
-        Self {
-            write: Mutex::new(write),
-            read: Mutex::new(BufReader::new(read)),
-        }
+        Self::from(UnixStream::connect(path).expect("the socket accepted before the deadline"))
     }
 
     fn send(&self, line: &str) {
@@ -364,17 +358,91 @@ fn hello() -> Response {
     ])
 }
 
-/// Starts a session through the hub with `content`, and returns its id.
-fn start_session(client: &Socket, workspace: &str, content: &str) -> String {
+/// Kills process group `group` on drop. After the group is empty,
+/// [`std::mem::forget`] skips that kill.
+struct KillGroup(u32);
+
+impl Drop for KillGroup {
+    fn drop(&mut self) {
+        match fakes::kill_group(self.0, "KILL") {
+            Ok(_) | Err(_) => {}
+        }
+    }
+}
+
+/// A session the hub started in its own process group: killed on drop,
+/// and by its watchdog if the test process dies.
+struct SessionProc {
+    id: String,
+    group: u32,
+    guard: KillGroup,
+    watchdog: Watchdog,
+}
+
+impl SessionProc {
+    /// Waits under [`DEADLINE`] for the session's process group to empty,
+    /// then stands the guards down.
+    fn wait_gone(self) {
+        let Self {
+            group,
+            guard,
+            watchdog,
+            ..
+        } = self;
+        let (done, gone) = mpsc::channel();
+        thread::spawn(move || {
+            while group_alive(group) {
+                thread::yield_now();
+            }
+            match done.send(()) {
+                Ok(()) | Err(mpsc::SendError(())) => {}
+            }
+        });
+        assert!(
+            gone.recv_timeout(DEADLINE).is_ok(),
+            "waited {DEADLINE:?} for the session's process group to empty"
+        );
+        std::mem::forget(guard);
+        watchdog.stand_down(DEADLINE);
+    }
+}
+
+/// Starts a session through the hub with `content`, and guards its process
+/// group. The session writes its pid into its log's lock before it binds
+/// `run/<id>`, and the hub acknowledges only once that socket accepts, so
+/// the pid is there once the acknowledgement arrives. The hub starts each
+/// session in its own process group, so the pid is the group.
+fn start_session(setup: &Setup, client: &Socket, workspace: &str, content: &str) -> SessionProc {
     client.send(&format!(
         "{{\"id\":\"c_start\",\"command\":\"start\",\"args\":{{\"workspace\":\"{workspace}\",\"content\":[{{\"type\":\"text\",\"text\":\"{content}\"}}]}}}}"
     ));
     let ack = recv(client, "the start acknowledgement");
     assert_eq!(ack["kind"], "command_accepted", "{ack}");
-    ack["payload"]["result"]["session_id"]
+    let id = ack["payload"]["result"]["session_id"]
         .as_str()
         .expect("the start answers with a session id")
-        .to_owned()
+        .to_owned();
+    let project = fs::canonicalize(workspace).unwrap();
+    let lock = log::sessions_dir(&setup.home(), &project)
+        .join(&id)
+        .join("session.lock");
+    let group: u32 = fs::read_to_string(&lock)
+        .unwrap()
+        .trim()
+        .parse()
+        .expect("the session's lock names its pid");
+    let guard = KillGroup(group);
+    let watchdog = Watchdog::group(group);
+    assert!(
+        group_alive(group),
+        "the lock's pid names the session's group"
+    );
+    SessionProc {
+        id,
+        group,
+        guard,
+        watchdog,
+    }
 }
 
 /// Subscribes `full` to `session` through the hub.
@@ -405,8 +473,8 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     assert_eq!(hello["kind"], "hub_hello");
     assert_eq!(hello["payload"]["fiber_version"], env!("CARGO_PKG_VERSION"));
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let session = start_session(&client, &workspace, PROMPT);
-    subscribe(&client, &session);
+    let session = start_session(&setup, &client, &workspace, PROMPT);
+    subscribe(&client, &session.id);
     let rest = until(&client, "turn_completed", |line| {
         line["kind"] == "turn_completed"
     });
@@ -421,13 +489,14 @@ fn a_turn_runs_through_the_hub_and_the_hub_outlives_no_session() {
     hub.kill("KILL");
     let status = hub.wait();
     assert!(!status.success());
-    let direct = Socket::connect(&setup.session_socket(&session));
+    let direct = Socket::connect(&setup.session_socket(&session.id));
     close_session(&direct);
     drop(direct);
     assert!(
-        !setup.session_socket(&session).exists(),
+        !setup.session_socket(&session.id).exists(),
         "the closed session unlinked its socket"
     );
+    session.wait_gone();
 }
 
 #[test]
@@ -443,6 +512,8 @@ fn two_racing_clients_share_one_hub() {
             barrier.wait();
             client.send(r#"{"id":"c_status","command":"status","args":{}}"#);
             let status = recv(&client, "the status acknowledgement");
+            // Both stay open until both `status` answers are read.
+            barrier.wait();
             drop(client);
             (hello, status, hub)
         });
@@ -452,6 +523,7 @@ fn two_racing_clients_share_one_hub() {
         barrier.wait();
         client.send(r#"{"id":"c_status","command":"status","args":{}}"#);
         let status = recv(&client, "the status acknowledgement");
+        barrier.wait();
         let (other_hello, other_status, other_hub) = first.join().unwrap();
         assert_eq!(hello["kind"], "hub_hello");
         assert_eq!(other_hello["kind"], "hub_hello");
@@ -482,16 +554,17 @@ fn sigterm_stops_the_hub_and_leaves_sessions_accepting() {
     let hub = Arc::new(Mutex::new(None));
     let (client, _) = connect_hub(&setup, &hub);
     let workspace = setup.workspace().to_string_lossy().into_owned();
-    let session = start_session(&client, &workspace, PROMPT);
-    subscribe(&client, &session);
+    let session = start_session(&setup, &client, &workspace, PROMPT);
+    subscribe(&client, &session.id);
     let hub = hub.lock().unwrap().take().expect("the starter ran");
     hub.kill("TERM");
     let status = hub.wait();
     assert_eq!(status.code(), Some(143));
     // The session keeps accepting on its own socket.
-    let direct = Socket::connect(&setup.session_socket(&session));
+    let direct = Socket::connect(&setup.session_socket(&session.id));
     close_session(&direct);
     drop(direct);
+    session.wait_gone();
     drop(client);
     let log = setup.hub_log();
     for code in [
