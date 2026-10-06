@@ -499,6 +499,23 @@ fn a_thinking_level_is_recorded_and_sent_on_every_request() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let built = lines.iter().find(|l| l.kind == "preamble_built").unwrap();
     assert_eq!(built.payload["thinking"], "high");
     let requests = session.requests();

@@ -3030,6 +3030,7 @@ fn a_thinking_suffix_is_recorded_and_an_unsupported_level_fails_first() {
 
     let run = setup.fiber(&["ask", "--model", "fake/m:high", "hi"], None);
     assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
     let built = run
         .lines
         .iter()

@@ -336,11 +336,5 @@ pub fn parse_duration(text: &str) -> Option<Duration> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn thinking_key_values_match_the_contract_levels() {
-        assert_eq!(LEVELS, contract::ThinkingLevel::names());
-    }
-}
+#[path = "keys_tests.rs"]
+mod tests;

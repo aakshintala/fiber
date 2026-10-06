@@ -58,12 +58,12 @@ fn an_exact_reference_resolves_even_when_its_id_holds_colons() {
 fn a_thinking_suffix_is_stripped_when_the_exact_string_matches_nothing() {
     let setup = Setup::new();
     let providers = installed(&setup, &[("openai", provider("openai", &["gpt-5.6"]))]);
-    for level in contract::ThinkingLevel::names() {
+    for level in contract::ThinkingLevel::ALL.map(contract::ThinkingLevel::as_str) {
         let model = providers
             .resolve(&format!("openai/gpt-5.6:{level}"))
             .unwrap();
         assert_eq!(model.reference(), "openai/gpt-5.6");
-        assert_eq!(model.thinking.map(|l| l.as_str()), Some(*level));
+        assert_eq!(model.thinking.map(|l| l.as_str()), Some(level));
     }
     let err = providers.resolve("openai/gpt-5.6:extreme").unwrap_err();
     assert!(matches!(err, Error::UnknownModel { .. }), "{err:?}");

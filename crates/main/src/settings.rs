@@ -106,8 +106,7 @@ pub(crate) fn thinking(
             let takes = model
                 .thinking_levels
                 .iter()
-                .map(|level| level.as_str())
-                .map(|name| format!("`{name}`"))
+                .map(|l| format!("`{l}`"))
                 .collect::<Vec<_>>()
                 .join(", ");
             let takes = if takes.is_empty() {
@@ -118,8 +117,7 @@ pub(crate) fn thinking(
             Err(Failure {
                 code: ErrorCode::InvalidArguments,
                 message: format!(
-                    "The thinking level `{}` is not one model `{reference}` takes: it {takes}.",
-                    level.as_str()
+                    "The thinking level `{level}` is not one model `{reference}` takes: it {takes}.",
                 ),
                 retry_after: None,
                 provider: None,

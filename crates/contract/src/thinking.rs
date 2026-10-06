@@ -26,6 +26,17 @@ pub enum ThinkingLevel {
 }
 
 impl ThinkingLevel {
+    /// Every level, in declaration order.
+    pub const ALL: [Self; 7] = [
+        Self::Off,
+        Self::Minimal,
+        Self::Low,
+        Self::Medium,
+        Self::High,
+        Self::Xhigh,
+        Self::Max,
+    ];
+
     /// The level's name, as typed and as the wire records it.
     #[must_use]
     pub fn as_str(self) -> &'static str {
@@ -39,28 +50,16 @@ impl ThinkingLevel {
             Self::Max => "max",
         }
     }
-
-    /// Every level's name, in declaration order.
-    #[must_use]
-    pub const fn names() -> &'static [&'static str] {
-        &["off", "minimal", "low", "medium", "high", "xhigh", "max"]
-    }
 }
 
 impl FromStr for ThinkingLevel {
     type Err = String;
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
-        match s {
-            "off" => Ok(Self::Off),
-            "minimal" => Ok(Self::Minimal),
-            "low" => Ok(Self::Low),
-            "medium" => Ok(Self::Medium),
-            "high" => Ok(Self::High),
-            "xhigh" => Ok(Self::Xhigh),
-            "max" => Ok(Self::Max),
-            _ => Err(format!("unknown thinking level `{s}`")),
-        }
+        Self::ALL
+            .into_iter()
+            .find(|level| level.as_str() == s)
+            .ok_or_else(|| format!("unknown thinking level `{s}`"))
     }
 }
 
@@ -71,24 +70,5 @@ impl fmt::Display for ThinkingLevel {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn round_trips_each_level_through_serde() {
-        for name in ThinkingLevel::names() {
-            let level: ThinkingLevel = serde_json::from_value(serde_json::json!(name)).expect(name);
-            assert_eq!(level.as_str(), *name);
-            assert_eq!(serde_json::json!(level), serde_json::json!(name));
-            assert_eq!(name.parse::<ThinkingLevel>().expect(name), level);
-        }
-    }
-
-    #[test]
-    fn rejects_unknown_and_wrong_case_names() {
-        assert!("on".parse::<ThinkingLevel>().is_err());
-        assert!("High".parse::<ThinkingLevel>().is_err());
-        assert!("".parse::<ThinkingLevel>().is_err());
-        assert!(serde_json::from_value::<ThinkingLevel>(serde_json::json!("High")).is_err());
-    }
-}
+#[path = "thinking_tests.rs"]
+mod tests;
