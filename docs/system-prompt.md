@@ -273,7 +273,7 @@ Fiber finds skills in these places, read once at session start:
 | Repository | `.fiber/skills/` and `.agents/skills/` at the top of the git repository, or in the workspace outside git |
 | Personal | `skills/` in Fiber home, and `~/.agents/skills/` |
 | Extension | each installed extension's `skills/` and `prompts/` directories (`docs/extensions.md`, "What a package holds") |
-| Built-in | skills compiled into the binary, such as the recipe that recommends `cache.warm_cap` from the person's own sessions (`docs/prompt-cache.md`) |
+| Built-in | `docs/skills/` in Fiber home, from the docs archive (`docs/releasing.md`), such as the recipe that recommends `cache.warm_cap` from the person's own sessions (`docs/prompt-cache.md`) |
 
 Each place holds one directory per skill, at a fixed depth. Fiber never walks
 the tree below it, so the cost does not grow with the repository.
@@ -283,6 +283,9 @@ Claude Code need no copy.
 When two skills share a name, the more specific source wins: the repository,
 then personal, then an extension, then built-in. A `notice` with code
 `skill_shadowed` names both paths.
+
+With `docs/` missing from Fiber home, as for a binary copied without the
+installer, there are no built-in skills.
 
 A person can switch a skill off, for one project or everywhere, from the
 terminal's `/skills` view. The view writes the skill's name to

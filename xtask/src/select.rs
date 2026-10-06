@@ -82,6 +82,8 @@ const COMPILED_IN: &[(&str, &str)] = &[
     ("crates/loop/prompt/opening.md", "loop"),
     ("crates/loop/prompt/reviewer.md", "loop"),
     ("crates/loop/prompt/system.md", "loop"),
+    ("docs/skills/cache-warming/SKILL.md", "loop"),
+    ("docs/skills/using-fiber/SKILL.md", "loop"),
     ("crates/tools/prompt/guidelines.md", "tools"),
 ];
 /// `docs/ci.md`: mutation testing runs as 6 shards.

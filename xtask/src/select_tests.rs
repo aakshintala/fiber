@@ -567,16 +567,7 @@ fn listed_includes(krate: &str) -> String {
     COMPILED_IN
         .iter()
         .filter(|(_, listed)| *listed == krate)
-        .map(|(path, _)| {
-            let path: &str = path;
-            match krate {
-                "loop" => format!(
-                    "include_str!(\"../{rel}\");\n",
-                    rel = path.strip_prefix("crates/loop/").unwrap_or(path)
-                ),
-                _ => format!("include_str!(\"../../../{path}\");\n"),
-            }
-        })
+        .map(|(path, _)| format!("include_str!(\"../../../{path}\");\n"))
         .collect()
 }
 

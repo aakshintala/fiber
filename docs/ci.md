@@ -54,9 +54,10 @@ A pull request runs only what its diff can affect.
   depend on it. This covers Markdown anywhere, and any file outside the
   crate. A change to `docs/events.md`, `docs/errors.md` or
   `docs/invocation.md` runs `contract`, whose tests check the code against
-  them. The selector lists these files. The gate fails when the list and
-  the source disagree, or when an include's argument is not a string
-  literal.
+  them. A change to a built-in skill under `docs/skills/` runs `loop`, whose
+  tests check it parses. The selector lists these files. The gate fails when
+  the list and the source disagree, or when an include's argument is not a
+  string literal.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).

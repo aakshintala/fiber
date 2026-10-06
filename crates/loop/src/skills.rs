@@ -42,8 +42,9 @@ struct Place {
 }
 
 /// Every place in order, most specific first (`docs/system-prompt.md`,
-/// "Skills"). `top` is the repository's top level, or the workspace
-/// outside git.
+/// "Skills"). The last place is the built-in one, `docs/skills/` in
+/// Fiber home, so any other source wins a name. `top` is the repository's
+/// top level, or the workspace outside git.
 fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
     let place = |dir: PathBuf, source, label: Option<String>, prompts| Place {
         dir,
@@ -96,8 +97,12 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
             true,
         ));
     }
-    // debt: no built-in skill is compiled in, so the built-in source adds
-    // no place; fixed by #760.
+    places.push(place(
+        inputs.home.join("docs/skills"),
+        SkillSource::Builtin,
+        None,
+        false,
+    ));
     places
 }
 
