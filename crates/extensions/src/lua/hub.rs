@@ -137,17 +137,19 @@ impl Hub {
     /// Hands the session loop's inbox to the extension's `host.exec` runs:
     /// a run that ended before any sender is buffered in order and sent on
     /// the first sender; a later sender replaces the last, and each later
-    /// run goes to the newest.
+    /// run goes to the newest. Sender choice, buffering and the flush hold
+    /// one lock, so a run ending against `deliver_to` is sent, never
+    /// stranded: an `mpsc` send never blocks, so sending under the lock is
+    /// safe, and every delivery leaves in order.
     pub(crate) fn set_exec_inbox(&self, inbox: std::sync::mpsc::Sender<Delivery>) {
-        let buffered = {
-            let mut shared = self.lock();
-            shared.exec_inbox = Some(inbox.clone());
-            std::mem::take(&mut shared.exec_buffer)
-        };
+        let mut shared = self.lock();
+        shared.exec_inbox = Some(inbox.clone());
+        let buffered = std::mem::take(&mut shared.exec_buffer);
         for exec in buffered {
-            match inbox.send(Delivery::ExtensionExec(exec)) {
-                Ok(()) => {}
-                Err(_) => return,
+            // `send` on an `mpsc` Sender never blocks; held under the hub
+            // lock so a concurrent `send_exec` cannot interleave.
+            if inbox.send(Delivery::ExtensionExec(exec)).is_err() {
+                return;
             }
         }
     }
@@ -217,14 +219,19 @@ impl Hub {
     /// Logs a finished `host.exec` run: sent to the loop's inbox, or
     /// buffered in end order when no sender arrived yet. A send that fails
     /// means the session is over and nothing can log it, so the run is
-    /// dropped.
+    /// dropped. Sender choice and buffering hold one lock, so a
+    /// `deliver_to` racing the run's end cannot flush an empty buffer and
+    /// strand the run.
     pub(super) fn send_exec(&self, exec: ExtensionExec) {
-        if let Some(inbox) = self.lock().exec_inbox.clone() {
+        let mut shared = self.lock();
+        if let Some(inbox) = shared.exec_inbox.clone() {
+            // `send` on an `mpsc` Sender never blocks; held under the hub
+            // lock so sender choice, buffering and flushing serialize.
             match inbox.send(Delivery::ExtensionExec(exec)) {
                 Ok(()) | Err(_) => {}
             }
         } else {
-            self.lock().exec_buffer.push(exec);
+            shared.exec_buffer.push(exec);
         }
     }
 }
@@ -723,3 +730,7 @@ fn again(name: &str, e: &Error) -> Error {
         | Error::NoModel => stopped(name),
     }
 }
+
+#[cfg(test)]
+#[path = "hub_tests.rs"]
+mod tests;

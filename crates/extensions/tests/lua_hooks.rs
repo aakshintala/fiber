@@ -473,6 +473,13 @@ fn a_timer_set_in_init_fires_after_load() {
     );
     let fired = read_fifo(timer_fifo(&dir, "fired.fifo"));
     exec_call(&ext, "nop").expect("loading runs the entry script");
+    // The thread parks at the timer's due: the signal it waits on the
+    // clock before the advance.
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&fired, "the init timer"), b"x");
 }
@@ -496,8 +503,17 @@ fn after_fires_once() {
     );
     let fired = read_fifo(timer_fifo(&dir, "fired.fifo"));
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
+    // The thread parks at the `after` due before the advance.
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&fired, "the after timer"), b"x");
+    // The `count` call runs only after the thread is free, so past it the
+    // one-shot has ended and no timer waits: the advance cannot shift a
+    // rescheduling.
     assert_eq!(exec_call(&ext, "count").unwrap(), "1");
     clock.advance(Duration::from_secs(10));
     assert_eq!(exec_call(&ext, "count").unwrap(), "1");
@@ -522,8 +538,23 @@ fn every_fires_again_ms_after_each_firing_ends() {
     let first = read_fifo(timer_fifo(&dir, "f1.fifo"));
     let second = read_fifo(timer_fifo(&dir, "f2.fifo"));
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
+    // The thread parks at the `every` due before the advance.
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&first, "the first firing"), b"x");
+    // The fifo proves the write, not that the firing ended: the thread
+    // parks at the rescheduled due only after the firing ends, so awaiting
+    // it proves the end before the advance. Advancing earlier would shift
+    // the rescheduling and make this test flaky.
+    let rescheduled = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(rescheduled, WAIT),
+        "waited {WAIT:?} for the first firing to end and park at its every"
+    );
     // The first firing ended at the frozen now, so its `every` is due 50 ms
     // later: 49 ms must not fire it, 2 ms more must.
     clock.advance(Duration::from_millis(49));
@@ -555,6 +586,8 @@ fn cancel_before_the_due_time_stops_it_and_twice_is_a_no_op() {
     let fired = read_fifo(timer_fifo(&dir, "fired.fifo"));
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
     assert_eq!(exec_call(&ext, "cancel").unwrap(), "cancelled");
+    // The `cancel` return proves the timer is gone and no timer waits: the
+    // advance cannot shift a rescheduling.
     clock.advance(Duration::from_secs(20));
     no_line(&fired, "the cancelled timer");
 }
@@ -579,11 +612,28 @@ fn cancel_inside_its_own_every_callback_stops_it() {
     let second = read_fifo(timer_fifo(&dir, "f2.fifo"));
     let third = read_fifo(timer_fifo(&dir, "f3.fifo"));
     exec_call(&ext, "nop").expect("loading sets the timer");
+    // The thread parks at the `every` due before the advance.
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&first, "the first firing"), b"x");
-    // The second firing is due 50 ms after the first one ended.
+    // The second firing is due 50 ms after the first one ended: await the
+    // rescheduled park, which proves the first firing ended, before the
+    // advance.
+    let rescheduled = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(rescheduled, WAIT),
+        "waited {WAIT:?} for the first firing to end and park at its every"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&second, "the second firing"), b"x");
+    // The fifo proves the write, not that the cancelling firing ended: the
+    // `nop` call runs only after the thread is free, so past it no timer
+    // waits and the advance cannot shift a rescheduling.
+    exec_call(&ext, "nop").expect("the cancelling firing ended");
     clock.advance(Duration::from_secs(10));
     no_line(&third, "a third firing after the cancel");
 }
@@ -655,7 +705,10 @@ fn a_queued_command_starts_before_a_due_timer() {
     let slow_caller = Arc::clone(&ext);
     std::thread::spawn(move || slow_tx.send(slow_caller.command("slow", "")));
     // `slow` runs, spinning in Lua past the advance below; its long
-    // timeout never comes due on the fake clock.
+    // timeout never comes due on the fake clock. The `started` fifo is the
+    // signal: it proves `slow` reached its write and now spins, so the
+    // timer coming due during the spin cannot fire until `slow` ends. No
+    // parked signal exists while the thread spins in Lua.
     assert_eq!(next_line(&started, "the slow command"), b"x");
     clock.advance(Duration::from_millis(20000));
     // Queued while `slow` runs and the timer is due: `quick` starts
@@ -704,14 +757,27 @@ fn a_timer_callback_past_its_timeout_ends_and_every_keeps_firing() {
     let started = read_fifo(timer_fifo(&dir, "started.fifo"));
     let second = read_fifo(timer_fifo(&dir, "f2.fifo"));
     assert_eq!(exec_call(&ext, "arm").unwrap(), "armed");
+    // The thread parks at the `every` due before the advance.
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&started, "the first firing"), b"x");
-    // Past the firing's 200 ms timeout it ends. The `count` call is the
+    // Past the firing's 200 ms timeout it ends. The `started` fifo proves
+    // the firing spins; the `count` call past the next advance is the
     // barrier: it runs only after the thread is free, so past it the
     // first firing has ended and only the first one has run.
     clock.advance(Duration::from_millis(400));
     assert_eq!(exec_call(&ext, "count").unwrap(), "1");
-    // Its `every` is due 50 ms after that end; 500 ms later it fires again.
+    // Its `every` is due 50 ms after that end: await the rescheduled park,
+    // which proves the end, before advancing; 500 ms later it fires again.
+    let rescheduled = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(rescheduled, WAIT),
+        "waited {WAIT:?} for the timed-out firing to park at its every"
+    );
     clock.advance(Duration::from_millis(500));
     assert_eq!(next_line(&second, "the second firing"), b"x");
     assert_eq!(exec_call(&ext, "count").unwrap(), "2");
@@ -738,6 +804,13 @@ fn a_timer_has_no_provider_credential_to_refresh() {
     );
     let first = read_fifo(timer_fifo(&dir, "f1.fifo"));
     exec_call(&ext, "nop").expect("loading sets the timers");
+    // Both timers come due 50 ms after load: await the park, which proves
+    // the thread waits on the clock, before the advance.
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     // The refused refresh ends the firing silently (`docs/extensions.md`:
     // a timer failure is reported nowhere); the `every` keeps firing.
@@ -774,8 +847,16 @@ fn a_timer_fires_while_a_hook_waits_on_host_exec() {
     timer_fifo(&dir, "hook.fifo");
     let answered = ask(&session);
     // The hook runs first and parks in its exec; the timer comes due while
-    // it waits and fires in the gap.
+    // it waits and fires in the gap. The `started` fifo proves the hook
+    // parked; awaiting the timer due proves the extension thread waits on
+    // the clock before the advance. The exec's own parks use `GROUP_POLL`,
+    // so the timer due names the thread's wait.
     assert_eq!(next_line(&started, "the parked hook"), b"x");
+    let due = clock.now() + Duration::from_millis(50);
+    assert!(
+        clock.await_parked(due, WAIT),
+        "waited {WAIT:?} for the thread to park at the timer due"
+    );
     clock.advance(Duration::from_millis(1000));
     assert_eq!(next_line(&tick, "the timer while the hook waits"), b"x");
     // Releasing the shell ends the exec, and the hook returns unchanged.

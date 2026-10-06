@@ -69,6 +69,14 @@ struct Inner {
     reaped: bool,
     status: Option<ExitStatus>,
     seq: u64,
+    /// Each stream keeps at most `cap + 1` bytes: one past the cap proves
+    /// it fired, and nothing more is retained. Set at spawn from the
+    /// extension's memory cap.
+    cap: usize,
+    /// The run returned: readers drop every later byte instead of
+    /// retaining it, so an escaped descendant holding the pipe past the
+    /// drain cannot grow Fiber's memory.
+    discard: bool,
 }
 
 #[derive(Default)]
@@ -125,44 +133,66 @@ pub(crate) fn run(
         }
     };
     let pgid = child.id();
-    let stdout = child.stdout.take();
-    let stderr = child.stderr.take();
-    let shared = Arc::new(Shared::default());
+    let shared = Arc::new(Shared {
+        inner: Mutex::new(Inner {
+            cap: req.cap,
+            ..Default::default()
+        }),
+        cv: Condvar::new(),
+    });
     clock.subscribe(Arc::downgrade(
         &(Arc::clone(&shared) as Arc<dyn contract::clock::Wake>),
     ));
-    if let Some(stdout) = stdout {
-        let shared = Arc::clone(&shared);
-        std::thread::Builder::new()
-            .name("exec stdout".into())
-            .spawn(move || read_into(stdout, &shared, true))
-            .map_err(|e| ExecError {
-                message: format!("host.exec: {}: {e}", req.program),
-                ran: None,
-            })?;
-    } else {
-        lock(&shared.inner).stdout_eof = true;
+    // `Stdio::piped()` always yields both streams, so a missing one is a
+    // post-spawn failure like a thread that cannot start: the group stops
+    // and the run is still logged.
+    let (Some(out), Some(err)) = (child.stdout.take(), child.stderr.take()) else {
+        return Err(abort_startup(
+            req,
+            pgid,
+            child,
+            &shared,
+            std::io::Error::other("host.exec pipes missing"),
+        ));
+    };
+    let out_shared = Arc::clone(&shared);
+    if let Err(source) = std::thread::Builder::new()
+        .name("exec stdout".into())
+        .spawn(move || read_into(out, &out_shared, true))
+    {
+        return Err(abort_startup(req, pgid, child, &shared, source));
     }
-    if let Some(stderr) = stderr {
-        let shared = Arc::clone(&shared);
-        std::thread::Builder::new()
-            .name("exec stderr".into())
-            .spawn(move || read_into(stderr, &shared, false))
-            .map_err(|e| ExecError {
-                message: format!("host.exec: {}: {e}", req.program),
-                ran: None,
-            })?;
-    } else {
-        lock(&shared.inner).stderr_eof = true;
+    let err_shared = Arc::clone(&shared);
+    if let Err(source) = std::thread::Builder::new()
+        .name("exec stderr".into())
+        .spawn(move || read_into(err, &err_shared, false))
+    {
+        return Err(abort_startup(req, pgid, child, &shared, source));
     }
+    // The waiter takes the child through a handoff, so a spawn failure
+    // keeps it here for the stop and the reap instead of dropping it in
+    // a closure that never runs.
+    let (wait_tx, wait_rx) = mpsc::channel::<Child>();
     let waiter = Arc::clone(&shared);
-    std::thread::Builder::new()
+    if let Err(source) = std::thread::Builder::new()
         .name("exec wait".into())
-        .spawn(move || wait_child(child, &waiter))
-        .map_err(|e| ExecError {
-            message: format!("host.exec: {}: {e}", req.program),
-            ran: None,
-        })?;
+        .spawn(move || {
+            if let Ok(child) = wait_rx.recv() {
+                wait_child(child, &waiter);
+            }
+        })
+    {
+        return Err(abort_startup(req, pgid, child, &shared, source));
+    }
+    if let Err(send) = wait_tx.send(child) {
+        return Err(abort_startup(
+            req,
+            pgid,
+            send.0,
+            &shared,
+            std::io::Error::other("host.exec waiter gone"),
+        ));
+    }
 
     let mut seen_empty = false;
     let mut sent_term = false;
@@ -193,22 +223,17 @@ pub(crate) fn run(
         let cancelled = matches!(cancel.try_recv(), Err(mpsc::TryRecvError::Disconnected));
         let deadline_due = deadline.is_some_and(|at| now >= at);
 
-        // The cap fires once, on the first pass past it.
+        // The cap fires once, on the first pass past it. No signal to a
+        // group already seen empty: its id may be reused.
         if !capped && (out_len > req.cap || err_len > req.cap) {
             capped = true;
-            if !sent_term {
-                signal_group(pgid, Signal::TERM);
-                sent_term = true;
-            }
+            sent_term = send_term(pgid, sent_term, seen_empty);
             kill_at = Some(add(now, GRACE));
         }
         // A stop starts once: the cap, the deadline, or the drop.
         if kill_at.is_none() && (deadline_due || cancelled) {
             timed_out = deadline_due;
-            if !sent_term {
-                signal_group(pgid, Signal::TERM);
-                sent_term = true;
-            }
+            sent_term = send_term(pgid, sent_term, seen_empty);
             kill_at = Some(add(now, GRACE));
         }
 
@@ -224,17 +249,22 @@ pub(crate) fn run(
                 }
                 // One SIGKILL: fall through to the drain below.
             } else {
-                park(clock, &shared, seen_seq, Some(kill_at), !seen_empty);
+                park(clock, &shared, seen_seq, Some(kill_at));
                 continue;
             }
         } else if seen_empty && eof {
-            // A quiet end: no stop, no drain.
-            return finish(req, &shared, pgid, seen_empty, status, false, false);
+            // A quiet end: no stop, no drain. Nothing more is retained:
+            // an escaped descendant holding the pipe past here is dropped.
+            let ran = ran_of(&shared, status, false);
+            lock(&shared.inner).discard = true;
+            finished(pgid, seen_empty);
+            return Ok(ran);
         } else {
             // Running: the deadline may stop it, and the group is polled.
             // Always a concrete `until` so a test can wait for the park.
-            let until = sooner(deadline, Some(add(clock.now(), GROUP_POLL)));
-            park(clock, &shared, seen_seq, until, !seen_empty);
+            let poll = add(clock.now(), GROUP_POLL);
+            let until = Some(deadline.map_or(poll, |d| d.min(poll)));
+            park(clock, &shared, seen_seq, until);
             continue;
         }
 
@@ -242,8 +272,9 @@ pub(crate) fn run(
         let until = drain_until.unwrap_or_else(|| add(clock.now(), DRAIN));
         if (eof && seen_empty) || clock.now() >= until {
             if capped {
-                finished(pgid, seen_empty);
                 let ran = ran_of(&shared, status, timed_out);
+                lock(&shared.inner).discard = true;
+                finished(pgid, seen_empty);
                 return Err(ExecError {
                     message: format!(
                         "host.exec: {}: output passed the extension's memory cap of {} bytes",
@@ -252,25 +283,52 @@ pub(crate) fn run(
                     ran: Some(ran),
                 });
             }
-            return finish(req, &shared, pgid, seen_empty, status, timed_out, true);
+            let ran = ran_of(&shared, status, timed_out);
+            lock(&shared.inner).discard = true;
+            finished(pgid, seen_empty);
+            return Ok(ran);
         }
-        park(clock, &shared, seen_seq, Some(until), !seen_empty);
+        park(clock, &shared, seen_seq, Some(until));
     }
 }
 
-fn finish(
+/// Stops a group that started but whose readers or waiter never did: the
+/// stop sequence, then the reap. The run started, so its end is still
+/// logged; the call raises the spawn error.
+fn abort_startup(
     req: &ExecRequest,
-    shared: &Shared,
     pgid: u32,
-    seen_empty: bool,
-    status: Option<ExitStatus>,
-    timed_out: bool,
-    _stopped: bool,
-) -> Result<Ran, ExecError> {
-    let _ = req;
-    let ran = ran_of(shared, status, timed_out);
-    finished(pgid, seen_empty);
-    Ok(ran)
+    mut child: Child,
+    shared: &Shared,
+    source: std::io::Error,
+) -> ExecError {
+    signal_group(pgid, Signal::TERM);
+    signal_group(pgid, Signal::KILL);
+    let status = child.wait().ok();
+    {
+        let mut inner = lock(&shared.inner);
+        inner.discard = true;
+        if !inner.reaped {
+            inner.reaped = true;
+            inner.status = status;
+        }
+    }
+    let ran = ran_of(shared, lock(&shared.inner).status, false);
+    finished(pgid, true);
+    ExecError {
+        message: format!("host.exec: {}: {source}", req.program),
+        ran: Some(ran),
+    }
+}
+
+/// Sends SIGTERM once, never to a group already seen empty: its id may be
+/// reused by an unrelated process.
+fn send_term(pgid: u32, sent: bool, seen_empty: bool) -> bool {
+    if sent || seen_empty {
+        return sent;
+    }
+    signal_group(pgid, Signal::TERM);
+    true
 }
 
 fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
@@ -295,33 +353,24 @@ fn ran_of(shared: &Shared, status: Option<ExitStatus>, timed_out: bool) -> Ran {
 /// Parks until the shared state moves or `until` on the injected clock.
 /// The condvar always times out at `GROUP_POLL`: a clock move whose wake
 /// lands between the register and the wait still surfaces within one poll.
-fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>, _poll: bool) {
+fn park(clock: &dyn Clock, shared: &Shared, seen: u64, until: Option<Instant>) {
     let mut slot = Some(lock(&shared.inner));
     clock.wait_until(until, &mut |bound| {
         let Some(guard) = slot.take() else {
             return;
         };
-        let timeout = match bound {
-            Some(bound) => Some(bound.min(GROUP_POLL)),
-            None => Some(GROUP_POLL),
-        };
+        let timeout = bound.map_or(GROUP_POLL, |b| b.min(GROUP_POLL));
         if guard.seq != seen {
             slot = Some(guard);
             return;
         }
-        slot = Some(match timeout {
-            Some(timeout) => {
-                shared
-                    .cv
-                    .wait_timeout(guard, timeout)
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .0
-            }
-            None => shared
+        slot = Some(
+            shared
                 .cv
-                .wait(guard)
-                .unwrap_or_else(PoisonError::into_inner),
-        });
+                .wait_timeout(guard, timeout)
+                .unwrap_or_else(PoisonError::into_inner)
+                .0,
+        );
     });
 }
 
@@ -335,10 +384,24 @@ fn read_into(mut read: impl Read, shared: &Shared, stdout: bool) {
                     break;
                 };
                 let mut inner = lock(&shared.inner);
-                if stdout {
-                    inner.stdout.extend_from_slice(bytes);
-                } else {
-                    inner.stderr.extend_from_slice(bytes);
+                // Past the drain nothing is retained; past the cap only one
+                // byte more is kept to prove it fired. The read continues
+                // so the program never blocks on the pipe.
+                if !inner.discard {
+                    let len = if stdout {
+                        inner.stdout.len()
+                    } else {
+                        inner.stderr.len()
+                    };
+                    let room = inner.cap.saturating_add(1).saturating_sub(len);
+                    if room > 0 {
+                        let kept = bytes.get(..room.min(bytes.len())).unwrap_or(&[]);
+                        if stdout {
+                            inner.stdout.extend_from_slice(kept);
+                        } else {
+                            inner.stderr.extend_from_slice(kept);
+                        }
+                    }
                 }
                 bump(&mut inner, shared);
             }
@@ -364,13 +427,6 @@ fn wait_child(mut child: Child, shared: &Shared) {
 
 fn add(now: Instant, delay: Duration) -> Instant {
     now.checked_add(delay).unwrap_or(now)
-}
-
-fn sooner(a: Option<Instant>, b: Option<Instant>) -> Option<Instant> {
-    match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (one, other) => one.or(other),
-    }
 }
 
 /// Whether the group still holds a process. A group id of 1 or less is
@@ -490,12 +546,6 @@ mod groups {
         for pgid in live.iter() {
             signal_group(*pgid, Signal::KILL);
         }
-    }
-
-    #[cfg(test)]
-    #[allow(dead_code, reason = "listed is read if a later test needs it")]
-    pub(super) fn listed() -> Vec<u32> {
-        live().clone()
     }
 }
 
