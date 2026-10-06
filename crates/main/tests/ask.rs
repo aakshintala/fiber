@@ -2685,3 +2685,61 @@ fn a_credential_that_errors_fails_before_any_session_line() {
 
     assert_pre_session(&run, 1, "credential_failed");
 }
+
+#[test]
+fn a_lua_provider_without_credential_uses_the_stored_key() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    let source = setup.root.path().join("src-plain");
+    write(
+        &source.join("extension.json"),
+        &json!({"name": "plain", "version": "v0.0.0", "fiber": "0.0.0", "api": 1}),
+    );
+    fs::write(
+        source.join("init.lua"),
+        format!(
+            "fiber.provider(\"plain\", {{\n models = {{\n   timeout = 5000,\n   run = function()\n     return {{ {{ id = \"m1\", protocol = \"openai-responses\", base_url = \"{}/v1\" }} }}\n   end,\n }},\n}})\n",
+            server.url()
+        ),
+    )
+    .unwrap();
+    extensions::plan(
+        &setup.home(),
+        &extensions::Request::Path(source),
+        "0.0.0",
+        &extensions::Origin::github(),
+        &*fakes::clock::FakeClock::new(),
+    )
+    .unwrap()
+    .commit()
+    .unwrap();
+    config::store_credential(
+        &setup.home(),
+        "plain",
+        "default",
+        &config::Secret::new("k-plain".into()),
+    )
+    .unwrap();
+    write(
+        &setup.home().join("config.json"),
+        &json!({"model": "plain/m1"}),
+    );
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    assert!(
+        server.await_requests(1, DEADLINE),
+        "waited for the model request"
+    );
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert_eq!(requests[0].path, "/v1/responses");
+    assert_fingerprint(&requests[0], "authorization", "Bearer k-plain");
+    assert!(
+        !requests.iter().any(|request| request.path == "/token"),
+        "{requests:?}"
+    );
+}
