@@ -23,9 +23,10 @@ use crate::{fail, failed, project_of};
 
 /// Starts the detached refresh of stale model lists: the running binary
 /// re-run as its hidden refresh child: its own process group, nothing on
-/// any pipe, never waited on.
-fn spawn_refresh(providers: Vec<String>) -> io::Result<()> {
-    let mut command = std::process::Command::new(std::env::current_exe()?);
+/// any pipe, never waited on. `exe` is the binary to re-run: the real call
+/// passes `current_exe()`, a test passes its stub.
+fn spawn_refresh(exe: &Path, providers: Vec<String>) -> io::Result<()> {
+    let mut command = std::process::Command::new(exe);
     command.arg("refresh-model-lists").args(&providers);
     command
         .stdin(std::process::Stdio::null())
@@ -277,7 +278,7 @@ pub fn models(
                 &|config: &Config| {
                     SessionExtensions::load(&home, config, Arc::clone(&clock), Arc::clone(&locks))
                 },
-                &spawn_refresh,
+                &|providers| std::env::current_exe().and_then(|exe| spawn_refresh(&exe, providers)),
                 clock.as_ref(),
             )
         });
@@ -313,31 +314,39 @@ fn refresh_named(
     }
 }
 
+/// Refreshes the named providers' cached lists in `home`, with the age
+/// check: the testable body behind [`refresh_model_lists`], as `run` is
+/// behind `models`.
+fn refresh_run(
+    home: &Path,
+    workspace: &Path,
+    names: &[String],
+    clock: Arc<dyn Clock>,
+    locks: Arc<dyn PathLock>,
+) {
+    if let Ok((_, project)) = project_of(home, workspace)
+        && let Ok(config) = Config::load(Sources {
+            home: home.to_path_buf(),
+            workspace: workspace.to_path_buf(),
+            project,
+            overrides: Vec::new(),
+        })
+        && let Ok((providers, _)) = Providers::load(home)
+    {
+        let loaded = SessionExtensions::load(home, &config, clock, locks);
+        refresh_named(names, &providers, &loaded, &config);
+    }
+}
+
 /// `fiber refresh-model-lists <provider>...`: refreshes the named providers'
 /// cached model lists with the age check, for the next run. The hidden
 /// child `fiber models` spawns: hidden and free to change, like the other
 /// hidden subcommands. It joins every refresh it starts, and exits 0
 /// whatever the result: a background refresh never fails a command.
-pub fn refresh_model_lists(
-    names: &[String],
-    clock: Arc<dyn Clock>,
-    locks: Arc<dyn PathLock>,
-) -> i32 {
-    if let Ok(home) = config::fiber_home_from_env()
-        && let Ok(workspace) = std::env::current_dir()
-        && let Ok((_, project)) = project_of(&home, &workspace)
-        && let Ok(config) = Config::load(Sources {
-            home: home.clone(),
-            workspace,
-            project,
-            overrides: Vec::new(),
-        })
-        && let Ok((providers, _)) = Providers::load(&home)
-    {
-        let loaded = SessionExtensions::load(&home, &config, clock, locks);
-        refresh_named(names, &providers, &loaded, &config);
+pub fn refresh_model_lists(names: &[String], clock: Arc<dyn Clock>, locks: Arc<dyn PathLock>) {
+    if let (Ok(home), Ok(workspace)) = (config::fiber_home_from_env(), std::env::current_dir()) {
+        refresh_run(&home, &workspace, names, clock, locks);
     }
-    0
 }
 
 #[cfg(test)]

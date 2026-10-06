@@ -151,7 +151,8 @@ fn run() -> i32 {
             Arc::new(tools::PathLocks::new()),
         ),
         cli::Invocation::Run(Some(cli::Commands::RefreshModelLists { providers })) => {
-            ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()))
+            ::cli::refresh_model_lists(&providers, clock, Arc::new(tools::PathLocks::new()));
+            0
         }
         cli::Invocation::Run(Some(cli::Commands::Extension(cmd))) => extension(cmd, clock.as_ref()),
         cli::Invocation::Run(Some(cli::Commands::Approve(args))) => ::cli::approve(args.yes),
@@ -629,7 +630,6 @@ fn parts_with(
             .as_ref()
             .ok()
             .and_then(|judge| judge.model.reference.split_once('/').map(|(name, _)| name))
-            && name != model.provider.name.as_str()
         {
             keep.push(name);
         }

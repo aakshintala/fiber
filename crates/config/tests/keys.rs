@@ -9,6 +9,7 @@ use common::{Setup, nest};
 use config::{CredentialSource, Source};
 use contract::ErrorCode;
 use serde_json::{Value, json};
+use std::time::Duration;
 
 const STR: &str = "a string";
 const BOOL: &str = "true or false";
@@ -700,4 +701,32 @@ fn model_lists_refresh_after_defaults_to_one_day() {
         config.get("model_lists.refresh_after", None),
         Some((json!("24h"), Source::Default))
     );
+}
+
+#[test]
+fn parse_duration_pins_exact_seconds_for_every_unit() {
+    assert_eq!(config::parse_duration("7s"), Some(Duration::from_secs(7)));
+    assert_eq!(config::parse_duration("2m"), Some(Duration::from_secs(120)));
+    assert_eq!(
+        config::parse_duration("3h"),
+        Some(Duration::from_secs(10800))
+    );
+    assert_eq!(
+        config::parse_duration("2d"),
+        Some(Duration::from_secs(172800))
+    );
+}
+
+#[test]
+fn refresh_after_defaults_to_a_day_and_reads_ninety_minutes() {
+    let setup = Setup::new();
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config::refresh_after(&config), Duration::from_secs(86400));
+    let setup = Setup::new();
+    setup.write(
+        &setup.global(),
+        &nest(&["model_lists", "refresh_after"], json!("90m")).to_string(),
+    );
+    let config = setup.load(&[]).unwrap();
+    assert_eq!(config::refresh_after(&config), Duration::from_secs(5400));
 }

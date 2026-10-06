@@ -19,7 +19,7 @@ use contract::clock::Clock;
 use contract::shapes::Failure;
 use serde_json::{Value, json};
 
-use super::{refresh_named, run};
+use super::{refresh_named, refresh_run, run};
 
 /// `fiber models` never writes a file, so its lock runs every call straight
 /// through.
@@ -404,6 +404,16 @@ fn a_model_listed_twice_prints_two_rows_and_marks_only_the_first() {
     );
 }
 
+/// How long a refresh worker may run before the test fails: the refresh
+/// joins its threads on a worker and receives completion under this one
+/// named deadline.
+const REFRESH_DEADLINE: Duration = Duration::from_secs(60);
+
+/// How long the spawn stub may take to record its arguments: a fresh
+/// executable can stall on macOS, so the crate's usual child deadline.
+#[cfg(unix)]
+const SPAWN_DEADLINE: Duration = Duration::from_secs(60);
+
 /// The child's marker: set, the test runs `models` and exits with its code.
 const CHILD: &str = "FIBER_CLI_TEST_CHILD";
 
@@ -716,7 +726,17 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
         clock.clone(),
         std::sync::Arc::new(NoLock),
     );
-    refresh_named(&["stale".to_owned()], &providers, &loaded, &config);
+    // `refresh_named` joins its refresh threads: run it on a worker and
+    // receive completion under one named deadline.
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        refresh_named(&["stale".to_owned()], &providers, &loaded, &config);
+        done.send(()).unwrap();
+    });
+    assert!(
+        finished.recv_timeout(REFRESH_DEADLINE).is_ok(),
+        "waited {REFRESH_DEADLINE:?} for the refresh child to finish"
+    );
     let stale: Vec<config::ModelData> = config::read_model_cache(&home, "stale").unwrap().unwrap();
     assert_eq!(
         stale.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
@@ -725,5 +745,127 @@ fn the_refresh_child_leaves_an_unnamed_uncached_provider_alone() {
     assert!(
         config::read_model_cache(&home, "other").unwrap().is_none(),
         "the unnamed provider's `models()` must not run"
+    );
+}
+
+#[test]
+fn a_list_exactly_refresh_after_old_spawns_nothing() {
+    // The boundary `stale_lists` pins: a list whose age equals `max_age`
+    // exactly is not stale. The default `refresh_after` is one day, and
+    // the fake clock's wall time is whole seconds, so the mtime below
+    // reads exactly one day old.
+    let setup = Setup::new();
+    setup.install_lua("acme-lua", "acme", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    let now = clock.wall();
+    config::write_model_cache(
+        &setup.home(),
+        "acme",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+    )
+    .unwrap();
+    let file = setup.home().join("cache/models/acme.json");
+    std::fs::File::options()
+        .write(true)
+        .open(&file)
+        .unwrap()
+        .set_modified(now - Duration::from_secs(24 * 60 * 60))
+        .unwrap();
+    let spawner = Recorder::fresh();
+    let (result, out, err) = setup.run(None, false, &|providers| spawner.spawn(providers), clock);
+    result.unwrap();
+    assert_eq!(err, "");
+    assert!(out.contains("acme/old"), "{out:?}");
+    assert!(
+        spawner.calls().is_empty(),
+        "a list exactly `refresh_after` old is not stale"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn spawn_refresh_runs_the_stub_with_the_refresh_arguments() {
+    // The subject is direct execution, so the stub stays an executable
+    // file (`docs/testing.md`, "Waits and timeouts"): a shell script
+    // recording its arguments, run by its shebang. A body replaced with
+    // `Ok(())` never spawns, so the record never lands and the wait fails.
+    use std::os::unix::fs::PermissionsExt;
+    let dir = fakes::TempDir::new("fiber-spawn-refresh");
+    let record = dir.path().join("args");
+    let stub = dir.path().join("stub.sh");
+    std::fs::write(
+        &stub,
+        format!("#!/bin/sh\nprintf '%s\\n' \"$@\" > {}\n", record.display()),
+    )
+    .unwrap();
+    std::fs::set_permissions(&stub, std::fs::Permissions::from_mode(0o755)).unwrap();
+    super::spawn_refresh(&stub, vec!["acme".to_owned()]).unwrap();
+    // A file existing is not the proof the child ran: the shell creates
+    // it before `printf` writes, so wait for the argument line itself.
+    let (done, finished) = mpsc::channel();
+    let waited = record.clone();
+    thread::spawn(move || {
+        loop {
+            if let Ok(args) = std::fs::read_to_string(&waited)
+                && args.contains("refresh-model-lists")
+            {
+                break;
+            }
+            thread::yield_now();
+        }
+        done.send(()).unwrap();
+    });
+    assert!(
+        finished.recv_timeout(SPAWN_DEADLINE).is_ok(),
+        "waited {SPAWN_DEADLINE:?} for the refresh child to record its arguments"
+    );
+    let args = std::fs::read_to_string(&record).unwrap();
+    assert!(
+        args.contains("refresh-model-lists") && args.contains("acme"),
+        "{args:?}"
+    );
+}
+
+#[test]
+fn the_refresh_entry_refreshes_a_stale_list() {
+    // `refresh_run` is the testable body behind the hidden child: a stale
+    // Lua provider's cache holds the new list afterwards. A body replaced
+    // with `()` refreshes nothing, so the assertion fails. It joins its
+    // refresh threads, so it runs on a worker under one named deadline.
+    let setup = Setup::new();
+    setup.install_lua("stale-ext", "stale", &lua_list("new"));
+    let clock = fakes::clock::FakeClock::new();
+    write_stale_cache(
+        &setup.home(),
+        "stale",
+        &json!([{"id": "old", "protocol": "openai-responses",
+                 "base_url": "http://127.0.0.1:1/v1"}]),
+        clock.wall(),
+    );
+    let home = setup.home();
+    let workspace = setup.workspace();
+    let names = vec!["stale".to_owned()];
+    let (done, finished) = mpsc::channel();
+    thread::spawn(move || {
+        refresh_run(
+            &home,
+            &workspace,
+            &names,
+            clock,
+            std::sync::Arc::new(NoLock),
+        );
+        done.send(()).unwrap();
+    });
+    assert!(
+        finished.recv_timeout(REFRESH_DEADLINE).is_ok(),
+        "waited {REFRESH_DEADLINE:?} for the refresh entry to finish"
+    );
+    let stale: Vec<config::ModelData> = config::read_model_cache(&setup.home(), "stale")
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        stale.iter().map(|m| m.id.as_str()).collect::<Vec<_>>(),
+        ["new"]
     );
 }
