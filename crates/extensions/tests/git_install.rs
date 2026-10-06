@@ -1414,6 +1414,34 @@ fn a_damaged_extension_removes_by_its_full_name() {
 }
 
 #[test]
+fn removing_a_damaged_extension_also_removes_its_orphaned_dependency() {
+    let setup = Setup::new();
+    let mut repos = Repos::new(&setup);
+    let dep = "example.com/acme/dep";
+    repos.tag(dep, "", "v1.0.0", &manifest(dep), &[]);
+    let top = "example.com/acme/top";
+    repos.tag(top, "", "v1.0.0", &named(top, &[(dep, "1.0")]), &[]);
+    let keeper = "example.com/acme/keeper";
+    repos.tag(keeper, "", "v1.0.0", &manifest(keeper), &[]);
+    install(&setup, &repos, top).unwrap();
+    install(&setup, &repos, keeper).unwrap();
+    // Damaging the parent orphans its dependency: nothing healthy
+    // needs it now.
+    fs::remove_file(
+        setup
+            .home()
+            .join("extensions/example.com-acme-top/.fiber.json"),
+    )
+    .unwrap();
+    assert_eq!(uninstall(&setup.home(), top).unwrap(), [top, dep]);
+    assert_eq!(dirs(&setup), ["example.com-acme-keeper"]);
+    assert_eq!(
+        versions(&setup).keys().cloned().collect::<Vec<_>>(),
+        [keeper]
+    );
+}
+
+#[test]
 fn a_remove_lists_and_then_deletes_the_data_and_settings_of_what_it_removes() {
     let setup = Setup::new();
     let source = setup.source("local", &manifest("example.com/acme/x"), &[]);

@@ -169,10 +169,10 @@ fn extension(cmd: cli::ExtensionCommands, clock: &dyn contract::clock::Clock) ->
             } else {
                 Request::Install(name_or_path)
             };
-            install(request, clock, false)
+            install(request, clock)
         }
         cli::ExtensionCommands::Update { name: Some(name) } => {
-            install(Request::Update(name), clock, false)
+            install(Request::Update(name), clock)
         }
         cli::ExtensionCommands::Update { name: None } => update_all(clock),
         cli::ExtensionCommands::Remove { name } => remove(&name, clock),
@@ -196,9 +196,17 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
         eprintln!("fiber: {}", hit.skipped());
     }
     for ext in listing.installed.iter().filter(|i| i.requested) {
-        let code = install(Request::Update(ext.name.clone()), clock, true);
-        if code != 0 {
-            return code;
+        match install_request(Request::Update(ext.name.clone()), clock) {
+            Ok((Some(names), _)) => {
+                for name in names {
+                    eprintln!("fiber: installed {name}");
+                }
+            }
+            Ok((None, _)) => {
+                eprintln!("fiber: nothing was installed.");
+                return 1;
+            }
+            Err(e) => return fail(e),
         }
     }
     0
@@ -208,15 +216,21 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
 /// checks the extension and its dependencies, shows what they register and
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
-fn install(request: Request, clock: &dyn contract::clock::Clock, quiet_damaged: bool) -> i32 {
-    match install_request(request, clock, quiet_damaged) {
-        Ok(Some(names)) => {
+fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
+    match install_request(request, clock) {
+        Ok((Some(names), damaged)) => {
+            for hit in &damaged {
+                eprintln!("fiber: {}", hit.skipped());
+            }
             for name in names {
                 eprintln!("fiber: installed {name}");
             }
             0
         }
-        Ok(None) => {
+        Ok((None, damaged)) => {
+            for hit in &damaged {
+                eprintln!("fiber: {}", hit.skipped());
+            }
             eprintln!("fiber: nothing was installed.");
             1
         }
@@ -228,12 +242,13 @@ fn install(request: Request, clock: &dyn contract::clock::Clock, quiet_damaged: 
 }
 
 /// Installs what `request` needs once approved; `None` when the person
-/// declined.
+/// declined. Returns the damaged directories the plan skipped alongside
+/// the names, so each caller decides whether to print them: `install`
+/// prints them, while `update_all` already named each once itself.
 fn install_request(
     request: Request,
     clock: &dyn contract::clock::Clock,
-    quiet_damaged: bool,
-) -> Result<Option<Vec<String>>, Failure> {
+) -> Result<(Option<Vec<String>>, Vec<extensions::Damaged>), Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
     let plan = extensions::plan(
         &home,
@@ -243,14 +258,7 @@ fn install_request(
         clock,
     )
     .map_err(|e| failed(e.code(), e))?;
-    // A damaged extension's dependency minimums are unknown, so the
-    // versions chosen did not count them. Before approval, while the
-    // plan still holds what was skipped.
-    if !quiet_damaged {
-        for hit in plan.damaged() {
-            eprintln!("fiber: {}", hit.skipped());
-        }
-    }
+    let damaged = plan.damaged().to_vec();
     let summaries: Vec<doors::InstallSummary> = plan
         .items()
         .map(|item| doors::InstallSummary {
@@ -283,9 +291,11 @@ fn install_request(
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     if !doors::install_approved(&summaries, terminal, &mut stdin.lock(), &mut io::stderr())? {
-        return Ok(None);
+        return Ok((None, damaged));
     }
-    plan.commit().map(Some).map_err(|e| failed(e.code(), e))
+    plan.commit()
+        .map(|names| (Some(names), damaged))
+        .map_err(|e| failed(e.code(), e))
 }
 
 /// `fiber extension remove <name>`: removes an extension, the dependencies nothing

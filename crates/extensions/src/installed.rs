@@ -231,37 +231,46 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
     let listing = read(home)?;
     // A damaged directory is removed by its directory name, without
     // reading its record, so removal always works.
-    if let Some(hit) = listing
+    let damaged = listing
         .damaged
         .iter()
         .find(|hit| slug(&name).is_ok_and(|mine| mine == hit.dir))
-    {
-        let layers = layers(home)?;
-        return Ok(Removal {
-            names: vec![hit.name.clone()],
-            data: existing_data(&layers, &hit.dir)?,
-            dirs: vec![home.join("extensions").join(&hit.dir)],
-            _lock: lock,
-        });
-    }
+        .cloned();
     let mut left = listing.installed;
-    if !left.iter().any(|i| i.name == name) {
-        return Err(Error::NotInstalled { name });
-    }
     let mut names = Vec::new();
-    let mut next = Some(name);
+    let mut damaged_dir: Option<String> = None;
+    let mut next = match damaged {
+        Some(hit) => {
+            names.push(hit.name.clone());
+            damaged_dir = Some(hit.dir.clone());
+            orphan(&left)
+        }
+        None => {
+            if !left.iter().any(|i| i.name == name) {
+                return Err(Error::NotInstalled { name });
+            }
+            Some(name)
+        }
+    };
+    // The orphan cascade runs unchanged over the healthy extensions,
+    // whether the one asked for was damaged or healthy.
     while let Some(name) = next {
         left.retain(|i| i.name != name);
         names.push(name);
-        next = left
-            .iter()
-            .find(|i| !i.requested && !left.iter().any(|other| other.depends.contains_key(&i.name)))
-            .map(|i| i.name.clone());
+        next = orphan(&left);
     }
     let layers = layers(home)?;
     let mut dirs = Vec::new();
     let mut data = Vec::new();
-    for name in &names {
+    // The damaged directory is named by its directory, without reading
+    // its record; every orphan cascades from its healthy name.
+    let mut orphan_names = names.iter();
+    if let Some(dir) = damaged_dir {
+        orphan_names.next();
+        dirs.push(home.join("extensions").join(&dir));
+        data.extend(existing_data(&layers, &dir)?);
+    }
+    for name in orphan_names {
         let dir = slug(name)?;
         dirs.push(home.join("extensions").join(&dir));
         data.extend(existing_data(&layers, &dir)?);
@@ -272,6 +281,15 @@ pub fn removal(home: &Path, typed: &str, clock: &dyn Clock) -> Result<Removal, E
         dirs,
         _lock: lock,
     })
+}
+
+/// The first healthy extension nothing left needs: non-requested and
+/// not named in any remaining dependency list. The orphan cascade calls
+/// this once per removal, shared by healthy and damaged removals.
+fn orphan(left: &[Installed]) -> Option<String> {
+    left.iter()
+        .find(|i| !i.requested && !left.iter().any(|other| other.depends.contains_key(&i.name)))
+        .map(|i| i.name.clone())
 }
 
 /// Fiber home and each project in it: the layers a removal reads data
