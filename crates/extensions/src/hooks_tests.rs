@@ -198,6 +198,21 @@ fn every_enabled_extension_is_loaded_with_its_version_and_a_disabled_one_is_not(
 }
 
 #[test]
+fn a_loaded_extensions_directory_is_listed_and_a_disabled_ones_is_not() {
+    let home = Home::new();
+    home.install("data", None);
+    home.install("off", Some(&tagging("off", "transform")));
+    let session = home.load(&["extensions.\"fiber.test/off\".enabled=false"]);
+    assert_eq!(
+        session.dirs(),
+        [(
+            "fiber.test/data".to_owned(),
+            home.home().join("extensions").join("fiber.test-data")
+        )]
+    );
+}
+
+#[test]
 fn an_entry_script_that_fails_leaves_a_notice_and_is_not_loaded() {
     let home = Home::new();
     home.install("broken", Some("error(\"bad start\")\n"));
