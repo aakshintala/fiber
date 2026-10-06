@@ -183,11 +183,8 @@ impl Session {
         cancel: Arc<dyn Fn() -> bool + Send + Sync>,
         run: impl FnOnce(Receiver<Delivery>) -> Result<(), Failure>,
     ) -> Result<(), Failure> {
-        let first = prompt
-            .map(|prompt| Delivery::Prompt(prompt_message(prompt), ignore()))
-            .into_iter()
-            .collect();
-        self.run(first, cancel, run)
+        let first = prompt.map(|prompt| Delivery::Prompt(prompt_message(prompt), ignore()));
+        self.run(first.into_iter().collect(), cancel, run)
     }
 
     /// The tool a driver `shell` runs (`docs/invocation.md`, "Shell").
@@ -685,8 +682,9 @@ fn prompted(dir: &Path) -> bool {
 }
 
 /// Binds the session's socket at `run/<session_id>`, mode 0600 in a 0700
-/// directory. The session's lock holder owns the socket, so a stale one left
-/// by a dead process is removed first.
+/// directory. A socket a connect reaches is live: fail `session_held` and
+/// leave it alone; anything else is a dead process's, removed before
+/// binding (`docs/state.md`, "Sockets").
 fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
     let run = home.join("run");
     let socket = run.join(dir.file_name().unwrap_or_default());
@@ -704,6 +702,10 @@ fn bind(home: &Path, dir: &Path) -> Result<(PathBuf, UnixListener), Failure> {
         .mode(0o700)
         .create(&run)
         .map_err(|e| io_failed(&run, &e))?;
+    if fs::symlink_metadata(&socket).is_ok() && UnixStream::connect(&socket).is_ok() {
+        let held = format!("{}: another session is running", socket.display());
+        return Err(failure(ErrorCode::SessionHeld, held));
+    }
     remove_socket(&socket);
     let listener = UnixListener::bind(&socket).map_err(|e| io_failed(&socket, &e))?;
     if let Err(e) = fs::set_permissions(&socket, Permissions::from_mode(0o600)) {

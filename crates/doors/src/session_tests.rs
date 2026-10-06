@@ -967,6 +967,36 @@ fn resume_replaces_a_stale_socket_file() {
 }
 
 #[test]
+fn open_refuses_a_socket_a_live_session_holds() {
+    reset();
+    let opened = open();
+    let socket = opened.socket.clone();
+    // The same id in another project: its own new directory, the shared
+    // socket the live session owns.
+    let id = contract::SessionId(socket.file_name().unwrap().to_string_lossy().into_owned());
+    let home = opened._temp.path().join("h");
+    let sessions = home.join("projects/q/sessions");
+    let clock = FakeClock::new();
+    let timed = Arc::clone(&clock);
+    let timed: Arc<dyn Clock> = timed;
+    let log = Arc::new(Log::create(&sessions, id.clone(), Arc::clone(&timed)).unwrap());
+    let dir = sessions.join(&id.0);
+
+    let timed: Arc<dyn Clock> = clock;
+    let error = match Session::open(&home, &dir, &log, timed, Vec::new(), Box::new(io::sink())) {
+        Ok(_) => panic!("a socket a live session holds binds"),
+        Err(error) => error,
+    };
+
+    assert_eq!(error.code, ErrorCode::SessionHeld);
+    // Nothing the live session owns was removed: its socket still
+    // answers. Only the refused session's own directory is cleaned up.
+    UnixStream::connect(&socket).unwrap();
+    assert!(!dir.exists());
+    close_within(opened.session, opened.log);
+}
+
+#[test]
 fn close_after_resume_keeps_a_session_that_has_turns() {
     use contract::events::{InputItem, TurnStarted};
     use contract::shapes::{ContentPart, Origin, Sender};

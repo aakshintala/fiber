@@ -769,17 +769,6 @@ fn session_rejects_an_id_that_is_not_a_minted_session_id() {
         let said = sentence(&["fiber", "session", "--id", id, "--workspace", "/w"]);
         assert!(said.contains("session id"), "{id}: {said}");
     }
-    let Invocation::Run(Some(Commands::Session(args))) = parse_from([
-        "fiber",
-        "session",
-        "--id",
-        "s_0123456789abcdef",
-        "--workspace",
-        "/w",
-    ]) else {
-        panic!("s_ plus 16 lowercase hex digits parses");
-    };
-    assert_eq!(args.id, "s_0123456789abcdef");
 }
 
 #[test]

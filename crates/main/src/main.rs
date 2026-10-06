@@ -572,6 +572,10 @@ fn new_session(
                 }),
                 budget,
                 idle,
+                // Only one-turn `fiber ask` runs with no client: the
+                // session command serves clients that may answer
+                // (`docs/permissions.md`, "Headless").
+                !one_turn,
                 reviewer,
                 limits,
                 retry,
@@ -603,13 +607,20 @@ fn ask_permissions(
     }
 }
 
-/// Finishes an `ask` loop, however it started: the budget, the headless
-/// answers and the reviewer every session gets, so a change to the chain is
-/// made once.
+/// Finishes a loop, however it started: the budget, whether a person may
+/// answer an approval, and the reviewer every session gets, so a change to
+/// the chain is made once. `answerable` is false only for one-turn
+/// `fiber ask`, new or resumed; the session command serves clients that may
+/// answer (`docs/permissions.md`, "Headless").
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one hand-off of the loop's end: budget, answerability, reviewer, retry and cancel"
+)]
 fn finish(
     looped: Result<Loop, r#loop::Error>,
     budget: Option<f64>,
     idle: Option<Duration>,
+    answerable: bool,
     reviewer: Result<r#loop::Reviewer, Failure>,
     limits: r#loop::BlockLimits,
     retry: r#loop::Retry,
@@ -620,7 +631,7 @@ fn finish(
             looped
                 .budget(budget)
                 .idle_exit(idle)
-                .answerable(false)
+                .answerable(answerable)
                 .reviewer(reviewer, limits)
                 .retry(retry)
                 .cancelled_by(cancel)

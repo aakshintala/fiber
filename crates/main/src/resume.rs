@@ -178,6 +178,8 @@ pub(crate) fn ask_resume(
                 }),
                 budget,
                 idle,
+                // `fiber ask --resume` runs one turn with no client.
+                false,
                 reviewer,
                 limits,
                 retry,
