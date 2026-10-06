@@ -576,10 +576,7 @@ impl Loop {
         let call = endpoint.provider.call(&request);
         let reply = crate::cancel::run_cancellable(&self.cancel, call, &mut |_| {});
         if let Ok(reply) = &reply {
-            let cost = endpoint
-                .cost
-                .as_ref()
-                .map(|prices| crate::usage::price(prices, &reply.tokens));
+            let cost = crate::usage::call_cost(reply.cost, endpoint.cost.as_ref(), &reply.tokens);
             let recorded = UsageRecorded {
                 generation_id: reply.generation_id.clone(),
                 model: endpoint.reference.clone(),

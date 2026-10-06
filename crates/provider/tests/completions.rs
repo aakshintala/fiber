@@ -1636,3 +1636,83 @@ fn a_dropped_input_after_a_tool_result_does_not_break_the_previous_end() {
             "cache_control": {"type": "ephemeral"}}])
     );
 }
+
+/// A usage chunk with `cost` added: `usage()` carries none.
+fn usage_cost(cost: Value) -> Value {
+    let mut chunk = usage(15, 14, 9);
+    chunk["usage"]["cost"] = cost;
+    chunk
+}
+
+fn costed_stream(costs: &[Value]) -> Vec<u8> {
+    let mut chunks = vec![chunk(json!({"content": "ok"}), Some("stop"))];
+    chunks.extend(costs.iter().cloned());
+    stream(&chunks)
+}
+
+#[test]
+fn the_last_usage_chunks_cost_is_the_replys_cost() {
+    let bytes = costed_stream(&[usage_cost(json!(0.000123))]);
+    let (reply, _) = decoded(&bytes);
+    assert_eq!(reply.unwrap().cost, Some(0.000123));
+}
+
+#[test]
+fn usage_without_a_cost_carries_no_inline_cost() {
+    let bytes = costed_stream(&[usage(15, 14, 9)]);
+    let (reply, _) = decoded(&bytes);
+    assert_eq!(reply.unwrap().cost, None);
+}
+
+#[test]
+fn a_null_string_or_negative_cost_carries_no_inline_cost() {
+    for cost in [json!(null), json!("0.1"), json!(-1)] {
+        let bytes = costed_stream(&[usage_cost(cost.clone())]);
+        let (reply, _) = decoded(&bytes);
+        assert_eq!(reply.unwrap().cost, None, "{cost}");
+    }
+}
+
+#[test]
+fn a_zero_cost_is_a_reported_cost() {
+    let bytes = costed_stream(&[usage_cost(json!(0))]);
+    let (reply, _) = decoded(&bytes);
+    assert_eq!(reply.unwrap().cost, Some(0.0));
+}
+
+#[test]
+fn where_usage_repeats_the_last_chunks_cost_wins() {
+    let bytes = costed_stream(&[usage_cost(json!(0.5)), usage_cost(json!(0.000123))]);
+    let (reply, _) = decoded(&bytes);
+    assert_eq!(reply.unwrap().cost, Some(0.000123));
+}
+
+#[test]
+fn an_openrouter_stream_decodes_its_inline_cost() {
+    let recorded: Value = serde_json::from_slice(
+        &std::fs::read(research("openrouter-cost/raw/results.json")).unwrap(),
+    )
+    .unwrap();
+    let run = recorded
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["stream"].as_bool().unwrap_or(false))
+        .unwrap();
+    let mut sse = String::new();
+    for chunk in run["chunks"].as_array().unwrap() {
+        if let Some(done) = chunk.as_str() {
+            sse.push_str(&format!("data: {done}\n\n"));
+        } else {
+            sse.push_str(&format!("data: {chunk}\n\n"));
+        }
+    }
+    let (reply, _) = decoded(sse.as_bytes());
+    let reply = reply.unwrap();
+    assert_eq!(
+        reply.cost,
+        run["inline_usage"]["cost"].as_f64(),
+        "the stream's own cost"
+    );
+    assert_eq!(reply.tokens, tokens(&run["inline_usage"], "5m"));
+}

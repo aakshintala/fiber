@@ -528,6 +528,26 @@ fn gemini_hello() -> Response {
     Response::stream(body)
 }
 
+/// An `openai-completions` stream answering `Hello.` in two fragments,
+/// its usage chunk carrying `cost`: OpenRouter's inline figure.
+fn completions_hello(id: &str, cost: Value) -> Response {
+    let chunks = [
+        json!({"id": id, "object": "chat.completion.chunk", "choices": [
+            {"index": 0, "delta": {"role": "assistant", "content": "Hel"}}]}),
+        json!({"id": id, "object": "chat.completion.chunk", "choices": [
+            {"index": 0, "delta": {"content": "lo."}, "finish_reason": "stop"}]}),
+        json!({"id": id, "choices": [], "usage": {"prompt_tokens": 15,
+            "completion_tokens": 9, "total_tokens": 24, "cost": cost,
+            "prompt_tokens_details": {"cached_tokens": 14}}}),
+    ];
+    let mut body: String = chunks
+        .iter()
+        .map(|chunk| format!("data: {chunk}\n\n"))
+        .collect();
+    body.push_str("data: [DONE]\n\n");
+    Response::stream(body)
+}
+
 /// The event kinds of a turn answered by [`hello`].
 const HELLO_KINDS: [&str; 15] = [
     "session_started",
@@ -2062,6 +2082,122 @@ fn openai_installed_by_path_completes_a_turn_on_a_scripted_stream() {
     assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openai");
     let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
     assert_eq!(body["store"], Value::Bool(false));
+}
+
+#[test]
+fn openrouter_installed_by_path_records_the_inline_cost_on_a_completed_turn() {
+    let setup = Setup::new();
+    let server =
+        ProviderServer::start([completions_hello("gen-abc123", json!(0.0000072))]).unwrap();
+    install(
+        &setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+
+    let run = setup.fiber_with_env(
+        &["ask", "--model", "openrouter/z-ai/glm-5.3-flash", "hi"],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    assert_eq!(run.kinds(), HELLO_KINDS);
+    assert_eq!(run.last()["payload"]["text"], "Hello.");
+    let requests = server.requests();
+    assert_eq!(requests.len(), 1);
+    assert_eq!(requests[0].path, "/api/v1/chat/completions");
+    assert_fingerprint(&requests[0], "authorization", "Bearer sk-test-openrouter");
+    // The stream's 15 prompt tokens hold 14 cached, so the declared
+    // prices give about 0.0000051: the inline figure stands instead.
+    let recorded: Vec<_> = run
+        .lines
+        .iter()
+        .filter(|line| line["kind"] == "usage_recorded")
+        .collect();
+    assert_eq!(recorded.len(), 1);
+    assert_eq!(recorded[0]["payload"]["cost"], json!(0.0000072));
+    assert_eq!(recorded[0]["payload"]["generation_id"], "gen-abc123");
+}
+
+#[test]
+fn openrouter_sends_the_cache_key_and_anthropic_markers_for_a_claude_model() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([completions_hello("gen-one", json!(0.0001))]).unwrap();
+    install(
+        &setup,
+        &setup.package("openrouter", "https://openrouter.ai", &server.url()),
+    );
+
+    // The default lifetime is 1 hour: the markers carry `ttl: "1h"`.
+    let run = setup.fiber_with_env(
+        &[
+            "ask",
+            "--model",
+            "openrouter/anthropic/claude-sonnet-5.5",
+            "hi",
+        ],
+        &[("OPENROUTER_API_KEY", "sk-test-openrouter")],
+    );
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let body: Value = serde_json::from_slice(&server.requests()[0].body).unwrap();
+    assert_eq!(body["session_id"], run.session_id());
+    assert_eq!(body["prompt_cache_key"], run.session_id());
+    let hour = json!({"type": "ephemeral", "ttl": "1h"});
+    // The system message holds several parts; the marker is on its last.
+    // The opening message stands between it and the prompt, so the
+    // prompt's marker is on the messages' last.
+    let system = body["messages"][0]["content"].as_array().unwrap();
+    assert_eq!(system.last().unwrap()["cache_control"], hour);
+    let last = body["messages"].as_array().unwrap();
+    assert_eq!(last.last().unwrap()["content"][0]["cache_control"], hour);
+    // A 5-minute request's markers carry no `ttl`: the protocol tests
+    // pin that (`a_dropped_input_after_a_tool_result...` sends one at
+    // the default 5 minutes), because the CLI takes no lifetime and
+    // every binary run is 1 hour.
+}
+
+#[test]
+fn the_openrouter_package_declares_completions_models_with_the_cache_key() {
+    let providers = config::read_providers(&package("openrouter")).unwrap();
+    assert_eq!(providers.len(), 1);
+    let provider = &providers[0];
+    assert_eq!(provider.name, "openrouter");
+    assert_eq!(
+        provider.reviewer_model.as_deref(),
+        Some("anthropic/claude-sonnet-5.5")
+    );
+    assert!(
+        provider
+            .models
+            .iter()
+            .any(|m| m.id == "anthropic/claude-sonnet-5.5")
+    );
+    for model in &provider.models {
+        assert_eq!(
+            model.protocol,
+            config::Protocol::OpenaiCompletions,
+            "{}",
+            model.id
+        );
+        assert_eq!(
+            model.base_url, "https://openrouter.ai/api/v1",
+            "{}",
+            model.id
+        );
+        assert_eq!(
+            model.compat["cache_key_field"], "session_id",
+            "{}",
+            model.id
+        );
+        assert_eq!(
+            model.compat.get("anthropic"),
+            model
+                .id
+                .starts_with("anthropic/")
+                .then_some(&Value::Bool(true)),
+            "{}",
+            model.id
+        );
+    }
 }
 
 #[test]

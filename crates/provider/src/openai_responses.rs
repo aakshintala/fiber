@@ -517,6 +517,7 @@ impl Decoder {
             generation_id: GenerationId(str_at(response, "id").to_owned()),
             tokens: tokens(&response["usage"]),
             web_searches: None,
+            cost: None,
         })
     }
 }

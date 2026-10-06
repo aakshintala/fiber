@@ -215,6 +215,7 @@ fn live_reviewer() {
                     output: 3,
                 },
                 web_searches: None,
+                cost: None,
             }),
         },
         Scripted::text("Done."),

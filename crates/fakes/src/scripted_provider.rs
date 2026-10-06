@@ -71,6 +71,7 @@ pub fn reply(text: &str) -> Reply {
             output: 3,
         },
         web_searches: None,
+        cost: None,
     }
 }
 
