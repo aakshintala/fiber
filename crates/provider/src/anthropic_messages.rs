@@ -216,9 +216,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
             .map_or(limit, |n| n.min(limit));
         body.insert("max_tokens".into(), json!(max));
     }
-    let mut body = Value::Object(body);
-    cap_markers(&mut body);
-    body.to_string().into_bytes()
+    Value::Object(body).to_string().into_bytes()
 }
 
 /// Whether any `enum` in `schema` has an object or array value.
@@ -238,48 +236,6 @@ pub(crate) fn complex_enum(schema: &Value) -> bool {
 
 /// The most tools Anthropic takes with `strict: true` in one request.
 pub(crate) const MAX_STRICT_TOOLS: usize = 20;
-
-/// The most cache markers Anthropic takes in one request
-/// (`docs/prompt-cache.md`, "Cache markers and keys").
-pub(crate) const MAX_MARKERS: usize = 4;
-
-/// Removes cache markers past [`MAX_MARKERS`], counted across `tools`,
-/// `system` and `messages`. The ones kept are
-/// in the order `docs/prompt-cache.md` lists: the system prompt's, then the
-/// previous end's, then the new end's (the last block of all), which is
-/// body order through `system` and then `messages`; markers on tools come
-/// last.
-fn cap_markers(body: &mut Value) {
-    let mut found: Vec<String> = Vec::new();
-    let mut marked = |pointer: String, blocks: Option<&Value>| {
-        for (i, block) in blocks
-            .and_then(Value::as_array)
-            .into_iter()
-            .flatten()
-            .enumerate()
-        {
-            if block.get("cache_control").is_some() {
-                found.push(format!("{pointer}/{i}"));
-            }
-        }
-    };
-    marked("/system".into(), body.get("system"));
-    for (m, message) in body
-        .get("messages")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
-        .enumerate()
-    {
-        marked(format!("/messages/{m}/content"), message.get("content"));
-    }
-    marked("/tools".into(), body.get("tools"));
-    for pointer in found.iter().skip(MAX_MARKERS) {
-        if let Some(block) = body.pointer_mut(pointer).and_then(Value::as_object_mut) {
-            block.remove("cache_control");
-        }
-    }
-}
 
 /// `tool_choice` on the wire: `auto`, `none` and `any` are Anthropic's own
 /// values; any other string names the one tool to force
@@ -475,7 +431,3 @@ fn message(role: &'static str, blocks: Vec<Value>) -> Value {
     };
     json!({"role": role, "content": content})
 }
-
-#[cfg(test)]
-#[path = "anthropic_messages_tests.rs"]
-mod tests;

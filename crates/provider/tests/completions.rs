@@ -621,34 +621,6 @@ fn declared_cache_markers_go_on_the_system_prompt_the_previous_end_and_the_new_e
 }
 
 #[test]
-fn no_request_carries_more_than_four_cache_markers() {
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let request = ModelRequest {
-        conversation: four_turn_conversation(),
-        previous_end: Some(3),
-        ..request()
-    };
-    // Model data that marks two tools of its own.
-    let marked: Vec<Value> = (0..2)
-        .map(|i| {
-            json!({"type": "function", "function": {"name": format!("t{i}")},
-                "cache_control": {"type": "ephemeral"}})
-        })
-        .collect();
-    let declared = Endpoint {
-        base_url: endpoint(&server).base_url,
-        extra_body: json!({"tools": marked}).as_object().unwrap().clone(),
-        ..markers()
-    };
-    send(declared, &request);
-    let body = sent_body(&server, 0);
-    assert_eq!(body.to_string().matches("cache_control").count(), 4);
-    // Fiber's three come first, then the first tool's.
-    assert!(body["tools"][0].get("cache_control").is_some());
-    assert_eq!(body["tools"][1].get("cache_control"), None);
-}
-
-#[test]
 fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() {
     let exchange = probes::read(&research(
         "openai-completions-probe/raw/openrouter-stream-reasoning.json",
@@ -1139,40 +1111,6 @@ fn compat_flags_are_read_from_the_models_data_and_unset_when_absent() {
 }
 
 #[test]
-fn a_schema_property_named_cache_control_is_not_a_marker() {
-    let server = ProviderServer::start([completed_reply()]).unwrap();
-    let schema = json!({
-        "type": "object",
-        "properties": {"cache_control": {"type": "string"}},
-        "required": ["cache_control"],
-        "additionalProperties": false
-    });
-    let request = ModelRequest {
-        tools: vec![ToolDefinition {
-            input_schema: schema.clone(),
-            ..weather_tool()
-        }],
-        conversation: four_turn_conversation(),
-        previous_end: Some(3),
-        ..request()
-    };
-    // Model data that marks a tool of its own: with Fiber's three, four.
-    let declared = Endpoint {
-        base_url: endpoint(&server).base_url,
-        extra_body: json!({"tools": [{"type": "function", "cache_control": {"type": "ephemeral"},
-            "function": {"name": "t", "parameters": schema}}]})
-        .as_object()
-        .unwrap()
-        .clone(),
-        ..markers()
-    };
-    send(declared, &request);
-    let body = sent_body(&server, 0);
-    assert_eq!(body["tools"][0]["function"]["parameters"], schema);
-    assert!(body["tools"][0].get("cache_control").is_some());
-}
-
-#[test]
 fn an_anthropic_model_gets_anthropics_strict_limits() {
     let server = ProviderServer::start([completed_reply(), completed_reply()]).unwrap();
     let mut tools: Vec<ToolDefinition> = (0..21)
@@ -1261,7 +1199,7 @@ fn a_declared_cache_key_field_carries_the_cache_key() {
 }
 
 #[test]
-fn a_cache_write_counts_under_the_lifetime_of_the_markers_sent() {
+fn a_cache_write_counts_under_the_requests_cache_lifetime() {
     let written = || {
         Response::stream(stream(&[
             chunk(json!({"content": "hi"}), Some("stop")),
@@ -1274,32 +1212,26 @@ fn a_cache_write_counts_under_the_lifetime_of_the_markers_sent() {
         cache_lifetime: CacheLifetime::OneHour,
         ..request()
     };
+    let five = ModelRequest {
+        cache_lifetime: CacheLifetime::FiveMinutes,
+        ..request()
+    };
     let base_url = endpoint(&server).base_url;
-    // Fiber's own markers, at the request's lifetime.
-    let ours = Endpoint {
+    // Fiber's own markers, at the request's lifetime: 1 hour, then 5
+    // minutes. Without markers the write counts under the request's
+    // lifetime, 1 hour here.
+    let marked_hour = Endpoint {
         base_url: base_url.clone(),
         ..markers()
     };
-    // Only a marker model data supplied, with no `ttl`: it takes the
-    // request's lifetime, five minutes here.
-    let theirs = Endpoint {
-        extra_body: json!({"tools": [{"type": "function", "function": {"name": "t"},
-            "cache_control": {"type": "ephemeral"}}]})
-        .as_object()
-        .unwrap()
-        .clone(),
-        ..endpoint(&server)
+    let marked_five = Endpoint {
+        base_url: base_url.clone(),
+        ..markers()
     };
     let mut keys = Vec::new();
     for (endpoint, request) in [
-        (ours, &hour),
-        (
-            theirs,
-            &ModelRequest {
-                cache_lifetime: CacheLifetime::FiveMinutes,
-                ..request()
-            },
-        ),
+        (marked_hour, &hour),
+        (marked_five, &five),
         (endpoint(&server), &hour),
     ] {
         let reply = run(Box::new(Completions::new(endpoint).request(request)))
@@ -1308,46 +1240,6 @@ fn a_cache_write_counts_under_the_lifetime_of_the_markers_sent() {
         keys.push(reply.tokens.cache_write.into_keys().collect::<Vec<_>>());
     }
     assert_eq!(keys, [["1h"], ["5m"], ["1h"]]);
-}
-
-#[test]
-fn a_model_data_marker_mixed_with_fibers_markers_sends_one_lifetime() {
-    let written = Response::stream(stream(&[
-        chunk(json!({"content": "hi"}), Some("stop")),
-        json!({"choices": [], "usage": {"prompt_tokens": 10, "completion_tokens": 1,
-            "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 8}}}),
-    ]));
-    let server = ProviderServer::start([written]).unwrap();
-    let request = ModelRequest {
-        conversation: four_turn_conversation(),
-        previous_end: Some(3),
-        cache_lifetime: CacheLifetime::OneHour,
-        ..request()
-    };
-    // Model data marks a tool with no `ttl` next to Fiber's 1-hour markers.
-    let declared = Endpoint {
-        base_url: endpoint(&server).base_url,
-        extra_body: json!({"tools": [{"type": "function", "function": {"name": "t"},
-            "cache_control": {"type": "ephemeral"}}]})
-        .as_object()
-        .unwrap()
-        .clone(),
-        ..markers()
-    };
-    let reply = run(Box::new(Completions::new(declared).request(&request)))
-        .0
-        .unwrap();
-    assert_eq!(
-        reply.tokens.cache_write.into_keys().collect::<Vec<_>>(),
-        ["1h"]
-    );
-    let sent = sent_body(&server, 0).to_string();
-    assert_eq!(sent.matches("cache_control").count(), 4);
-    assert_eq!(
-        sent.matches("\"ttl\":\"1h\"").count(),
-        4,
-        "every marker sent carries the request's lifetime"
-    );
 }
 
 #[test]

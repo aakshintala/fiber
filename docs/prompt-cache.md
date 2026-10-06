@@ -115,12 +115,10 @@ The second marker keeps a long stretch of appended messages within the
 lookback. Probed: 12 appended exchanges with only an end marker lost the cache
 for every message.
 
-Anthropic refuses a request with more than 4 markers across `tools`, `system`
-and `messages` (`research/anthropic-messages-probe`). The provider module counts
-the markers and never sends more than 4. Past 4, it keeps them in the order
-listed above. Markers that model data adds rank after Fiber's three, in the
-order they appear in the request, and the provider module drops the excess past
-4. Fiber keeps all three of its markers.
+Fiber places at most these three markers, and model data adds none
+(`docs/model-routing.md`, "Extra request body fields"). Anthropic refuses a
+request with more than 4 markers across `tools`, `system` and `messages`
+(`research/anthropic-messages-probe`).
 
 Providers that route by key are given the root session's id:
 

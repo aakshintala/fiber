@@ -20,7 +20,6 @@ use contract::shapes::Tokens;
 use contract::{GenerationId, ProviderCallId};
 use serde_json::{Map, Value, json};
 
-use crate::anthropic_messages::{MAX_MARKERS, cache_control};
 use crate::http::{self, Cancel};
 use crate::openai_completions_messages::messages;
 use crate::{Endpoint, Error, sse};
@@ -53,7 +52,7 @@ impl Completions {
             headers.push(("authorization".to_owned(), format!("Bearer {key}")));
         }
         headers.extend(endpoint.headers.iter().cloned());
-        let (body, lifetime) = body(endpoint, request);
+        let body = body(endpoint, request);
         Call {
             url: format!(
                 "{}/chat/completions",
@@ -62,7 +61,7 @@ impl Completions {
             headers,
             body,
             provider: endpoint.provider.clone(),
-            lifetime,
+            lifetime: request.cache_lifetime,
             direct: endpoint.direct,
             cancel: Arc::default(),
         }
@@ -86,8 +85,8 @@ pub struct Call {
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     provider: String,
-    /// The lifetime a reported cache write is counted under (see
-    /// [`write_lifetime`]).
+    /// The request's cache lifetime, which a reported cache write is counted
+    /// under.
     lifetime: CacheLifetime,
     direct: bool,
     cancel: Arc<Cancel>,
@@ -126,10 +125,10 @@ impl ModelCall for Call {
     }
 }
 
-/// The request body, and the lifetime its cache writes are counted under.
-/// Its objects serialise with their keys sorted, because serde_json's
-/// `preserve_order` is never on (`docs/prompt-cache.md`, "Bytes").
-fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime) {
+/// The request body. Its objects serialise with their keys sorted, because
+/// serde_json's `preserve_order` is never on (`docs/prompt-cache.md`,
+/// "Bytes").
+fn body(endpoint: &Endpoint, request: &ModelRequest) -> Vec<u8> {
     let tools: Vec<Value> = crate::openai_completions_tools::wire_tools(endpoint, &request.tools)
         .into_iter()
         .map(Value::Object)
@@ -181,88 +180,7 @@ fn body(endpoint: &Endpoint, request: &ModelRequest) -> (Vec<u8>, CacheLifetime)
             .map_or(limit, |n| n.min(limit));
         body.insert(field.into(), json!(max));
     }
-    let mut body = Value::Object(body);
-    normalize_markers(&mut body, &request.cache_lifetime);
-    let markers = cap_markers(&mut body);
-    let lifetime = write_lifetime(&markers, request.cache_lifetime);
-    (body.to_string().into_bytes(), lifetime)
-}
-
-/// Rewrites every marker the request sends to the request's cache lifetime
-/// (`docs/prompt-cache.md`, "Usage"): model data may supply a marker with
-/// another lifetime, and the vendor reports one cache-write total, so a
-/// request never sends markers of two lifetimes. Every marker kept by
-/// [`cap_markers`] then carries the request's lifetime, and
-/// [`write_lifetime`] is exact by construction.
-fn normalize_markers(body: &mut Value, lifetime: &CacheLifetime) {
-    for place in marker_places(body) {
-        let Some(holder) = body.pointer_mut(&place).and_then(Value::as_object_mut) else {
-            continue;
-        };
-        if holder.contains_key("cache_control") {
-            holder.insert("cache_control".into(), cache_control(lifetime));
-        }
-    }
-}
-
-/// Where a cache marker may sit: on a message's content part (the system
-/// prompt's included), and on a tool, at its top level or inside
-/// `function`, as OpenRouter accepts (`research/openai-completions-probe`).
-/// A `cache_control` key anywhere else, such as a schema property, is not a
-/// marker.
-fn marker_places(body: &Value) -> Vec<String> {
-    let list = |key: &str| body.get(key).and_then(Value::as_array).map_or(0, Vec::len);
-    let mut places = Vec::new();
-    for m in 0..list("messages") {
-        let parts = body
-            .pointer(&format!("/messages/{m}/content"))
-            .and_then(Value::as_array)
-            .map_or(0, Vec::len);
-        places.extend((0..parts).map(|p| format!("/messages/{m}/content/{p}")));
-    }
-    for t in 0..list("tools") {
-        places.push(format!("/tools/{t}"));
-        places.push(format!("/tools/{t}/function"));
-    }
-    places
-}
-
-/// Removes cache markers past [`MAX_MARKERS`], counted in body order:
-/// `messages` (the system prompt's, the previous end's, the new end's, as
-/// `docs/prompt-cache.md` orders them), then any on `tools` that model data
-/// added. Returns the markers kept.
-fn cap_markers(body: &mut Value) -> Vec<Value> {
-    let mut kept = Vec::new();
-    for place in marker_places(body) {
-        let Some(holder) = body.pointer_mut(&place).and_then(Value::as_object_mut) else {
-            continue;
-        };
-        let Some(marker) = holder.get("cache_control") else {
-            continue;
-        };
-        if kept.len() < MAX_MARKERS {
-            kept.push(marker.clone());
-        } else {
-            holder.remove("cache_control");
-        }
-    }
-    kept
-}
-
-/// The lifetime a reported cache write is counted under. The vendor reports
-/// one `cache_write_tokens` total, and [`normalize_markers`] gives every
-/// marker the request sends the request's lifetime, so it is that lifetime
-/// whenever the request sent a marker: `1h` for a marker with `ttl: "1h"`,
-/// and Anthropic's default of 5 minutes for one without
-/// (openrouter.ai/docs/guides/best-practices/prompt-caching: "By default,
-/// the cache expires after 5 minutes"). A request with no markers counts
-/// any write under its own cache lifetime.
-fn write_lifetime(markers: &[Value], requested: CacheLifetime) -> CacheLifetime {
-    match markers.first() {
-        Some(marker) if marker.get("ttl") == Some(&json!("1h")) => CacheLifetime::OneHour,
-        Some(_) => CacheLifetime::FiveMinutes,
-        None => requested,
-    }
+    Value::Object(body).to_string().into_bytes()
 }
 
 /// `tool_choice` on the wire: `auto`, `none` and `required` are OpenAI's own
@@ -573,7 +491,10 @@ impl Decoder {
 /// (`cached_tokens`) and OpenRouter's cache writes (`cache_write_tokens`)
 /// inside `prompt_tokens`, and `tokens.input` excludes both
 /// (`docs/model-routing.md`, "openai-completions facts"). The vendor does
-/// not say which lifetime a write was, so the caller says ([`write_lifetime`]).
+/// not say which lifetime a write was, so it is counted under the request's
+/// cache lifetime: `1h` for a 1-hour request, whose marker carries `ttl: "1h"`,
+/// and 5 minutes for one without (openrouter.ai/docs/guides/best-practices/prompt-caching:
+/// "By default, the cache expires after 5 minutes").
 fn tokens(usage: &Value, lifetime: &CacheLifetime) -> Tokens {
     let count = |pointer: &str| usage.pointer(pointer).and_then(Value::as_u64).unwrap_or(0);
     let read = count("/prompt_tokens_details/cached_tokens");
