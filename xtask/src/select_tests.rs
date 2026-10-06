@@ -56,15 +56,7 @@ fn markdown_docs_and_research_run_the_docs_job_alone() {
 
 #[test]
 fn manifests_toolchain_and_workflows_run_everything() {
-    let everything = strings(&[
-        "config",
-        "contract",
-        "extensions",
-        "log",
-        "loop",
-        "loop-extra",
-        "main",
-    ]);
+    let everything: Vec<String> = members().keys().cloned().collect();
     for trigger in [
         "Cargo.lock",
         "crates/log/Cargo.toml",
@@ -167,15 +159,7 @@ fn a_compiled_in_crate_prompt_runs_that_crate() {
 
 #[test]
 fn scripts_check_alone_runs_everything() {
-    let everything = strings(&[
-        "config",
-        "contract",
-        "extensions",
-        "log",
-        "loop",
-        "loop-extra",
-        "main",
-    ]);
+    let everything: Vec<String> = members().keys().cloned().collect();
     let selection = classify(&strings(&["scripts/check"]), &members());
     assert_eq!(selection, Selection::All(everything));
     assert_eq!(selection.mode(), "all");
@@ -183,15 +167,7 @@ fn scripts_check_alone_runs_everything() {
 
 #[test]
 fn clippy_toml_runs_everything() {
-    let everything = strings(&[
-        "config",
-        "contract",
-        "extensions",
-        "log",
-        "loop",
-        "loop-extra",
-        "main",
-    ]);
+    let everything: Vec<String> = members().keys().cloned().collect();
     assert_eq!(
         classify(&strings(&["clippy.toml"]), &members()),
         Selection::All(everything)
@@ -200,15 +176,7 @@ fn clippy_toml_runs_everything() {
 
 #[test]
 fn nextest_toml_runs_everything() {
-    let everything = strings(&[
-        "config",
-        "contract",
-        "extensions",
-        "log",
-        "loop",
-        "loop-extra",
-        "main",
-    ]);
+    let everything: Vec<String> = members().keys().cloned().collect();
     assert_eq!(
         classify(&strings(&[".config/nextest.toml"]), &members()),
         Selection::All(everything)
@@ -926,19 +894,6 @@ fn a_package_diff_runs_the_binary_tests_beside_the_listed_readers() {
 }
 
 #[test]
-fn package_readers_outside_the_workspace_are_dropped() {
-    let mut members = members();
-    members.remove("main");
-    let selection = classify_with(
-        &strings(&["providers/opencode/providers/opencode-go.json"]),
-        &members,
-        COMPILED_IN,
-        &["config", "main"],
-    );
-    assert_eq!(selection, Selection::Crates(strings(&["config"])));
-}
-
-#[test]
 fn only_a_repo_root_providers_or_extensions_dir_is_a_package_file() {
     for path in [
         "providers/opencode/providers/opencode-go.json",
@@ -1139,6 +1094,28 @@ fn a_crates_extensions_segment_counts() {
             "tools: its sources read a first-party package, but the package-reader list does not list it"
         ]
     );
+}
+
+#[test]
+fn non_package_literals_with_the_manifest_do_not_count() {
+    // Kills the `==` -> `!=` mutants on either segment comparison in
+    // `reads_package::walk`: with `!=`, every one of these literals would
+    // count as a package path. `"tests/pages"` is the real case
+    // (`crates/tools/src/web_fetch/pages_tests.rs` joins it onto
+    // `CARGO_MANIFEST_DIR` without reading a package).
+    for literal in ["../../research", "tests/pages", "providersX/a"] {
+        let mut files = package_ok_files();
+        files.push(package_src(
+            "tools",
+            "crates/tools/src/search.rs",
+            &format!("let dir = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"{literal}\");\n"),
+        ));
+        assert_eq!(
+            package_reader_mismatches(&files, &package_members()).unwrap(),
+            Vec::<String>::new(),
+            "{literal}"
+        );
+    }
 }
 
 #[test]

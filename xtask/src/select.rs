@@ -218,9 +218,6 @@ fn reads_package(source: &str) -> Result<bool, proc_macro2::LexError> {
     fn walk(stream: TokenStream, manifest: &mut bool, package: &mut bool) {
         for tree in stream {
             match tree {
-                TokenTree::Ident(ident) if ident == "CARGO_MANIFEST_DIR" => {
-                    *manifest = true;
-                }
                 TokenTree::Literal(lit) => {
                     if let Some(text) = string_literal(&lit.to_string()) {
                         if text == "CARGO_MANIFEST_DIR" {
@@ -339,13 +336,11 @@ fn classify_with(
     }
     let compiled: BTreeSet<String> = files
         .iter()
-        .filter(|f| !is_package_file(f))
         .flat_map(|f| {
             listed
                 .iter()
                 .filter_map(move |(p, krate)| (*p == f.as_str()).then_some(*krate))
         })
-        .filter(|name| members.contains_key(*name))
         .map(str::to_owned)
         .collect();
     // Docs files do not own a crate; listed files run their crate without
@@ -360,15 +355,8 @@ fn classify_with(
     let mut selected = dependents(touched, members);
     selected.extend(compiled);
     if has_package {
-        selected.extend(
-            readers
-                .iter()
-                .filter(|name| members.contains_key(**name))
-                .map(|name| (*name).to_owned()),
-        );
-        if members.contains_key(BINARY_TESTS) {
-            selected.insert(BINARY_TESTS.to_owned());
-        }
+        selected.extend(readers.iter().map(|name| (*name).to_owned()));
+        selected.insert(BINARY_TESTS.to_owned());
     }
     Selection::Crates(selected.into_iter().collect())
 }
