@@ -245,7 +245,6 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
         match read.read_until(b'\n', &mut buf) {
             Ok(0) | Err(_) => break,
             Ok(_) => {
-                strip_line(&mut buf);
                 on_command(&buf, &hub, &writer, &relays);
             }
         }
@@ -258,19 +257,6 @@ pub(crate) fn serve_counted(stream: UnixStream, hub: Arc<Hub>, n: u64) {
     }
     drop(relays);
     disconnect(&hub, n);
-}
-
-/// Drops the line ending, so the parse sees the object alone. Stripping
-/// changes nothing the parse keeps: JSON ignores trailing whitespace, so
-/// a mutant here is exempt.
-#[cfg_attr(false, mutants::skip)]
-fn strip_line(buf: &mut Vec<u8>) {
-    while buf
-        .last()
-        .is_some_and(|byte| *byte == b'\n' || *byte == b'\r')
-    {
-        buf.pop();
-    }
 }
 
 fn disconnect(hub: &Hub, n: u64) {
