@@ -325,6 +325,13 @@ A test advances a fake clock only after a signal that the code under test is
 waiting on that clock (past its own clock check); a parked caller alone is not
 that signal.
 
+A test does not execute a file it wrote in the same run. On macOS, the first
+run of a newly written executable can stall for seconds under load. The test
+runs the script through its interpreter (`/bin/sh <path>`, `/bin/bash <path>`)
+or uses a checked-in fixture. A test whose subject is direct execution, such as
+a `PATH` lookup or the shebang line, keeps the executable file and passes a
+`cargo nextest run --stress-count` run.
+
 ### Flaky tests
 
 A failed binary-level test retries once. A pass on retry does not block the
