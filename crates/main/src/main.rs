@@ -74,6 +74,8 @@ struct Parts {
     /// The installed extensions, started, and their hooks.
     extensions: Arc<extensions::SessionExtensions>,
     mcp: mcp_servers::Specs,
+    /// The session model's hosted search type, such as `web_search_20250305`.
+    web_search: Option<String>,
 }
 
 fn main() -> ExitCode {
@@ -396,6 +398,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         sessions,
         extensions,
         mcp,
+        web_search,
     } = parts;
     let (job_emit, jobs) = late_emit::registry(&dir, &clock);
     // Before the log exists: a failure here, such as not finding the running
@@ -406,6 +409,7 @@ fn ask_new(model: Option<String>, prompt: String, clock: Arc<dyn contract::clock
         &clock,
         &jobs,
         mcp.specs,
+        web_search.as_deref(),
     ) {
         Ok(built) => built,
         Err(e) => return ask_failed(e),
@@ -624,6 +628,7 @@ fn parts_with(
         idle,
         extensions: Arc::new(extensions),
         mcp: mcp_servers::specs(&config),
+        web_search: model.model.web_search.clone(),
     })
 }
 
