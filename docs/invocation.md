@@ -116,9 +116,10 @@ groups, then the flags and examples.
 a git repository that is the repository's project, every worktree of it;
 outside one it is every project. `sessions --all` lists every project.
 
-`models` reads each provider's cached model list, and runs a provider's
-`models()` only when it has no cached copy (`docs/model-routing.md`, "Model
-discovery").
+`models` prints each provider's cached model list at once, and runs a
+provider's `models()` only when it has no cached copy. A list older than
+`model_lists.refresh_after` refreshes in the background for the next run
+(`docs/model-routing.md`, "Model discovery").
 
 `fiber ask` has no `--continue`. Several callers run `fiber ask` at once, so
 "the most recent session" is a race.
@@ -170,6 +171,7 @@ a key is valid.
 | `extension install [--project] <name or path>` | Installs an extension and its dependencies. `--project` installs it for the current project only. |
 | `extension update [<name>]` | Updates one extension, or every installed extension, to its newest tag. It never touches a repository's extension. |
 | `extension remove <name>` | Removes an extension, the dependencies nothing else uses, and their data. Run in a project on a repository's extension, it removes that and records never for its content. |
+| `extension reinstall <name>` | Removes an extension and installs it again, from its recorded source and commit, or from `<name>` as given when it is damaged (`docs/extensions.md`, "Installing"). |
 | `extension list` | Lists installed extensions: name, version and commit; and each repository extension with its project, its path in the repository and the content it loads. |
 | `extension test [<path>]` | Runs an extension's test cases, from its directory or the current one, against the `scripted` provider in a temporary Fiber home, and exits non-zero if any fails (`docs/testing.md`, "Testing an extension"). |
 
