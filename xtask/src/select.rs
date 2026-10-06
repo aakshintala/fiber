@@ -469,7 +469,7 @@ pub(crate) fn is_test_file(rel: &str) -> bool {
 /// not its directory's own module (`docs/code-quality.md`, "Size"):
 /// `foo_tests.rs` holds `foo::tests`, while `tests.rs` and, at the crate
 /// root, `lib_tests.rs` and `main_tests.rs` hold `tests`.
-fn test_module<'a>(root: bool, stem: &'a str) -> Option<&'a str> {
+fn test_module(root: bool, stem: &str) -> Option<&str> {
     match stem.strip_suffix("_tests") {
         None => None,
         Some("lib" | "main") if root => None,
