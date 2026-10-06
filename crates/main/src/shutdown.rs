@@ -10,13 +10,16 @@ use doors::{Session, Signals};
 use r#loop::TurnCancel;
 
 /// Arms the signals just before the first child process starts: from now a
-/// signal is recorded, and at the bound every command group and MCP server
-/// still alive is killed.
+/// signal is recorded, every server still starting is told to stop, and at
+/// the bound every command group and MCP server still alive is killed.
 pub(crate) fn arm(signals: &Signals) {
-    signals.arm(Box::new(|| {
-        tools::kill_every_group();
-        mcp::kill_every_server();
-    }));
+    signals.arm(
+        Box::new(mcp::stop_every_start),
+        Box::new(|| {
+            tools::kill_every_group();
+            mcp::kill_every_server();
+        }),
+    );
 }
 
 /// Starts the session just before its first line: the code of a signal

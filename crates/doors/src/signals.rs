@@ -6,8 +6,9 @@
 //! - booting, before any child process starts: the process exits at once
 //!   with the signal's code, writing nothing;
 //! - armed, from then until `fiber_started` is about to be written: the
-//!   signal is recorded, and [`Signals::start`] hands it to the door, which
-//!   stops what it started and exits writing nothing;
+//!   signal is recorded, the door's startup is told to stop, and
+//!   [`Signals::start`] hands it to the door, which stops what it started
+//!   and exits writing nothing;
 //! - started: the shutdown the door registered runs, and a second SIGTERM
 //!   or SIGINT kills every live process group at once.
 //!
@@ -83,6 +84,7 @@ struct State {
     seen: u32,
     /// The code a signal left while armed.
     recorded: Option<i32>,
+    on_record: Option<Callback>,
     on_bound: Option<Callback>,
     on_signal: Option<OnSignal>,
     on_second: Option<Callback>,
@@ -121,6 +123,7 @@ impl Signals {
                 phase: Phase::Booting,
                 seen: 0,
                 recorded: None,
+                on_record: None,
                 on_bound: None,
                 on_signal: None,
                 on_second: None,
@@ -132,10 +135,16 @@ impl Signals {
     }
 
     /// Called just before the first child process starts: from now a signal
-    /// is recorded, not an exit, and at the bound `on_bound` kills whatever
-    /// is still alive before the process exits.
-    pub fn arm(&self, on_bound: Box<dyn Fn() + Send + Sync>) {
+    /// is recorded, the door's startup is told to stop through `on_record`,
+    /// and at the bound `on_bound` kills whatever is still alive before the
+    /// process exits.
+    pub fn arm(
+        &self,
+        on_record: Box<dyn Fn() + Send + Sync>,
+        on_bound: Box<dyn Fn() + Send + Sync>,
+    ) {
         let mut state = lock(&self.state);
+        state.on_record = Some(Arc::from(on_record));
         state.on_bound = Some(Arc::from(on_bound));
         if state.phase == Phase::Booting {
             state.phase = Phase::Armed;
@@ -165,18 +174,28 @@ impl Signals {
 
     /// Handles one signal. The callbacks run outside the lock.
     fn handle(self: &Arc<Self>, signal: i32) {
-        let (action, on_signal, on_second) = {
+        let (action, on_record, on_signal, on_second) = {
             let mut state = lock(&self.state);
             let action = decide(state.phase, signal, state.seen);
             state.seen = state.seen.saturating_add(1);
             if let Action::Record(code) = action {
                 state.recorded = Some(code);
             }
-            (action, state.on_signal.clone(), state.on_second.clone())
+            (
+                action,
+                state.on_record.clone(),
+                state.on_signal.clone(),
+                state.on_second.clone(),
+            )
         };
         match action {
             Action::Exit(code) => (self.exit)(code),
-            Action::Record(code) => self.bound(code),
+            Action::Record(code) => {
+                self.bound(code);
+                if let Some(on_record) = on_record {
+                    on_record();
+                }
+            }
             Action::Shutdown(code) => {
                 self.bound(code);
                 if let Some(on_signal) = on_signal {
