@@ -27,7 +27,7 @@ use contract::{CommandId, Envelope, ErrorCode, RequestId};
 use fakes::Scripted;
 use serde_json::{Map, Value, json};
 
-use support::{Session, TestTool, calls_reply, kinds, message};
+use support::{Session, TestTool, calls_reply, kinds, message, on_request};
 
 const BUSY: &str = "A turn is running; send `steer` to add to it.";
 const CLOSING: &str = "The session is closing and takes no new turn.";
@@ -417,34 +417,6 @@ fn standing_ask() -> StandingRules {
 
 fn paris() -> Value {
     json!({"city": "Paris"})
-}
-
-fn on_request(
-    session: &Session,
-    send: impl FnOnce(RequestId) + Send + 'static,
-) -> thread::JoinHandle<()> {
-    let mut watcher = session.log.watch();
-    thread::spawn(move || {
-        let (forward, waiting) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                if forward.send(line).is_err() {
-                    return;
-                }
-            }
-        });
-        loop {
-            let line = waiting
-                .recv_timeout(support::DEADLINE)
-                .expect("a permission_requested line");
-            if line.kind == "permission_requested" {
-                send(RequestId(
-                    line.payload["request_id"].as_str().unwrap().into(),
-                ));
-                return;
-            }
-        }
-    })
 }
 
 /// `run` until it returns. The session keeps its inbox sender, so the loop

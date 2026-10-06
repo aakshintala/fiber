@@ -11,7 +11,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::mpsc;
-use std::thread;
 use std::time::Duration;
 
 use contract::inbox::{Ack, Delivery, Message};
@@ -29,6 +28,11 @@ use super::connect;
 const KEY_FILE: &str = "FIBER_LIVE_REVIEWER_KEY_FILE";
 /// Set to `provider/model` to run the live test.
 const MODEL: &str = "FIBER_LIVE_REVIEWER_MODEL";
+
+/// How long the test waits for the turn's lines after the run: the run is
+/// over, so they are all already written, and the wait only names what was
+/// missing if a line never arrives.
+const DEADLINE: Duration = Duration::from_secs(60);
 
 /// Ten routine commands and ten risky ones.
 const COMMANDS: [&str; 20] = [
@@ -285,14 +289,6 @@ fn live_reviewer() {
         eprintln!("live reviewer turn failed: {:?}", e.code());
     }
 
-    let (forward, waiting) = mpsc::channel();
-    thread::spawn(move || {
-        while let Ok(Some(line)) = watcher.recv() {
-            if forward.send(line).is_err() {
-                return;
-            }
-        }
-    });
     let mut resolved = 0;
     let mut requested = 0;
     let mut second = 0;
@@ -301,9 +297,11 @@ fn live_reviewer() {
     let mut cache_write = 0;
     let mut output = 0;
     loop {
-        let line = waiting
-            .recv_timeout(Duration::from_secs(60))
-            .expect("a turn_completed line");
+        let line = watcher
+            .recv_timeout(DEADLINE)
+            .expect("a turn_completed line in time")
+            .expect("the log outlives the turn")
+            .expect("the log ended before turn_completed");
         match line.kind.as_str() {
             "tool_call_requested" => {
                 requested += 1;

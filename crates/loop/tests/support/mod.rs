@@ -33,7 +33,7 @@ use contract::tool::{Bound, Cancel, Effects, EffectsError, Output, Tool};
 use contract::{CommandId, Envelope, RequestId, SessionId};
 use fakes::clock::FakeClock;
 use fakes::{BlockingProvider, Scripted, ScriptedProvider, reply};
-use log::{Injector, Log};
+use log::{Log, Watcher};
 use r#loop::{BlockLimits, Loop, Model, Reviewer, TurnCancel};
 use serde_json::{Map, Value, json};
 
@@ -57,21 +57,12 @@ pub(crate) fn on_request(
 ) -> thread::JoinHandle<()> {
     let mut watcher = session.log.watch();
     thread::spawn(move || {
-        // The watcher blocks without a deadline, so its lines cross an mpsc
-        // channel, as in `Session::open`, and the wait below carries the
-        // deadline instead.
-        let (forward, waiting) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                if forward.send(line).is_err() {
-                    return;
-                }
-            }
-        });
         loop {
-            let line = waiting
+            let line = watcher
                 .recv_timeout(DEADLINE)
-                .expect("a permission_requested line");
+                .expect("a permission_requested line in time")
+                .expect("the log outlives the request")
+                .expect("the log ended before permission_requested");
             if line.kind == "permission_requested" {
                 send(RequestId(
                     line.payload["request_id"].as_str().unwrap().into(),
@@ -655,7 +646,7 @@ pub(crate) struct Session {
     /// The standing rules the loop reads.
     pub(crate) rules: Arc<FakeRules>,
     pub(crate) inbox: Sender<Delivery>,
-    lines: mpsc::Receiver<Envelope>,
+    lines: Watcher,
     pub(crate) looped: Option<Loop>,
     /// Cancels the session's running turn, as a driver does.
     pub(crate) cancel: Arc<TurnCancel>,
@@ -844,17 +835,7 @@ impl Session {
         std::fs::create_dir_all(&credentials).unwrap();
         let id = SessionId("s_test".into());
         let log = Arc::new(Log::create(&home.0, id.clone(), clock.clone()).unwrap());
-        let mut watcher = log.watch();
-        let (forward, lines) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                // `run` starts the status observer, whose lines race the
-                // loop's own; `tests/status.rs` reads them.
-                if line.kind != "session_status" && forward.send(line).is_err() {
-                    break;
-                }
-            }
-        });
+        let lines = log.watch();
         let (inbox, rx) = mpsc::channel();
         let seam = Seam {
             inner: provider,
@@ -1012,7 +993,14 @@ impl Session {
             let line = self
                 .lines
                 .recv_timeout(DEADLINE)
-                .expect("a turn_completed line");
+                .expect("a turn_completed line in time")
+                .expect("the log outlives the turn")
+                .expect("the log ended before turn_completed");
+            // `run` starts the status observer, whose lines race the
+            // loop's own; `tests/status.rs` reads them.
+            if line.kind == "session_status" {
+                continue;
+            }
             let last = line.kind == "turn_completed";
             lines.push(line);
             if last {
@@ -1039,37 +1027,17 @@ pub(crate) fn kinds(lines: &[Envelope]) -> Vec<&str> {
 /// A live tap on a session's log: its own watcher, readable mid-turn with
 /// a deadline, alongside `Session::lines`, which drains after the turn.
 /// Lines read here stay in the session's own queue: each watcher has one.
-/// Dropping the tap ends its forwarder even with no traffic, through a
-/// shutdown line the forwarder strips before forwarding.
 pub(crate) struct Tap {
-    lines: mpsc::Receiver<Envelope>,
+    watcher: Mutex<Watcher>,
     buffered: Mutex<Vec<Envelope>>,
-    injector: Injector,
 }
-
-/// The tap's own shutdown line, never forwarded.
-const TAP_CLOSED: &str = "tap_closed";
 
 impl Tap {
     /// Taps `log` from now on.
     pub(crate) fn new(log: &Arc<Log>) -> Self {
-        let mut watcher = log.watch();
-        let injector = watcher.injector();
-        let (forward, lines) = mpsc::channel();
-        thread::spawn(move || {
-            while let Ok(Some(line)) = watcher.recv() {
-                if line.kind == TAP_CLOSED {
-                    break;
-                }
-                if forward.send(line).is_err() {
-                    break;
-                }
-            }
-        });
         Self {
-            lines,
+            watcher: Mutex::new(log.watch()),
             buffered: Mutex::default(),
-            injector,
         }
     }
 
@@ -1086,13 +1054,22 @@ impl Tap {
     }
 
     /// The next line `matches` accepts, buffering the rest, and failing the
-    /// test at [`DEADLINE`].
+    /// test at [`DEADLINE`]. Takes the watcher lock and the buffer lock one
+    /// at a time, never nested, and never holds the buffer lock across the
+    /// wait.
     fn wait_until(&self, matches: impl Fn(&Envelope) -> bool) -> Envelope {
         loop {
             if let Some(found) = take_from(&self.buffered, &matches) {
                 return found;
             }
-            let line = self.lines.recv_timeout(DEADLINE).expect("a line in time");
+            let line = self
+                .watcher
+                .lock()
+                .unwrap()
+                .recv_timeout(DEADLINE)
+                .expect("a line in time")
+                .expect("the log outlives the tap")
+                .expect("the log ended before the awaited line");
             if matches(&line) {
                 return line;
             }
@@ -1103,32 +1080,15 @@ impl Tap {
     /// Every line received and buffered so far, without waiting.
     pub(crate) fn pending(&self) -> Vec<Envelope> {
         let mut lines = std::mem::take(&mut *self.buffered.lock().unwrap());
-        lines.extend(self.lines.try_iter());
+        let mut watcher = self.watcher.lock().unwrap();
+        loop {
+            match watcher.try_recv() {
+                Ok(Some(line)) => lines.push(line),
+                Ok(None) => break,
+                Err(e) => panic!("the tap's watcher failed: {e}"),
+            }
+        }
         lines
-    }
-}
-
-impl Drop for Tap {
-    fn drop(&mut self) {
-        // Best effort: wakes a forwarder blocked with no traffic, so its
-        // thread ends with the tap instead of the log. A push after the
-        // watcher is dropped is ignored. The line never reaches the test:
-        // the forwarder strips it before forwarding.
-        self.injector.push_kept(tap_closed());
-    }
-}
-
-/// The tap's shutdown line: queue-only, never in the log.
-fn tap_closed() -> Envelope {
-    Envelope {
-        kind: TAP_CLOSED.into(),
-        session_id: SessionId("s_tap".into()),
-        ts: 0,
-        schema_version: contract::SCHEMA_VERSION,
-        turn_id: None,
-        action_id: None,
-        seq: None,
-        payload: Map::new(),
     }
 }
 

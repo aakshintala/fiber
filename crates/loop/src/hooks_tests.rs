@@ -314,8 +314,16 @@ fn run_with(
     let turn = done_rx.recv_timeout(TURN_DEADLINE).expect("the turn ended");
     drop(inbox);
     let mut streamed = Vec::new();
-    // The loop is dropped once its turn returns, so the watcher ends.
-    while let Ok(Some(line)) = watcher.recv() {
+    // The loop is dropped once its turn returns, so the watcher ends. A
+    // turn that fails writes no `turn_completed`: the end breaks the loop
+    // too.
+    loop {
+        let got = watcher
+            .recv_timeout(TURN_DEADLINE)
+            .expect("a turn_completed line or the log's end in time");
+        let Ok(Some(line)) = got else {
+            break;
+        };
         let last = line.kind == "turn_completed";
         streamed.push(line);
         if last {
@@ -837,8 +845,15 @@ fn extensions_loaded_writes_the_set_then_each_notice() {
     .unwrap();
     drop(log);
     let mut streamed = Vec::new();
-    while let Ok(Some(line)) = watcher.recv() {
-        streamed.push(line);
+    loop {
+        match watcher
+            .recv_timeout(TURN_DEADLINE)
+            .expect("the log's remaining lines in time")
+        {
+            Ok(Some(line)) => streamed.push(line),
+            Ok(None) => break,
+            Err(e) => panic!("the extensions watcher failed: {e}"),
+        }
     }
     let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["extensions_loaded", "notice"]);
@@ -879,8 +894,15 @@ fn mcp_servers_started_writes_each_failure_then_each_notice() {
     .unwrap();
     drop(log);
     let mut streamed = Vec::new();
-    while let Ok(Some(line)) = watcher.recv() {
-        streamed.push(line);
+    loop {
+        match watcher
+            .recv_timeout(TURN_DEADLINE)
+            .expect("the log's remaining lines in time")
+        {
+            Ok(Some(line)) => streamed.push(line),
+            Ok(None) => break,
+            Err(e) => panic!("the MCP watcher failed: {e}"),
+        }
     }
     let kinds: Vec<&str> = streamed.iter().map(|l| l.kind.as_str()).collect();
     assert_eq!(kinds, ["mcp_server_failed", "notice"]);

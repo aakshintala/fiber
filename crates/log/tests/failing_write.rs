@@ -101,7 +101,10 @@ fn child_writing_past_a_file_size_limit() {
     // Dropping the stopped log does not turn its failure into a clean end.
     let mut orphan = log.watch();
     drop(log);
-    let ended = orphan.recv().unwrap_err();
+    let ended = orphan
+        .recv_timeout(DEADLINE)
+        .expect("the failure of a dropped log")
+        .unwrap_err();
     assert_eq!(ended.code(), ErrorCode::IoFailed);
 }
 
