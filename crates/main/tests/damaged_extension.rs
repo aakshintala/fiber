@@ -165,6 +165,13 @@ fn damaged_flow(invalid: bool) {
     let run = setup.extension(&["install", &setup.src("fresh")]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);
     assert_eq!(skips(&run), 1, "stderr: {:?}", run.stderr);
+    let skip = run.stderr.lines().position(|line| line == SKIP).unwrap();
+    let installed = run
+        .stderr
+        .lines()
+        .position(|line| line.starts_with("fiber: installed"))
+        .unwrap();
+    assert!(skip < installed, "stderr: {:?}", run.stderr);
 
     let run = setup.extension(&["update"]);
     assert_eq!(run.code, Some(0), "{}", run.stderr);

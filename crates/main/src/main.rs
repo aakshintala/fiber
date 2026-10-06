@@ -196,17 +196,13 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
         eprintln!("fiber: {}", hit.skipped());
     }
     for ext in listing.installed.iter().filter(|i| i.requested) {
-        match install_request(Request::Update(ext.name.clone()), clock) {
-            Ok((Some(names), _)) => {
-                for name in names {
-                    eprintln!("fiber: installed {name}");
-                }
-            }
-            Ok((None, _)) => {
-                eprintln!("fiber: nothing was installed.");
-                return 1;
-            }
+        let plan = match plan_request(Request::Update(ext.name.clone()), clock) {
+            Ok(plan) => plan,
             Err(e) => return fail(e),
+        };
+        let code = report_install(commit_plan(plan));
+        if code != 0 {
+            return code;
         }
     }
     0
@@ -217,48 +213,55 @@ fn update_all(clock: &dyn contract::clock::Clock) -> i32 {
 /// asks when stdin is a terminal (`docs/extensions.md`, "Installing"), and
 /// prints each name installed.
 fn install(request: Request, clock: &dyn contract::clock::Clock) -> i32 {
-    match install_request(request, clock) {
-        Ok((Some(names), damaged)) => {
-            for hit in &damaged {
-                eprintln!("fiber: {}", hit.skipped());
-            }
+    let plan = match plan_request(request, clock) {
+        Ok(plan) => plan,
+        Err(e) => return fail(e),
+    };
+    // The plan's damaged directories are named before approval, so a
+    // declined or failed install still names them.
+    for hit in plan.damaged() {
+        eprintln!("fiber: {}", hit.skipped());
+    }
+    report_install(commit_plan(plan))
+}
+
+/// Prints what an approved install did: each name installed, or that
+/// nothing was installed.
+fn report_install(result: Result<Option<Vec<String>>, Failure>) -> i32 {
+    match result {
+        Ok(Some(names)) => {
             for name in names {
                 eprintln!("fiber: installed {name}");
             }
             0
         }
-        Ok((None, damaged)) => {
-            for hit in &damaged {
-                eprintln!("fiber: {}", hit.skipped());
-            }
+        Ok(None) => {
             eprintln!("fiber: nothing was installed.");
             1
         }
-        Err(e) => {
-            eprintln!("fiber: {}", e.message);
-            doors::exit_code(&e)
-        }
+        Err(e) => fail(e),
     }
 }
 
-/// Installs what `request` needs once approved; `None` when the person
-/// declined. Returns the damaged directories the plan skipped alongside
-/// the names, so each caller decides whether to print them: `install`
-/// prints them, while `update_all` already named each once itself.
-fn install_request(
+/// Fetches and checks what `request` and its dependencies need.
+fn plan_request(
     request: Request,
     clock: &dyn contract::clock::Clock,
-) -> Result<(Option<Vec<String>>, Vec<extensions::Damaged>), Failure> {
+) -> Result<extensions::Plan, Failure> {
     let home = config::fiber_home_from_env().map_err(|e| failed(e.code(), e))?;
-    let plan = extensions::plan(
+    extensions::plan(
         &home,
         &request,
         env!("CARGO_PKG_VERSION"),
         &Origin::github(),
         clock,
     )
-    .map_err(|e| failed(e.code(), e))?;
-    let damaged = plan.damaged().to_vec();
+    .map_err(|e| failed(e.code(), e))
+}
+
+/// Shows what `plan` registers, asks when stdin is a terminal, and
+/// installs once approved; `None` when the person declined.
+fn commit_plan(plan: extensions::Plan) -> Result<Option<Vec<String>>, Failure> {
     let summaries: Vec<doors::InstallSummary> = plan
         .items()
         .map(|item| doors::InstallSummary {
@@ -291,11 +294,9 @@ fn install_request(
     let stdin = io::stdin();
     let terminal = stdin.is_terminal();
     if !doors::install_approved(&summaries, terminal, &mut stdin.lock(), &mut io::stderr())? {
-        return Ok((None, damaged));
+        return Ok(None);
     }
-    plan.commit()
-        .map(|names| (Some(names), damaged))
-        .map_err(|e| failed(e.code(), e))
+    plan.commit().map(Some).map_err(|e| failed(e.code(), e))
 }
 
 /// `fiber extension remove <name>`: removes an extension, the dependencies nothing
