@@ -1661,6 +1661,17 @@ fn a_reviewer_reply_reporting_searches_records_their_count() {
     scripted.end = Ok(end);
     session.reviewer(vec![scripted]);
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            1,
+        )
+    );
     let recorded: Vec<&Envelope> = usages(&lines)
         .into_iter()
         .filter(|l| l.payload["model"] == REVIEWER_MODEL)
@@ -1679,6 +1690,17 @@ fn a_reviewer_reply_reporting_searches_records_their_count() {
     );
     session.reviewer(vec![Scripted::text("allow")]);
     let lines = go(&mut session);
+    assert_eq!(
+        kinds(&lines),
+        kinds_with(
+            &[
+                "permission_resolved",
+                "tool_call_started",
+                "tool_call_completed",
+            ],
+            1,
+        )
+    );
     let recorded: Vec<&Envelope> = usages(&lines)
         .into_iter()
         .filter(|l| l.payload["model"] == REVIEWER_MODEL)

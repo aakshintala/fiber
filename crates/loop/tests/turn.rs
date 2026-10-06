@@ -1237,6 +1237,23 @@ fn a_reply_reporting_searches_records_their_count() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert_eq!(usage.payload["web_searches"], 3);
 
@@ -1244,6 +1261,23 @@ fn a_reply_reporting_searches_records_their_count() {
     session.inbox.send(delivery("hi")).unwrap();
     session.turn();
     let lines = session.lines();
+    assert_eq!(
+        kinds(&lines),
+        [
+            "session_started",
+            "preamble_built",
+            "opening_message",
+            "turn_started",
+            "step_started",
+            "assistant_message_started",
+            "assistant_message_delta",
+            "assistant_message_delta",
+            "text_completed",
+            "usage_recorded",
+            "assistant_message_completed",
+            "turn_completed",
+        ]
+    );
     let usage = lines.iter().find(|l| l.kind == "usage_recorded").unwrap();
     assert!(usage.payload.get("web_searches").is_none());
 }
