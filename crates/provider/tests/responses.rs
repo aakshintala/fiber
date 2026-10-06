@@ -558,6 +558,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
         Input::ToolCall {
             action_id: ActionId("a_1".into()),
             call: call.clone(),
+            model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolCall {
             action_id: ActionId("a_2".into()),
@@ -566,6 +567,7 @@ fn reasoning_goes_back_unchanged_only_to_the_model_reference_that_produced_it() 
                 arguments: Value::String("{not json".into()),
                 ..call.clone()
             },
+            model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_2".into()),
@@ -1082,6 +1084,7 @@ fn a_failed_tool_result_sends_the_same_bytes_as_a_success() {
                     ran_by: None,
                     provider_item: None,
                 },
+                model: "opencode/muse-spark-1.3-contributor".into(),
             },
             Input::ToolResult {
                 action_id: ActionId("a_1".into()),
@@ -1132,6 +1135,7 @@ fn image_conversation(text: &str, images: Vec<contract::provider::ImageRef>) -> 
                 ran_by: None,
                 provider_item: None,
             },
+            model: "opencode/muse-spark-1.3-contributor".into(),
         },
         Input::ToolResult {
             action_id: ActionId("a_1".into()),

@@ -295,7 +295,10 @@ fn the_conversation_in_memory_is_the_one_rebuilt_from_the_log() {
     // In log order: a reply's text parts sit among its calls, and the
     // calls' results follow the reply.
     let call = |n: usize| {
-        let Input::ToolCall { action_id, call } = &sent[n] else {
+        let Input::ToolCall {
+            action_id, call, ..
+        } = &sent[n]
+        else {
             panic!("{:?}", sent[n]);
         };
         (action_id.clone(), call.name.clone())

@@ -721,3 +721,43 @@ fn a_fixed_result_for_a_call_that_never_completed_holds_no_image() {
         Input::ToolResult { images, is_error: true, .. } if images.is_empty()
     ));
 }
+
+#[test]
+fn rebuild_stamps_a_tool_call_with_the_model_in_force() {
+    // The push path: a call the log completes.
+    let lines = vec![
+        line("tool_call_requested", &call("read"), Some("a_1")),
+        line("tool_call_completed", &result("hello"), Some("a_1")),
+    ];
+    let rebuilt = super::rebuild(&lines, "p/m").unwrap();
+    let Input::ToolCall {
+        model, call: made, ..
+    } = &rebuilt[0]
+    else {
+        panic!("{rebuilt:?}");
+    };
+    assert_eq!(model, "p/m");
+    assert_eq!(made.name, "read");
+    // The crash-open path: a call with no result gets its fixed result,
+    // and the call still carries the model.
+    let open = vec![line("tool_call_requested", &call("read"), Some("a_1"))];
+    let rebuilt = super::rebuild(&open, "p/m").unwrap();
+    let Input::ToolCall { model, .. } = &rebuilt[0] else {
+        panic!("{rebuilt:?}");
+    };
+    assert_eq!(model, "p/m");
+    // The live path renders the same model.
+    let mut live = Vec::new();
+    render(
+        &mut live,
+        &call("read"),
+        Some(&ActionId("a_1".into())),
+        "p/m",
+        &mut BTreeMap::new(),
+        &mut crate::handoff::Carry::default(),
+    );
+    let Input::ToolCall { model, .. } = &live[0] else {
+        panic!("{live:?}");
+    };
+    assert_eq!(model, "p/m");
+}
