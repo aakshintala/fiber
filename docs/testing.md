@@ -285,8 +285,9 @@ Code is written so a mutant fails fast. A loop that steps an index by hand can
 spin forever when a mutant breaks the arithmetic, and a hung mutant fails CI as
 a timeout; walk with an iterator instead. A test reaches the code under test
 from outside, through a seam such as a fake writer or the injected clock. A
-`#[cfg(test)]` hook inside a production function is a last resort, and the
-plan that needs one says why.
+`#[cfg(test)]` hook inside a production function is used only where no outside
+seam can reach the behaviour, such as a race's pause point ("Waits and
+timeouts"), and the plan that needs one says why.
 
 A bug fix must also show that its test reproduces the bug. A pull request
 where any issue its body resolves is labelled `bug` starts with a red commit:
