@@ -525,7 +525,6 @@ impl Observer {
                 self.fold.go_live();
                 true
             }
-            "session_status" => return Flow::Go,
             _ => self.fold.observe(line),
         };
         if self.live && changed && !self.emit() {

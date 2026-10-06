@@ -440,8 +440,16 @@ fn a_summary_subscriber_is_sent_the_session_status_and_each_change_through_idle(
     let rest = until(&client, "the idle session_status", |line| {
         line["kind"] == "session_status" && line["payload"]["state"] == "idle"
     });
-    assert!(rest.iter().all(|line| line["kind"] == "session_status"));
-    assert!(rest.iter().all(|line| line.get("seq").is_none()));
+    // `extensions_loaded` follows the first status on subscribe.
+    assert!(rest.iter().all(|line| matches!(
+        line["kind"].as_str(),
+        Some("session_status" | "extensions_loaded")
+    )));
+    assert!(
+        rest.iter()
+            .filter(|line| line["kind"] == "session_status")
+            .all(|line| line.get("seq").is_none())
+    );
     let idle = rest.last().unwrap();
     assert_eq!(idle["payload"]["name"], "hi");
     assert_eq!(idle["payload"]["jobs"], 0);

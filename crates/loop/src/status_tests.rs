@@ -880,3 +880,134 @@ fn a_lagging_observer_folds_every_written_line_before_it_stops() {
     assert_eq!(last.payload["spend"]["cost"], 1.5);
     assert_eq!(last.payload["spend"]["tokens"]["input"], 10);
 }
+
+/// An ephemeral line is a delta and changes nothing, except a retry notice,
+/// which is what `retrying` is read from.
+#[test]
+fn an_ephemeral_retry_notice_is_read_and_another_ephemeral_line_is_not() {
+    let mut w = world();
+    w.start();
+    w.prompt("go");
+    let ephemeral = |kind: &str, payload: &Value| envelope(kind, 99, None, None, payload);
+    let delta = ephemeral("assistant_message_delta", &json!({"text": "hi"}));
+    assert!(!w.fold.observe(&delta));
+    assert_eq!(w.status().state, SessionState::Streaming);
+    let retry = ephemeral(
+        "retry_scheduled",
+        &json!({"code": "rate_limited", "attempt": 2, "delay_ms": 1000}),
+    );
+    assert!(w.fold.observe(&retry));
+    assert_eq!(w.status().state, SessionState::Retrying);
+    w.feed("assistant_message_started", None, &json!({}));
+    assert_eq!(w.status().state, SessionState::Streaming);
+}
+
+fn git(dir: &std::path::Path, args: &[&str]) {
+    let out = std::process::Command::new("git")
+        .arg("-C")
+        .arg(dir)
+        .args(["-c", "user.name=t", "-c", "user.email=t@example.com"])
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(out.status.success(), "git {args:?}: {out:?}");
+}
+
+/// The branch read: none outside a repository, the branch's name on one,
+/// and a detached head as a `null` branch.
+#[test]
+fn the_branch_is_read_from_git_and_a_detached_head_is_null() {
+    let root = fakes::TempDir::new("status-git");
+    let plain = root.path().join("plain");
+    std::fs::create_dir_all(&plain).unwrap();
+    assert_eq!(super::branch(&plain), None);
+
+    let repo = root.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-q", "-b", "trunk"]);
+    git(&repo, &["commit", "-q", "--allow-empty", "-m", "first"]);
+    assert_eq!(
+        super::branch(&repo),
+        Some(Git {
+            branch: Some("trunk".into())
+        })
+    );
+    git(&repo, &["checkout", "-q", "--detach"]);
+    assert_eq!(super::branch(&repo), Some(Git { branch: None }));
+}
+
+/// `Status::stop` returns only after the observer has folded every line
+/// already written: the stop line is queued and the thread joined.
+#[test]
+fn stop_returns_after_the_observer_folded_what_was_written() {
+    use contract::events::{Event, InputItem, TurnCompleted, TurnOutcome, TurnStarted};
+    use contract::shapes::{ContentPart, Origin, Sender};
+    use contract::{CommandId, TurnId};
+
+    let root = fakes::TempDir::new("status-stop");
+    let log = Arc::new(
+        log::Log::create(
+            root.path(),
+            SessionId("s_1".into()),
+            fakes::clock::FakeClock::new(),
+        )
+        .unwrap(),
+    );
+    let (held, observer_held) = std::sync::mpsc::channel::<()>();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let held_read = Mutex::new(Some((held, released)));
+    let status = super::start(
+        &log,
+        Fold::new(
+            "/w".to_owned(),
+            "fake/m".to_owned(),
+            None,
+            Box::new(move || {
+                if let Some((held, released)) = held_read.lock().unwrap().take() {
+                    held.send(()).unwrap();
+                    released.recv_timeout(DEADLINE).unwrap();
+                }
+                Vec::new()
+            }),
+            Box::new(|| None),
+        ),
+    )
+    .expect("an observer");
+    observer_held
+        .recv_timeout(DEADLINE)
+        .expect("the observer is held");
+    let turn = Some(TurnId("t_1".into()));
+    log.append(
+        &Event::TurnStarted(TurnStarted {
+            input: vec![InputItem::Message {
+                content: vec![ContentPart::Text { text: "go".into() }],
+                sender: Sender {
+                    origin: Origin::Driver,
+                    command_id: Some(CommandId("c_1".into())),
+                },
+                changed_by: None,
+            }],
+        }),
+        turn.clone(),
+        None,
+    )
+    .unwrap();
+    log.append(
+        &Event::TurnCompleted(TurnCompleted {
+            outcome: TurnOutcome::Completed,
+            error: None,
+            questions: None,
+        }),
+        turn,
+        None,
+    )
+    .unwrap();
+    // The observer is released as `stop` is called: a `stop` that returned
+    // at once would leave the last status as it was.
+    let releaser = std::thread::spawn(move || release.send(()).unwrap());
+    status.stop();
+    releaser.join().unwrap();
+    let last = log.latest("session_status").expect("a session_status");
+    assert_eq!(last.payload["state"], "idle");
+    assert_eq!(last.payload["name"], "go");
+}
