@@ -609,6 +609,7 @@ fn parts_with(
     prompt.context_window = model.model.context_window;
     prompt.agents_home = prompt_files::agents_home(std::env::var_os("HOME"));
     prompt.extension_dirs = extensions.dirs();
+    prompt.builtin_skills = true;
     prompt.skills_disabled = config.union_list("skills.disabled");
     prompt.credential = Some(label);
     Ok(Parts {

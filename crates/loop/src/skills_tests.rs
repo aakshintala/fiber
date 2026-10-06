@@ -643,3 +643,102 @@ fn a_skill_the_model_may_not_load_adds_nothing_to_the_size() {
     let found = [sized("a", "/p", 40), hidden];
     assert_eq!(large(&found, Some(100)), None);
 }
+
+fn with_builtins(tree: &Tree) -> PromptInputs {
+    let mut inputs = with_extension(tree);
+    inputs.builtin_skills = true;
+    inputs
+}
+
+#[test]
+fn the_built_ins_are_found_alone_as_builtin_with_their_own_paths() {
+    let tree = Tree::new();
+    let found = discover(&with_builtins(&tree), &tree.top());
+    assert_eq!(names(&found), ["cache-warming", "using-fiber"]);
+    assert!(found.notices.is_empty());
+    for skill in &found.skills {
+        assert_eq!(skill.listed.source, SkillSource::Builtin);
+        assert_eq!(skill.listed.path, format!("builtin:{}", skill.listed.name));
+        assert!(skill.model_invocable);
+        assert_eq!(skill.place, "built-in");
+        assert!(!skill.listed.description.is_empty());
+    }
+}
+
+#[test]
+fn the_built_ins_are_off_unless_the_input_is_set() {
+    let tree = Tree::new();
+    assert!(!tree.inputs().builtin_skills);
+    assert!(tree.discover().skills.is_empty());
+}
+
+#[test]
+fn a_skill_of_any_other_source_wins_over_a_built_in_of_its_name() {
+    for (source, place_index) in [("repository", 0), ("personal", 2), ("extension", 4)] {
+        for name in ["using-fiber", "cache-warming"] {
+            let tree = Tree::new();
+            let won = skill(&six_places(&tree)[place_index], "a", name, "mine");
+            let found = discover(&with_builtins(&tree), &tree.top());
+            let kept = found.skills.iter().find(|s| s.listed.name == name).unwrap();
+            assert_eq!(kept.listed.description, "mine", "{source} {name}");
+            assert_ne!(kept.listed.source, SkillSource::Builtin);
+            assert_eq!(
+                messages(&found),
+                [(
+                    ErrorCode::SkillShadowed,
+                    format!(
+                        "Skill {name} at builtin:{name} is shadowed by {}, which is used.",
+                        won.display()
+                    )
+                )],
+                "{source} {name}"
+            );
+        }
+    }
+}
+
+#[test]
+fn an_extensions_prompt_also_shadows_a_built_in() {
+    let tree = Tree::new();
+    let won = skill(&six_places(&tree)[5], "a", "using-fiber", "mine");
+    let found = discover(&with_builtins(&tree), &tree.top());
+    assert_eq!(
+        messages(&found),
+        [(
+            ErrorCode::SkillShadowed,
+            format!(
+                "Skill using-fiber at builtin:using-fiber is shadowed by {}, which is used.",
+                won.display()
+            )
+        )]
+    );
+}
+
+#[test]
+fn a_switched_off_built_in_is_left_out_and_the_other_stays() {
+    let tree = Tree::new();
+    let found = discover(&with_builtins(&tree), &tree.top());
+    assert_eq!(
+        listed_names(&found.skills, &["cache-warming"]),
+        ["using-fiber"]
+    );
+}
+
+#[test]
+fn the_size_notice_names_the_built_in_place() {
+    let tree = Tree::new();
+    let found = discover(&with_builtins(&tree), &tree.top());
+    let message = large(&found.skills, Some(10)).unwrap();
+    assert!(message.contains("Largest: built-in ("), "{message}");
+}
+
+#[test]
+fn both_compiled_texts_parse_with_the_name_of_their_directory() {
+    for (directory, text) in super::BUILTIN {
+        let header = crate::skill_header::parse(text).unwrap();
+        assert_eq!(&header.name, directory);
+        assert!(header.model_invocable);
+        assert!(!header.description.is_empty());
+    }
+    assert_eq!(super::BUILTIN.len(), 2);
+}

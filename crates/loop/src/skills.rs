@@ -18,8 +18,8 @@ pub(crate) struct Found {
     /// Whether the model may load it: its header does not switch that off
     /// and it is not in an extension's `prompts/`.
     pub(crate) model_invocable: bool,
-    /// The place it was read from: the canonical directory, or
-    /// `extension <name>`.
+    /// The place it was read from: the canonical directory,
+    /// `extension <name>` or `built-in`.
     pub(crate) place: String,
 }
 
@@ -31,6 +31,22 @@ pub(crate) struct Discovered {
     /// order.
     pub(crate) notices: Vec<Notice>,
 }
+
+/// The skills compiled into the binary: each directory name under
+/// `skills/` and its `SKILL.md`.
+const BUILTIN: [(&str, &str); 2] = [
+    (
+        "cache-warming",
+        include_str!("../skills/cache-warming/SKILL.md"),
+    ),
+    (
+        "using-fiber",
+        include_str!("../skills/using-fiber/SKILL.md"),
+    ),
+];
+
+/// The place label of a built-in skill, in `skills_large`.
+const BUILTIN_PLACE: &str = "built-in";
 
 /// One directory holding a directory per skill.
 struct Place {
@@ -96,8 +112,6 @@ fn places(inputs: &PromptInputs, top: &Path) -> Vec<Place> {
             true,
         ));
     }
-    // debt: no built-in skill is compiled in, so the built-in source adds
-    // no place; fixed by #760.
     places
 }
 
@@ -117,39 +131,65 @@ pub(crate) fn discover(inputs: &PromptInputs, top: &Path) -> Discovered {
             .clone()
             .unwrap_or_else(|| dir.display().to_string());
         for (path, text) in read_place(&dir, &mut notices) {
-            let header = match skill_header::parse(&text) {
-                Ok(header) => header,
-                Err(invalid) => {
-                    notices.push(invalid_notice(&path, &invalid));
-                    continue;
-                }
-            };
-            let path = path.display().to_string();
-            if let Some(winner) = skills.iter().find(|found| found.listed.name == header.name) {
-                notices.push(Notice {
-                    code: ErrorCode::SkillShadowed,
-                    message: format!(
-                        "Skill {} at {path} is shadowed by {}, which is used.",
-                        header.name, winner.listed.path
-                    ),
-                    extension: None,
-                });
-                continue;
-            }
-            skills.push(Found {
-                listed: SkillListed {
-                    name: header.name,
-                    description: header.description,
-                    path,
-                    source: place.source,
-                },
-                model_invocable: header.model_invocable && !place.prompts,
-                place: label.clone(),
-            });
+            keep(
+                &mut skills,
+                &mut notices,
+                (path.display().to_string(), &text),
+                (place.source, place.prompts, &label),
+            );
         }
         read.push(dir);
     }
+    // The built-in place comes last, so any other source wins a name.
+    if inputs.builtin_skills {
+        for (name, text) in BUILTIN {
+            keep(
+                &mut skills,
+                &mut notices,
+                (format!("builtin:{name}"), text),
+                (SkillSource::Builtin, false, BUILTIN_PLACE),
+            );
+        }
+    }
     Discovered { skills, notices }
+}
+
+/// Adds the skill at `(path, text)` from `(source, prompts, label)` unless
+/// its header is invalid or an earlier skill has its name.
+fn keep(
+    skills: &mut Vec<Found>,
+    notices: &mut Vec<Notice>,
+    (path, text): (String, &str),
+    (source, prompts, label): (SkillSource, bool, &str),
+) {
+    let header = match skill_header::parse(text) {
+        Ok(header) => header,
+        Err(invalid) => {
+            notices.push(invalid_notice(&path, &invalid));
+            return;
+        }
+    };
+    if let Some(winner) = skills.iter().find(|found| found.listed.name == header.name) {
+        notices.push(Notice {
+            code: ErrorCode::SkillShadowed,
+            message: format!(
+                "Skill {} at {path} is shadowed by {}, which is used.",
+                header.name, winner.listed.path
+            ),
+            extension: None,
+        });
+        return;
+    }
+    skills.push(Found {
+        listed: SkillListed {
+            name: header.name,
+            description: header.description,
+            path,
+            source,
+        },
+        model_invocable: header.model_invocable && !prompts,
+        place: label.to_owned(),
+    });
 }
 
 /// Each skill's `SKILL.md` path and text in `dir`, in byte order of the
@@ -197,7 +237,7 @@ fn io_failed(path: &Path, error: &std::io::Error) -> Notice {
     }
 }
 
-fn invalid_notice(path: &Path, invalid: &Invalid) -> Notice {
+fn invalid_notice(path: &str, invalid: &Invalid) -> Notice {
     let reason = match invalid {
         Invalid::DoesNotParse => "its header does not parse",
         Invalid::NoName => "it has no name",
@@ -205,7 +245,7 @@ fn invalid_notice(path: &Path, invalid: &Invalid) -> Notice {
     };
     Notice {
         code: ErrorCode::SkillInvalid,
-        message: format!("Skill {} was left out: {reason}.", path.display()),
+        message: format!("Skill {path} was left out: {reason}."),
         extension: None,
     }
 }

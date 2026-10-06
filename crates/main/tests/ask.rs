@@ -610,6 +610,40 @@ fn a_prompt_as_an_argument_runs_one_turn_and_stdout_is_the_log() {
 }
 
 #[test]
+fn the_opening_message_lists_the_built_in_skills() {
+    let setup = Setup::new();
+    let server = ProviderServer::start([hello()]).unwrap();
+    setup.provider(&server);
+
+    let run = setup.fiber(&["ask", "hi"], None);
+
+    assert_eq!(run.code, Some(0), "stderr: {}", run.stderr);
+    let opening = run
+        .lines
+        .iter()
+        .find(|l| l["kind"] == "opening_message")
+        .unwrap();
+    let skills = opening["payload"]["skills"].as_array().unwrap();
+    let listed: Vec<(&str, &str, &str)> = skills
+        .iter()
+        .map(|s| {
+            (
+                s["name"].as_str().unwrap(),
+                s["path"].as_str().unwrap(),
+                s["source"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("cache-warming", "builtin:cache-warming", "builtin"),
+            ("using-fiber", "builtin:using-fiber", "builtin"),
+        ]
+    );
+}
+
+#[test]
 fn a_prompt_on_stdin_runs_one_turn() {
     let setup = Setup::new();
     let server = ProviderServer::start([hello()]).unwrap();

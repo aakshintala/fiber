@@ -29,6 +29,8 @@ pub struct PromptInputs {
     /// Each loaded extension's name and package directory, for its
     /// `skills/` and `prompts/`.
     pub extension_dirs: Vec<(String, PathBuf)>,
+    /// Whether the skills compiled into the binary join discovery.
+    pub builtin_skills: bool,
     /// `skills.disabled`, every layer unioned.
     pub skills_disabled: Vec<String>,
     /// The shell, or `unknown` when `SHELL` is unset.
@@ -61,6 +63,7 @@ impl PromptInputs {
             home,
             agents_home: None,
             extension_dirs: Vec::new(),
+            builtin_skills: false,
             skills_disabled: Vec::new(),
             shell,
             session_log,
