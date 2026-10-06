@@ -74,10 +74,12 @@ extension talks to `contract`, not to `loop`.
 
 ## The call rules
 
-`contract` depends on nothing and everything depends on it. `log` and
+`contract` depends on nothing and everything but `picture` depends on it.
+`picture` depends on nothing in the workspace. `log` and
 `config` depend only on `contract`. `provider`, `tools`, `mcp`, `jobs` and
 `extensions` depend on `contract` and never on `loop`, on each other, or on
-`tui`. `loop`
+`tui`. `extensions` also depends on `config`, for what an extension reads
+while it runs. `loop`
 depends on `contract`, `log` and the three seams, and never on `tui`, `doors`
 or `main`. `tui`, `hub` and `doors` depend on `contract` and on `log`'s reading
 side, and never on `loop`, `provider`, `tools`, `mcp`, `jobs` or
@@ -101,7 +103,9 @@ as a normal one, and no release binary contains it.
    every built-in by name
    ([Core reasons about tool kinds, not builtin names](https://github.com/aakshintala/fiber-zig/issues/138)).
 5. Only `config` reads configuration files ([Configuration](configuration.md)).
-   `main` distributes what it returns.
+   `main` distributes what it returns at startup. What an extension reads
+   while it runs, such as a secret through `host.secret`, a manifest or the
+   cached model list, `extensions` asks `config` for itself.
 6. `main` holds no feature logic.
 
 ## How the boundaries are enforced
@@ -141,7 +145,8 @@ over a native wire protocol; see `docs/model-routing.md` and
 A provider extension's Lua functions, `models()`, `quota()`, `credential()`
 and `sign()`, reach the `provider` module through this seam, wired by
 `extensions`, so `provider` never depends on `extensions`. `sign()` is the one
-called on the request path.
+called on the request path, and `credential()` only when the cached token has
+already expired (`docs/model-routing.md`, "Keys, tokens and OAuth").
 
 ### Hook seam
 
@@ -149,7 +154,8 @@ called on the request path.
 Synchronous: the loop stops, asks, waits and honours the answer, under a
 timeout Fiber enforces. The hook points are `docs/extensions.md`, "Hooks". A hook is Lua in the
 session's process or a process extension answering over a pipe; either
-answers inside the turn, under the timeout the hook declared.
+answers inside the turn, under the hook's timeout: the one it declared, or the extension's
+`hook_timeout_ms` when the person set it (`docs/configuration.md`).
 
 ## Asking a human
 
@@ -203,6 +209,10 @@ Fiber uses blocking threads and no async runtime.
 | two per client | one reads its commands and answers them, one writes its events | the connection |
 | one per running tool call | that call's subprocess and its output | the call |
 | signals | the process's SIGTERM, SIGINT and SIGHUP, and end of file on a delegate's lifeline; it starts a shutdown (`docs/invocation.md`, "Shutdown") | the process |
+| accept | the session's socket: it accepts each connection and starts that client's two threads | the session |
+| status | `session_status`: it folds the log as it is written into the session's status line (`docs/events.md`) | the session |
+| `fiber ask`'s printer | `ask`'s stdout, as a watcher | the run |
+| one per blocking wait | one wait and nothing else: a command's exit, a web fetch's deadline, one Lua host call's HTTP request, a background refresh, the shutdown bound | the wait |
 
 A client is a reader and a writer on the session's socket, and every client
 is the same code. `fiber ask`'s stdout is not a client: it only receives, so
@@ -226,15 +236,16 @@ session's process.
 event calls it, and it mints `seq`, writes, fsyncs and fans out.
 
 Background jobs, delegates, MCP servers and process extensions each add one
-parked thread per blocking pipe. Each Lua extension in use adds one thread,
+parked thread per blocking pipe or wait. Each Lua extension in use adds one thread,
 which blocks on that extension's inbox (`docs/extensions.md`, "How an
 extension runs"). That is affordable: 512 parked threads measured 11.6 MiB RSS
 and 0.35 ms of CPU over ten seconds on macOS arm64.
 
 ### One inbox
 
-Everything that wants the loop's attention sends to one queue: a driver's
-commands, a finished tool call, news from a background job. The loop blocks on
+Everything that wants the loop's attention between steps sends to one
+queue: a driver's commands and news from a background job. A step waits on
+its own tool calls directly ("Tool calls in a step"). The loop blocks on
 that queue when it is idle, which is why an idle Fiber costs nothing.
 
 The loop drains the queue **at step boundaries** — between one round-trip to
@@ -247,8 +258,8 @@ thread reading that delegate stops the running delegates at once
 
 A driver command that writes no durable event is not queued either. The
 thread reading the client's connection handles it at once, even while a
-model response streams: `background`, `job_stop`, `shell` with `send` false,
-and `tools`.
+model response streams: `subscribe`, `history`, `background`, `job_stop`,
+`shell` with `send` false, and `tools`.
 `job_stop` stops the job at once, and its `job_completed` is logged at the
 next step boundary. Every other command waits for the drain.
 

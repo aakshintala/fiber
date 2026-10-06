@@ -222,9 +222,10 @@ pairing code, list devices and revoke one, through the hub commands
 Every command that talks to the hub takes `--hub <name>` to use a hub from
 the client's list instead of the default.
 
-**Internal commands.** Fiber starts its own processes with two internal
-commands: the session command and the hub. Neither is in the menu, and no
-person or client runs them.
+**Internal commands.** Fiber starts its own processes with internal
+commands: the session command, the hub, the image child ("Processes") and
+the `grep` and `find` that the file tools run (`docs/tools.md`). None is in
+the menu, and no person or client runs them.
 
 The flags are `-h`, `--help`, `-v` and `--version`. There is no `-V`.
 `-v` and `--version` are top-level only: `fiber ask -v` is an unknown
@@ -479,8 +480,11 @@ editing the global rules file, never from an approval.
 
 ## Lifecycle
 
-**First line is `fiber_started`**, carrying the Fiber version, the
-`schema_version`, the `session_id`, and whether the session is new or resumed.
+**Every process announces itself with `fiber_started`**, carrying the Fiber
+version, the `schema_version`, the `session_id`, and whether the session is
+new or resumed. In a new session it follows `session_started`, the log's
+first line; in a resumed process it is the process's first line
+(`docs/events.md`, "Session and turn").
 `fiber ask --resume <id>` and `fiber resume <id>` take the same selector: a
 full session id or any prefix of one that is unique among the project's
 sessions. `fiber resume` with no id opens home. `fiber ask --resume` with no
@@ -495,13 +499,13 @@ phone or a terminal left open is connected all the time. Leaving never
 cancels. When the delay passes, Fiber exits.
 
 **A session left unattended with jobs running checks them once.** Unattended
-means no prompt from a person or a driver for `session.idle_exit_ms`, jobs or
-no jobs. A running job keeps a session from being idle, so the idle delay
+means no prompt or steer from a person or a driver for
+`session.idle_exit_ms`, jobs or no jobs. A running job keeps a session from being idle, so the idle delay
 never ends it; instead, when it has been unattended that long with jobs
 running, Fiber wakes the model once with the jobs check: a notice listing
 the running jobs and telling it to stop any that look hung or that it no
 longer needs, judging from each job's output file. The session does not end.
-The check fires once and is armed again only by the next prompt, so a job
+The check fires once and is armed again only by the next prompt or steer, so a job
 the model keeps does not cost a turn every delay.
 
 **A delegate exits as soon as its run finishes**: its final answer is written
@@ -705,7 +709,7 @@ raises the request again.
 
 A signal that arrives before `fiber_started` is written exits with the code
 and writes nothing. Once `fiber_started` is written, `fiber_exited` always
-is, unless the process dies.
+is, unless the process dies or passes the bound.
 
 **The bound is 5 seconds** from the signal to exit, per process. The
 command stage is at most 2.8 s (800 ms grace plus 2 s drain), the levels of
@@ -713,10 +717,12 @@ a tree run concurrently, and the rest is margin. It sits under the
 supervisors Fiber runs under: Docker sends SIGKILL 10 s after SIGTERM,
 Kubernetes 30 s, systemd 90 s (each one's documented default, not measured).
 Past the bound, every group still
-alive gets SIGKILL; each call, job or delegate it belonged to ends `failed`
-with code `indeterminate` (`docs/tools.md`: "never `completed`"), and the
-exit code is unchanged. A delegate killed this way leaves a log with no
-`fiber_exited`, like any process that died.
+alive gets SIGKILL and the process exits at once with the same code, writing
+nothing more: the loop may be stuck holding the log, so no other thread
+writes to it. The log ends as a process that died leaves it, with no
+`fiber_exited`, and a resume reads it as it reads any such log: a call left
+open has an unknown outcome and is never re-run, and a job left open
+completes `orphaned` (`docs/events.md`, "Resume").
 
 **What a crash leaves.** A crash, a SIGKILL, or a supervisor that gives up
 before the bound stops nothing. A command whose output goes to the pipe
@@ -981,7 +987,8 @@ and passes the path.
 ## Deleting and pruning
 
 Nothing in Fiber deletes a session, its artifacts or a kept worktree on its
-own. A person does, with the commands here. An idle Fiber does no work, so
+own, except a session that never got a prompt, which deletes its own
+directory as it exits ("Lifecycle"). A person does, with the commands here. An idle Fiber does no work, so
 there is no sweep to run, and a session log is the only record of its session
 ([ADR 0001](adr/0001-session-log-is-the-only-state-of-record.md)), so deleting
 one cannot be undone.

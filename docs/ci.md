@@ -68,8 +68,9 @@ A pull request runs only what its diff can affect.
 - Any other diff runs the crates it touches and every crate that depends on
   them, read from the workspace's dependency graph
   ([ADR 0002](adr/0002-module-boundaries-are-crate-boundaries.md)).
-  Binary-level tests depend on every crate, so any change to Rust code runs
-  them.
+  Binary-level tests depend on every crate that ships, so any change to one
+  runs them. `xtask` ships in no binary, so a change to it alone runs its
+  own tests.
 
 The selector has its own tests.
 
@@ -79,7 +80,9 @@ On each of Linux x86_64, Linux arm64 and macOS arm64, one job runs
 `scripts/check`, the same command an implementer runs before every push to
 a pull request (`docs/workflow.md`, "The gate"). It:
 
-- builds the workspace with the debug profile
+- compiles the selected crates with the debug profile, every target,
+  through clippy and nextest; the whole workspace is built by the backstop
+  ("The backstop on `main`")
 - runs clippy with the workspace lints across all targets, so code compiled
   only for one platform is linted on that platform
 - runs the selected tests under nextest, and doc-tests with

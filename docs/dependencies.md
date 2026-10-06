@@ -118,7 +118,6 @@ only that crate, in KiB; the empty program is 323 KiB.
 | clap | the command line | 452 | 448 | ~0 | 17 | 782 |
 | thiserror | error types in library crates | ~0 | ~0 | ~0 | 6 | 325 |
 | signal-hook | SIGTERM, SIGINT and SIGHUP | ~0 | ~0 | ~0 | 4 | 352 |
-| getrandom | random ids | ~0 | ~0 | ~0 | 3 | 325 |
 | ring | SHA-256, for PKCE and extension binary checksums; HMAC-SHA256, for `host.hmac_sha256`; credential fingerprints in the fake provider server | ~0 | ~0 | ~0 | 8 | 341 |
 | base64 | PKCE, and attachments sent to providers | ~0 | ~0 | ~0 | 1 | 328 |
 | rustix | the shell tool's pseudo-terminal, new session and process group, and reading a key without echo | ~0 | ~0 | ~0 | 4 | 330 |
@@ -139,9 +138,12 @@ Notes:
 - mlua carries Lua's C source.
 - ratatui's figure is its two 200 by 50 screen buffers. Any full-screen
   terminal UI holds a screen model of that size.
-- thiserror, getrandom, ring and rustix are already in the tree
+- thiserror, ring and rustix are already in the tree
   through other crates (rustls, crossterm, mlua), so listing them directly
   adds no crate.
+- Random ids come from the standard library's `RandomState`, which the
+  operating system seeds, so no crate mints them. The one secret random
+  value, the PKCE verifier, comes from ring.
 - serde_json's `preserve_order` feature is never enabled
   (`docs/prompt-cache.md`).
 - The search row is ripgrep's walker (`ignore`), its search loop

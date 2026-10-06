@@ -433,7 +433,7 @@ data directory and `project` paths in its project data directory
 (`docs/state.md`, "What each part holds"), each relative to that directory
 and inside it. `budget_bytes` is the section's optional byte budget: over it,
 Fiber tells the model to prune the files when it builds the opening message
-and after the session's own `write` or `edit` of one of them
+and after a call by the session that declares a `writes` effect on one of them
 (`docs/system-prompt.md`, "Extension sections"). All three default to none.
 
 ## A provider's data
@@ -500,14 +500,16 @@ provider extension declares") lists:
   the model hosts no search. A type its protocol does not read back leaves
   the model out with `model_invalid` (`docs/model-routing.md`, "Hosted web
   search").
+- `context_window` is required. A model without it is left out with the
+  notice `model_invalid` (`docs/model-routing.md`, "What a provider extension
+  declares").
 - `deferred_tools` is set only after a probe (`docs/tools.md`, "Which tools the
   model sees"). Absent means false.
 - `cost` is in US dollars per million tokens. A model priced by request size
   adds `tiers`, a list of the same four prices, each with `input_tokens_above`:
-  the highest threshold the request's input tokens exceed prices the whole call,
-  and below every threshold the base prices apply. What counts as input
-  tokens, such as whether cache reads count, is the vendor's definition, and
-  the package declares its thresholds by it. Absent means one price at every
+  the highest threshold the request's whole input exceeds prices the whole
+  call, and below every threshold the base prices apply. The whole input
+  counts cache reads and writes (`docs/model-routing.md`, "Cost"). Absent means one price at every
   size.
 - `subscription` is `true` for a model a subscription login serves; its `cost`
   is then the vendor's API prices (`docs/model-routing.md`, "Cost"). Absent

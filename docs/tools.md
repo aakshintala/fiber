@@ -217,8 +217,10 @@ path's directory, ending in `/`.
   decoder's message (or the pixel count). A CMYK JPEG decodes and is
   accepted. For a model that cannot take images, the image is left out and
   the result says so. On a protocol that cannot carry an image inside a tool
-  result, the image goes in a user message right after the tool message, as
-  rendered PDF pages do on `openai-completions`.
+  result, the image goes in a user message right after the run of tool
+  messages that holds its result, as rendered PDF pages do on
+  `openai-completions`, because nothing may come between the tool messages
+  that answer one assistant turn.
 - A PDF comes back as a PDF part. One of more than 10 pages needs `pages`,
   and a request takes at most 20 pages. A
   PDF of more than 10 pages without `pages`, a range of more than 20 pages,
@@ -428,6 +430,10 @@ that ticket's resolution holds the rationale and the rejected alternatives.
   (optional); `monitor` (optional; starts a monitor, "Background jobs");
   `deadline_ms` (optional; a monitor's deadline). Each call starts fresh: a `cd` does not carry over to the
   next call.
+- A monitor takes neither `tty` nor `run_in_background`, and its only limit
+  is `deadline_ms`, so it takes no `timeout_ms`. `deadline_ms` without
+  `monitor` is refused too. Each of these fails with `invalid_arguments`,
+  the message naming the argument.
 - A bare wait is rejected. When the call is not `run_in_background` and
   the first part of the command is `sleep N` with N of 25 seconds or more,
   alone or followed by other commands, the call completes as `failed` with
@@ -441,8 +447,9 @@ that ticket's resolution holds the rationale and the rejected alternatives.
 - `timeout_ms` is the one thing that kills a command for running long.
   When the model gives none it is 600,000 (10 minutes). There is no
   maximum. It counts from when the command started.
-- It applies to every command, run in the foreground or as a job, and it
-  stays with a command after the command moves to the background. This is
+- It applies to every command except a monitor, run in the foreground or as
+  a job, and it stays with a command after the command moves to the
+  background. A monitor's deadline does the same for it. This is
   where a hang is bounded: "Background jobs" has no cap on waiting.
 - A command that times out ends `failed` with code `timeout` and
   `process.timed_out` true.

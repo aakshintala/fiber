@@ -114,7 +114,8 @@ A fork's history, and a rewind's, is a pointer into another session's log
 (`docs/delegates.md`, "Forks"; `docs/events.md`, "Rewind"). Deleting a session
 a fork or a rewind points at is refused unless the person asks for those to
 be deleted too (`docs/invocation.md`, "Deleting and pruning"). Nothing deletes
-a session on its own.
+a session on its own, except a session that never got a prompt, which
+deletes its own directory as it exits (`docs/invocation.md`, "Lifecycle").
 
 ## What each part holds
 
