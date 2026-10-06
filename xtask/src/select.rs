@@ -42,7 +42,9 @@ pub(crate) enum Selection {
     /// under `scripts/`, or gate configuration changed.
     All(Vec<String>),
     /// The crates the diff touches and every crate that depends on them, plus
-    /// any crate that compiles in a changed listed file, without dependents.
+    /// any crate that compiles in a changed listed file, without dependents,
+    /// plus, when the diff changes a first-party package, the crates that
+    /// read packages and the binary-level tests, without dependents.
     Crates(Vec<String>),
 }
 
@@ -88,6 +90,19 @@ const COMPILED_IN: &[(&str, &str)] = &[
 ];
 /// `docs/ci.md`: mutation testing runs as 6 shards.
 const MUTANT_SHARDS: u64 = 6;
+/// Crates whose tests read a first-party package under `providers/` or
+/// `extensions/` (`docs/ci.md`, "Selection"); sorted. Checked against the
+/// sources by `package_reader_mismatches`.
+const PACKAGE_READERS: &[&str] = &["config", "main"];
+/// The package whose tests are the binary-level tests (`docs/ci.md`,
+/// "Selection"): the `fiber` binary.
+const BINARY_TESTS: &str = "main";
+/// Whether `path` is a first-party package file: under `providers/` or
+/// `extensions/` at the repository root (`docs/ci.md`, "Selection").
+/// `crates/extensions/...` is not one.
+fn is_package_file(path: &str) -> bool {
+    path.starts_with("providers/") || path.starts_with("extensions/")
+}
 
 fn is_docs_file(path: &str) -> bool {
     path.ends_with(".md") || path.starts_with("docs/") || path.starts_with("research/")
@@ -193,6 +208,80 @@ pub(crate) fn compiled_in_mismatches(
     Ok(failures)
 }
 
+/// Whether Rust `source` reads a first-party package: its tokens hold
+/// `CARGO_MANIFEST_DIR` and a string literal one of whose `/`-separated
+/// segments is exactly `providers` or `extensions`. Literals only, never
+/// comments: proc-macro2 tokenises, so comments never appear as tokens.
+/// Over-detects (for example `"crates/extensions"` counts), which only
+/// adds a crate to the list, so it fails safe.
+fn reads_package(source: &str) -> Result<bool, proc_macro2::LexError> {
+    fn walk(stream: TokenStream, manifest: &mut bool, package: &mut bool) {
+        for tree in stream {
+            match tree {
+                TokenTree::Ident(ident) if ident == "CARGO_MANIFEST_DIR" => {
+                    *manifest = true;
+                }
+                TokenTree::Literal(lit) => {
+                    if let Some(text) = string_literal(&lit.to_string()) {
+                        if text == "CARGO_MANIFEST_DIR" {
+                            *manifest = true;
+                        } else if text
+                            .split('/')
+                            .any(|segment| segment == "providers" || segment == "extensions")
+                        {
+                            *package = true;
+                        }
+                    }
+                }
+                TokenTree::Group(group) => walk(group.stream(), manifest, package),
+                TokenTree::Ident(_) | TokenTree::Punct(_) => {}
+            }
+        }
+    }
+    let mut manifest = false;
+    let mut package = false;
+    walk(source.parse()?, &mut manifest, &mut package);
+    Ok(manifest && package)
+}
+
+/// Failures where the package-reader list and the sources disagree, one
+/// line each; empty when they agree. A Rust file in a workspace member
+/// reads a first-party package when `reads_package` says so; crate `xtask`
+/// never counts (its own tests hold such literals as data). Err on a file
+/// that does not tokenise.
+pub(crate) fn package_reader_mismatches(
+    files: &[RustFile],
+    members: &Members,
+) -> Result<Vec<String>, String> {
+    let mut found = BTreeSet::new();
+    for f in files {
+        if f.krate == "xtask" || !members.contains_key(&f.krate) {
+            continue;
+        }
+        if reads_package(&f.source)
+            .map_err(|e| format!("{}: does not tokenise as Rust: {e}", f.path))?
+        {
+            found.insert(f.krate.clone());
+        }
+    }
+    let listed: BTreeSet<String> = PACKAGE_READERS
+        .iter()
+        .map(|name| (*name).to_owned())
+        .collect();
+    let mut failures: Vec<String> = found
+        .difference(&listed)
+        .map(|krate| {
+            format!(
+                "{krate}: its sources read a first-party package, but the package-reader list does not list it"
+            )
+        })
+        .collect();
+    failures.extend(listed.difference(&found).map(|krate| {
+        format!("{krate}: listed as reading a first-party package, but no source reads one")
+    }));
+    Ok(failures)
+}
+
 fn runs_all(path: &str) -> bool {
     let name = path.rsplit('/').next().unwrap_or(path);
     RUN_ALL_NAMES.contains(&name)
@@ -229,19 +318,28 @@ pub(crate) fn dependents(touched: BTreeSet<String>, members: &Members) -> BTreeS
 }
 
 pub(crate) fn classify(files: &[String], members: &Members) -> Selection {
-    classify_with(files, members, COMPILED_IN)
+    classify_with(files, members, COMPILED_IN, PACKAGE_READERS)
 }
 
-fn classify_with(files: &[String], members: &Members, listed: &[(&str, &str)]) -> Selection {
+fn classify_with(
+    files: &[String],
+    members: &Members,
+    listed: &[(&str, &str)],
+    readers: &[&str],
+) -> Selection {
     if files.iter().any(|f| runs_all(f)) {
         return Selection::All(members.keys().cloned().collect());
     }
+    // A package file is checked before the docs rule, so a `.md` inside a
+    // package is not a docs-only diff (`docs/ci.md`, "Selection").
+    let has_package = files.iter().any(|f| is_package_file(f));
     let is_listed = |path: &str| listed.iter().any(|(p, _)| *p == path);
-    if files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
+    if !has_package && files.iter().all(|f| is_docs_file(f) && !is_listed(f)) {
         return Selection::Docs;
     }
     let compiled: BTreeSet<String> = files
         .iter()
+        .filter(|f| !is_package_file(f))
         .flat_map(|f| {
             listed
                 .iter()
@@ -251,15 +349,27 @@ fn classify_with(files: &[String], members: &Members, listed: &[(&str, &str)]) -
         .map(str::to_owned)
         .collect();
     // Docs files do not own a crate; listed files run their crate without
-    // dependents (`docs/ci.md`, "Selection").
+    // dependents (`docs/ci.md`, "Selection"). Package files own no crate;
+    // they run the package readers and the binary-level tests, below.
     let touched = files
         .iter()
-        .filter(|f| !is_docs_file(f) && !is_listed(f))
+        .filter(|f| !is_package_file(f) && !is_docs_file(f) && !is_listed(f))
         .filter_map(|f| owner(f, members))
         .map(str::to_owned)
         .collect();
     let mut selected = dependents(touched, members);
     selected.extend(compiled);
+    if has_package {
+        selected.extend(
+            readers
+                .iter()
+                .filter(|name| members.contains_key(**name))
+                .map(|name| (*name).to_owned()),
+        );
+        if members.contains_key(BINARY_TESTS) {
+            selected.insert(BINARY_TESTS.to_owned());
+        }
+    }
     Selection::Crates(selected.into_iter().collect())
 }
 

@@ -18,6 +18,8 @@ fn members() -> Members {
             member("crates/loop", &["contract", "log"]),
         ),
         ("loop-extra".to_owned(), member("crates/loop/extra", &[])),
+        ("extensions".to_owned(), member("crates/extensions", &[])),
+        ("main".to_owned(), member("crates/main", &[])),
     ])
 }
 
@@ -54,7 +56,15 @@ fn markdown_docs_and_research_run_the_docs_job_alone() {
 
 #[test]
 fn manifests_toolchain_and_workflows_run_everything() {
-    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    let everything = strings(&[
+        "config",
+        "contract",
+        "extensions",
+        "log",
+        "loop",
+        "loop-extra",
+        "main",
+    ]);
     for trigger in [
         "Cargo.lock",
         "crates/log/Cargo.toml",
@@ -157,7 +167,15 @@ fn a_compiled_in_crate_prompt_runs_that_crate() {
 
 #[test]
 fn scripts_check_alone_runs_everything() {
-    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    let everything = strings(&[
+        "config",
+        "contract",
+        "extensions",
+        "log",
+        "loop",
+        "loop-extra",
+        "main",
+    ]);
     let selection = classify(&strings(&["scripts/check"]), &members());
     assert_eq!(selection, Selection::All(everything));
     assert_eq!(selection.mode(), "all");
@@ -165,7 +183,15 @@ fn scripts_check_alone_runs_everything() {
 
 #[test]
 fn clippy_toml_runs_everything() {
-    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    let everything = strings(&[
+        "config",
+        "contract",
+        "extensions",
+        "log",
+        "loop",
+        "loop-extra",
+        "main",
+    ]);
     assert_eq!(
         classify(&strings(&["clippy.toml"]), &members()),
         Selection::All(everything)
@@ -174,7 +200,15 @@ fn clippy_toml_runs_everything() {
 
 #[test]
 fn nextest_toml_runs_everything() {
-    let everything = strings(&["config", "contract", "log", "loop", "loop-extra"]);
+    let everything = strings(&[
+        "config",
+        "contract",
+        "extensions",
+        "log",
+        "loop",
+        "loop-extra",
+        "main",
+    ]);
     assert_eq!(
         classify(&strings(&[".config/nextest.toml"]), &members()),
         Selection::All(everything)
@@ -666,6 +700,7 @@ fn a_listed_markdown_inside_the_crate_dir_runs_that_crate_alone() {
         &strings(&["crates/contract/prompt/system.md"]),
         &members(),
         &listed,
+        &[],
     );
     assert_eq!(selection, Selection::Crates(strings(&["contract"])));
     assert_eq!(selection.mode(), "crates");
@@ -796,6 +831,328 @@ fn an_include_with_tokens_after_the_literal_fails() {
         [
             "crates/contract/src/lib.rs: include_str! argument is not a string literal; the compiled-in check cannot resolve it"
         ]
+    );
+}
+
+#[test]
+fn a_provider_package_diff_runs_the_package_readers() {
+    let selection = classify_with(
+        &strings(&["providers/opencode/providers/opencode-go.json"]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "main"])));
+    assert_eq!(selection.mode(), "crates");
+}
+
+#[test]
+fn an_extension_readme_is_a_package_file_not_a_docs_only_diff() {
+    let selection = classify_with(
+        &strings(&["extensions/x/README.md"]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "main"])));
+}
+
+#[test]
+fn a_file_under_crates_extensions_is_not_a_package_file() {
+    let selection = classify_with(
+        &strings(&["crates/extensions/src/lib.rs"]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["extensions"])));
+}
+
+#[test]
+fn a_package_file_plus_a_manifest_runs_everything() {
+    let everything: Vec<String> = members().keys().cloned().collect();
+    let selection = classify_with(
+        &strings(&[
+            "providers/opencode/providers/opencode-go.json",
+            "crates/log/Cargo.toml",
+        ]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::All(everything));
+}
+
+#[test]
+fn a_package_file_unions_with_a_crate_change() {
+    let selection = classify_with(
+        &strings(&[
+            "providers/opencode/providers/opencode-go.json",
+            "crates/log/src/lib.rs",
+        ]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(
+        selection,
+        Selection::Crates(strings(&["config", "log", "loop", "main"]))
+    );
+}
+
+#[test]
+fn a_package_file_plus_a_plain_doc_runs_only_the_package_readers() {
+    let selection = classify_with(
+        &strings(&[
+            "providers/opencode/providers/opencode-go.json",
+            "docs/ci.md",
+        ]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "main"])));
+}
+
+#[test]
+fn a_package_diff_runs_the_binary_tests_beside_the_listed_readers() {
+    let selection = classify_with(
+        &strings(&["providers/opencode/providers/opencode-go.json"]),
+        &members(),
+        COMPILED_IN,
+        &["config"],
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config", "main"])));
+}
+
+#[test]
+fn package_readers_outside_the_workspace_are_dropped() {
+    let mut members = members();
+    members.remove("main");
+    let selection = classify_with(
+        &strings(&["providers/opencode/providers/opencode-go.json"]),
+        &members,
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::Crates(strings(&["config"])));
+}
+
+#[test]
+fn only_a_repo_root_providers_or_extensions_dir_is_a_package_file() {
+    for path in [
+        "providers/opencode/providers/opencode-go.json",
+        "providers/x.json",
+        "extensions/x/README.md",
+        "extensions/x/extension.json",
+    ] {
+        assert!(is_package_file(path), "{path}");
+    }
+    for path in [
+        "providersX/opencode-go.json",
+        "crates/extensions/src/lib.rs",
+        "research/topic/providers/notes.md",
+        "docs/ci.md",
+    ] {
+        assert!(!is_package_file(path), "{path}");
+    }
+}
+
+#[test]
+fn a_providers_lookalike_diff_selects_as_before() {
+    let selection = classify_with(
+        &strings(&[
+            "providersX/opencode-go.json",
+            "research/topic/providers/notes.md",
+        ]),
+        &members(),
+        COMPILED_IN,
+        &["config", "main"],
+    );
+    assert_eq!(selection, Selection::Crates(Vec::new()));
+}
+
+fn package_src(krate: &str, path: &str, source: &str) -> RustFile {
+    RustFile {
+        krate: krate.to_owned(),
+        path: path.to_owned(),
+        rel: "src/lib.rs".to_owned(),
+        source: source.to_owned(),
+    }
+}
+
+fn config_reads_a_package() -> RustFile {
+    package_src(
+        "config",
+        "crates/config/tests/credentials.rs",
+        "fn dir() -> PathBuf {\n    std::path::PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers/opencode\")\n}\n",
+    )
+}
+
+fn main_reads_a_package() -> RustFile {
+    package_src(
+        "main",
+        "crates/main/tests/ask.rs",
+        "fn package(name: &str) -> PathBuf {\n    Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers\").join(name)\n}\n",
+    )
+}
+
+fn package_ok_files() -> Vec<RustFile> {
+    vec![config_reads_a_package(), main_reads_a_package()]
+}
+
+/// `members()` with the `tools` and `xtask` crates: only the package-reader
+/// tests name them, so the selection tests keep the smaller fixture.
+fn package_members() -> Members {
+    let mut members = members_with_tools();
+    members.insert(
+        "xtask".to_owned(),
+        Member {
+            dir: "xtask".to_owned(),
+            version: "0.0.0".to_owned(),
+            deps: Vec::new(),
+            library: true,
+        },
+    );
+    members
+}
+
+#[test]
+fn the_package_reader_list_matches_its_sources() {
+    assert_eq!(
+        package_reader_mismatches(&package_ok_files(), &package_members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn an_unlisted_crate_that_reads_a_package_fails() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "let root = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"../../providers\");\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        [
+            "tools: its sources read a first-party package, but the package-reader list does not list it"
+        ]
+    );
+}
+
+#[test]
+fn a_listed_crate_with_no_reading_source_fails() {
+    assert_eq!(
+        package_reader_mismatches(&[config_reads_a_package()], &package_members()).unwrap(),
+        ["main: listed as reading a first-party package, but no source reads one"]
+    );
+}
+
+#[test]
+fn a_package_literal_in_a_comment_does_not_count() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "let root = Path::new(env!(\"CARGO_MANIFEST_DIR\"));\n// let old = \"../../providers/opencode\";\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_package_literal_without_the_manifest_does_not_count() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "let dir = \"../../providers/opencode\";\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_joined_providers_segment_counts() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "let root = PathBuf::from(env!(\"CARGO_MANIFEST_DIR\")).join(\"..\").join(\"..\").join(\"providers\");\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        [
+            "tools: its sources read a first-party package, but the package-reader list does not list it"
+        ]
+    );
+}
+
+#[test]
+fn a_raw_string_package_literal_counts() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "let dir = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(r\"../../providers/opencode\");\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        [
+            "tools: its sources read a first-party package, but the package-reader list does not list it"
+        ]
+    );
+}
+
+#[test]
+fn xtask_sources_never_count_as_package_readers() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "xtask",
+        "xtask/src/select_tests.rs",
+        "let dir = \"../../providers/opencode\";\nlet manifest = env!(\"CARGO_MANIFEST_DIR\");\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn a_crates_extensions_segment_counts() {
+    // Fails safe: a `CARGO_MANIFEST_DIR` file naming `"crates/extensions"`
+    // counts as reading a package, so the list carries it.
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "let dir = Path::new(env!(\"CARGO_MANIFEST_DIR\")).join(\"crates/extensions/foo\");\n",
+    ));
+    assert_eq!(
+        package_reader_mismatches(&files, &package_members()).unwrap(),
+        [
+            "tools: its sources read a first-party package, but the package-reader list does not list it"
+        ]
+    );
+}
+
+#[test]
+fn a_file_that_does_not_tokenise_fails_the_package_check() {
+    let mut files = package_ok_files();
+    files.push(package_src(
+        "tools",
+        "crates/tools/src/search.rs",
+        "fn broken( {\n",
+    ));
+    let failure = package_reader_mismatches(&files, &package_members()).unwrap_err();
+    assert!(
+        failure.starts_with("crates/tools/src/search.rs: does not tokenise as Rust: "),
+        "{failure}"
     );
 }
 

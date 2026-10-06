@@ -198,11 +198,10 @@ fn run(args: &[String]) -> Result<bool, String> {
         ),
         "compiled-in" => {
             let members = workspace_members()?;
-            report(
-                "compiled-in",
-                &select::compiled_in_mismatches(&rust_files(&members)?, &members)?,
-                "ok",
-            )
+            let files = rust_files(&members)?;
+            let mut failures = select::compiled_in_mismatches(&files, &members)?;
+            failures.extend(select::package_reader_mismatches(&files, &members)?);
+            report("compiled-in", &failures, "ok")
         }
         "dependency-list" => {
             let failures = rules::unlisted(&cargo_dependencies()?, &read("docs/dependencies.md")?)?;
