@@ -198,7 +198,8 @@ The shipped tooling has three parts:
   says, not when the wall clock does. These exist only under the runner, as
   its documented feature; a session started any other way has neither.
 
-Fiber's CI runs `fiber extension test` for every first-party extension. An
+Fiber's CI runs `fiber extension test` for every first-party extension that has
+code. An
 extension change that breaks one of its cases fails the pull request that
 caused it.
 

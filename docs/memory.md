@@ -119,10 +119,10 @@ When they are over it, the model is told to prune them in two places:
   giving their size against the budget (`docs/system-prompt.md`, "Extension
   sections"). The extension declares the budget in its manifest.
 - After a `write` or `edit` that touches an index while the two are over
-  budget, the extension's `after_tool` hook appends the same line to the
-  call's result (`docs/extensions.md`, "The hook points").
+  budget, Fiber appends the same line to the call's result (the same
+  section).
 
-An index edited through the shell is not seen by the hook; the next build
+An index edited through the shell is not seen when it happens; the next build
 reports it. The indexes also count as instruction text for the 10%-of-window
 notice (`docs/system-prompt.md`, "Size").
 
@@ -150,12 +150,16 @@ fresh install has it (`docs/extensions.md`, "A fresh install").
 `fiber extension remove memory` removes it and its data directories, asking
 first, which turns memory off and deletes the store.
 
-The extension is Lua with an `after_tool` hook, so it starts a VM in every
-session it is enabled for (`docs/extensions.md`, "Loading, and cost when
-nothing is loaded").
+The extension has no code: it is a manifest and its prompt text. It starts no
+Lua VM, so it costs nothing in a session beyond its opening-message section,
+which adds nothing while the store is empty (`docs/extensions.md`, "Loading,
+and cost when nothing is loaded").
 
 ## Testing
 
-The opening-message section is core and tested like instruction files
-(`docs/testing.md`). The extension is tested with `fiber extension test` and
-the `scripted` provider (`docs/testing.md`, "Testing an extension").
+The opening-message section, its budget line and the prune line on writes are
+core, tested like instruction files (`docs/testing.md`). The extension has no
+code, so it is tested at the binary level with its shipped manifest: a fresh
+install has it enabled and starts no VM for it, a page write takes the fast
+path, an over-budget store ends the section with the prune line, and after
+`fiber extension remove memory` the opening message has no memory section.

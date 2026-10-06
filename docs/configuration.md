@@ -424,7 +424,9 @@ file in the package whose text goes in the system prompt
 goes in the opening message: `machine` lists paths in the extension's machine
 data directory and `project` paths in its project data directory
 (`docs/state.md`, "What each part holds"), each relative to that directory
-and inside it. `budget_bytes` is the section's optional byte budget
+and inside it. `budget_bytes` is the section's optional byte budget: over it,
+Fiber tells the model to prune the files when it builds the opening message
+and after the session's own `write` or `edit` of one of them
 (`docs/system-prompt.md`, "Extension sections"). All three default to none.
 
 ## A provider's data

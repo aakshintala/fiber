@@ -859,8 +859,9 @@ extension costs about 120 KiB and a thread for the whole session. These cost
 nothing at start:
 
 - an extension disabled for the project, which never starts;
-- an extension with no Lua, only data, skills, themes, prompt templates or
-  binaries, which starts no VM;
+- an extension with no Lua, only data, skills, themes, prompt templates,
+  opening-message files or binaries, which starts no VM, such as the
+  first-party `memory` extension;
 - a provider, which its manifest's `providers` and its data file declare, so
   its Lua, if it has any, first runs when the session uses one of its models;
 - the first-party `hooks` extension in a session whose configuration has no
@@ -1097,12 +1098,11 @@ installs beside the binary (`docs/releasing.md`), so a first run needs no
 recorded under their full names: nothing is compiled in, and
 `fiber extension remove <name>` removes any of them.
 
-A provider or `hooks` costs nothing in a session that does not use it. A
+A provider, `hooks` or `memory` costs nothing in a session that does not use it. A
 provider that is pure data is only read, a Lua provider first runs when a
 session uses one of its models, and `hooks` loads only when configuration has
-a `hooks` key. `memory` starts in every session it is enabled for, because its
-`after_tool` hook must be registered; its opening-message section adds nothing
-while the store is empty.
+a `hooks` key. `memory` has no code, and its opening-message section adds
+nothing while the store is empty.
 
 A person who removed a provider can install it again with
 `fiber extension install <name>`, or by choosing it in the terminal's model

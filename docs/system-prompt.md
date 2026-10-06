@@ -213,9 +213,12 @@ project's, each in the order the manifest lists them.
 
 The manifest may also give the section a byte budget. When the section's files
 together are over it, Fiber ends the section with one line giving their size
-against the budget and telling the model to prune them. Under budget, or with
-no budget, there is no line. The files are never cut. The person cannot change
-the budget.
+against the budget and telling the model to prune them. The same line is
+appended to the result of a `write` or `edit` by this session that touches one
+of the section's files while they are over budget. Under budget, with no
+budget, or for a call that touches none of the files, there is no line. A shell
+edit is not seen when it happens; the next build reports it. The files are
+never cut. The person cannot change the budget.
 
 ### Subdirectory files
 
