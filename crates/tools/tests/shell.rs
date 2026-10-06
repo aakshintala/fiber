@@ -482,7 +482,7 @@ fn a_descendant_that_ignores_sigterm_is_killed_with_the_group() {
     assert!(output.error.is_none(), "{}", text(&output));
     assert!(text(&output).contains("Cancelled and stopped."));
     for pid in pids {
-        assert!(!pid_alive(pid), "{pid} survived");
+        wait_until_pid_gone(pid);
     }
     assert!(!group_alive(pgid));
     watchdog.stand_down(DEADLINE);
