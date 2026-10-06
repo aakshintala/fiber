@@ -240,6 +240,7 @@ yaml-rust and bincode.
 | Percent-encoding OAuth URLs and parsing the callback query | a fixed format from RFC 3986, a few dozen lines |
 | File locking | `std::fs::File::lock`, stable since Rust 1.89 |
 | Timestamps | the log's `ts` is milliseconds since the epoch, from `std::time` |
+| Converting HTML to markdown for `web_fetch` | the smallest maintained crate builds a whole DOM and pulls 41 crates; see below |
 
 Tool arguments are checked against a subset of JSON Schema: `type`,
 `properties`, `required`, `additionalProperties`, `enum`, `items`, `minimum`,
@@ -253,6 +254,19 @@ server whose schema uses one still works. Checking those schemas is best
 effort. The jsonschema
 crate covers the whole specification, but it costs 14,808 KiB on Linux x86_64
 and brings 79 crates, more than every runtime crate together.
+
+`web_fetch` converts a page in one pass that holds the page and its output
+(`crates/tools/src/web_fetch/markdown.rs`). The smallest maintained crate,
+htmd 0.5.5, passes `cargo deny` with this repository's `deny.toml` but pulls 41
+crates (html5ever, markup5ever_rcdom, xml5ever, string_cache, phf and their
+dependencies) and builds a DOM of the page. Peak memory footprint on macOS
+arm64, from `/usr/bin/time -l` on a generated page, against the 24 MiB busy
+session budget (`docs/performance.md`):
+
+| Page | htmd | Fiber's converter |
+|---|---|---|
+| 1 MiB | 24.9 MB | 3.0 MB |
+| 10 MiB (the download cap) | 232.2 MB | 21.0 MB |
 
 The shell tool's recogniser splits a command on `&&`, `||`, `;` and `|` and
 reads each part as plain words. Anything it cannot read plainly makes the

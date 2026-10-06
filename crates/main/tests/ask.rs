@@ -2326,5 +2326,16 @@ fn two_runs_send_byte_identical_preambles() {
         .iter()
         .map(|tool| tool["name"].as_str().unwrap())
         .collect();
-    assert_eq!(names, ["edit", "handoff", "jobs", "read", "shell", "write"]);
+    assert_eq!(
+        names,
+        [
+            "edit",
+            "handoff",
+            "jobs",
+            "read",
+            "shell",
+            "web_fetch",
+            "write"
+        ]
+    );
 }

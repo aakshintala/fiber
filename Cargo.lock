@@ -1502,6 +1502,7 @@ dependencies = [
  "rustix",
  "serde_json",
  "similar",
+ "ureq",
 ]
 
 [[package]]

@@ -208,7 +208,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `busy` | driver command | `prompt` or `reload` while a turn is running, or `rewind` mid-turn (`docs/invocation.md`, "What each command does") |
 | `closing` | tool call, extension call, driver command | `session_message` named a session that was sent `close` (`docs/tools.md`, "Messaging other sessions"), or `state.set` or `state.unset` ran after `fiber_exited` (`docs/extensions.md`, "When a session ends"), or a driver command after `close` (`docs/invocation.md`, "Driver commands") |
 | `config_invalid` | exit | a configuration file is invalid |
-| `connection_failed` | model call, turn | the connection to the provider failed |
+| `connection_failed` | model call, tool call, turn | the connection to the provider failed, or `web_fetch` could not reach the host |
 | `context_overflow` | model call, turn | the request does not fit the context window |
 | `credential_failed` | exit, model call, turn | a stored credential cannot be used, or the provider's `credential()` or `sign()` failed; log in again or fix the credential |
 | `credential_missing` | exit | no credential was found for the session's model, or its credential label names none; the message lists the provider's labels |
