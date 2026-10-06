@@ -123,7 +123,9 @@ pub(crate) fn run(
 
 /// Sends `content` as the session's first prompt on a short connection of
 /// the hub's own, and reads lines until the session's acknowledgement for
-/// it. Accepted: `Ok`. Rejected: the `start` rejection, carrying the
+/// it. The connection subscribes `summary` first: a session answers no
+/// other command before `subscribe`, and `summary` never counts in
+/// `clients`. Accepted: `Ok`. Rejected: the `start` rejection, carrying the
 /// session's code and message.
 fn deliver(
     stream: UnixStream,
@@ -132,12 +134,21 @@ fn deliver(
     started: &dyn crate::Started,
     hub: &Hub,
 ) -> Result<(), Outcome> {
-    let prompt_id = mint("c_");
-    let failed = |code: ErrorCode, message: String| Outcome::Rejected { code, message };
     let mut stream = stream;
     if stream.set_read_timeout(Some(HANDSHAKE_TIMEOUT)).is_err() {
         return Err(io_failed(hub, id, "its acknowledgement could not be read."));
     }
+    let subscribe_id = mint("c_");
+    let subscribe = serde_json::json!({
+        "id": subscribe_id,
+        "command": "subscribe",
+        "args": { "level": "summary" },
+    });
+    if write_line(&mut stream, &subscribe).is_err() {
+        return Err(exited_or_io(hub, id, started));
+    }
+    acknowledge(&stream, &subscribe_id, started, hub, id)?;
+    let prompt_id = mint("c_");
     let line = serde_json::json!({
         "id": prompt_id,
         "command": "prompt",
@@ -146,7 +157,23 @@ fn deliver(
     if write_line(&mut stream, &line).is_err() {
         return Err(exited_or_io(hub, id, started));
     }
-    let mut read = BufReader::new(stream);
+    acknowledge(&stream, &prompt_id, started, hub, id)
+}
+/// Reads lines until the session's acknowledgement for `command_id`:
+/// `Ok` when accepted, the `start` rejection with the session's code and
+/// message when rejected.
+fn acknowledge(
+    stream: &UnixStream,
+    command_id: &str,
+    started: &dyn crate::Started,
+    hub: &Hub,
+    id: &SessionId,
+) -> Result<(), Outcome> {
+    let mut read = BufReader::new(
+        stream
+            .try_clone()
+            .map_err(|_| io_failed(hub, id, "its acknowledgement could not be read."))?,
+    );
     let mut buf = Vec::new();
     loop {
         buf.clear();
@@ -162,7 +189,7 @@ fn deliver(
             .get("payload")
             .and_then(|payload| payload.get("command_id"))
             .and_then(Value::as_str)
-            == Some(prompt_id.as_str());
+            == Some(command_id);
         if !named {
             continue;
         }
@@ -182,7 +209,7 @@ fn deliver(
                     .unwrap_or("The session rejected its first prompt.")
                     .to_owned();
                 hub.diag.warn_session(id, &code_name(&code), &message);
-                return Err(failed(code, message));
+                return Err(Outcome::Rejected { code, message });
             }
             _ => continue,
         }

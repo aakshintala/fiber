@@ -124,13 +124,13 @@ fn hub_session(
     stdout: &mut impl Write,
 ) -> io::Result<()> {
     let binary = binary.to_owned();
-    let hub = doors::hub::connect(home, &mut move || start_hub(&binary), clock)?;
-    let mut hello = serde_json::to_vec(&hub.hello)
+    let (stream, hello) = doors::hub::connect(home, &mut move || start_hub(&binary), clock)?;
+    let mut hello = serde_json::to_vec(&hello)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     hello.push(b'\n');
     stdout.write_all(&hello)?;
     stdout.flush()?;
-    relay(hub.stream, stdin, stdout)
+    relay(stream, stdin, stdout)
 }
 
 /// Starts `<binary> hub serve` in its own process group with null stdio.

@@ -259,7 +259,7 @@ Every code Fiber emits. "Where" names the lines that carry it.
 | `repository_code_skipped` | notice | an extension, hook or MCP server the repository declares was skipped, because nobody approved it and nobody could be asked (`docs/extensions.md`, "Code a repository ships") |
 | `session_has_dependents` | exit | a delete names a session that forks or rewinds point at; the message lists them, and `--cascade` deletes them too (`docs/invocation.md`, "Deleting and pruning") |
 | `session_held` | exit | another process holds the session |
-| `session_not_found` | exit | a resume names no session |
+| `session_not_found` | exit, hub command | a resume names no session, or a command whose `session_id` names no socket that accepts a connection (`docs/invocation.md`, "The hub") |
 | `signal` | tool call, job | a process killed by a signal Fiber did not send |
 | `skill_invalid` | notice | a skill's `SKILL.md` header does not parse or lacks `name` or `description`, so it is left out; the message names its path (`docs/system-prompt.md`, "Skills") |
 | `skill_shadowed` | notice | two skills share a name; the message names both paths and which one won (`docs/system-prompt.md`, "Skills") |
@@ -304,7 +304,7 @@ Notices, for a failure outside any action:
 
 Driver command rejections (`malformed`, `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `invalid_arguments`,
-`unknown_command`, `closing`, `duplicate_command`)
+`unknown_command`, `closing`, `duplicate_command`, `session_not_found`)
 are `docs/invocation.md`, "Driver commands".
 
 ## Not settled here

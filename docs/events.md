@@ -87,6 +87,9 @@ is about the hub or names its session in the payload:
   `session_id` (string) and `how`, `exited` or `crashed`, a closed set
   (`docs/invocation.md`, "The hub").
 
+The hub's `command_accepted` and `command_rejected` for a hub command carry
+no `session_id` in the envelope either.
+
 ## Durable and ephemeral
 
 **A line is durable if and only if it carries `seq`.** There is no separate
@@ -1253,6 +1256,8 @@ Every driver command is answered with exactly one of these, echoing its id
 | `tools` | `tools`, an array with one object per declared tool: `name` (string), `source` (`builtin`, `extension` or `mcp`), `server` or `extension` (string, the tool's server or extension, when not built in), `state` (`full`, `deferred` or `loaded`), `bytes` (integer) and `tokens` (integer, estimated, absent before the first request) (`docs/tools.md`, "Seeing the tools") |
 | `history` | `lines`, an array of the session's durable lines in the range asked for, each a whole line as the log holds it, in `seq` order |
 | `shell` | `output` (string), `artifact` (string, when cut) and `process` (`process`), as on `shell_command` |
+| `start` | `session_id` (string), the session the hub started, over the hub (`docs/invocation.md`, "The hub") |
+| `status` | `running` (boolean, always true), `fiber_version` (string) and `clients` (integer, the open connections, the asker included), over the hub (`docs/invocation.md`, "The hub") |
 
 #### `command_rejected`
 

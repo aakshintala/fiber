@@ -50,7 +50,7 @@ fn run_connect(
     home: PathBuf,
     mut start: impl FnMut() -> io::Result<()> + Send + 'static,
     clock: Arc<fakes::clock::FakeClock>,
-) -> io::Result<super::Hub> {
+) -> io::Result<Hub> {
     let (done_tx, done_rx) = mpsc::channel();
     thread::Builder::new()
         .name("hub-test-connect".to_owned())
@@ -95,7 +95,7 @@ fn an_existing_hub_is_used_and_the_starter_rests() {
         fakes::clock::FakeClock::new(),
     )
     .unwrap();
-    assert_eq!(hub.hello.kind, "hub_hello");
+    assert_eq!(hub.1.kind, "hub_hello");
     assert_eq!(calls.load(Ordering::SeqCst), 0);
 }
 
@@ -119,7 +119,7 @@ fn without_a_hub_the_starter_runs_once() {
         fakes::clock::FakeClock::new(),
     )
     .unwrap();
-    assert_eq!(hub.hello.kind, "hub_hello");
+    assert_eq!(hub.1.kind, "hub_hello");
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
 
@@ -162,7 +162,7 @@ fn eof_before_hello_retries_the_whole_connect_once() {
         }
     });
     let hub = run_connect(temp.dir.clone(), || Ok(()), fakes::clock::FakeClock::new()).unwrap();
-    assert_eq!(hub.hello.kind, "hub_hello");
+    assert_eq!(hub.1.kind, "hub_hello");
     assert_eq!(served.load(Ordering::SeqCst), 2);
 }
 

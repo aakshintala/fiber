@@ -21,12 +21,10 @@ pub const CONNECT_DEADLINE: Duration = Duration::from_secs(5);
 const CONNECT_POLL: Duration = Duration::from_millis(10);
 
 /// Which hub the client talks to, with its opening line.
-pub struct Hub {
-    /// The hub's socket, ready for driver commands.
-    pub stream: UnixStream,
-    /// The `hub_hello` it spoke first.
-    pub hello: HubLine,
-}
+///
+/// The stream is ready for driver commands; `hello` is the `hub_hello` it
+/// spoke first.
+pub type Hub = (UnixStream, HubLine);
 
 /// Connects to the hub's socket in `home`, starting one through `start`
 /// when none runs. `start` runs once at most. Returns the stream and the
@@ -127,7 +125,7 @@ fn read_hello(mut stream: UnixStream) -> Result<Hub, Poll> {
             "the hub did not speak `hub_hello` first",
         )));
     }
-    Ok(Hub { stream, hello })
+    Ok((stream, hello))
 }
 
 #[cfg(test)]

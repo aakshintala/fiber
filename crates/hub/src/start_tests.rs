@@ -167,8 +167,11 @@ fn content_is_delivered_as_the_first_prompt_and_accepted() {
         panic!("the start is accepted");
     };
     let received = starter.received();
-    assert_eq!(received.len(), 1);
-    let prompt: Value = serde_json::from_str(&received[0]).unwrap();
+    assert_eq!(received.len(), 2);
+    let subscribe: Value = serde_json::from_str(&received[0]).unwrap();
+    assert_eq!(subscribe.get("command"), Some(&json!("subscribe")));
+    assert_eq!(subscribe.get("args"), Some(&json!({"level": "summary"})));
+    let prompt: Value = serde_json::from_str(&received[1]).unwrap();
     assert_eq!(prompt.get("command"), Some(&json!("prompt")));
     assert_eq!(
         prompt.get("args").and_then(|args| args.get("content")),

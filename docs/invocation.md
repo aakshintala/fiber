@@ -380,7 +380,7 @@ the processed file to `artifacts/`, then logs the part with its `path`,
 Rejection codes: `malformed`, `invalid_arguments`, `unknown_command`,
 `not_subscribed`, `busy`, `stale_request`, `not_step_boundary`,
 `session_held`, `delegate_session`, `summary_failed`, `closing`,
-`duplicate_command`.
+`duplicate_command`, `session_not_found`.
 
 **`reply` answers every interaction that asks something, not just approvals.**
 `docs/architecture.md` fixes the set: "Fiber ships one closed, versioned set

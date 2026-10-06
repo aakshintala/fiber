@@ -16,6 +16,17 @@ pub(crate) fn idle_exit(config: &Config) -> Option<Duration> {
     Some(Duration::from_millis(ms))
 }
 
+/// How long a hub a client started stays running with no client
+/// connected, from `hub.idle_exit_ms` (`docs/configuration.md`). `0`
+/// exits at the first empty wait. A missing value is 30 minutes.
+pub(crate) fn hub_idle_exit(config: &Config) -> Duration {
+    let ms = config
+        .get("hub.idle_exit_ms", None)
+        .and_then(|(value, _)| value.as_u64())
+        .unwrap_or(1_800_000);
+    Duration::from_millis(ms)
+}
+
 /// When a reviewer block hands the call to a person, from configuration
 /// with the documented defaults (`docs/configuration.md`).
 pub(crate) fn block_limits(config: &Config) -> r#loop::BlockLimits {

@@ -166,24 +166,29 @@ fn serve_one(
     };
     let mut read = BufReader::new(stream);
     let mut buf = Vec::new();
-    match read.read_until(b'\n', &mut buf) {
-        // The hub's liveness check closed without sending.
-        Ok(0) => {}
-        Ok(_) => {
-            let text = String::from_utf8_lossy(&buf).into_owned();
-            lock(received).push(text.clone());
-            if is_prompt(&text)
-                && let Some(reply) = lock(handshake).clone()
-            {
-                write_ack(&mut writer, &text, &reply);
-                return;
+    loop {
+        buf.clear();
+        match read.read_until(b'\n', &mut buf) {
+            // The hub's liveness check closed without sending.
+            Ok(0) => return,
+            Ok(_) => {
+                let text = String::from_utf8_lossy(&buf).into_owned();
+                lock(received).push(text.clone());
+                match command_of(&text).as_deref() {
+                    // The hub's handshake subscribes before its first prompt.
+                    Some("subscribe") => write_accepted(&mut writer, &text),
+                    Some("prompt") => {
+                        if let Some(reply) = lock(handshake).clone() {
+                            write_ack(&mut writer, &text, &reply);
+                            return;
+                        }
+                    }
+                    // Any other connection is held until EOF.
+                    _ => hold(&mut read),
+                }
             }
-            // Any other connection is held until EOF.
-            hold(&mut read);
-        }
-        // Nothing sent: hold until EOF.
-        Err(_) => {
-            hold(&mut read);
+            // Nothing sent yet: hold until EOF.
+            Err(_) => hold(&mut read),
         }
     }
 }
@@ -202,11 +207,30 @@ fn hold(read: &mut BufReader<UnixStream>) {
     }
 }
 
-fn is_prompt(text: &str) -> bool {
+fn command_of(text: &str) -> Option<String> {
     serde_json::from_str::<Value>(text)
         .ok()
         .and_then(|line| line.get("command").cloned())
-        .is_some_and(|command| command == Value::String("prompt".to_owned()))
+        .and_then(|command| command.as_str().map(str::to_owned))
+}
+
+fn write_accepted(writer: &mut UnixStream, command: &str) {
+    let id = serde_json::from_str::<Value>(command)
+        .ok()
+        .and_then(|line| line.get("id").cloned())
+        .unwrap_or(Value::Null);
+    let ack = serde_json::json!({
+        "kind": "command_accepted",
+        "ts": 1,
+        "schema_version": 1,
+        "payload": { "command_id": id },
+    });
+    let mut bytes = serde_json::to_vec(&ack).unwrap_or_default();
+    bytes.push(b'\n');
+    writer
+        .write_all(&bytes)
+        .and_then(|()| writer.flush())
+        .unwrap_or(());
 }
 
 fn write_ack(writer: &mut UnixStream, prompt: &str, reply: &Handshake) {
