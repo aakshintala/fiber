@@ -153,13 +153,26 @@ fn matching_finds_a_process_by_its_command_line() {
     let marker = dir.path().join("a.b").to_string_lossy().into_owned();
     let child = marked(&marker);
     let pid = child.id();
-    assert_eq!(matching(&marker).unwrap(), vec![pid]);
+    let guard = KillOnDrop(pid);
+    // The shell's forked `sleep` may briefly carry the same command line,
+    // so the shell's pid is asserted present, not alone.
+    assert!(matching(&marker).unwrap().contains(&pid));
     // The dot is literal: a near miss matches nothing.
     let near = marker.replace("a.b", "axb");
     assert!(matching(&near).unwrap().is_empty());
-    kill_group(pid, "KILL").unwrap();
+    drop(guard);
     reaped(child, "the marked shell");
     assert!(matching(&marker).unwrap().is_empty());
+}
+
+/// Kills a process group on drop, so a failed assertion leaves nothing
+/// running.
+struct KillOnDrop(u32);
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        kill_group(self.0, "KILL").unwrap_or(false);
+    }
 }
 
 #[test]

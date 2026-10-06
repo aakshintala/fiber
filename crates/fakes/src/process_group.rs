@@ -125,7 +125,7 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
 }
 
 /// Sends SIGKILL to every process whose command line contains `text`, and
-/// to its process group. Pids of 1 or less are skipped.
+/// to its process group.
 ///
 /// # Errors
 ///
@@ -133,13 +133,12 @@ pub fn matching(text: &str) -> io::Result<Vec<u32>> {
 ///
 /// # Panics
 ///
-/// When `text` is empty, before running anything.
+/// When `text` is empty, before running anything, or when a match is pid 1
+/// or less ([`kill_group`], [`kill_pid`]).
 pub fn kill_matching(text: &str) -> io::Result<()> {
     for pid in matching(text)? {
-        if pid > 1 {
-            kill_group(pid, "KILL")?;
-            kill_pid(pid, "KILL")?;
-        }
+        kill_group(pid, "KILL")?;
+        kill_pid(pid, "KILL")?;
     }
     Ok(())
 }
